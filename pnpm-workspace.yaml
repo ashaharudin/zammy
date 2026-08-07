@@ -1,0 +1,14 @@
+packages:
+  - "packages/*"
+  - "apps/*"
+
+# Required for `pnpm deploy` to produce a self-contained node_modules for the
+# Docker image. Without it, deploy falls back to --legacy, which symlinks
+# workspace packages and leaves their transitive dependencies (zod) out of the
+# tree entirely — an image that builds cleanly and then fails on first import.
+injectWorkspacePackages: true
+
+# esbuild ships a platform-specific binary via a postinstall script; Vite cannot
+# run without it. Everything else stays blocked by default.
+allowBuilds:
+  esbuild: true

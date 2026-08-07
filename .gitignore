@@ -1,0 +1,17 @@
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+coverage/
+
+# Secrets — the Currents API key lives here (ARCHITECTURE 4.1, 12).
+# Never commit. .env.example is the committed template.
+.env
+.env.*
+!.env.example
+
+.DS_Store
+*.log
+.vite/
+.idea/
+.vscode/

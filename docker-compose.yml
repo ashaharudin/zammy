@@ -1,0 +1,82 @@
+# Local development stack (ARCHITECTURE 4.1).
+#
+# This is the DEV environment, not the deployment target. In AWS these become
+# RDS and ElastiCache; the api image is identical in both, differing only by
+# environment variables. Nothing here should teach the app anything it would not
+# also learn in production.
+#
+#   docker compose up -d postgres redis   # data stores only, run the app on the host
+#   docker compose --profile app up       # everything, including the api container
+
+name: zammy
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: zammy
+      POSTGRES_PASSWORD: zammy
+      POSTGRES_DB: zammy
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zammy -d zammy"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  redis:
+    image: redis:7-alpine
+    # Pure cache (ARCHITECTURE 7.1): a flush costs latency and quota, never
+    # correctness. Bounded memory with LRU eviction mirrors that intent, and
+    # means a runaway cache cannot starve the laptop.
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 320M
+
+  api:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      NODE_ENV: development
+      PORT: "3000"
+      DATABASE_URL: postgres://zammy:zammy@postgres:5432/zammy
+      REDIS_URL: redis://redis:6379
+      # Offline by default: the free tier allows 1000 calls/day and a dev loop
+      # will burn through that. Set CURRENTS_MODE=live plus a key to go online.
+      CURRENTS_MODE: ${CURRENTS_MODE:-fixture}
+      CURRENTS_API_KEY: ${CURRENTS_API_KEY:-}
+      # Must be non-empty — Cloudflare 403s default library User-Agents.
+      CURRENTS_USER_AGENT: ${CURRENTS_USER_AGENT:-zammy/0.1 (+local-dev)}
+      CORS_ORIGIN: http://localhost:5173
+      FIXTURES_DIR: ./fixtures
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Give the app time to drain in-flight work on `compose down`, matching the
+    # ECS stop timeout it will meet in production.
+    stop_grace_period: 15s
+
+volumes:
+  postgres-data:

@@ -1,0 +1,17 @@
+node_modules
+**/node_modules
+**/dist
+
+# Critical: a host tsbuildinfo makes `tsc -b` inside the image believe the build
+# is already done, so it emits nothing — while dist is excluded above. The result
+# is a silently empty image. Exclude both or neither; never one.
+**/*.tsbuildinfo
+
+.git
+.env
+.env.*
+!.env.example
+*.log
+coverage
+.vite
+docs

@@ -1,0 +1,1345 @@
+{
+ "_provenance": {
+  "endpoint": "GET /v1/search (no keywords)",
+  "captured": "2026-08-04",
+  "tier": "free",
+  "why": "Regression fixture for term scoring (ARCHITECTURE 10.3). 80 articles, 80 unique URLs. Contains a single-source burst of near-identical Jenkins CVE advisories that naive document-frequency ranks first; the df_domains>=2 gate must suppress it."
+ },
+ "calls": [
+  {
+   "label": "s6_cat_tech",
+   "params": {
+    "language": "en",
+    "category": "technology"
+   },
+   "news": [
+    {
+     "id": "16a2f670-1d0a-5f41-b451-8dd96dcbbe7a",
+     "title": "Daily Deal: The Ultimate Python & Artificial Intelligence Bundle",
+     "description": "The Ultimate Python and Artificial Intelligence Bundle has 9 courses to help you take your Python and AI knowledge to the next level. You’ll learn about data pre-processing and visualization,…",
+     "url": "https://www.techdirt.com/2026/08/05/daily-deal-the-ultimate-python-artificial-intelligence-bundle-8/",
+     "author": "Daily Deal",
+     "image": "https://www.techdirt.com/wp-content/themes/techdirt/assets/images/td-rect-logo-white.png",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 18:18:37 +0000"
+    },
+    {
+     "id": "d472da06-8120-5865-a661-e070a0fb5a7a",
+     "title": "Blueish-Green Light from the Dynamic Island",
+     "description": "Hello everyone,  For some reason since a recent iOS 26 update, every time I switch apps that are already open, close an app, or open an app which was previously closed, the blueish-green light that is associated with the camera light flashes for a while and then turns off on the dynamic island. Is t...",
+     "url": "https://www.reddit.com/r/iphone/comments/1vgfcco/blueishgreen_light_from_the_dynamic_island/",
+     "author": "/u/FinancialSoftware931",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 18:17:17 +0000"
+    },
+    {
+     "id": "bba7f4a5-42d2-5abe-93f5-1cc9572234a6",
+     "title": "ItaSoRL Clip 2/4: outside watcher catches a one-rule world copy at ~99%",
+     "description": "Clip 2 of 4. Follow-up to the spot-the-fake setup. https://i.redd.it/9yjuw9fmklhh1.gif Same near-copy environment: one dynamics rule changed (ground grip / step slip). Everything else identical. Probe: an outside watcher / oracle-style discriminator that knows the true rules and replays every step. ...",
+     "url": "https://www.reddit.com/r/reinforcementlearning/comments/1vgf71j/itasorl_clip_24_outside_watcher_catches_a_onerule/",
+     "author": "/u/LevyTateLabs",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 18:11:59 +0000"
+    },
+    {
+     "id": "1f8ab34b-b533-526a-8681-77fa6a9e203b",
+     "title": "Assistive Touch doesn't want to appear",
+     "description": "Hello guys. I have an iPhone 14 Pro. After a while (like 2 years after) I did want to turn on Assistive Touch, but it didn't work. No matter how many solutions I tried, none of them worked. Have you ever been faced with this kind of situation on your iPhone?    submitted by    /u/raufatali   [link] ...",
+     "url": "https://www.reddit.com/r/iphone/comments/1vgf32u/assistive_touch_doesnt_want_to_appear/",
+     "author": "/u/raufatali",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 18:08:02 +0000"
+    },
+    {
+     "id": "625ed323-29ab-5048-95a6-955903f7b82d",
+     "title": "Are your Android apps secretly sharing your location with advertisers? Some developers are accidentally leaving on this critical data-invading setting when using third-party SDKs",
+     "description": "Some apps are gathering highly-localized location data and feeding it back to advertisers, data brokers, and even the military.",
+     "url": "https://www.techradar.com/pro/security/are-your-android-apps-secretly-sharing-your-location-with-advertisers-some-developers-are-accidentally-leaving-on-this-critical-data-invading-setting-when-using-third-party-sdks",
+     "author": "Benedict Collins",
+     "image": "https://cdn.mos.cms.futurecdn.net/hHfi9yH36kgGzLHyDnHTcX-2000-80.jpg",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 18:01:55 +0000"
+    },
+    {
+     "id": "6712abd3-f6d6-5ab2-9aab-efdd412daf26",
+     "title": "Radical Study Suggests Life on Earth Arose From Non-Living Matter TWICE",
+     "description": "The fact that you, or I, or any living creature, is here at all is a series of astonishing strokes of luck stretching back more than 4 billion years. One of the biggest hurdles was the very first one: How did life emerge from a primordial soup of stuff that very much wasn't alive? A radical new stud...",
+     "url": "https://www.sciencealert.com/?p=212295",
+     "author": "Michael Irving",
+     "image": "https://www.sciencealert.com/images/2026/08/two-blue-colorful-bubbles-on-a-black-background.jpg",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 18:00:00 +0000"
+    },
+    {
+     "id": "66846f46-6f67-5c3f-814d-68351c96f6f1",
+     "title": "Beginner looking to join an AI/ML project to learn and contribute",
+     "description": "Hi everyone, I’m currently learning deep learning and have worked on a few AI/ML projects like a customer churn prediction model and student performance prediction. I’m looking to join an existing project to gain more hands-on experience and contribute while learning. I’m comfortable with Python and...",
+     "url": "https://www.reddit.com/r/reinforcementlearning/comments/1vgeovp/beginner_looking_to_join_an_aiml_project_to_learn/",
+     "author": "/u/Quiet-Cod-9650",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:54:07 +0000"
+    },
+    {
+     "id": "a69fc4c2-1e43-50b5-8880-7ed34be01f5c",
+     "title": "Two of Ring’s latest video doorbells are a lot cheaper than usual",
+     "description": "Both wired and battery-powered doorbells are on sale.",
+     "url": "https://www.theverge.com/gadgets/975723/ring-wired-doorbell-pro-battery-doorbell-plus-deal-sale",
+     "author": "Sheena Vasani",
+     "image": "https://platform.theverge.com/wp-content/uploads/sites/2/2026/08/ring_wired_doorbell_plusghfhg_lifestyle_1500x1500.jpg?quality=90&strip=all&crop=0%2C12.649167492099%2C100%2C74.701665015801&w=1200",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:53:43 +0000"
+    },
+    {
+     "id": "f5a3a302-52ad-5b7f-8455-9cdeaf656d92",
+     "title": "CVE-2026-70611 Electron: DevTools embedder handler executes arbitrary files via shell open",
+     "description": "Electron is a framework for writing cross-platform desktop applications using JavaScript, HTML and CSS. Prior to 39.8.9, 40.9.2, 41.2.1, and 42.0.0-beta.3, the DevTools reveal in file manager action could launch the target file rather than reveal it. An attacker with a separate means of running scri...",
+     "url": "https://vulners.com/cve/CVE-2026-70611",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:49:09 +0000"
+    },
+    {
+     "id": "0c0a63e2-2671-5eab-affe-8d23d0f95a72",
+     "title": "CVE-2026-70611 Electron: DevTools embedder handler executes arbitrary files via shell open",
+     "description": "Electron is a framework for writing cross-platform desktop applications using JavaScript, HTML and CSS. Prior to 39.8.9, 40.9.2, 41.2.1, and 42.0.0-beta.3, the DevTools reveal in file manager action could launch the target file rather than reveal it. An attacker with a separate means of running scri...",
+     "url": "https://vulners.com/cvelist/CVELIST:CVE-2026-70611",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:49:09 +0000"
+    },
+    {
+     "id": "9d22f5d8-b3ff-50ea-99da-02c52f37a0fe",
+     "title": "A SpaceX rocket just crashed into the moon. Now, the race is on to get a look at the impact site",
+     "description": "Orbiters are taking a close look at the predicted crash site to learn more.",
+     "url": "https://www.space.com/astronomy/moon/a-spacex-rocket-just-crashed-into-the-moon-now-the-race-is-on-to-get-a-look-at-the-impact-site",
+     "author": "Chelsea Gohd",
+     "image": "https://cdn.mos.cms.futurecdn.net/mkNi4yVYAZHLoKR8qDsACg-2133-80.jpg",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:43:30 +0000"
+    },
+    {
+     "id": "88bbb02a-fd33-56a6-a339-bd63e62e17aa",
+     "title": "Canada Billionaire Buys Half of Tech Fund, Commits $125 Million",
+     "description": "A Canadian real estate billionaire acquired half of tech investment firm Vistara Growth, committing as much as $125 million to a new fund in a deal with roots in a business school friendship formed three decades ago.",
+     "url": "https://www.bloomberg.com/news/articles/2026-08-05/canada-billionaire-buys-half-of-tech-fund-commits-125-million",
+     "author": "Thomas Seal",
+     "image": "https://assets.bwbx.io/images/users/iqjWHBFdfxIU/i9IcurAyaJJM/v0/1200x800.jpg",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:41:08 +0000"
+    },
+    {
+     "id": "7c011d32-d993-5a00-8d8d-5f4e1f8fbbca",
+     "title": "Google DeepMind shakeup: Gemini co-leads quit for a startup",
+     "description": "Demis Hassabis is handing over Google DeepMind. Jeff Dean, Oriol Vinyals, Quoc Le and Sanjay Ghemawat are leaving to found Discovery Loop.",
+     "url": "https://thenextweb.com/news/google-deepmind-shakeup-hassabis-jeff-dean-vinyals-discovery-loop",
+     "author": "Ana Maria Constantin",
+     "image": "https://media.thenextweb.com/2026/08/discoveryloop-founders.jpg",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:41:08 +0000"
+    },
+    {
+     "id": "8eabdf8c-dbe8-59c7-bc1a-36d2ad0e007b",
+     "title": "CVE-2026-70448",
+     "description": "Jenkins Ivy Report Plugin 1.2 and earlier does not configure its XML parser to prevent XML external entity XXE attacks when processing Ivy report files...",
+     "url": "https://vulners.com/cvelist/CVELIST:CVE-2026-70448",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:40:42 +0000"
+    },
+    {
+     "id": "011bc5ee-c47d-5b36-839c-b0a0825e4a2e",
+     "title": "CVE-2026-70448",
+     "description": "Jenkins Ivy Report Plugin 1.2 and earlier does not configure its XML parser to prevent XML external entity XXE attacks when processing Ivy report files...",
+     "url": "https://vulners.com/cve/CVE-2026-70448",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:40:42 +0000"
+    },
+    {
+     "id": "f9d001de-9bc3-52a4-996c-b5cd412be2d8",
+     "title": "CVE-2026-70445",
+     "description": "Missing permission checks in Jenkins Sauce OnDemand Plugin 2.2.0 and earlier allow attackers with Overall/Read permission to enumerate credentials IDs of credentials stored in Jenkins...",
+     "url": "https://vulners.com/cvelist/CVELIST:CVE-2026-70445",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:40:40 +0000"
+    },
+    {
+     "id": "7753f85b-23a0-5137-b611-060b1d0a6d3f",
+     "title": "CVE-2026-70446",
+     "description": "Missing permission checks in Jenkins CodeSonar Plugin 3.6.0 and earlier allow attackers with Overall/Read permission to enumerate credentials IDs of credentials stored in Jenkins...",
+     "url": "https://vulners.com/cve/CVE-2026-70446",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:40:40 +0000"
+    },
+    {
+     "id": "3f146224-1964-5db3-9c04-4d4f2b238001",
+     "title": "CVE-2026-70446",
+     "description": "Missing permission checks in Jenkins CodeSonar Plugin 3.6.0 and earlier allow attackers with Overall/Read permission to enumerate credentials IDs of credentials stored in Jenkins...",
+     "url": "https://vulners.com/cvelist/CVELIST:CVE-2026-70446",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:40:40 +0000"
+    },
+    {
+     "id": "3a6f67ff-a246-58ff-9f28-66f5853d1584",
+     "title": "CVE-2026-70445",
+     "description": "Missing permission checks in Jenkins Sauce OnDemand Plugin 2.2.0 and earlier allow attackers with Overall/Read permission to enumerate credentials IDs of credentials stored in Jenkins...",
+     "url": "https://vulners.com/cve/CVE-2026-70445",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:40:40 +0000"
+    },
+    {
+     "id": "61cd29fa-193d-51b9-9d24-e56d99e794ad",
+     "title": "CVE-2026-70444",
+     "description": "A missing permission check in Jenkins Violation Comments to GitLab Plugin 2.62.0 and earlier allows attackers with Overall/Read permission to enumerate credentials IDs of credentials stored in Jenkins...",
+     "url": "https://vulners.com/cvelist/CVELIST:CVE-2026-70444",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:40:39 +0000"
+    }
+   ]
+  },
+  {
+   "label": "s6_cat_tech_p2",
+   "params": {
+    "language": "en",
+    "category": "technology",
+    "page_number": "2"
+   },
+   "news": [
+    {
+     "id": "52aef1fd-1046-5728-a053-9bb9ff2de946",
+     "title": "CVE-2026-70444",
+     "description": "A missing permission check in Jenkins Violation Comments to GitLab Plugin 2.62.0 and earlier allows attackers with Overall/Read permission to enumerate credentials IDs of credentials stored in Jenkins...",
+     "url": "https://vulners.com/cve/CVE-2026-70444",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:40:39 +0000"
+    },
+    {
+     "id": "f88a3042-db7e-5350-87c6-5eebbf70cfaf",
+     "title": "CVE-2026-70442",
+     "description": "Jenkins Google Chat Notification Plugin 166.ve6bde280f2e8 and earlier does not set the appropriate context for credentials lookup, allowing attackers with Item/Configure permission to access and capture credentials they are not entitled to use...",
+     "url": "https://vulners.com/cvelist/CVELIST:CVE-2026-70442",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:40:38 +0000"
+    },
+    {
+     "id": "9abbcd0f-1e55-5c56-a2f1-b8b497973510",
+     "title": "CVE-2026-70442",
+     "description": "Jenkins Google Chat Notification Plugin 166.ve6bde280f2e8 and earlier does not set the appropriate context for credentials lookup, allowing attackers with Item/Configure permission to access and capture credentials they are not entitled to use...",
+     "url": "https://vulners.com/cve/CVE-2026-70442",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:40:38 +0000"
+    },
+    {
+     "id": "2a76158b-99ac-5f1e-a6b4-58aca421445a",
+     "title": "CVE-2026-70443",
+     "description": "Jenkins Horreum Plugin 0.16.162.v33b4aab5f828 and earlier does not set the appropriate context for credentials lookup, allowing attackers with Item/Configure permission to have Jenkins send credentials they are not entitled to use to the administrator-configured Horreum URL...",
+     "url": "https://vulners.com/cvelist/CVELIST:CVE-2026-70443",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:40:38 +0000"
+    },
+    {
+     "id": "6976c2a3-efd0-507a-b728-6e6c9a5fa85a",
+     "title": "Study finds it's where you log, not just how much, that determines flood risk",
+     "description": "Watersheds that are flatter, drier and warmer are generally more vulnerable to increases in flooding after trees are harvested. Those with greater variation in elevation spread runoff out over time, reducing flood peaks.",
+     "url": "https://phys.org/news/2026-08-study-finds-it-where-you.html",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:40:10 +0000"
+    },
+    {
+     "id": "2f33cc6f-2e07-5bbd-8156-335ea2a62f8b",
+     "title": "German cockroaches appear to be more social animals than previously thought",
+     "description": "Newborn German cockroaches use pheromones in cockroach feces to identify members of their own colony and form a kind of social bond, a discovery that could be used to improve pest control efforts.",
+     "url": "https://phys.org/news/2026-08-german-cockroaches-social-animals-previously.html",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:40:08 +0000"
+    },
+    {
+     "id": "be1f182e-660b-5eab-94c0-4034aac732ae",
+     "title": "How to have two dots like this?",
+     "description": "https://preview.redd.it/yiq7p50pelhh1.png?width=716&format=png&auto=webp&s=ada0cebd4928ee2931c4cf72aa276f5b5a4226a3 I'll start to use a phone with dynamic island and I wonder how to have two dots like this with dynamic island?    submitted by    /u/rtrnismo   [link]   [comments]",
+     "url": "https://www.reddit.com/r/iphone/comments/1vgea8o/how_to_have_two_dots_like_this/",
+     "author": "/u/rtrnismo",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:39:57 +0000"
+    },
+    {
+     "id": "bfbc6416-2d5a-59eb-941c-8e7cb9b292f0",
+     "title": "AMD To Present Opening Keynote at IFA 2026 With Jack Huynh To Give Some Surprise Consumer-Side Announcements, Including Ryzen AI MAX 400 Launch",
+     "description": "AMD announced the company is returning to IFA this year & will present the opening keynote to share \"vision for the next era of computing\".",
+     "url": "https://wccftech.com/amd-opening-keynote-ifa-2026-jack-huynh/",
+     "author": "Hassan Mujtaba",
+     "image": "https://cdn.wccftech.com/wp-content/uploads/2026/08/AMD-Jack-Huynh-1920x1280.jpg",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:35:31 +0000"
+    },
+    {
+     "id": "1437778f-56de-557b-ac0e-b2eb9ce14ff6",
+     "title": "Amazon's Zoox Robotaxi Enters the Commercial Race",
+     "description": "Zoox is entering a new phase of its business as it's getting ready to launch paid robotaxi rides in Las Vegas, becoming the first company in the US to charge for rides in a purpose-built, steering wheel-free autonomous vehicle. Zoox CEO Aicha Evans joins Bloomberg to discuss pricing, expansion plans...",
+     "url": "https://www.bloomberg.com/news/videos/2026-08-05/digi-aicha-evans-zoox-ceo-video",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:35:10 +0000"
+    },
+    {
+     "id": "b799268b-29ab-5fd9-b360-2955dc7881ed",
+     "title": "‘Our corrupt, AI-addicted President cannot be allowed to sacrifice our federal lands’: A bill to permanently ban AI data centers from federal lands has been introduced to congress",
+     "description": "The Trump administration is pushing forward with a huge data center buildout while sidelining environmental concerns and worsening pollution.",
+     "url": "https://www.techradar.com/pro/our-corrupt-ai-addicted-president-cannot-be-allowed-to-sacrifice-our-federal-lands-a-bill-to-permanently-ban-ai-data-centers-from-federal-lands-has-been-introduced-to-congress",
+     "author": "Benedict Collins",
+     "image": "https://cdn.mos.cms.futurecdn.net/ttukYbNfuX2BivfYrsGfGH-1920-80.jpg",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:35:00 +0000"
+    },
+    {
+     "id": "ba8ac5f4-344a-530f-a859-ab19ac8c824c",
+     "title": "Uber CEO brushes off reports of a Waymo break-up",
+     "description": "Uber CEO Dara Khosrowshahi said the relationship with Waymo remains “strong,” despite signs that the two companies may be drifting apart. After Uber and Waymo ended their partnership in Phoenix earlier this year, experts and robotaxi watchers wondered whether the companies’ improbable bromance was …",
+     "url": "https://www.theverge.com/transportation/975651/uber-ceo-earnings-waymo-partnership",
+     "author": "Andrew J. Hawkins",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:34:48 +0000"
+    },
+    {
+     "id": "4e37a7de-598b-534a-b121-5e9268d88564",
+     "title": "New PLA footage highlights H-6N bomber with large underbelly missile",
+     "description": "The H-6N bomber appeared carrying a large unidentified centerline missile during a Chinese joint operations documentary.",
+     "url": "https://interestingengineering.com/military/h6n-air-launched-missile",
+     "author": "Kaif Shaikh",
+     "image": "https://cms.interestingengineering.com/wp-content/uploads/2026/08/Thumbnails-for-IE-Chinese-anti-ship-ballistic-missile-under-H6-n-bomber.jpg",
+     "language": "en",
+     "category": [
+      "technology",
+      "science"
+     ],
+     "source_category": [
+      "technology",
+      "science"
+     ],
+     "published": "2026-08-05 17:34:42 +0000"
+    },
+    {
+     "id": "dca20c99-be5c-56fd-aca2-6e3fa9863ea1",
+     "title": "CVE-2026-20310 Cisco SD-WAN Controller/SD-WAN Manager link following",
+     "description": "A vulnerability has been found in Cisco SD-WAN Controller and SD-WAN Manager. This vulnerability is referenced as CVE-2026-20310. It is recommended to upgrade the affected component.",
+     "url": "https://vuldb.com/vuln/386316",
+     "author": "",
+     "image": "https://vuldb.com/_thm/preview_images/vuldb_vulnerability-10.jpg",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:34:37 +0000"
+    },
+    {
+     "id": "78958483-2124-5c77-a6c8-a867e37aab13",
+     "title": "CVE-2026-20304 | Cisco Catalyst SD-WAN Controller/Catalyst SD-WAN Manager access control",
+     "description": "A vulnerability described as very critical has been identified in Cisco Catalyst SD-WAN Controller and Catalyst SD-WAN Manager. Impacted is an unknown function. Executing a manipulation can lead to improper access controls.\n\nThe identification of this vulnerability is CVE-2026-20304. The attack may ...",
+     "url": "https://vuldb.com/vuln/386315",
+     "author": "vuldb.com",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:34:17 +0000"
+    },
+    {
+     "id": "75264919-d514-5aaf-8e89-55933cbd4b5f",
+     "title": "CVE-2026-20303 | Cisco Catalyst SD-WAN Controller/Catalyst SD-WAN Manager input validation",
+     "description": "A vulnerability marked as very critical has been reported in Cisco Catalyst SD-WAN Controller and Catalyst SD-WAN Manager. This issue affects some unknown processing. Performing a manipulation results in improper input validation.\n\nThis vulnerability was named CVE-2026-20303. The attack may be initi...",
+     "url": "https://vuldb.com/vuln/386314",
+     "author": "vuldb.com",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:33:35 +0000"
+    },
+    {
+     "id": "52f69aaf-1a64-5e4c-bb43-8c20c430fe4d",
+     "title": "CVE-2026-20311 | Cisco IOS XE Software up to 26.2.1ea Web-based Management Interface certificate validation",
+     "description": "A vulnerability labeled as problematic has been found in Cisco IOS XE Software. This vulnerability affects unknown code of the component Web-based Management Interface. Such manipulation leads to improper certificate validation.\n\nThis vulnerability is uniquely identified as CVE-2026-20311. The attac...",
+     "url": "https://vuldb.com/vuln/386313",
+     "author": "vuldb.com",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:32:42 +0000"
+    },
+    {
+     "id": "a16115c9-a88e-5db4-a51f-4055f9e63045",
+     "title": "A man arrested at Trump golf course near Los Angeles set to appear in court on weapons charge",
+     "description": "LOS ANGELES (AP) — A California man who was arrested at President Donald Trump's Los Angeles-area golf course while pretending to be part of the security detail preparing for Trump's visit is due in court Wednesday on a federal weapons charge. Jeanine John Taele, 38, was arrested Sunday at Trump Nat...",
+     "url": "https://www.keloland.com/news/national-world-news/ap-a-man-arrested-at-trump-golf-course-near-los-angeles-set-to-appear-in-court-on-weapons-charge/",
+     "author": "Associated Press",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:32:22 +0000"
+    },
+    {
+     "id": "18e4340d-5891-5a69-9a2e-6e162cdd3142",
+     "title": "CVE-2026-20308 | Cisco IOS XE Software up to 26.2.1ea Web-based Management Interface input validation",
+     "description": "A vulnerability identified as critical has been detected in Cisco IOS XE Software. This affects an unknown part of the component Web-based Management Interface. This manipulation causes improper input validation.\n\nThis vulnerability is handled as CVE-2026-20308. The attack can be initiated remotely....",
+     "url": "https://vuldb.com/vuln/386312",
+     "author": "vuldb.com",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:32:13 +0000"
+    },
+    {
+     "id": "b87b3a7d-cb26-5e02-b99a-eeda5b3ff906",
+     "title": "How Disney's IP Strategy Is Driving Growth",
+     "description": "Disney's latest earnings beat was powered by more than just streaming. Phillips Securities analyst Helena Wang joins Bloomberg to explain why Disney's unique ability to monetize its intellectual property across movies, Disney+, theme parks, cruises and consumer products continues to set it apart, an...",
+     "url": "https://www.bloomberg.com/news/videos/2026-08-05/why-disney-keeps-outperforming-video",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:32:03 +0000"
+    },
+    {
+     "id": "8ff902df-df5a-5ced-98bb-bf7c4b4aaab6",
+     "title": "CVE-2026-20301 | Cisco IOS XE Software/IOS XMCP denial of service",
+     "description": "A vulnerability categorized as critical has been discovered in Cisco IOS XE Software and IOS. Affected by this issue is some unknown functionality of the component XMCP. The manipulation results in denial of service.\n\nThis vulnerability is known as CVE-2026-20301. It is possible to launch the attack...",
+     "url": "https://vuldb.com/vuln/386311",
+     "author": "vuldb.com",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 17:31:22 +0000"
+    }
+   ]
+  },
+  {
+   "label": "s6_cat_politics",
+   "params": {
+    "language": "en",
+    "category": "politics"
+   },
+   "news": [
+    {
+     "id": "66fac220-1e62-506f-95ca-686859e0e11e",
+     "title": "NUPRC approved over $57 billion in oil, gas development plans since 2024—Official",
+     "description": "Nigeria’s upstream petroleum regulator says it has approved more than $57 billion worth of Field Development Plans since 2024, as the country prepares for 22 major offshore projects estimated to attract between $30 billion and $50 billion in investments from 2026 to 2030.",
+     "url": "https://www.premiumtimesng.com/business/business-news/900918-nuprc-approved-over-57-billion-in-oil-gas-development-plans-since-2024-official.html",
+     "author": "Abdulkareem Mojeed",
+     "image": "https://media.premiumtimesng.com/wp-content/files/2026/08/2d83539b-03f2-44d0-9971-53e9e447e521.png",
+     "language": "en",
+     "category": [
+      "politics"
+     ],
+     "source_category": [
+      "politics"
+     ],
+     "published": "2026-08-05 18:11:54 +0000"
+    },
+    {
+     "id": "51f428d5-137b-5330-8bea-75932281186d",
+     "title": "Of palaces and ghost kingdoms, By Zainab Suleiman Okino",
+     "description": "It is unsurprising that a budget which already defies logic would allocate billions for palaces in locations where no chiefdom exists.",
+     "url": "https://www.premiumtimesng.com/opinion/900907-of-palaces-and-ghost-kingdoms-by-zainab-suleiman-okino.html",
+     "author": "Premium Times",
+     "image": "https://media.premiumtimesng.com/wp-content/files/2021/10/Zainab-Suleiman-Okino.jpeg",
+     "language": "en",
+     "category": [
+      "politics"
+     ],
+     "source_category": [
+      "politics"
+     ],
+     "published": "2026-08-05 18:08:09 +0000"
+    },
+    {
+     "id": "261ef434-17ee-5b0c-9737-b7806d883dee",
+     "title": "Man hearing screams finds his brother-in-law 'actively stabbing' his sister: Police",
+     "description": "A man in Maryland was at his sister's home when suddenly he heard screaming and found her husband stabbing her to death, authorities say.",
+     "url": "https://lawandcrime.com/crime/man-hearing-screams-finds-his-brother-in-law-on-top-of-his-sister-actively-stabbing-her-and-covered-in-blood-police/",
+     "author": "Conrad Hoyt",
+     "image": "https://lawandcrime.com/wp-content/uploads/2026/08/Kimberly-Lechner-and-Anthony-Lechner.jpg",
+     "language": "en",
+     "category": [
+      "legal",
+      "crime",
+      "politics"
+     ],
+     "source_category": [
+      "legal",
+      "crime",
+      "politics"
+     ],
+     "published": "2026-08-05 18:02:10 +0000"
+    },
+    {
+     "id": "7c40698c-6cc4-5722-8f84-54564bddf0e1",
+     "title": "Trump’s Battleship Fleet Could Cost $275 Billion, CBO Says",
+     "description": "President Donald Trump’s so-called Golden Fleet of around 15 nuclear-powered battleships could cost as much as $275 billion to develop and acquire through 2056, according to the non-partisan Congressional Budget Office.",
+     "url": "https://www.bloomberg.com/news/articles/2026-08-05/trump-s-battleship-fleet-could-cost-275-billion-cbo-says",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "politics"
+     ],
+     "source_category": [
+      "politics"
+     ],
+     "published": "2026-08-05 18:02:05 +0000"
+    },
+    {
+     "id": "6e7c8dbd-efb0-59ca-8ec5-17b745626f9f",
+     "title": "NDIC says over N106bn paid to Heritage Bank depositors",
+     "description": "The corporation urged depositors who have yet to receive their payments to lodge their complaints via the NDIC Helpdesk portal, noting that the payment process is still ongoing.",
+     "url": "https://www.premiumtimesng.com/business/business-news/900916-ndic-says-over-n106bn-paid-to-heritage-bank-depositors.html",
+     "author": "Omotoyosi Idowu",
+     "image": "https://media.premiumtimesng.com/wp-content/files/2022/08/NDIC.jpg",
+     "language": "en",
+     "category": [
+      "politics"
+     ],
+     "source_category": [
+      "politics"
+     ],
+     "published": "2026-08-05 17:59:46 +0000"
+    },
+    {
+     "id": "366338b1-dbaa-5316-af07-5b6f6b857a7b",
+     "title": "Researchers examined every body vertebra in 13 Australian snakes and found five distinct regions, including a short neck just 7 to 12 vertebrae long",
+     "description": "By measuring every vertebra along the bodies of 13 native Australian snakes, evolutionary biologists have discovered that a snake's spine is much more organized than previously believed. Instead of being one long, uniform structure, it contains five distinct anatomical regions, including a surprisin...",
+     "url": "https://timesofindia.indiatimes.com/science/researchers-examined-every-body-vertebra-in-13-australian-snakes-and-found-five-distinct-regions-including-a-short-neck-just-7-to-12-vertebrae-long/articleshow/132955773.cms",
+     "author": "TOI Science Desk",
+     "image": "https://static.toiimg.com/thumb/msid-132958221,width-1280,height-720,resizemode-6,overlay-toi_sw,pt-32,y_pad-600/photo.jpg",
+     "language": "en",
+     "category": [
+      "politics"
+     ],
+     "source_category": [
+      "politics"
+     ],
+     "published": "2026-08-05 17:57:49 +0000"
+    },
+    {
+     "id": "5d5d1e9d-562d-5ddc-920e-0fc68dff13b7",
+     "title": "Lagos, FirstBank, Zenith Bank back QEDNG Creative Powerhouse Summit 2.0",
+     "description": "The announcement was made on Wednesday by Mighty Media Plus Network Limited, publishers of the online newspaper QEDNG.",
+     "url": "https://www.premiumtimesng.com/entertainment/naija-fashion/900739-lagos-firstbank-zenith-bank-back-qedng-creative-powerhouse-summit-2-0.html",
+     "author": "Premium Times",
+     "image": "https://media.premiumtimesng.com/wp-content/files/2026/08/QEDNG-Creative-Powerhouse-Summit-2-0.png",
+     "language": "en",
+     "category": [
+      "politics"
+     ],
+     "source_category": [
+      "politics"
+     ],
+     "published": "2026-08-05 17:52:12 +0000"
+    },
+    {
+     "id": "f4768a21-2f2a-54a8-9f63-e4b3a2721ded",
+     "title": "NYT's Tirade About Self-Defense Shows Contempt For Constitution",
+     "description": "The ‘right to kill’ isn’t growing, as The New York Times purports. It’s always been there thanks to the Second Amendment.",
+     "url": "https://thefederalist.com/2026/08/05/nyt-writer-pearl-clutching-about-self-defense-laws-reveals-his-contempt-for-the-constitution/",
+     "author": "Jordan Boyd",
+     "image": "https://thefederalist.com/wp-content/uploads/2026/08/Untitled-design-3.jpg",
+     "language": "en",
+     "category": [
+      "politics"
+     ],
+     "source_category": [
+      "politics"
+     ],
+     "published": "2026-08-05 17:48:33 +0000"
+    },
+    {
+     "id": "92657a1a-1c09-558f-b544-4765f000971e",
+     "title": "WATCH LIVE: Trump talks about the economy in Las Vegas",
+     "description": "The Republican president has struggled to connect with voters on the economy as elevated inflation and Americans' feelings of uncertainty have overshadowed the stock market gains he often cites along with a low national unemployment rate.",
+     "url": "https://www.pbs.org/newshour/politics/watch-live-trump-talks-about-the-economy-in-las-vegas",
+     "author": "",
+     "image": "https://d3i6fh83elv35t.cloudfront.net/static/2026/08/2026-08-04T234657Z_1362422208_RC2ZRMAEJPK2_RTRMADP_3_USA-TRUMP-1024x683.jpg",
+     "language": "en",
+     "category": [
+      "politics",
+      "world"
+     ],
+     "source_category": [
+      "politics",
+      "world"
+     ],
+     "published": "2026-08-05 17:47:46 +0000"
+    },
+    {
+     "id": "1896635e-1491-5b6e-8f68-6492b706a2f8",
+     "title": "Progressive Democrats propel El-Sayed to Michigan Senate primary win",
+     "description": "Abdul El-Sayed edged Rep. Haley Stevens in Michigan’s Democratic primary for a Senate seat.",
+     "url": "https://www.csmonitor.com/USA/Politics/2026/0805/michigan-election-el-sayed-senate",
+     "author": "The Christian Science Monitor",
+     "image": "https://images.csmonitor.com/csm/2026/08/0705_NMICHWIN_El-Sayed.jpg?alias=standard_900x600",
+     "language": "en",
+     "category": [
+      "politics"
+     ],
+     "source_category": [
+      "politics"
+     ],
+     "published": "2026-08-05 17:44:00 +0000"
+    },
+    {
+     "id": "61c1f326-5585-5b5e-8a0c-3da5e17208b6",
+     "title": "'What I had to do': Daughter who fatally shot elderly dad in forehead 'on purpose' is sentenced",
+     "description": "Jennifer Mulligan was sentenced to 17 years in a Virginia prison for fatally shooting her father \"on purpose,\" claiming he had abused her for years.",
+     "url": "https://lawandcrime.com/crime/did-what-i-had-to-do-daughter-who-said-she-fatally-shot-elderly-dad-in-forehead-on-purpose-is-sentenced/",
+     "author": "Jerry Lambe",
+     "image": "https://lawandcrime.com/wp-content/uploads/2025/09/Landan-Jennings-36-10.jpg",
+     "language": "en",
+     "category": [
+      "legal",
+      "crime",
+      "politics"
+     ],
+     "source_category": [
+      "legal",
+      "crime",
+      "politics"
+     ],
+     "published": "2026-08-05 17:39:45 +0000"
+    },
+    {
+     "id": "9196c73e-755d-5c90-9d0b-bac74f4053af",
+     "title": "West American dams are on the verge of shutting down: Lack of maintenance is filling them with silt faster than ever, making the great structures obsolete",
+     "description": "The accumulation of sediment in reservoirs across the American West represents a significant challenge for water resource management. Since the early 20th century, thousands of dams have been constructed to provide essential services, including hydro-electric power, irrigation for agriculture, and r...",
+     "url": "https://timesofindia.indiatimes.com/world/us/west-american-dams-are-on-the-verge-of-shutting-down-lack-of-maintenance-is-filling-them-with-silt-faster-than-ever-making-the-great-structures-obsolete/articleshow/132953829.cms",
+     "author": "TOI World Desk",
+     "image": "https://static.toiimg.com/thumb/msid-132954825,width-1280,height-720,resizemode-6,overlay-toi_sw,pt-32,y_pad-600/photo.jpg",
+     "language": "en",
+     "category": [
+      "politics"
+     ],
+     "source_category": [
+      "politics"
+     ],
+     "published": "2026-08-05 17:37:18 +0000"
+    },
+    {
+     "id": "7ff45ac7-31e8-58c2-870c-cd352729ff0b",
+     "title": "FG promises payment of outstanding wage awards before mid-August",
+     "description": "The finance minister said the release of payment for the outstanding wage award was in its final stage and expressed confidence that eligible workers would begin receiving payments before mid-August.",
+     "url": "https://www.premiumtimesng.com/news/top-news/900908-fg-promises-payment-of-outstanding-wage-awards-before-mid-august.html",
+     "author": "Agency Report",
+     "image": "https://media.premiumtimesng.com/wp-content/files/2026/06/701385325_10235973202284108_1386022563267335218_n-e1780647385197.jpg",
+     "language": "en",
+     "category": [
+      "politics"
+     ],
+     "source_category": [
+      "politics"
+     ],
+     "published": "2026-08-05 17:37:18 +0000"
+    },
+    {
+     "id": "0adae732-c594-5a9e-91af-b112bbdc6c6c",
+     "title": "North Carolina Rep. Edwards quits reelection bid after committee finds inappropriate conduct",
+     "description": "The House Ethics Committee recommended he be censured for unprofessional and inappropriate conduct toward two young female aides in his office.",
+     "url": "https://www.pbs.org/newshour/politics/north-carolina-rep-edwards-quits-reelection-bid-after-committee-finds-inappropriate-conduct",
+     "author": "",
+     "image": "https://d3i6fh83elv35t.cloudfront.net/static/2026/08/2026-04-15T154822Z_847564599_RC2RPKAH3PSG_RTRMADP_3_USA-CONGRESS-BUDGET-1024x683.jpg",
+     "language": "en",
+     "category": [
+      "politics",
+      "world"
+     ],
+     "source_category": [
+      "politics",
+      "world"
+     ],
+     "published": "2026-08-05 17:33:51 +0000"
+    },
+    {
+     "id": "095df7ea-46b3-536f-92f5-92edfcaf0304",
+     "title": "Iran and Oman agree on new Hormuz route, Tehran says",
+     "description": "Trump has repeatedly insisted Iran wants a deal with the US to reopen the strait, but Iran says it will make arrangements with Oman instead.",
+     "url": "https://www.scmp.com/news/world/middle-east/article/3363094/iran-and-oman-agree-new-hormuz-route-tehran-says",
+     "author": "Agence France-Presse",
+     "image": "https://cdn.i-scmp.com/sites/default/files/styles/og_image_scmp_generic/public/d8/images/canvas/2026/08/06/eedf89c1-11e4-4721-b9dc-88570c464290_c611d2b0.jpg?itok=fW-O2fDF&v=1785950857",
+     "language": "en",
+     "category": [
+      "politics"
+     ],
+     "source_category": [
+      "politics"
+     ],
+     "published": "2026-08-05 17:27:45 +0000"
+    },
+    {
+     "id": "125a6e90-4b30-5e42-8dfb-0bda51fd3ffb",
+     "title": "In 2023, America’s first live yellow-legged hornet, a bee-killing predator, was found in Georgia; by 2026, officials had trapped 866 and destroyed 44 nests",
+     "description": "State agriculture teams in Georgia have trapped at least 866 invasive yellow-legged hornets and destroyed 44 active nests so far this year, according to official data released by the Georgia Department of Agriculture.",
+     "url": "https://timesofindia.indiatimes.com/world/us/in-2023-americas-first-live-yellow-legged-hornet-a-bee-killing-predator-was-found-in-georgia-by-2026-officials-had-trapped-866-and-destroyed-44-nests/articleshow/132952172.cms",
+     "author": "TOI World Desk",
+     "image": "https://static.toiimg.com/thumb/msid-132955581,width-1280,height-720,resizemode-6,overlay-toi_sw,pt-32,y_pad-600/photo.jpg",
+     "language": "en",
+     "category": [
+      "politics"
+     ],
+     "source_category": [
+      "politics"
+     ],
+     "published": "2026-08-05 17:27:00 +0000"
+    },
+    {
+     "id": "99f34127-e145-554d-b74f-a814ed20ebc0",
+     "title": "How El-Sayed won the contentious Michigan Senate Democratic primary",
+     "description": "Abdul El-Sayed won with a populist platform buoyed by voter discontent with establishment Democrats and Israel.",
+     "url": "https://www.washingtonpost.com/politics/2026/08/05/how-el-sayed-won-contentious-michigan-senate-democratic-primary/",
+     "author": "Liz Goodwin; Erin Cox; Clara Ence Morse; Patrick Marley",
+     "image": "https://www.washingtonpost.com/wp-apps/imrs.php?src=https://cloudfront-us-east-1.images.arcpublishing.com/wapo/JRU3Q7E6RTZAMPMOOXXLA4U7SQ.jpg&w=1440",
+     "language": "en",
+     "category": [
+      "politics"
+     ],
+     "source_category": [
+      "politics"
+     ],
+     "published": "2026-08-05 17:26:04 +0000"
+    },
+    {
+     "id": "db7f61b7-795a-5497-89a9-f17874af2196",
+     "title": "Judge criticizes Trump's Justice Department as he says he has no choice but to dismiss Jan. 6 seditious conspiracy case",
+     "description": "The move Tuesday closes the book on the Jan. 6 cases that were wiped out with Republican President Donald Trump's sweeping pardons and commutations last year, freeing from prison people convicted of violent of assaults on police and other crimes.",
+     "url": "https://www.pbs.org/newshour/politics/judge-criticizes-trumps-justice-department-as-he-says-he-has-no-choice-but-to-dismiss-jan-6-seditious-conspiracy-case",
+     "author": "",
+     "image": "https://d3i6fh83elv35t.cloudfront.net/static/2026/08/2025-09-25T140609Z_1542402117_RC22ZGAWVY5F_RTRMADP_3_REUTERS-40ANNIVERSARY-1024x688.jpg",
+     "language": "en",
+     "category": [
+      "politics",
+      "world"
+     ],
+     "source_category": [
+      "politics",
+      "world"
+     ],
+     "published": "2026-08-05 17:19:27 +0000"
+    },
+    {
+     "id": "6061ca85-1265-5d1a-97ba-fef4673385df",
+     "title": "Iran and Oman reach understanding on coordinates of route through Hormuz, Iran says",
+     "description": "Iran and Oman have reached an understanding on the geographic coordinates for a shipping route through the Strait of Hormuz, and a joint announcement is being finalized, Iran said.",
+     "url": "https://www.gmanetwork.com/news/topstories/world/997521/iran-and-oman-reach-understanding-on-coordinates-of-route-through-hormuz-iran-says/story/",
+     "author": "Reuters",
+     "image": "https://images.gmanews.tv/webpics/2026/06/strait_of_hormuz_2026_06_17_02_45_48.JPG",
+     "language": "en",
+     "category": [
+      "politics"
+     ],
+     "source_category": [
+      "politics"
+     ],
+     "published": "2026-08-05 17:18:50 +0000"
+    },
+    {
+     "id": "14d9e37c-f3f2-534c-8d84-2aae8053624f",
+     "title": "Democrats turn out big in Michigan gubernatorial primary",
+     "description": "About 1.5 million voters cast ballots in the Democratic primary for governor compared with about 930,000 in the Republican primary, as of midday Wednesday.",
+     "url": "https://www.washingtonpost.com/politics/2026/08/05/democrats-turn-out-big-michigan-gubernatorial-primary/",
+     "author": "Praveena Somasundaram; Erin Cox",
+     "image": "https://www.washingtonpost.com/wp-apps/imrs.php?src=https://cloudfront-us-east-1.images.arcpublishing.com/wapo/MSLZI6BGO2I2MEFQWGVMD6SGZQ.jpg&w=1440",
+     "language": "en",
+     "category": [
+      "politics"
+     ],
+     "source_category": [
+      "politics"
+     ],
+     "published": "2026-08-05 17:14:56 +0000"
+    }
+   ]
+  },
+  {
+   "label": "s6_day_bounded",
+   "params": {
+    "language": "en",
+    "category": "technology",
+    "start_date": "2026-08-04T00:00:00+00:00",
+    "end_date": "2026-08-05T00:00:00+00:00"
+   },
+   "news": [
+    {
+     "id": "f5143426-5f73-5c39-93d1-2c6fea3ace46",
+     "title": "Discovery Week 2026: What we learned, and what we’re doing next",
+     "description": "Reflections and outcomes from the 5-day rapid research event we held in May",
+     "url": "https://blog.joinmastodon.org/2026/08/discovery-week-2026-what-we-learned-and-what-were-doing-next/",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 00:00:00 +0000"
+    },
+    {
+     "id": "f1b72d66-0e9f-58e9-969e-26ea1e5a2203",
+     "title": "Comparing 364d7dfaca...5d2d977495 · gggeek/yet-another-waf-core",
+     "description": "A library for implementing Web API Firewalls. Contribute to gggeek/yet-another-waf-core development by creating an account on GitHub.",
+     "url": "https://github.com/gggeek/yet-another-waf-core",
+     "author": "Gggeek",
+     "image": "https://opengraph.githubassets.com/9df84082516558487efb761e27d2ccc7728c125e11ce735f5a54228f29f7684e/gggeek/yet-another-waf-core",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 00:00:00 +0000"
+    },
+    {
+     "id": "cec6fe25-fd4e-56cc-926e-999a0b00a0c8",
+     "title": "Comparing f27121e1ff...dfd022658a · tanowaf/HTTP-Core",
+     "description": "Contribute to tanowaf/HTTP-Core development by creating an account on GitHub.",
+     "url": "https://github.com/tanowaf/HTTP-Core",
+     "author": "Tanowaf",
+     "image": "https://opengraph.githubassets.com/52d752a693fb5d937f0f4f161793fce575c98b91c5afbdd73f98acb52aa8972c/tanowaf/HTTP-Core",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 00:00:00 +0000"
+    },
+    {
+     "id": "aed6d89c-a111-5bed-ba10-18f3cc8b91b9",
+     "title": "gggeek created a branch",
+     "description": "gggeek\n\n              created a\n              branch\n              in\n              tanowaf/WAF-Core\n\n              · August 5, 2026 14:40\n\n                    refs/heads/main in tanowaf/WAF-Core\n\n            Updated Aug 5",
+     "url": "https://github.com/tanowaf/WAF-Core/compare/0000000000...f40de70a6b",
+     "author": "gggeek (giunta.gaetano@gmail.com)",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 00:00:00 +0000"
+    },
+    {
+     "id": "ace1fee9-d581-597c-880b-d2181282d1cd",
+     "title": "Chrome lands on arm64 | Calibre",
+     "description": "Google has shipped official arm64 Linux builds of Chrome. Here’s where to get them, and why it’s good news for anyone running browser automation.",
+     "url": "https://calibreapp.com/blog/chrome-for-linux-arm64",
+     "author": "Ben Schwarz",
+     "image": "https://calibreapp.com/images/pages/blog/chrome-for-linux-arm64.png",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 00:00:00 +0000"
+    },
+    {
+     "id": "984f4169-4d61-5648-a084-f77c9562fb4f",
+     "title": "Comparing 4bc832dd9b...a300b48674 · gggeek/yet-another-docker-socket-proxy",
+     "description": "A semantically-aware docker-socket reverse proxy. In php, just because - Comparing 4bc832dd9b...a300b48674 · gggeek/yet-another-docker-socket-proxy",
+     "url": "https://github.com/gggeek/yet-another-docker-socket-proxy",
+     "author": "Gggeek",
+     "image": "https://opengraph.githubassets.com/13ca47a6ed5d726586c450529b4e68bf55895c5d211cc5196ad607d09a5cf1c4/gggeek/yet-another-docker-socket-proxy",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 00:00:00 +0000"
+    },
+    {
+     "id": "9169cf73-a0fc-59d6-8391-cc969b73010f",
+     "title": "Measure time between steps in Vercel Workflows - Vercel",
+     "description": "The trace viewer for Vercel Workflows and the Workflow SDK now measures the time between steps. Select a step, hold Option or Alt, and hover another to see the delta.",
+     "url": "https://vercel.com/changelog/measure-time-between-steps-in-vercel-workflows",
+     "author": "Mitul Shah",
+     "image": "https://assets.vercel.com/image/upload/contentful/image/e5382hct74si/35CSfyoQTIBBW0ImK7hd33/97c4beb2680b27a976e94423e1a6ca12/file-f91a12bcb090a93b2096242579ff8f62.png",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 00:00:00 +0000"
+    },
+    {
+     "id": "8af5c2ec-6146-5f46-86dc-cdf5af7e4f9e",
+     "title": "What if Claude were your Postgres server?",
+     "description": "Postgres Weekly — Issue #660",
+     "url": "https://postgresweekly.com/issues/660",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 00:00:00 +0000"
+    },
+    {
+     "id": "74214a0b-adab-5eda-ab37-6b77b724f2d6",
+     "title": "5 best practices for preventing chaos in Tailwind CSS—Martian Chronicles, Evil Martians’ team blog",
+     "description": "Tailwind CSS has become a very popular CSS framework, and it can speed up development. But using it without proper caution can add mayhem to your code. Learn best practices to avoid getting swept away!",
+     "url": "https://evilmartians.com/chronicles/5-best-practices-for-preventing-chaos-in-tailwind-css",
+     "author": "Nina Torgunakova; Travis Turner",
+     "image": "https://evilmartians.com/social-cards/chronicles/5-best-practices-for-preventing-chaos-in-tailwind-css.jpg",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 00:00:00 +0000"
+    },
+    {
+     "id": "45b66d37-5a19-59f4-8fb4-97175fb74d6c",
+     "title": "Comparing a37341432f...2cae5f289b · tanowaf/WAF-Core",
+     "description": "Contribute to tanowaf/WAF-Core development by creating an account on GitHub.",
+     "url": "https://github.com/tanowaf/WAF-Core",
+     "author": "Tanowaf",
+     "image": "https://opengraph.githubassets.com/414544d6eefe19751027323a783287611ac8f8d13243292ab47338b8ebb9ac83/tanowaf/WAF-Core",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 00:00:00 +0000"
+    },
+    {
+     "id": "3ae53f6a-40a5-5c40-96a3-ecd029447022",
+     "title": "Accessibility: Start with \"why\" - Craig Abbott",
+     "description": "Why leading with compliance fails, and how starting with \"why\" builds a lasting accessibility culture",
+     "url": "https://www.craigabbott.co.uk/blog/2026/accessibility-start-with-why/",
+     "author": "Craig Abbott",
+     "image": "https://www.craigabbott.co.uk/assets/images/share-images/strategy-and-leadership.png",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 00:00:00 +0000"
+    },
+    {
+     "id": "3a5a5853-4712-5ef1-a771-5161cb7fe9b9",
+     "title": "Comparing a1e6c39c10...00b572e75b · gggeek/yet-another-waf",
+     "description": "A Web API Firewall. In PHP, just because. Contribute to gggeek/yet-another-waf development by creating an account on GitHub.",
+     "url": "https://github.com/gggeek/yet-another-waf",
+     "author": "Gggeek",
+     "image": "https://opengraph.githubassets.com/b3d41fe46ee4a9ef54d318596907c28f21f6074ff6fa2566d4f63118cd300572/gggeek/yet-another-waf",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 00:00:00 +0000"
+    },
+    {
+     "id": "388a1ac4-1463-5a0e-95c7-997a3bee2d7f",
+     "title": "Hacker News Daily",
+     "description": "",
+     "url": "https://www.daemonology.net/hn-daily/2026-08-04.html",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 00:00:00 +0000"
+    },
+    {
+     "id": "342035c7-c20a-57c2-ab56-470209530e49",
+     "title": "gggeek created a branch",
+     "description": "gggeek\n\n              created a\n              branch\n              in\n              tanowaf/Yet-Another-Docker-Socket-Proxy\n\n              · August 5, 2026 15:17\n\n                    refs/heads/main in tanowaf/Yet-Another-Docker-Socket-Proxy\n\n            Updated Aug 5",
+     "url": "https://github.com/tanowaf/Yet-Another-Docker-Socket-Proxy/compare/0000000000...dc6ce2f185",
+     "author": "gggeek (giunta.gaetano@gmail.com)",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 00:00:00 +0000"
+    },
+    {
+     "id": "0f69aa04-461b-5aef-b501-bedaa655f791",
+     "title": "gggeek created a branch",
+     "description": "gggeek\n\n              created a\n              branch\n              in\n              tanowaf/HTTP-Core\n\n              · August 5, 2026 14:47\n\n                    refs/heads/main in tanowaf/HTTP-Core\n\n            Updated Aug 5",
+     "url": "https://github.com/tanowaf/HTTP-Core/compare/0000000000...f27121e1ff",
+     "author": "gggeek (giunta.gaetano@gmail.com)",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 00:00:00 +0000"
+    },
+    {
+     "id": "07ae66e3-a5df-525d-a9d2-77aa19cd1f97",
+     "title": "Firmware Extraction: How Attackers Read Device Memory and How to Defend Against It",
+     "description": "Tech magazine for cybersecurity specialists",
+     "url": "https://hackmag.com/security/instrumental-investigation",
+     "author": "HackMag",
+     "image": "https://hackmag.com/wp-content/uploads/2026/08/25837_thumbnail.webp",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-05 00:00:00 +0000"
+    },
+    {
+     "id": "e3340f6f-fc16-5a8c-ad27-aa1387cacc9b",
+     "title": "Malicious code in @tuluax/errb (npm)",
+     "description": "--- -= Per source details. Do not edit below this line.=- Source: amazon-inspector 561541f6fdbe9bd25716c6fb8a3326df9cbe7a78e7c972d89e36a1c9afc7a186 package.json scripts.install runs node -e \"require'childprocess'.spawn'node', 'index.js', detached: true, stdio: 'ignore' .unref\", causing npm install t...",
+     "url": "https://vulners.com/ossf/OSSF:MAL-2026-11993",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-04 23:57:59 +0000"
+    },
+    {
+     "id": "07e15808-db1a-5f71-83d4-a64b6832cd39",
+     "title": "Malicious code in vitest-preview-pro (npm)",
+     "description": "--- -= Per source details. Do not edit below this line.=- Source: amazon-inspector 367fd88886da38fc8a88929cfb486d6031ee42d44499b5f7a2d47d4e91d5b075 The package is published under a name suggesting a Vitest preview utility, but the shipped code is a rebranded copy of nodemailer with an added preinsta...",
+     "url": "https://vulners.com/ossf/OSSF:MAL-2026-12004",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-04 23:56:52 +0000"
+    },
+    {
+     "id": "290c264c-1003-57ea-aab4-0cb063728cc0",
+     "title": "SpaceX's first earnings as a public company show an AI bet outrunning its cash generation",
+     "description": "SpaceX's debut quarterly report as a listed company laid out the scale of the wager it is making on artificial intelligence compute, a business now large enough to reshape the group's finances just seven weeks after its Nasdaq debut.",
+     "url": "https://www.digitimes.com/news/a20260805VL202/spacex-earnings-revenue-business-loss.html",
+     "author": "DIGITIMES",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-04 23:55:01 +0000"
+    },
+    {
+     "id": "0824d04a-251e-5745-b280-15d0b5695aac",
+     "title": "CVE-2026-18375 Pagure ACL improper authorization",
+     "description": "A vulnerability was found in Pagure. This vulnerability is identified as CVE-2026-18375.",
+     "url": "https://vuldb.com/vuln/386002",
+     "author": "",
+     "image": "https://vuldb.com/_thm/preview_images/vuldb_vulnerability-8.jpg",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-04 23:53:11 +0000"
+    }
+   ]
+  }
+ ]
+}

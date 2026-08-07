@@ -1,0 +1,230 @@
+{
+ "_provenance": {
+  "captured": "2026-08-04",
+  "tier": "free",
+  "why": "Client error-taxonomy fixtures (ARCHITECTURE 5.3). Note these shapes do NOT match the OpenAPI ApiResponse definition."
+ },
+ "unauthorized_401": {
+  "status": "401",
+  "msg": "Invalid token"
+ },
+ "page_size_over_tier_400": {
+  "status": "400",
+  "msg": "Bad request",
+  "code": "INVALID_QUERY",
+  "message": "Bad request",
+  "details": {
+   "message": "Invalid parameters",
+   "errors": {
+    "page_size": "Max page_size for Free tier is 20"
+   }
+  }
+ },
+ "page_number_zero_400": {
+  "status": "400",
+  "msg": "Bad request",
+  "code": "INVALID_QUERY",
+  "message": "Bad request",
+  "details": {
+   "message": "Invalid parameters",
+   "errors": {
+    "page_number": "Min value: 1"
+   }
+  }
+ },
+ "page_number_over_cap_400": {
+  "status": "400",
+  "msg": "Bad request",
+  "code": "INVALID_QUERY",
+  "message": "Bad request",
+  "details": {
+   "message": "Invalid parameters",
+   "errors": {
+    "page_number": "Max retrievable results for Free tier is 100"
+   }
+  }
+ },
+ "lookback_exceeded_400": {
+  "status": "400",
+  "msg": "Bad request",
+  "code": "INVALID_QUERY",
+  "message": "Bad request",
+  "details": {
+   "message": "Invalid parameters",
+   "errors": {
+    "date_range": "Max lookback is 30 days"
+   }
+  }
+ },
+ "past_end_page_200_empty": {
+  "status": "ok",
+  "news": []
+ },
+ "reference_languages": {
+  "languages": {
+   "Arabic": "ar",
+   "Chinese": "zh",
+   "Dutch": "nl",
+   "English": "en",
+   "Finnish": "fi",
+   "French": "fr",
+   "German": "de",
+   "Hindi": "hi",
+   "Italian": "it",
+   "Japanese": "ja",
+   "Korean": "ko",
+   "Malay": "msa",
+   "Portuguese": "pt",
+   "Russian": "ru",
+   "Spanish": "es",
+   "Vietnamise": "vi",
+   "Danish": "da",
+   "Czech": "cs",
+   "Greek": "el",
+   "Hungarian": "hu",
+   "Serbian": "sr",
+   "Thai": "th",
+   "Turkish": "tr"
+  },
+  "description": "available languages followed by query code",
+  "status": "ok"
+ },
+ "reference_regions": {
+  "regions": {
+   "United State": "US",
+   "Taiwan": "TW",
+   "German": "DE",
+   "United Kingdom": "GB",
+   "China": "CN",
+   "India": "IN",
+   "Spain": "ES",
+   "Italy": "IT",
+   "Poland": "PL",
+   "Australia": "AU",
+   "Malaysia": "MY",
+   "Singapore": "SG",
+   "Canada": "CA",
+   "South Korea": "KR",
+   "Denmark": "DK",
+   "France": "FR",
+   "Belgium": "BE",
+   "Japan": "JP",
+   "Austria": "AT",
+   "Portugal": "PT",
+   "Philippines": "PH",
+   "Hong Kong": "HK",
+   "Argentina": "AR",
+   "Venezuela": "VE",
+   "Brazil": "BR",
+   "Finland": "FI",
+   "Indonedia": "ID",
+   "Vietnam": "VN",
+   "Mexico": "MX",
+   "Greece": "GR",
+   "Netherlands": "NL",
+   "Norway": "NO",
+   "New Zealand": "NZ",
+   "Russia": "RU",
+   "Saudi-Arabia": "SA",
+   "Switzerland": "CH",
+   "Thailand": "TH",
+   "United Arab Emirates": "AE",
+   "Ireland": "IE",
+   "Iran": "IR",
+   "Iraq": "IQ",
+   "Romania": "RO",
+   "Afghanistan": "AF",
+   "Zimbabwe": "ZW",
+   "Myanmar": "MM",
+   "Sweden": "SE",
+   "Peru": "PE",
+   "Panama": "PA",
+   "Egypt": "EG",
+   "Turkey": "TR",
+   "Israel": "IL",
+   "Czech Republic": "CZ",
+   "Bangladesh": "BD",
+   "Nigeria": "NG",
+   "Kenya": "KE",
+   "Chile": "CL",
+   "Uruguay": "UY",
+   "Ecuador": "EC",
+   "Serbia": "RS",
+   "Hungary": "HU",
+   "Slovenia": "SI",
+   "Gahana": "GH",
+   "Bolivia": "BO",
+   "Pakistan": "PK",
+   "Colombia": "CO",
+   "North Korea": "NK",
+   "Paraguay": "PY",
+   "Palestine": "PS",
+   "Estonia": "EE",
+   "Lebanon": "LB",
+   "Qatar": "QA",
+   "Kuwait": "KW",
+   "Cambodia": "KH",
+   "Nepal": "NP",
+   "Luxembourg": "LU",
+   "Bosnia": "BA",
+   "Europe": "EU",
+   "Asia": "ASIA",
+   "International": "INT"
+  },
+  "description": "available regions followed by query code",
+  "status": "ok"
+ },
+ "reference_categories": {
+  "categories": [
+   "regional",
+   "technology",
+   "lifestyle",
+   "business",
+   "general",
+   "programming",
+   "science",
+   "entertainment",
+   "world",
+   "sports",
+   "finance",
+   "academia",
+   "politics",
+   "health",
+   "opinion",
+   "food",
+   "game",
+   "fashion",
+   "academic",
+   "crap",
+   "travel",
+   "culture",
+   "economy",
+   "environment",
+   "art",
+   "music",
+   "notsure",
+   "CS",
+   "education",
+   "redundant",
+   "television",
+   "trading",
+   "commodity",
+   "movie",
+   "entrepreneur",
+   "review",
+   "auto",
+   "energy",
+   "celebrity",
+   "medical",
+   "gadgets",
+   "design",
+   "EE",
+   "security",
+   "mobile",
+   "estate",
+   "funny"
+  ],
+  "description": "order by source count in descending order",
+  "status": "ok"
+ }
+}

@@ -1,0 +1,156 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { RawArticle, type SearchParams } from "./raw.js";
+
+/**
+ * Serves recorded upstream payloads instead of calling the API (CURRENTS_MODE=fixture).
+ *
+ * The free tier allows 1000 calls/day; a dev server with hot reload exhausts that
+ * before lunch. This makes the whole app developable — and the entire test suite
+ * runnable — with no network and no quota (ARCHITECTURE 4.1).
+ *
+ * These are real captured payloads, so fixture mode reproduces the upstream's
+ * actual misbehaviour: the duplication, the "None" images, the non-ISO dates.
+ * That is the point. Synthetic fixtures would hide exactly the bugs worth catching.
+ */
+
+interface DuplicatesFixture {
+  pages: Array<{ page_number: number; news: unknown[] }>;
+}
+interface SampleFixture {
+  calls: Array<{ label: string; params: Record<string, string>; news: unknown[] }>;
+}
+
+export class FixtureStore {
+  private articles: RawArticle[] = [];
+  private loaded = false;
+
+  constructor(private readonly fixturesDir: string) {}
+
+  async load(): Promise<void> {
+    if (this.loaded) return;
+
+    const collected: RawArticle[] = [];
+
+    const duplicates = await this.readJson<DuplicatesFixture>(
+      "search-climate-duplicates.json",
+    );
+    for (const page of duplicates?.pages ?? []) {
+      collected.push(...this.parseAll(page.news));
+    }
+
+    const sample = await this.readJson<SampleFixture>(
+      "search-keywordless-category-sample.json",
+    );
+    for (const call of sample?.calls ?? []) {
+      collected.push(...this.parseAll(call.news));
+    }
+
+    if (collected.length === 0) {
+      throw new Error(
+        `No fixtures loaded from ${this.fixturesDir}. ` +
+          "Fixture mode needs the recorded payloads committed in ./fixtures.",
+      );
+    }
+
+    // Newest-first, matching upstream's own default ordering.
+    collected.sort((a, b) => parsePublished(b.published) - parsePublished(a.published));
+    this.articles = collected;
+    this.loaded = true;
+  }
+
+  get size(): number {
+    return this.articles.length;
+  }
+
+  /**
+   * Approximate the upstream's filtering. Deliberately approximate: real matching
+   * runs against full article body text we never receive, so only 7 of 20 live
+   * results for "climate" contained that word in title or description
+   * (PROBE-FINDINGS 3). Fixture mode matches on the text we DO have, which is a
+   * strictly narrower filter — fine for development, not a relevance oracle.
+   */
+  search(params: SearchParams, limits: { maxPageSize: number }): RawArticle[] {
+    if (!this.loaded) {
+      throw new Error("FixtureStore.load() must be awaited before search()");
+    }
+
+    let results = this.articles;
+
+    if (params.keywords?.length) {
+      const terms = params.keywords.map((term) => term.toLowerCase());
+      results = results.filter((article) => {
+        const haystack =
+          `${article.title ?? ""} ${article.description ?? ""}`.toLowerCase();
+        return terms.every((term) => haystack.includes(term));
+      });
+    }
+    if (params.language) {
+      results = results.filter((article) => article.language === params.language);
+    }
+    if (params.category) {
+      const wanted = params.category.toLowerCase();
+      results = results.filter((article) =>
+        (article.category ?? []).some((c) => c.toLowerCase() === wanted),
+      );
+    }
+    if (params.startDate) {
+      const from = params.startDate.getTime();
+      results = results.filter((a) => parsePublished(a.published) >= from);
+    }
+    if (params.endDate) {
+      const to = params.endDate.getTime();
+      results = results.filter((a) => parsePublished(a.published) < to);
+    }
+
+    // Reproduce the tier's paging limits so code paths that handle truncation
+    // are exercised offline rather than first meeting them in production.
+    const pageSize = Math.min(params.pageSize ?? limits.maxPageSize, limits.maxPageSize);
+    const pageNumber = Math.max(1, params.pageNumber ?? 1);
+    const offset = (pageNumber - 1) * pageSize;
+
+    return results.slice(offset, offset + pageSize);
+  }
+
+  private async readJson<T>(filename: string): Promise<T | null> {
+    try {
+      const raw = await readFile(join(this.fixturesDir, filename), "utf8");
+      return JSON.parse(raw) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  private parseAll(items: unknown[]): RawArticle[] {
+    const parsed: RawArticle[] = [];
+    for (const item of items) {
+      const result = RawArticle.safeParse(item);
+      if (result.success) parsed.push(result.data);
+    }
+    return parsed;
+  }
+}
+
+/**
+ * Parse `"2026-08-04 20:45:56 +0000"`. `new Date()` handles this inconsistently
+ * across runtimes, and a wrong timestamp silently corrupts the timeline — which
+ * is the one thing the product promises. Returns NaN rather than guessing.
+ */
+export function parsePublished(value: string): number {
+  const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})\s*([+-]\d{2}):?(\d{2})?$/
+    .exec(value.trim());
+  if (!match) return Number.NaN;
+
+  const [, year, month, day, hour, minute, second, tzHour, tzMinute = "00"] = match;
+  const offsetMinutes =
+    Number(tzHour) * 60 + Math.sign(Number(tzHour) || 1) * Number(tzMinute);
+
+  return Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second),
+  ) - offsetMinutes * 60_000;
+}

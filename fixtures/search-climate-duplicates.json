@@ -1,0 +1,2158 @@
+{
+ "_provenance": {
+  "endpoint": "GET /v1/search",
+  "params": {
+   "keywords": "climate",
+   "language": "en",
+   "start_date": "2026-08-02T00:00:00+00:00",
+   "end_date": "2026-08-03T00:00:00+00:00",
+   "page_number": "1..5"
+  },
+  "captured": "2026-08-04",
+  "tier": "free",
+  "why": "Regression fixture for URL clustering (ARCHITECTURE 7.4). 100 articles, 100 unique ids, 42 unique URLs; one link-roundup URL appears 50 times."
+ },
+ "pages": [
+  {
+   "page_number": 1,
+   "news": [
+    {
+     "id": "827a8757-4627-5126-9878-1c026ee9f06c",
+     "title": "Climate-smart farming starts with better decisions, not just better forecasts",
+     "description": "In a recent interview with Landbouweekliks, Gabrielle Redelinghuys, Project Lead: Marketing Intelligence and Incubation Projects at Villa Crop Protection, highlighted how the company’s Villa Regional Weather Reports are helping South African growers move beyond simply checking the weather and toward...",
+     "url": "https://www.news24.com/brandstory/partner-content/climate-smart-farming-starts-with-better-decisions-not-just-better-forecasts-20260803-0513",
+     "author": "Sponsored Content",
+     "image": "https://news24cobalt.24.co.za/resources/02a8-21420c6e7a58-5cad9ee4d35a-1000/format/largeThumb/gabrielle_redelinghuys_project_lead_marketing_intelligence_and_incubation_projects_at_villa_crop_p.jpeg",
+     "language": "en",
+     "category": [
+      "regional"
+     ],
+     "source_category": [
+      "regional"
+     ],
+     "published": "2026-08-03 00:00:00 +0000"
+    },
+    {
+     "id": "41bcf9d4-d7c4-5148-b5a3-61c19c2b3b1c",
+     "title": "WATCH | Inside South Africa’s emergency response system",
+     "description": "Most of us go through life hoping we’ll never need emergency medical care. But accidents don’t make appointments.",
+     "url": "https://www.news24.com/brandstory/partner-content/watch-inside-south-africas-emergency-response-system-20260803-0602",
+     "author": "",
+     "image": "https://news24cobalt.24.co.za/resources/02a8-21422c7925bc-1ff762eec2df-1000/format/inline/1080x1080.png",
+     "language": "en",
+     "category": [
+      "regional"
+     ],
+     "source_category": [
+      "regional"
+     ],
+     "published": "2026-08-03 00:00:00 +0000"
+    },
+    {
+     "id": "2602bcb6-964e-57c7-b2fd-789e971b8e13",
+     "title": "From microclimates to mobile alerts: The future of potatoes",
+     "description": "A hyper-localised climate intelligence network is transforming potato production",
+     "url": "https://www.news24.com/brandstory/partner-content/from-microclimates-to-mobile-alerts-the-future-of-potatoes-20260803-0489",
+     "author": "Sponsored Content",
+     "image": "https://news24cobalt.24.co.za/resources/02a8-214204251f98-2353fd81060d-1000/format/inline/metos_sa_1.jpeg",
+     "language": "en",
+     "category": [
+      "regional"
+     ],
+     "source_category": [
+      "regional"
+     ],
+     "published": "2026-08-03 00:00:00 +0000"
+    },
+    {
+     "id": "b71befba-8358-5bbe-9c26-009cae59824d",
+     "title": "First-World Flames",
+     "description": "It’s not any comfort. Wildfires hurt Bordeaux just like Chamoli. Humanity’s in this together The huge wildfires burning across Europe can be surprising to people in India. European countries have lots of money, advanced science,...",
+     "url": "https://timesofindia.indiatimes.com/blogs/gen-zedits/first-world-flames-2/",
+     "author": "GenZeditor",
+     "image": "https://static.toiimg.com/imagenext/toiblogs/photo/blogs/wp-content/uploads/2024/05/Gen-Z-2-1-150x150.jpeg",
+     "language": "en",
+     "category": [
+      "opinion",
+      "regional"
+     ],
+     "source_category": [
+      "opinion",
+      "regional"
+     ],
+     "published": "2026-08-02 23:30:27 +0000"
+    },
+    {
+     "id": "7cdd267c-6feb-5716-b7b0-af798c8dd1b1",
+     "title": "First-World Flames",
+     "description": "It’s not any comfort. Wildfires hurt Bordeaux just like Chamoli. Humanity’s in this together Visuals of wildfires raging through Europe make for complicated viewing in India. Their firefighting seems to have next-level money, science, and...",
+     "url": "https://timesofindia.indiatimes.com/blogs/toi-edit-page/first-world-flames/",
+     "author": "TOI Edit",
+     "image": "https://static.toiimg.com/imagenext/toiblogs/photo/blogs/wp-content/uploads/2019/01/toiedit-logo.jpg",
+     "language": "en",
+     "category": [
+      "opinion",
+      "regional"
+     ],
+     "source_category": [
+      "opinion",
+      "regional"
+     ],
+     "published": "2026-08-02 23:30:12 +0000"
+    },
+    {
+     "id": "239b1d7a-cf16-5756-8af3-f400fdbf79d5",
+     "title": "Possible tornado touches down in Repentigny, Que., amid severe thunderstorm watch",
+     "description": "Residents in Repentigny, Que., were surveying the damage Sunday afternoon, after a possible tornado touched down at around 2 p.m., according to Environment and Climate Change Canada.",
+     "url": "https://www.cbc.ca/news/canada/montreal/possible-tornado-repentigny-quebec-9.7294629",
+     "author": "Annabelle Olivier",
+     "image": "https://i.cbc.ca/ais/950dbad7-d86e-4adf-88ee-8c6161dc93d3,1785711958660/full/max/0/default.jpg?im=Crop%2Crect%3D%280%2C667%2C4032%2C2268%29%3BResize%3D620",
+     "language": "en",
+     "category": [
+      "montreal",
+      "regional"
+     ],
+     "source_category": [
+      "montreal",
+      "regional"
+     ],
+     "published": "2026-08-02 23:27:07 +0000"
+    },
+    {
+     "id": "396fc5eb-ff6f-5550-9a0a-fbfdd09038dc",
+     "title": "Fauci Fakery - More unreal reality",
+     "description": "The Fauci \"diary\" nonsense is just the latest piece of idiotic fakery in a world increasingly dominated by the unreal, the wildly implausible and the fantasized. No, despite the breathless wittering of the mainstream (and some alt) media, the...",
+     "url": "https://www.sott.net/article/507715-Fauci-Fakery-More-unreal-reality",
+     "author": "",
+     "image": "https://www.sott.net/image/s37/747951/full/catte_fauci_puppet.jpg",
+     "language": "en",
+     "category": [
+      "society",
+      "politics"
+     ],
+     "source_category": [
+      "society",
+      "politics"
+     ],
+     "published": "2026-08-02 23:23:12 +0000"
+    },
+    {
+     "id": "618afce5-1310-5055-ae6d-36b820c04640",
+     "title": "Dithering by Labour damages business confidence, bosses say",
+     "description": "The Institute of Directors (IoD) said cost pressures and political upheaval had led to forecasts sagging among business leaders.",
+     "url": "https://www.dailymail.com/news/article-16023619/Dithering-Labour-damages-business-confidence-bosses-say.html?ns_campaign=1490&ito=1490",
+     "author": "John-Paul Ford Rojas",
+     "image": "https://i.dailymail.com/1s/2026/08/02/23/110399941-0-image-m-21_1785710767808.jpg",
+     "language": "en",
+     "category": [
+      "general"
+     ],
+     "source_category": [
+      "general"
+     ],
+     "published": "2026-08-02 23:21:26 +0000"
+    },
+    {
+     "id": "130338fb-a8ad-58e5-82b4-19f1e3d73f93",
+     "title": "Two die as firefighting helicopters collide in Greece",
+     "description": "Two firefighting helicopters collided in Greece while helping to control a huge wildfire on Sunday that has destroyed mo...",
+     "url": "https://news.rthk.hk/rthk/en/component/k2/1864737-20260803.htm",
+     "author": "",
+     "image": "https://newsstatic.rthk.hk/images/mfile_1864737_1_M_20260803071003.jpg",
+     "language": "en",
+     "category": [
+      "world"
+     ],
+     "source_category": [
+      "world"
+     ],
+     "published": "2026-08-02 23:10:02 +0000"
+    },
+    {
+     "id": "96cb046d-b416-5f31-b5c2-ef6e8b10ea6c",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 23:04:47 +0000"
+    },
+    {
+     "id": "b7f4b39f-d22a-5779-be68-99a2d4de81eb",
+     "title": "Hot mornings, rainy afternoons: Why Malaysia keeps getting thunderstorms despite the dry season",
+     "description": "KUALA LUMPUR, Aug 3 — It may be the Southwest Monsoon, a period usually associated with hotter and drier weather, but many Malaysians have found themselves reaching for...",
+     "url": "https://www.malaymail.com/news/malaysia/2026/08/03/hot-mornings-rainy-afternoons-why-malaysia-keeps-getting-thunderstorms-despite-the-dry-season/229721",
+     "author": "R Loheswar",
+     "image": "https://www.malaymail.com/malaymail/uploads/images/2026/08/02/355128.jpg",
+     "language": "en",
+     "category": [
+      "regional"
+     ],
+     "source_category": [
+      "regional"
+     ],
+     "published": "2026-08-02 23:00:00 +0000"
+    },
+    {
+     "id": "aa81bd3a-58a1-5018-b9c2-e3c6b6b417a9",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 22:59:30 +0000"
+    },
+    {
+     "id": "7d700578-97b1-57bb-a45d-82d6ad7c2acc",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 22:45:19 +0000"
+    },
+    {
+     "id": "5769bbd6-81f2-5bbe-a554-3917ac076f0e",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 22:43:35 +0000"
+    },
+    {
+     "id": "443ec219-5c6f-570e-9206-f59b23e06c23",
+     "title": "Few Spotty Showers, Typical August Temperatures and Summer-Fueled Storms in Alabama’s Weather Forecast | Flipboard",
+     "description": "Few Spotty Showers, Typical August Temperatures and Summer-Fueled Storms in Alabama’s Weather Forecast",
+     "url": "https://flipboard.com/article/https%3A%2F%2Fflipboard.com%2Fvideo%2Fwvtm%2F0965925afb",
+     "author": "Css-; Object-Fitcover; Border-Radius; Border; 0",
+     "image": "https://hips.hearstapps.com/vidthumb/5bac5e95-4fc9-4424-90b8-471e325b4f75/52ac9070-ea59-4c65-9eba-bf65ccb1170d.jpg?crop=1xw:1.0xh;center,top",
+     "language": "en",
+     "category": [
+      "regional",
+      "alabama",
+      "birmingham"
+     ],
+     "source_category": [
+      "regional",
+      "alabama",
+      "birmingham"
+     ],
+     "published": "2026-08-02 22:42:13 +0000"
+    },
+    {
+     "id": "c16b6910-e76f-5838-98c9-e36d65e621eb",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 22:40:47 +0000"
+    },
+    {
+     "id": "4d7ecfe1-7c80-5ad9-928a-6491d873298a",
+     "title": "Muddy water flows down hillside after heavy rainfall in Cranberry Township | Flipboard",
+     "description": "Muddy water flows down hillside after heavy rainfall in Cranberry Township",
+     "url": "https://flipboard.com/article/https%3A%2F%2Fflipboard.com%2Fvideo%2Fwtae%2F6d638acb23",
+     "author": "Css-; Object-Fitcover; Border-Radius; Border; 0",
+     "image": "https://hips.hearstapps.com/vidthumb/e38777e1-4776-40ce-8f54-b5c38b4cc5d5/f1be0a9b-0c4a-4eb4-9522-1b0de649f244.jpg?crop=1xw:1.0xh;center,top",
+     "language": "en",
+     "category": [
+      "regional",
+      "pittsburgh"
+     ],
+     "source_category": [
+      "regional",
+      "pittsburgh"
+     ],
+     "published": "2026-08-02 22:38:16 +0000"
+    },
+    {
+     "id": "68edc1b5-462a-5cf5-8aa2-3c1e1d1cfa63",
+     "title": "Links 7/31/2026 | naked capitalism",
+     "description": "Our rabble-rousing daily links: Commie corridor, Parkinson's trigger? Merz v. AfD, Trump approval falls further, Israel military catastrophe? diesel crunch, AI pushing recalled supplements, Meta crumbling? US mislabels Africa map, climate change hits UK farms, moar US uninsured patients. Gibraltar m...",
+     "url": "https://www.nakedcapitalism.com/2026/07/links-7-31-2026.html",
+     "author": "Yves Smith",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/07/Screenshot-2026-07-30-at-11.38.36 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 22:30:48 +0000"
+    },
+    {
+     "id": "06d7ec7c-38ff-5ce7-8423-eb19a982e85f",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 22:17:46 +0000"
+    },
+    {
+     "id": "afc64b73-15d7-5f0b-9133-e691cdd361ab",
+     "title": "Federal Plan Makes Steep Colorado River Water Cuts to Arizona, California and Nevada | naked capitalism",
+     "description": "The Bureau of Reclamation’s final environmental impact statement leaves the door open for states to come to an agreement on how to share the water—and for legal battles.",
+     "url": "https://www.nakedcapitalism.com/2026/08/federal-plan-makes-steep-colorado-river-water-cuts-to-arizona-california-and-nevada.html",
+     "author": "Conor Gallagher",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.27.39 AM-766x1024.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 22:16:28 +0000"
+    }
+   ]
+  },
+  {
+   "page_number": 2,
+   "news": [
+    {
+     "id": "012b980e-7261-5cdc-a04f-94af39513183",
+     "title": "Federal Plan Makes Steep Colorado River Water Cuts to Arizona, California and Nevada | naked capitalism",
+     "description": "The Bureau of Reclamation’s final environmental impact statement leaves the door open for states to come to an agreement on how to share the water—and for legal battles.",
+     "url": "https://www.nakedcapitalism.com/2026/08/federal-plan-makes-steep-colorado-river-water-cuts-to-arizona-california-and-nevada.html",
+     "author": "Conor Gallagher",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.27.39 AM-766x1024.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 22:01:51 +0000"
+    },
+    {
+     "id": "fdd361e5-88bc-5f4b-a98f-16190c2e59ed",
+     "title": "The Alchemy Of Time: Why The City Of The Future Is Hiding In The Wisdom Of The Past",
+     "description": "Key Takeaways: By Selene Verri To cool or not to cool? As extreme heatwaves grip the European continent, the debate over",
+     "url": "https://www.eurasiareview.com/02082026-the-alchemy-of-time-why-the-city-of-the-future-is-hiding-in-the-wisdom-of-the-past/",
+     "author": "Eurasia Review",
+     "image": "https://www.eurasiareview.com/wp-content/uploads/2026/08/a-13.jpg",
+     "language": "en",
+     "category": [
+      "national"
+     ],
+     "source_category": [
+      "national"
+     ],
+     "published": "2026-08-02 21:51:51 +0000"
+    },
+    {
+     "id": "165af368-54e9-5709-96a2-a5dc7d63f53d",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 21:41:57 +0000"
+    },
+    {
+     "id": "9a177fa3-a4c1-5e9a-8935-26e6e4053195",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 21:30:59 +0000"
+    },
+    {
+     "id": "3a393565-b9ab-5e7e-8425-99c0adb911a3",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 21:20:23 +0000"
+    },
+    {
+     "id": "c8381387-2e26-50bc-894c-4320421c5dea",
+     "title": "Surely adding more memory to Apple's MacBook Neo would defeat the point of it | Stuff",
+     "description": "Apple is planning to launch a version of its ultra popular MacBook Neo model with more RAM, which in the current climate could undermine the idea of behind its launch in the first place",
+     "url": "https://www.stuff.tv/news/surely-adding-more-memory-to-apples-macbook-neo-would-defeat-the-point-of-it/",
+     "author": "Chris Smith",
+     "image": "https://www.stuff.tv/wp-content/uploads/sites/2/2026/03/macbook-neo-review-9.jpg",
+     "language": "en",
+     "category": [
+      "technology",
+      "review"
+     ],
+     "source_category": [
+      "technology",
+      "review"
+     ],
+     "published": "2026-08-02 21:16:00 +0000"
+    },
+    {
+     "id": "42038a1f-90a0-55a3-bf2b-2ae7b96980ef",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 21:15:39 +0000"
+    },
+    {
+     "id": "be5872ee-00e5-5186-82bf-193d70b5506c",
+     "title": "Two killed as firefighting helicopters collide in Greece; French blaze changes course",
+     "description": "Two firefighting helicopters collided in Greece while helping to control a huge wildfire on Sunday that has destroyed more than 100 homes northwest of Athens, while people fled another blaze on the tourist island of Kefalonia. Two people on one helicopter — a Greek and a Danish national — died,…",
+     "url": "https://japantoday.com/category/world/two-die-as-firefighting-helicopters-collide-in-greece-french-blaze-changes-course",
+     "author": "",
+     "image": "https://media.japantoday.com/img/store/31/04/58c7933aa7fec3cdba1801ce47d930a31c28/tag-reuters/_w1700.jpg",
+     "language": "en",
+     "category": [
+      "politics"
+     ],
+     "source_category": [
+      "politics"
+     ],
+     "published": "2026-08-02 21:12:23 +0000"
+    },
+    {
+     "id": "26bdbe85-4630-5406-bbff-578185f09915",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 21:12:15 +0000"
+    },
+    {
+     "id": "fde339d2-ce8a-51a0-a0e6-8f30b615cd71",
+     "title": "River clean-up flows into data centre climate debate",
+     "description": "A tech giant plans to rescue millions of litres of drinking water from an Australian river as debate continues over data centre climate commitments.",
+     "url": "https://www.perthnow.com.au/news/environment/river-clean-up-flows-into-data-centre-climate-debate-c-22665563",
+     "author": "Jennifer Dudley-Nicholson AAP",
+     "image": "https://images.perthnow.com.au/publication/C-22665563/2548506b196b14a079c094465024cff40351ed9d-16x9-x0y0w1280h720.jpg?imwidth=1200",
+     "language": "en",
+     "category": [
+      "general"
+     ],
+     "source_category": [
+      "general"
+     ],
+     "published": "2026-08-02 21:02:39 +0000"
+    },
+    {
+     "id": "ae022d6b-1670-5484-b87f-ea4e699cca32",
+     "title": "River clean-up flows into data centre climate debate",
+     "description": "A tech giant plans to rescue millions of litres of drinking water from an Australian river as debate continues over data centre climate commitments.",
+     "url": "https://thewest.com.au/news/environment/river-clean-up-flows-into-data-centre-climate-debate-c-22665561",
+     "author": "Jennifer Dudley-Nicholson AAP Premium",
+     "image": "https://images.thewest.com.au/publication/C-22665561/2548506b196b14a079c094465024cff40351ed9d-16x9-x0y0w1280h720.jpg?imwidth=1200",
+     "language": "en",
+     "category": [
+      "general"
+     ],
+     "source_category": [
+      "general"
+     ],
+     "published": "2026-08-02 21:02:38 +0000"
+    },
+    {
+     "id": "3b3784fa-8ace-50cb-b52f-ae44b5a047b2",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 21:00:36 +0000"
+    },
+    {
+     "id": "454d1eb2-f2bf-57f1-9751-40f72d429cad",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 20:47:06 +0000"
+    },
+    {
+     "id": "edddf642-d2f3-54e8-b146-38d10004a547",
+     "title": "timber and wave-like metal reshape lakeside pavilion into family restaurant in china",
+     "description": "",
+     "url": "https://www.designboom.com/architecture/timber-wave-like-metal-lakeside-pavilion-family-restaurant-china-lago-italian-family-kitchen-vari-architects/",
+     "author": "Sunshine",
+     "image": "https://www.designboom.com/twitterimages/uploads/2026/08/lago-italian-family-kitchen-vari-architects-designboom-1200.jpg",
+     "language": "en",
+     "category": [
+      "entertainment"
+     ],
+     "source_category": [
+      "entertainment"
+     ],
+     "published": "2026-08-02 20:45:50 +0000"
+    },
+    {
+     "id": "c63c2450-ccc6-51c3-92cb-9681c3541886",
+     "title": "Federal Plan Makes Steep Colorado River Water Cuts to Arizona, California and Nevada | naked capitalism",
+     "description": "The Bureau of Reclamation’s final environmental impact statement leaves the door open for states to come to an agreement on how to share the water—and for legal battles.",
+     "url": "https://www.nakedcapitalism.com/2026/08/federal-plan-makes-steep-colorado-river-water-cuts-to-arizona-california-and-nevada.html",
+     "author": "Conor Gallagher",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.27.39 AM-766x1024.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 20:40:00 +0000"
+    },
+    {
+     "id": "c395bb26-03ee-5b32-ab4d-cfdf301ebae6",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 20:36:06 +0000"
+    },
+    {
+     "id": "d948905f-516f-59c8-ac8d-b498c09cbf00",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 20:25:27 +0000"
+    },
+    {
+     "id": "8284d968-809f-51ab-86ef-6716fbd2e0f6",
+     "title": "Onaiyekan on Tinubu: Catholic bishop not afraid to speak truth to power - Aisha Yesufu",
+     "description": "Activist politician, Aisha Yesufu, on Sunday declared that the Archbishop Emeritus of Catholic Diocese of Abuja, Cardinal John Onaiyekan, is",
+     "url": "https://dailypost.ng/2026/08/02/onaiyekan-on-tinubu-catholic-bishop-not-afraid-to-speak-truth-to-power-aisha-yesufu/",
+     "author": "Seun Opejobi",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "general"
+     ],
+     "source_category": [
+      "general"
+     ],
+     "published": "2026-08-02 20:20:27 +0000"
+    },
+    {
+     "id": "53377eb4-6267-5bfe-8fa4-c1aac00b9ac8",
+     "title": "Federal Plan Makes Steep Colorado River Water Cuts to Arizona, California and Nevada | naked capitalism",
+     "description": "The Bureau of Reclamation’s final environmental impact statement leaves the door open for states to come to an agreement on how to share the water—and for legal battles.",
+     "url": "https://www.nakedcapitalism.com/2026/08/federal-plan-makes-steep-colorado-river-water-cuts-to-arizona-california-and-nevada.html",
+     "author": "Conor Gallagher",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.27.39 AM-766x1024.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 20:11:54 +0000"
+    },
+    {
+     "id": "5d1ddee3-0f12-5a89-95a8-cfd986259199",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 19:53:21 +0000"
+    }
+   ]
+  },
+  {
+   "page_number": 3,
+   "news": [
+    {
+     "id": "f3f4cd0c-ff02-5f28-9b56-37aeceaea80d",
+     "title": "Federal Plan Makes Steep Colorado River Water Cuts to Arizona, California and Nevada | naked capitalism",
+     "description": "The Bureau of Reclamation’s final environmental impact statement leaves the door open for states to come to an agreement on how to share the water—and for legal battles.",
+     "url": "https://www.nakedcapitalism.com/2026/08/federal-plan-makes-steep-colorado-river-water-cuts-to-arizona-california-and-nevada.html",
+     "author": "Conor Gallagher",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.27.39 AM-766x1024.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 19:36:59 +0000"
+    },
+    {
+     "id": "67cac6e3-0893-5e8c-abd3-f1f740a2bf79",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 19:36:45 +0000"
+    },
+    {
+     "id": "9b7ad93f-b17c-5e50-9ec2-57618901c093",
+     "title": "Federal Plan Makes Steep Colorado River Water Cuts to Arizona, California and Nevada | naked capitalism",
+     "description": "The Bureau of Reclamation’s final environmental impact statement leaves the door open for states to come to an agreement on how to share the water—and for legal battles.",
+     "url": "https://www.nakedcapitalism.com/2026/08/federal-plan-makes-steep-colorado-river-water-cuts-to-arizona-california-and-nevada.html",
+     "author": "Conor Gallagher",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.27.39 AM-766x1024.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 19:33:18 +0000"
+    },
+    {
+     "id": "75e256bd-7d2b-5f9d-bf77-2ac748594a69",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 19:26:07 +0000"
+    },
+    {
+     "id": "a4f72224-5f1c-5d21-9751-c546f26e1830",
+     "title": "Dozens protest Meta data centre planned for county north of Edmonton | Globalnews.ca",
+     "description": "Premier Danielle Smith has said Alberta’s grid operator will use surplus energy to power the centre until a new natural gas-fired plant starts powering it in 2030.",
+     "url": "https://globalnews.ca/news/12006999/alberta-meta-data-centre-protest/",
+     "author": "Staff",
+     "image": "https://globalnews.ca/wp-content/uploads/2026/08/3b757fe330b307643bfdd65ea2bddecf90e35553c85af5d69d64327c0152d295.jpg?quality=65&strip=all&w=720&h=379&crop=1",
+     "language": "en",
+     "category": [
+      "national"
+     ],
+     "source_category": [
+      "national"
+     ],
+     "published": "2026-08-02 19:25:39 +0000"
+    },
+    {
+     "id": "e44bd16c-2200-5de2-9de6-1e2c02b05fc1",
+     "title": "Group warns of rising poll violence in BARMM",
+     "description": "COTABATO CITY, BARMM, Philippines — The deepening rift between leadership factions of the erstwhile rebel group Moro Islamic Liberation Front (MILF) is fueling communal violence that threatens the peaceful conduct of the first-ever parliamentary elections in the Bangsamoro Autonomous Region in Musli...",
+     "url": "https://www.inquirer.net/483122/group-warns-of-rising-poll-violence-in-barmm/",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "general"
+     ],
+     "source_category": [
+      "general"
+     ],
+     "published": "2026-08-02 19:25:22 +0000"
+    },
+    {
+     "id": "9d46b40f-7c05-58d5-be47-dbc2d2a3ef2d",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 19:21:05 +0000"
+    },
+    {
+     "id": "76f860ba-722b-5a2c-82ae-eea3e358277f",
+     "title": "How simple amber lights could make nights safer for insects",
+     "description": "Approximately 40% of insect species worldwide are thought to be in decline and under threat of extinction. Among the key causes are habitat loss, pollution and climate change. Another threat is artificial light from sources like streetlights and security lamps. In new research published in the journ...",
+     "url": "https://phys.org/news/2026-07-simple-amber-nights-safer-insects.html",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-02 19:20:01 +0000"
+    },
+    {
+     "id": "b1ffa1bb-c272-53a1-9755-09e306fcbad4",
+     "title": "Trump's environmental rollbacks have come to New Jersey",
+     "description": "The Clean Energy Fund and the Regional Greenhouse Gas Initiative, or RGGI, were created to fight climate change, not to plug holes in state budgets.",
+     "url": "https://jerseyvindicator.org/2026/08/02/trumps-environmental-rollbacks-have-come-to-new-jersey/",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "commodity",
+      "natural-gas"
+     ],
+     "source_category": [
+      "commodity",
+      "natural-gas"
+     ],
+     "published": "2026-08-02 19:15:06 +0000"
+    },
+    {
+     "id": "bcd40ae3-8dd0-5cf1-9c8c-2dbd876f79d4",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 19:08:59 +0000"
+    },
+    {
+     "id": "bd46baf5-b2dc-5a61-a892-36c9b6874724",
+     "title": "Presler Shows How Noncitizen Voters Can Sway Presidential Election Results",
+     "description": "Noncitizen voters could sway tight presidential elections, impacting results in key states like Florida and Pennsylvania.",
+     "url": "https://pjmedia.com/catherinesalgado/2026/08/02/presler-shows-how-noncitizen-voters-can-sway-presidential-election-results-n4955729",
+     "author": "Catherine Salgado",
+     "image": "https://media.townhall.com/cdn/hodl/2026/65/eb05ba92-01b8-4071-9263-54c214d053b0.jpg",
+     "language": "en",
+     "category": [
+      "politics"
+     ],
+     "source_category": [
+      "politics"
+     ],
+     "published": "2026-08-02 19:07:05 +0000"
+    },
+    {
+     "id": "ccd67f7f-4071-5246-b5a6-e355a67ab40a",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 19:01:31 +0000"
+    },
+    {
+     "id": "bd2e6323-b72f-5cb4-92d3-d8ad9d202b27",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 19:00:58 +0000"
+    },
+    {
+     "id": "ebb75ba9-37fb-5aea-83e6-611de12d2527",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 18:57:00 +0000"
+    },
+    {
+     "id": "f702164a-4452-58e1-bc38-a3844be9ee3a",
+     "title": "HomeKit Weekly: How I use Apple Home to keep tabs on my home during summer travels - 9to5Mac",
+     "description": "Automate your outdoor watering, climate control, and security cameras with Apple Home to keep your property safe during summer traveling.",
+     "url": "https://9to5mac.com/2026/08/02/how-i-use-apple-home-to-keep-tabs-on-my-home-during-summer-travels/",
+     "author": "Bradley C",
+     "image": "https://i0.wp.com/9to5mac.com/wp-content/uploads/sites/6/2022/08/Eve-Aqua-2.jpg?resize=1200%2C628&quality=82&strip=all&ssl=1",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-02 18:51:00 +0000"
+    },
+    {
+     "id": "b4e4b368-cefc-57c4-8192-488276349474",
+     "title": "Climate change could dramatically reduce water flowing from the West's headwaters",
+     "description": "The small mountain streams that feed many of the West's rivers may face a much drier future. A new study led by NAU researchers found that groundwater-fed streamflow, known as base flow, has been steadily declining across headwater watersheds in the western United States since 1950 and could decreas...",
+     "url": "https://phys.org/news/2026-07-climate-west-headwaters.html",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "technology"
+     ],
+     "source_category": [
+      "technology"
+     ],
+     "published": "2026-08-02 18:40:01 +0000"
+    },
+    {
+     "id": "c6cfdf65-b908-59f2-b1a9-475f66a36b13",
+     "title": "Climate Action, Not Climate-Hushing",
+     "description": "Surveys show that \"climate change\" is not among the top issues for voters; nevertheless, climate voters are more motivated to vote.",
+     "url": "https://cleantechnica.com/2026/08/02/climate-change-hushing-voter-motivation-democrats-2026-elections/",
+     "author": "Tina Casey",
+     "image": "https://cleantechnica.com/wp-content/uploads/2026/08/climate-change-survey-USC-santa-barbara.png",
+     "language": "en",
+     "category": [
+      "stock",
+      "company"
+     ],
+     "source_category": [
+      "stock",
+      "company"
+     ],
+     "published": "2026-08-02 18:37:31 +0000"
+    },
+    {
+     "id": "a20d7a84-75c4-5445-a564-9afc537f8e9b",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 18:36:03 +0000"
+    },
+    {
+     "id": "9f93b74c-e7ef-5ece-98be-c6a52a77367d",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 18:35:20 +0000"
+    },
+    {
+     "id": "eb1d5e62-81fc-5b0b-8a6a-f558dc8e12a8",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 18:28:56 +0000"
+    }
+   ]
+  },
+  {
+   "page_number": 4,
+   "news": [
+    {
+     "id": "e6165681-e732-5ea6-9e0e-f69c6b10c72f",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 18:27:20 +0000"
+    },
+    {
+     "id": "7f36e797-ecf7-54ae-92d3-e12646f1d8e7",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 18:21:44 +0000"
+    },
+    {
+     "id": "3f22f2c2-7970-5366-9f9e-9de966e9601c",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 18:12:55 +0000"
+    },
+    {
+     "id": "d696cccf-1528-55d0-8690-7ecaf062271b",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 18:01:40 +0000"
+    },
+    {
+     "id": "82742bd8-e55e-547b-8683-0e9884113838",
+     "title": "The economics of survival in an era of worsening climate extremes",
+     "description": "The fact is that green technology is now making inroads into countries not for climate mitigation but because it makes more energy and economic sense",
+     "url": "https://www.business-standard.com/opinion/columns/the-economics-of-survival-in-an-era-of-worsening-climate-extremes-126080200738_1.html",
+     "author": "Business Standard; Sunita Narain",
+     "image": "https://bsmedia.business-standard.com/_media/bs/img/article/2026-07/21/thumb/fitandfill/1200X628/1784611974-5361.jpg",
+     "language": "en",
+     "category": [
+      "business"
+     ],
+     "source_category": [
+      "business"
+     ],
+     "published": "2026-08-02 17:50:21 +0000"
+    },
+    {
+     "id": "548e9143-9c63-5a2c-b528-f2d194f7eb5e",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 17:46:20 +0000"
+    },
+    {
+     "id": "df72c9bf-30df-560e-a255-38e14423ae08",
+     "title": "Heat wave brings record-breaking temps and a heightened wildfire risk to parts of the Western U.S.",
+     "description": "Climate change from the burning of coal, oil and natural gas is causing larger, more intense and longer-lasting heat waves — which lead to more ...",
+     "url": "https://www.nbcnews.com/weather/heat/heat-wave-brings-record-breaking-temps-heightened-wildfire-risk-parts-rcna590429",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "commodity",
+      "natural-gas"
+     ],
+     "source_category": [
+      "commodity",
+      "natural-gas"
+     ],
+     "published": "2026-08-02 17:46:19 +0000"
+    },
+    {
+     "id": "af52e01a-b5d1-5cb8-b4f9-1a782a2f9fb8",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 17:44:55 +0000"
+    },
+    {
+     "id": "66128bff-25c9-5212-a4ad-88c480cf9496",
+     "title": "Federal Plan Makes Steep Colorado River Water Cuts to Arizona, California and Nevada | naked capitalism",
+     "description": "The Bureau of Reclamation’s final environmental impact statement leaves the door open for states to come to an agreement on how to share the water—and for legal battles.",
+     "url": "https://www.nakedcapitalism.com/2026/08/federal-plan-makes-steep-colorado-river-water-cuts-to-arizona-california-and-nevada.html",
+     "author": "Conor Gallagher",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.27.39 AM-766x1024.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 17:42:50 +0000"
+    },
+    {
+     "id": "a0ff366a-2ff7-56e7-aa5d-327f5e50d783",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 17:31:17 +0000"
+    },
+    {
+     "id": "e470d3d7-aeae-53b7-a49f-2516328e1bab",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 17:30:27 +0000"
+    },
+    {
+     "id": "c169cad9-913a-572e-8ebc-1901dac1e089",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 17:29:04 +0000"
+    },
+    {
+     "id": "78870019-bc32-5cac-8b9d-3847d71eac8b",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 17:27:07 +0000"
+    },
+    {
+     "id": "2e16299b-2468-5c46-9233-961cf6ea7b56",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 17:23:28 +0000"
+    },
+    {
+     "id": "54fcbd50-9652-51a8-a1a6-bdabc2b96204",
+     "title": "WNBA response to Sophie Cunningham's message exposed something bigger",
+     "description": "'Thank you, Sophie for speaking up for girls!' read signs the two fans were holding as the Fever trounced the Storm in a 105-95 win in Seattle.",
+     "url": "https://www.dailymail.com/debate/article-16020857/wnba-sophie-cunningham-jennifer-sey.html",
+     "author": "Jennifer Sey",
+     "image": "https://i.dailymail.com/1s/2026/07/31/22/110311837-0-image-m-21_1785534004946.jpg",
+     "language": "en",
+     "category": [
+      "national"
+     ],
+     "source_category": [
+      "national"
+     ],
+     "published": "2026-08-02 17:14:23 +0000"
+    },
+    {
+     "id": "502eb4db-3456-57df-86ff-f2529386bc01",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 17:09:44 +0000"
+    },
+    {
+     "id": "112025ac-73f3-5570-bfff-db16bcb61434",
+     "title": "Federal Plan Makes Steep Colorado River Water Cuts to Arizona, California and Nevada | naked capitalism",
+     "description": "The Bureau of Reclamation’s final environmental impact statement leaves the door open for states to come to an agreement on how to share the water—and for legal battles.",
+     "url": "https://www.nakedcapitalism.com/2026/08/federal-plan-makes-steep-colorado-river-water-cuts-to-arizona-california-and-nevada.html",
+     "author": "Conor Gallagher",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.27.39 AM-766x1024.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 17:08:02 +0000"
+    },
+    {
+     "id": "08706405-3f78-5965-bda0-467b46a7bd4c",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 17:06:25 +0000"
+    },
+    {
+     "id": "63c07a7b-6d54-50a2-8ff1-3d78b14947e4",
+     "title": "BBC Audio | Global News Podcast | Deadly bomb blast in Moscow",
+     "description": "Three people are killed in explosion at a restaurant in the Russian capital",
+     "url": "https://www.bbc.com/audio/play/p0p26d21",
+     "author": "",
+     "image": "https://ichef.bbci.co.uk/images/ic/1024x576/p0p26d2p.jpg",
+     "language": "en",
+     "category": [
+      "regional",
+      "moscow"
+     ],
+     "source_category": [
+      "regional",
+      "moscow"
+     ],
+     "published": "2026-08-02 17:03:39 +0000"
+    },
+    {
+     "id": "3517574b-0b03-5c37-ad2d-685f86536531",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 16:58:22 +0000"
+    }
+   ]
+  },
+  {
+   "page_number": 5,
+   "news": [
+    {
+     "id": "f5733ad6-8f58-5393-aea5-2ab37b270fe1",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 16:52:49 +0000"
+    },
+    {
+     "id": "e248b85b-032d-5668-87ce-9c15901a42b0",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 16:52:40 +0000"
+    },
+    {
+     "id": "55a6f23a-3cb2-5271-a4a4-3b3fe20608fa",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 16:48:14 +0000"
+    },
+    {
+     "id": "6da09885-0f0c-5fd3-81f8-06f5479cffc5",
+     "title": "An investigation by ProPublica and Drilled News has found that fossil fuel companies have ...",
+     "description": "... and gas majors continue to promote natural gas as part of a climate solution. “'Natural gas is now the U.S.'s largest energy source for ...",
+     "url": "https://www.facebook.com/propublica/posts/an-investigation-by-propublica-and-drilled-news-has-found-that-fossil-fuel-compa/1395865305736257/",
+     "author": "",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "commodity",
+      "natural-gas"
+     ],
+     "source_category": [
+      "commodity",
+      "natural-gas"
+     ],
+     "published": "2026-08-02 16:41:49 +0000"
+    },
+    {
+     "id": "6f3f5d4e-c057-5bc6-b2f3-79ec69b0ce9f",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 16:36:08 +0000"
+    },
+    {
+     "id": "a2fc269f-d433-52fb-be99-ce1371b46be8",
+     "title": "The Guardian view on drought: hot, dry conditions make inequality starker | Editorial",
+     "description": "Editorial: Water is a vital shared resource, and privatisation has made a just transition harder",
+     "url": "https://www.theguardian.com/commentisfree/2026/aug/02/the-guardian-view-on-drought-hot-dry-conditions-make-inequality-starker",
+     "author": "Editorial",
+     "image": "https://i.guim.co.uk/img/media/45295863febdd28f6c872d46f43a08c4d1a7273b/623_0_6099_4879/master/6099.jpg?width=1200&height=630&quality=85&auto=format&fit=crop&precrop=40:21,offset-x50,offset-y0&overlay-align=bottom%2Cleft&overlay-width=100p&overlay-base64=L2ltZy9zdGF0aWMvb3ZlcmxheXMvdGctb3BpbmlvbnMucG5n&enable=upscale&s=53a6f0f1057d6df7c87ad84e95c2f9a1",
+     "language": "en",
+     "category": [
+      "regional"
+     ],
+     "source_category": [
+      "regional"
+     ],
+     "published": "2026-08-02 16:30:25 +0000"
+    },
+    {
+     "id": "3eca526a-89da-5858-ac5d-ef15f4fea3b2",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 16:29:59 +0000"
+    },
+    {
+     "id": "84daa330-aa05-5a15-995e-d53d29bbfbca",
+     "title": "The Guardian view on global corporate tax: a $500bn prize that states must seize | Editorial",
+     "description": "Editorial: Donald Trump may reject the negotiations, but he cannot veto a global effort to make multinational companies answer to governments",
+     "url": "https://www.theguardian.com/commentisfree/2026/aug/02/the-guardian-view-on-global-corporate-tax-a-500bn-prize-that-states-must-seize",
+     "author": "Editorial",
+     "image": "https://i.guim.co.uk/img/media/b127c97f6846a575d2813e240fe7639716dea479/102_0_1932_1546/master/1932.jpg?width=1200&height=630&quality=85&auto=format&fit=crop&precrop=40:21,offset-x50,offset-y0&overlay-align=bottom%2Cleft&overlay-width=100p&overlay-base64=L2ltZy9zdGF0aWMvb3ZlcmxheXMvdGctb3BpbmlvbnMucG5n&enable=upscale&s=78163d65a97dc65313b2c5ec4ca52808",
+     "language": "en",
+     "category": [
+      "regional"
+     ],
+     "source_category": [
+      "regional"
+     ],
+     "published": "2026-08-02 16:25:25 +0000"
+    },
+    {
+     "id": "9e8ff6c7-9d05-55cf-90cf-898b6b5460ba",
+     "title": "Federal Plan Makes Steep Colorado River Water Cuts to Arizona, California and Nevada | naked capitalism",
+     "description": "The Bureau of Reclamation’s final environmental impact statement leaves the door open for states to come to an agreement on how to share the water—and for legal battles.",
+     "url": "https://www.nakedcapitalism.com/2026/08/federal-plan-makes-steep-colorado-river-water-cuts-to-arizona-california-and-nevada.html",
+     "author": "Conor Gallagher",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.27.39 AM-766x1024.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 16:23:47 +0000"
+    },
+    {
+     "id": "53fa4769-c2af-5f8d-9532-3ced55277175",
+     "title": "Is Circular Financing in AI setting up an epic blow-up?",
+     "description": "This interview on Bloomberg Podcasts highlights the Circularity of the Hypersclaler's AI revenues on Anthropic and Open AI.  The AI revenue streams of cloud giants (Google, Amazon, MSFT) are heavily dependent on two unprofitable, capital-hungry companies—OpenAI and Anthropic—creating systemic concen...",
+     "url": "https://www.reddit.com/r/ValueInvesting/comments/1vdmd49/is_circular_financing_in_ai_setting_up_an_epic/",
+     "author": "/u/pravchaw",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "finance"
+     ],
+     "source_category": [
+      "finance"
+     ],
+     "published": "2026-08-02 16:22:53 +0000"
+    },
+    {
+     "id": "956da91d-8e8b-5e49-8d14-5c9f4ba1e8f7",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 16:21:22 +0000"
+    },
+    {
+     "id": "93131550-839e-5e6c-bc08-01602f8ae2ba",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 16:14:32 +0000"
+    },
+    {
+     "id": "bc593f2f-1ddf-50a6-93d3-06a463734efc",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 16:09:39 +0000"
+    },
+    {
+     "id": "984c3709-c384-5824-8cd6-6f84b8303710",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 16:07:47 +0000"
+    },
+    {
+     "id": "26b6a4e5-1a6c-52cc-bef1-2be6615c8ace",
+     "title": "Links 8/2/2026 | naked capitalism",
+     "description": "Our strategic daily links: parahawking, theory of love, China fusion magnet, Moroccan invasion, Mideast horrors, Ukraine burning, vanishing privacy, Trumpishness, Musk world, hapless Democrats, immigration troubles, Mr. market, AI, and wretched excess",
+     "url": "https://www.nakedcapitalism.com/2026/08/links-8-2-2026.html",
+     "author": "Haig Hovaness",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.42.07 PM.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 16:03:34 +0000"
+    },
+    {
+     "id": "93842d61-439b-5d28-98f5-b0829b121115",
+     "title": "Federal Plan Makes Steep Colorado River Water Cuts to Arizona, California and Nevada | naked capitalism",
+     "description": "The Bureau of Reclamation’s final environmental impact statement leaves the door open for states to come to an agreement on how to share the water—and for legal battles.",
+     "url": "https://www.nakedcapitalism.com/2026/08/federal-plan-makes-steep-colorado-river-water-cuts-to-arizona-california-and-nevada.html",
+     "author": "Conor Gallagher",
+     "image": "https://www.nakedcapitalism.com/wp-content/uploads/2026/08/Screenshot-2026-08-02-at-12.27.39 AM-766x1024.png",
+     "language": "en",
+     "category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "source_category": [
+      "news",
+      "business",
+      "finances",
+      "money",
+      "banking"
+     ],
+     "published": "2026-08-02 16:01:14 +0000"
+    },
+    {
+     "id": "742f87e0-d36a-59a7-8345-354407665ad5",
+     "title": "Think You’re Safe? These U.S. Cities Face the Highest Natural Disaster Risk",
+     "description": "Living in the U.S. brings its fair share of weather extremes, with some areas more prone to natural disasters than others. Each region faces unique challenges, from hurricanes and floods to droughts and earthquakes. But it’s not all about the risks—many of these high-risk cities are vibrant places t...",
+     "url": "https://flipboard.com/@boutiqueadv/think-you-re-safe-these-u.s.-cities-face-the-highest-natural-disaster-risk-cnqjgo6tl0opbokr",
+     "author": "The Boutique Adventurer",
+     "image": "https://cdn-images-1.medium.com/max/1000/1*Zgn5W3a4KSIhbOiBIDZSOg.jpeg",
+     "language": "en",
+     "category": [
+      "travel",
+      "lifestyle"
+     ],
+     "source_category": [
+      "travel",
+      "lifestyle"
+     ],
+     "published": "2026-08-02 16:00:04 +0000"
+    },
+    {
+     "id": "8933192c-79c2-5e6e-bae6-41d79490edcd",
+     "title": "Mexico Well-Read: A review of Reyna Grande's 'Migrant Heart'",
+     "description": "Our \"Mexico Well-Read\" reviewer, Ann Marie Jackson, examines author Reyna Grande's latest book of essays, \"Migrant Heart.\"",
+     "url": "https://mexiconewsdaily.com/culture/mexico-well-read-a-review-of-reyna-grandes-migrant-heart/",
+     "author": "Ann Marie Jackson",
+     "image": "https://mexiconewsdaily.com/wp-content/uploads/2026/07/image1-1-3.jpg",
+     "language": "en",
+     "category": [
+      "regional"
+     ],
+     "source_category": [
+      "regional"
+     ],
+     "published": "2026-08-02 15:55:58 +0000"
+    },
+    {
+     "id": "fe91713d-5fa5-5997-8b5b-80b5afa3fd10",
+     "title": "When Mexico colonized California",
+     "description": "Although Hernán Cortés had arrived in La Paz by 1535, the work of colonizing the \"island\" of California would take centuries.",
+     "url": "https://mexiconewsdaily.com/culture/when-mexico-colonized-california/",
+     "author": "Bob Pateman",
+     "image": "https://mexiconewsdaily.com/wp-content/uploads/2026/07/California_island_Vinckeboons5-1.jpg",
+     "language": "en",
+     "category": [
+      "regional"
+     ],
+     "source_category": [
+      "regional"
+     ],
+     "published": "2026-08-02 15:49:30 +0000"
+    },
+    {
+     "id": "e86b8ee5-02a0-5e16-be33-86b9327d0b72",
+     "title": "Massachusetts farm installs 832 solar panels above berry fields, and the berries grown underneath turned out sweeter and juicier and could change the future of American farming",
+     "description": "A Massachusetts farm is integrating solar panels above berry fields. This agrivoltaics project generates electricity while shading the crops. The elevated panels create a cooler microclimate, retaining soil moisture effectively. Berries grown under shade were larger, juicier, and sweeter than those ...",
+     "url": "https://economictimes.indiatimes.com/news/international/global-trends/massachusetts-farm-installs-832-solar-panels-above-berry-fields-and-the-berries-grown-underneath-turned-out-sweeter-and-juicier-and-could-change-the-future-of-american-farming/articleshow/132809461.cms",
+     "author": "",
+     "image": "https://img.etimg.com/thumb/msid-132809475,width-1200,height-630,imgsize-1324851,overlay-economictimes/articleshow.jpg",
+     "language": "en",
+     "category": [
+      "general"
+     ],
+     "source_category": [
+      "general"
+     ],
+     "published": "2026-08-02 15:49:22 +0000"
+    }
+   ]
+  }
+ ]
+}
