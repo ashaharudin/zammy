@@ -60,11 +60,16 @@ export class CurrentsQuotaError extends CurrentsError {
   }
 }
 
-/** 5xx. */
+/**
+ * 5xx, and network faults where no status was ever received (`status: 0`).
+ *
+ * The three members are typed wider than the literals they hold because
+ * `CurrentsCircuitOpenError` below narrows them — see the reasoning there.
+ */
 export class CurrentsUpstreamError extends CurrentsError {
-  override readonly name = "CurrentsUpstreamError";
-  readonly kind = "upstream" as const;
-  readonly retryable = true;
+  override readonly name: string = "CurrentsUpstreamError";
+  readonly kind: string = "upstream";
+  readonly retryable: boolean = true;
   constructor(
     message: string,
     readonly status: number,
@@ -73,11 +78,49 @@ export class CurrentsUpstreamError extends CurrentsError {
   }
 }
 
-/** Request deadline exceeded. */
+/**
+ * The circuit breaker is open: N consecutive failures, so we fail fast instead of
+ * making users wait for a call we expect to fail (ARCHITECTURE 5.3).
+ *
+ * Deliberately a subclass of `CurrentsUpstreamError`, because callers should
+ * degrade identically — serve stale with `meta.degraded = "upstream"`. The
+ * distinct `kind` exists so metrics can tell "upstream is failing" from
+ * "we stopped asking", which are different operational stories.
+ *
+ * Not retryable: the whole point of an open circuit is that an immediate retry
+ * is known to be pointless.
+ */
+export class CurrentsCircuitOpenError extends CurrentsUpstreamError {
+  override readonly name = "CurrentsCircuitOpenError";
+  override readonly kind = "circuit_open" as const;
+  override readonly retryable = false;
+  constructor(
+    message: string,
+    readonly retryAt: Date,
+  ) {
+    super(message, 503);
+  }
+}
+
+/** Our per-request deadline expired before upstream answered. */
 export class CurrentsTimeoutError extends CurrentsError {
   override readonly name = "CurrentsTimeoutError";
   readonly kind = "timeout" as const;
   readonly retryable = true;
+}
+
+/**
+ * The caller's own signal fired — e.g. the 1200ms synchronous fill budget of
+ * ARCHITECTURE 6.3 running out.
+ *
+ * Deliberately NOT a timeout: our deadline expiring is a fact about upstream
+ * latency and worth a metric, whereas this is the caller exercising a budget it
+ * set for itself. Retrying it would defeat the budget's entire purpose.
+ */
+export class CurrentsCallerAbortedError extends CurrentsError {
+  override readonly name = "CurrentsCallerAbortedError";
+  readonly kind = "caller_aborted" as const;
+  readonly retryable = false;
 }
 
 /** Response did not match the expected shape, or `status: "error"` under HTTP 200. */

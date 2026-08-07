@@ -15,6 +15,7 @@
   "exclude": [
     "**/*.test.ts",
     "**/*.test.tsx",
+    "src/test-support.ts",
     "dist"
   ]
 }

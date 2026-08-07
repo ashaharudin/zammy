@@ -1,7 +1,8 @@
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { FixtureStore, parsePublished } from "./fixture-store.js";
+import { FixtureStore } from "./fixture-store.js";
+import { parsePublished } from "./normalize.js";
 import { toCurrentsDate, toQueryParams } from "./raw.js";
 
 const FIXTURES = resolve(

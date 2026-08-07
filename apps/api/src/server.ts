@@ -5,13 +5,14 @@ import { Pool } from "pg";
 // rather than the class under NodeNext resolution.
 import { Redis } from "ioredis";
 import { type Config, redactConfig } from "@zammy/config";
-import { FixtureStore } from "@zammy/currents-client";
+import { createCurrentsClient, type CurrentsClient } from "@zammy/currents-client";
 import { registerHealthRoutes } from "./health.js";
 
 export interface App {
   app: FastifyInstance;
   pool: Pool;
   redis: Redis;
+  currents: CurrentsClient;
   close: () => Promise<void>;
 }
 
@@ -42,30 +43,33 @@ export async function buildApp(config: Config): Promise<App> {
 
   await app.register(cors, { origin: config.CORS_ORIGIN.split(",").map((o) => o.trim()) });
 
-  registerHealthRoutes(app, { pool, redis });
-
+  // One interface for both modes: nothing below this line knows or cares whether
+  // articles come from the live API or from the recorded payloads
+  // (ARCHITECTURE 4.1 — a code path that branches on environment is a code path
+  // local development stops predicting).
+  const currents = await createCurrentsClient(config, { logger: app.log });
+  app.decorate("currents", currents);
   if (config.CURRENTS_MODE === "fixture") {
-    const fixtures = new FixtureStore(config.FIXTURES_DIR);
-    await fixtures.load();
     app.log.info(
-      { articles: fixtures.size, dir: config.FIXTURES_DIR },
+      { dir: config.FIXTURES_DIR },
       "CURRENTS_MODE=fixture — serving recorded payloads, no upstream calls, no quota spend",
     );
-    app.decorate("fixtures", fixtures);
   }
+
+  registerHealthRoutes(app, { pool, redis, currents });
 
   app.log.info({ config: redactConfig(config) }, "configuration loaded");
 
   const close = async (): Promise<void> => {
     await app.close();
-    await Promise.allSettled([pool.end(), redis.quit()]);
+    await Promise.allSettled([pool.end(), redis.quit(), currents.close()]);
   };
 
-  return { app, pool, redis, close };
+  return { app, pool, redis, currents, close };
 }
 
 declare module "fastify" {
   interface FastifyInstance {
-    fixtures?: FixtureStore;
+    currents: CurrentsClient;
   }
 }

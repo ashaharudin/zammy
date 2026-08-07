@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CurrentsInvalidQueryError } from "./errors.js";
 
 /**
  * The raw Currents wire shape, exactly as observed — not as the OpenAPI spec
@@ -42,6 +43,17 @@ export type RawSearchResponse = z.infer<typeof RawSearchResponse>;
 export function isEmptyPage(response: RawSearchResponse): boolean {
   return response.status === "ok" && (response.news?.length ?? 0) === 0;
 }
+
+/**
+ * Reference endpoints return name→code *maps*, not arrays as the spec implies,
+ * and the names contain typos ("Vietnamise", "United State", "German"). Always
+ * use the values; never derive a code from a name (PROBE-FINDINGS 6).
+ */
+export const RawLanguages = z
+  .object({ languages: z.record(z.string(), z.string()) })
+  .loose();
+export const RawRegions = z.object({ regions: z.record(z.string(), z.string()) }).loose();
+export const RawCategories = z.object({ categories: z.array(z.string()) }).loose();
 
 /** Search parameters, in our naming. Translated to wire names by the client. */
 export interface SearchParams {
@@ -93,4 +105,71 @@ export function toQueryParams(
 /** Upstream wants `YYYY-MM-DDTHH:MM:SS+00:00`, not `...Z`. */
 export function toCurrentsDate(date: Date): string {
   return `${date.toISOString().replace(/\.\d{3}Z$/, "")}+00:00`;
+}
+
+export interface ClampLimits {
+  maxPageSize: number;
+  maxRetrievableResults: number;
+  maxLookbackDays: number;
+}
+
+/**
+ * Pre-flight clamp, so the tier's limits are enforced locally instead of learned
+ * from a 400 (ARCHITECTURE 11: pre-flight validation should make upstream 400s
+ * unreachable). Every clamp here corresponds to an error upstream actually
+ * returned during the probe:
+ *
+ *   page_size > 20            → "Max page_size for Free tier is 20"
+ *   page_number > cap/size    → "Max retrievable results for Free tier is 100"
+ *   start_date > 30 days ago  → "Max lookback is 30 days"
+ *
+ * Adjustments are returned rather than logged-and-forgotten: a window silently
+ * pulled forward looks exactly like missing news, so the caller gets to say so.
+ */
+export function clampSearchParams(
+  params: SearchParams,
+  limits: ClampLimits,
+  now: Date = new Date(),
+): { params: SearchParams; adjustments: string[] } {
+  const adjustments: string[] = [];
+  const clamped: SearchParams = { ...params };
+
+  const requestedPageSize = params.pageSize ?? limits.maxPageSize;
+  const pageSize = Math.max(1, Math.min(Math.trunc(requestedPageSize), limits.maxPageSize));
+  if (params.pageSize !== undefined && pageSize !== params.pageSize) {
+    adjustments.push(`pageSize ${params.pageSize} → ${pageSize} (tier maximum)`);
+  }
+  clamped.pageSize = pageSize;
+
+  const maxPageNumber = Math.max(1, Math.floor(limits.maxRetrievableResults / pageSize));
+  if (params.pageNumber !== undefined) {
+    // Asking past the cap must FAIL, not quietly resolve to the last page.
+    // Upstream answers such a request with 400 "Max retrievable results for Free
+    // tier is 100", and clamping down would be actively worse than that error:
+    // page 6 would return page 5's articles, so a pager would ingest the same
+    // twenty articles forever and count them as new history.
+    if (Math.trunc(params.pageNumber) > maxPageNumber) {
+      throw new CurrentsInvalidQueryError(
+        `pageNumber ${params.pageNumber} exceeds the retrievable cap: ` +
+          `${limits.maxRetrievableResults} results at pageSize ${pageSize} is ` +
+          `${maxPageNumber} pages. Subdivide the time window instead — the cap is ` +
+          "a wall, not a cursor (ARCHITECTURE 6.3).",
+        { page_number: `Max retrievable results is ${limits.maxRetrievableResults}` },
+      );
+    }
+    clamped.pageNumber = Math.max(1, Math.trunc(params.pageNumber));
+  }
+
+  if (params.startDate) {
+    const earliest = new Date(now.getTime() - limits.maxLookbackDays * 86_400_000);
+    if (params.startDate < earliest) {
+      adjustments.push(
+        `startDate ${params.startDate.toISOString()} → ${earliest.toISOString()} ` +
+          `(${limits.maxLookbackDays}-day lookback limit)`,
+      );
+      clamped.startDate = earliest;
+    }
+  }
+
+  return { params: clamped, adjustments };
 }

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { RawArticle, type SearchParams } from "./raw.js";
+import { parsePublished } from "./normalize.js";
 
 /**
  * Serves recorded upstream payloads instead of calling the API (CURRENTS_MODE=fixture).
@@ -20,10 +21,18 @@ interface DuplicatesFixture {
 interface SampleFixture {
   calls: Array<{ label: string; params: Record<string, string>; news: unknown[] }>;
 }
+interface ReferenceFixture {
+  reference_languages?: { languages?: Record<string, string> };
+  reference_regions?: { regions?: Record<string, string> };
+  reference_categories?: { categories?: string[] };
+}
 
 export class FixtureStore {
   private articles: RawArticle[] = [];
   private loaded = false;
+  private languages: Record<string, string> = {};
+  private regions: Record<string, string> = {};
+  private categories: string[] = [];
 
   constructor(private readonly fixturesDir: string) {}
 
@@ -53,6 +62,23 @@ export class FixtureStore {
       );
     }
 
+    // Reference lists come from the same recorded capture, so offline mode can
+    // validate a `language` or `category` filter locally exactly as live mode
+    // does (ARCHITECTURE 6.2 step 3) instead of accepting anything.
+    const reference = await this.readJson<ReferenceFixture>(
+      "error-and-reference-bodies.json",
+    );
+    this.languages = reference?.reference_languages?.languages ?? {};
+    this.regions = reference?.reference_regions?.regions ?? {};
+    this.categories = reference?.reference_categories?.categories ?? [];
+
+    if (!Object.keys(this.languages).length || !this.categories.length) {
+      throw new Error(
+        `Reference data missing from ${this.fixturesDir}/error-and-reference-bodies.json. ` +
+          "Fixture mode cannot validate filter values without it.",
+      );
+    }
+
     // Newest-first, matching upstream's own default ordering.
     collected.sort((a, b) => parsePublished(b.published) - parsePublished(a.published));
     this.articles = collected;
@@ -61,6 +87,19 @@ export class FixtureStore {
 
   get size(): number {
     return this.articles.length;
+  }
+
+  /** Name → code, verbatim from the capture — including the "Vietnamise" typo. */
+  get referenceLanguages(): Record<string, string> {
+    return { ...this.languages };
+  }
+
+  get referenceRegions(): Record<string, string> {
+    return { ...this.regions };
+  }
+
+  get referenceCategories(): string[] {
+    return [...this.categories];
   }
 
   /**
@@ -129,28 +168,4 @@ export class FixtureStore {
     }
     return parsed;
   }
-}
-
-/**
- * Parse `"2026-08-04 20:45:56 +0000"`. `new Date()` handles this inconsistently
- * across runtimes, and a wrong timestamp silently corrupts the timeline — which
- * is the one thing the product promises. Returns NaN rather than guessing.
- */
-export function parsePublished(value: string): number {
-  const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})\s*([+-]\d{2}):?(\d{2})?$/
-    .exec(value.trim());
-  if (!match) return Number.NaN;
-
-  const [, year, month, day, hour, minute, second, tzHour, tzMinute = "00"] = match;
-  const offsetMinutes =
-    Number(tzHour) * 60 + Math.sign(Number(tzHour) || 1) * Number(tzMinute);
-
-  return Date.UTC(
-    Number(year),
-    Number(month) - 1,
-    Number(day),
-    Number(hour),
-    Number(minute),
-    Number(second),
-  ) - offsetMinutes * 60_000;
 }

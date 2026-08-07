@@ -7,8 +7,10 @@ wordcloud of the day's most-referenced topics. Backed by [Currents API](https://
 - **[docs/PROBE-FINDINGS.md](docs/PROBE-FINDINGS.md)** — what 45 live API calls revealed. Read this
   before assuming anything about the upstream; several of its findings contradict the OpenAPI spec.
 
-**Status: Phase 0 complete** — scaffold, shared contract, config validation, offline fixture mode,
-container build. No timeline yet; that is Phase 3–4.
+**Status: Phase 1 complete** — scaffold, shared contract, config validation, container build, and the
+upstream client: normalization, mandatory User-Agent, typed error taxonomy, header-driven quota
+governance, retries with a circuit breaker, and paging. No timeline yet; that needs the schema
+(Phase 2) and the query service (Phase 3).
 
 ## Quick start
 
@@ -53,6 +55,26 @@ fixtures/                  real captured upstream payloads — the regression ba
 The `shared` / `config` split is load-bearing: `shared` reaches the browser, `config` holds the API
 key. Keeping them apart is what makes it structurally hard to leak the key into a bundle.
 
+## Talking to the upstream
+
+`createCurrentsClient(config)` returns one interface backed by either the live API or the recorded
+fixtures, chosen by `CURRENTS_MODE`. Nothing above the package branches on the mode — that rule is
+what makes offline development predict production instead of merely resembling it.
+
+```ts
+const client = await createCurrentsClient(config);
+const page = await client.search({ keywords: ["climate", "policy"], pageSize: 20 });
+
+// Page a whole window, with an honest reason for stopping.
+const all = await collectPages(client, { keywords: ["climate"] }, { maxCalls: 2 });
+if (all.stoppedBy === "cap") {
+  // Upstream had more to give; the 100-result ceiling cut us off. Subdivide the window.
+}
+```
+
+`stoppedBy` is the value to care about. `end_of_results` means upstream is out of articles;
+`cap` means it is not, and only a narrower time window will reach the rest.
+
 ## Commands
 
 ```bash
@@ -85,3 +107,11 @@ with Phase 6.
   one post appeared 50 times in 100 results. Anything that counts articles must count clusters.
 - **Never `new Date()` an upstream timestamp.** Use the parser in `@zammy/currents-client`; the format
   is not ISO-8601 and a wrong timestamp silently corrupts the timeline.
+- **End-of-page is decided by the raw count, never by how many articles survived normalization.**
+  One malformed article would otherwise read as "that's all there is" and truncate a topic's history
+  with no error to report it.
+- **The 100-result cap is a wall, not a cursor.** Asking for a page past it is refused locally rather
+  than clamped to the last page — clamping hands back articles you already have and a pager counts
+  them as new. Get past the cap by narrowing the time window instead.
+- **`/readyz` must never call the upstream.** At a 30-second probe interval that alone would cost
+  ~2900 calls a day against a 1000-call budget. It reports what the last real call observed.
