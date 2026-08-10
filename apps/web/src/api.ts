@@ -23,13 +23,6 @@ export const Reference = z.object({
 });
 export type Reference = z.infer<typeof Reference>;
 
-/** Upstream's category list includes literal junk; never show these (§2). */
-const JUNK_CATEGORIES = new Set(["crap", "notsure", "redundant"]);
-
-export function pickerCategories(reference: Reference): string[] {
-  return reference.categories.filter((c) => !JUNK_CATEGORIES.has(c));
-}
-
 const ErrorBody = z.object({
   error: z.object({
     message: z.string(),
