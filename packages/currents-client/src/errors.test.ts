@@ -169,7 +169,7 @@ describe("past-end page — an end signal, not an error", () => {
 
     const result = await client.search({ keywords: ["climate"], pageNumber: 5 });
 
-    expect(result.articles).toHaveLength(0);
+    expect(result.sightings).toHaveLength(0);
     expect(result.rawCount).toBe(0);
     expect(result.isLastPage).toBe(true);
   });

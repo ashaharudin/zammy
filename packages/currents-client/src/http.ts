@@ -5,7 +5,7 @@ import {
   CurrentsUpstreamError,
 } from "./errors.js";
 import { mapErrorResponse } from "./map-error.js";
-import { normalizeArticles } from "./normalize.js";
+import { normalizeSightings } from "./normalize.js";
 import {
   RawCategories,
   RawLanguages,
@@ -200,19 +200,19 @@ export class HttpCurrentsClient implements CurrentsClient {
     }
 
     const raw = parsed.news ?? [];
-    const { articles, stats } = normalizeArticles(raw);
+    const { sightings, stats } = normalizeSightings(raw);
 
     if (stats.received !== stats.kept) {
       // The drop rate is a real metric (ARCHITECTURE 12): a rise means upstream
       // changed a field shape, and the timeline quietly thins until someone notices.
       this.logger?.warn(
         { received: stats.received, kept: stats.kept, dropped: stats.dropped },
-        "dropped malformed articles during normalization",
+        "dropped malformed sightings during normalization",
       );
     }
 
     return {
-      articles,
+      sightings,
       requestedAt: response.requestedAt,
       rawCount: raw.length,
       // Deliberately the RAW count: a normalization drop must never masquerade as

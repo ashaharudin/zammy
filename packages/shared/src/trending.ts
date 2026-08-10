@@ -13,7 +13,7 @@ import { ResponseMeta } from "./timeline.js";
 export const TrendingTerm = z.object({
   term: z.string().min(1),
   isBigram: z.boolean(),
-  /** Distinct CLUSTERS, never raw article rows. */
+  /** Distinct ARTICLES, never sightings — the 50x-repeated page counts once. */
   uniqueArticles: z.int().min(1),
   /** Distinct source domains. Gate: >= 2. */
   sourceCount: z.int().min(2),

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { NormalizedArticle } from "@zammy/shared";
+import { Sighting } from "./sighting.js";
 import type { RawArticle } from "./raw.js";
 
 /**
@@ -10,11 +10,11 @@ import type { RawArticle } from "./raw.js";
  * every entry was observed live (PROBE-FINDINGS 1):
  *
  *   - `published` is "2026-08-04 20:45:56 +0000" — NOT ISO-8601.
- *   - `image` is the literal string "None" in 47 of 180 recorded articles.
+ *   - `image` is the literal string "None" in 47 of 180 recorded sightings.
  *   - the link field is `url` in responses and `urls` in the spec; tolerate both.
  *   - `category` needs lowercasing; `source_category` is undocumented and kept verbatim.
  *
- * Normalization is deliberately fallible: a malformed article is dropped and
+ * Normalization is deliberately fallible: a malformed sighting is dropped and
  * counted rather than repaired with a guess (ARCHITECTURE 11). The one case that
  * matters most is a bad timestamp — the timeline axis is the product's core
  * promise, so defaulting it to "now" would silently corrupt the thing users came for.
@@ -35,7 +35,7 @@ export interface NormalizationStats {
 }
 
 export type NormalizeOutcome =
-  | { ok: true; article: NormalizedArticle }
+  | { ok: true; sighting: Sighting }
   | { ok: false; reason: DropReason; detail: string };
 
 export function emptyStats(): NormalizationStats {
@@ -55,33 +55,33 @@ export function emptyStats(): NormalizationStats {
 /**
  * Normalize a batch, keeping what is usable and counting what is not.
  *
- * The caller must NOT use `articles.length` as an end-of-results signal: drops
- * change the count, and `articles.length < pageSize` would then read as "last
- * page" when it only means "one article was malformed". The raw count is the
+ * The caller must NOT use `sightings.length` as an end-of-results signal: drops
+ * change the count, and `sightings.length < pageSize` would then read as "last
+ * page" when it only means "one sighting was malformed". The raw count is the
  * only valid page-boundary signal — see `SearchResult.isLastPage`.
  */
-export function normalizeArticles(raw: readonly RawArticle[]): {
-  articles: NormalizedArticle[];
+export function normalizeSightings(raw: readonly RawArticle[]): {
+  sightings: Sighting[];
   stats: NormalizationStats;
 } {
   const stats = emptyStats();
-  const articles: NormalizedArticle[] = [];
+  const sightings: Sighting[] = [];
 
   for (const item of raw) {
     stats.received += 1;
-    const outcome = normalizeArticle(item);
+    const outcome = normalizeSighting(item);
     if (outcome.ok) {
-      articles.push(outcome.article);
+      sightings.push(outcome.sighting);
       stats.kept += 1;
     } else {
       stats.dropped[outcome.reason] += 1;
     }
   }
 
-  return { articles, stats };
+  return { sightings, stats };
 }
 
-export function normalizeArticle(raw: RawArticle): NormalizeOutcome {
+export function normalizeSighting(raw: RawArticle): NormalizeOutcome {
   const title = collapseWhitespace(raw.title);
   if (!title) return { ok: false, reason: "no_title", detail: raw.id };
 
@@ -118,10 +118,10 @@ export function normalizeArticle(raw: RawArticle): NormalizeOutcome {
   };
 
   // Validate against the shared contract rather than trusting our own mapping.
-  // This is the last gate before an article reaches the rest of the system, and
+  // This is the last gate before a sighting reaches the rest of the system, and
   // it is cheap; a `schema` drop means upstream sent something the contract does
   // not describe, which is a fact worth a metric rather than a crash.
-  const parsed = NormalizedArticle.safeParse(candidate);
+  const parsed = Sighting.safeParse(candidate);
   if (!parsed.success) {
     return {
       ok: false,
@@ -132,7 +132,7 @@ export function normalizeArticle(raw: RawArticle): NormalizeOutcome {
     };
   }
 
-  return { ok: true, article: parsed.data };
+  return { ok: true, sighting: parsed.data };
 }
 
 /**
@@ -165,7 +165,7 @@ export function parsePublished(value: string): number {
 const TRACKING_PARAMS = new Set(["fbclid", "gclid", "msclkid", "igshid", "mc_eid"]);
 
 /**
- * Canonical form of an article link, used BOTH as the stored `url` and as the
+ * Canonical form of a sighting's link, used BOTH as the stored `url` and as the
  * input to `dedupKey` (ARCHITECTURE 7.4). One function, so the link a user
  * clicks and the key that collapses duplicates can never disagree.
  *
@@ -239,7 +239,7 @@ const SECOND_LEVEL_SUFFIXES = new Set([
  * Registrable domain of an article's link, for display as a source chip and as
  * the grouping key behind `df_domains` (ARCHITECTURE 10.3). Strips a leading
  * `www.`, which the dedup key deliberately does not — mis-grouping a source is
- * cosmetic, whereas over-collapsing dedup keys destroys articles.
+ * cosmetic, whereas over-collapsing dedup keys merges distinct articles.
  */
 export function sourceDomain(url: string): string | null {
   let host: string;
@@ -260,7 +260,7 @@ export function sourceDomain(url: string): string | null {
 
 /**
  * `image` → `string | null`. Upstream sends the literal string "None" rather
- * than null or an omitted field in roughly a quarter of articles, and a UI that
+ * than null or an omitted field in roughly a quarter of sightings, and a UI that
  * renders that as a src attribute shows a broken-image icon on every fourth card.
  */
 export function normalizeImage(value: string | null | undefined): string | null {

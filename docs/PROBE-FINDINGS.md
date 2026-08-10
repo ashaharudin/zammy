@@ -2,7 +2,8 @@
 
 **Date:** 2026-08-04 · **Method:** 45 live calls against `https://api.currentsapi.services/v1` with a
 Free-tier key · **Captured payloads:** [`fixtures/`](../fixtures) — committed, key-free, and used as
-the regression basis for clustering, term scoring and the client error taxonomy (ARCHITECTURE §12)
+the regression basis for the sighting→article collapse, term scoring and the client error
+taxonomy (ARCHITECTURE §12)
 
 Probes used a *closed* time window (`2026-08-02T00:00 → 2026-08-03T00:00`) so the result set was
 stable across calls and any difference was attributable to the parameter under test rather than to
@@ -87,6 +88,7 @@ Cumulative unique yield per call: 15 → 22 → 30 → 34 → **42**.
 **Two implications:**
 
 1. Without URL-collapsing the product is unusable — over half the timeline is one repeated post.
+   This is why `sightings` and `articles` are separate tables (ADR-0002).
 2. **Effective retrievable depth is ~40 unique articles per query, not 100.** Deduplication is not a
    tidiness feature; it is load-bearing for both the feed and capacity planning.
 
@@ -135,7 +137,8 @@ cve-, earlier, jenkins, plugin, attackers, permission, credentials, how, not, ju
 Three separate failure modes, each needing its own fix:
 
 1. **Single-source burst domination** — a run of near-identical Jenkins security advisories took the
-   cloud. These are *distinct, non-duplicate* articles, so URL clustering does **not** catch them.
+   cloud. These are *distinct, non-duplicate* articles, so URL-based collapsing does **not** catch
+   them.
    Fix: weight by distinct source domains and require `df_domains >= 2`.
 2. **Generic news vocabulary survives stopwording** ("earlier", "found", "read", "how"). Raw frequency
    cannot distinguish these from real topics. Fix: score against a rolling baseline.

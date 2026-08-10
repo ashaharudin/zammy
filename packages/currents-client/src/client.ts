@@ -1,4 +1,4 @@
-import type { NormalizedArticle } from "@zammy/shared";
+import type { Sighting } from "./sighting.js";
 import type { NormalizationStats } from "./normalize.js";
 import type { SearchParams } from "./raw.js";
 import type { CallPriority, QuotaSnapshot, QuotaView } from "./quota.js";
@@ -12,7 +12,7 @@ import type { CallPriority, QuotaSnapshot, QuotaView } from "./quota.js";
  * (ARCHITECTURE 4.1: the moment a code path branches on environment, local
  * development stops predicting production behaviour).
  *
- * `search()` returning `NormalizedArticle[]` is also the seam for a second
+ * `search()` returning `Sighting[]` is also the seam for a second
  * provider later (ARCHITECTURE 5.6).
  */
 
@@ -37,13 +37,13 @@ export interface CallOpts {
 }
 
 export interface SearchResult {
-  articles: NormalizedArticle[];
+  sightings: Sighting[];
   requestedAt: Date;
   /**
-   * Raw article count from upstream, BEFORE normalization drops.
+   * Raw sighting count from upstream, BEFORE normalization drops.
    *
-   * This is the only valid page-boundary signal. Using `articles.length` would
-   * make one malformed article read as "last page" and silently truncate a
+   * This is the only valid page-boundary signal. Using `sightings.length` would
+   * make one malformed sighting read as "last page" and silently truncate a
    * topic's history — a data-loss bug that nothing would report.
    */
   rawCount: number;
@@ -71,7 +71,7 @@ export interface CurrentsClient {
    *
    * Exposed so callers cannot page against a different idea of the cap than the
    * client clamps to. When they disagree, a pager asks for a page past the cap and
-   * gets the last page back again — twenty articles re-ingested as new history.
+   * gets the last page back again — twenty sightings re-ingested as new history.
    */
   readonly limits: ClientLimits;
   search(params: SearchParams, opts?: CallOpts): Promise<SearchResult>;
@@ -88,7 +88,7 @@ export interface CurrentsClient {
 
 /**
  * Values upstream returns in `/available/categories` that are not categories
- * (PROBE-FINDINGS 6). Filtered out of user-facing pickers only — a stored article
+ * (PROBE-FINDINGS 6). Filtered out of user-facing pickers only — a stored sighting
  * keeps whatever categories upstream assigned it, because dropping them would
  * make our copy differ from the source for no gain.
  */

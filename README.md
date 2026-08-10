@@ -44,7 +44,7 @@ To go online, set `CURRENTS_MODE=live` and `CURRENTS_API_KEY` in `.env`.
 ## Layout
 
 ```
-packages/shared            wire contract (Zod schemas + types) — bundled into the browser
+packages/shared            wire contract ONLY — what ships to the browser (ADR-0004)
 packages/config            server-only env validation — MUST NOT be imported by web
 packages/currents-client   upstream SDK: error taxonomy, wire shapes, fixture store
 apps/api                   Fastify: HTTP surface, query planning, in-process job consumer
@@ -103,8 +103,10 @@ with Phase 6.
   problem at once rather than the first. Adding a setting means adding it to `packages/config`.
 - **`CURRENTS_USER_AGENT` must be non-empty.** Cloudflare returns `403` (error 1010) to default
   library User-Agents; the probe lost its first 11 calls to this before diagnosing it.
-- **Timeline reads page over clusters, not articles.** Upstream re-emits the same URL under new UUIDs —
-  one post appeared 50 times in 100 results. Anything that counts articles must count clusters.
+- **A sighting is not an article.** Upstream re-emits the same story under fresh UUIDs — one post
+  appeared 50 times in 100 results — so a `sighting` is one emission and an `article` is the real
+  story. The timeline pages over articles, and `count(articles)` is the number you want. See
+  [CONTEXT.md](CONTEXT.md).
 - **Never `new Date()` an upstream timestamp.** Use the parser in `@zammy/currents-client`; the format
   is not ISO-8601 and a wrong timestamp silently corrupts the timeline.
 - **End-of-page is decided by the raw count, never by how many articles survived normalization.**

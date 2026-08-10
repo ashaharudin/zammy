@@ -119,7 +119,7 @@ describe("query construction", () => {
 });
 
 describe("end-of-results signalling", () => {
-  it("uses the RAW count, so a dropped article is not read as the last page", async () => {
+  it("uses the RAW count, so a dropped sighting is not read as the last page", async () => {
     // 20 raw articles of which one is malformed leaves 19 normalized. Treating
     // that as "fewer than pageSize, therefore done" would permanently hide the
     // rest of a topic's history with no error to report it.
@@ -135,7 +135,7 @@ describe("end-of-results signalling", () => {
     const result = await client.search({ keywords: ["climate"], pageSize: 20 });
 
     expect(result.rawCount).toBe(20);
-    expect(result.articles).toHaveLength(19);
+    expect(result.sightings).toHaveLength(19);
     expect(result.normalization.dropped.bad_published).toBe(1);
     expect(result.isLastPage).toBe(false);
   });
@@ -237,7 +237,7 @@ describe("retries", () => {
     const result = await client.search({ keywords: ["climate"] });
 
     expect(calls).toHaveLength(3);
-    expect(result.articles).toHaveLength(1);
+    expect(result.sightings).toHaveLength(1);
   });
 
   it("gives up after two retries", async () => {
@@ -400,7 +400,7 @@ describe("deadlines", () => {
     const client = makeClient({ fetch });
 
     const result = await client.search({ keywords: ["x"] }, { timeoutMs: 50 });
-    expect(result.articles).toHaveLength(1);
+    expect(result.sightings).toHaveLength(1);
   });
 });
 
@@ -525,7 +525,7 @@ describe("response validation and secrecy", () => {
     const client = makeClient({ fetch });
 
     const result = await client.search({ keywords: ["x"] });
-    expect(result.articles).toHaveLength(1);
+    expect(result.sightings).toHaveLength(1);
   });
 
   it("redacts the API key from anything upstream echoes back", async () => {
@@ -556,7 +556,7 @@ describe("response validation and secrecy", () => {
 
     expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({ received: 2, kept: 1 }),
-      expect.stringContaining("dropped malformed articles"),
+      expect.stringContaining("dropped malformed sightings"),
     );
   });
 });
@@ -569,7 +569,7 @@ describe("latestNews", () => {
     const result = await client.latestNews("en");
 
     expect(calls[0]!.url).toContain("/latest-news?language=en");
-    expect(result.articles).toHaveLength(3);
+    expect(result.sightings).toHaveLength(3);
   });
 });
 

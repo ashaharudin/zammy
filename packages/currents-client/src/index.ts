@@ -11,6 +11,7 @@
  */
 export * from "./errors.js";
 export * from "./raw.js";
+export * from "./sighting.js";
 export * from "./normalize.js";
 export * from "./quota.js";
 export * from "./breaker.js";

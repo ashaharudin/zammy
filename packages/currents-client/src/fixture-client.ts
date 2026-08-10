@@ -1,5 +1,5 @@
 import type { FixtureStore } from "./fixture-store.js";
-import { normalizeArticles } from "./normalize.js";
+import { normalizeSightings } from "./normalize.js";
 import { clampSearchParams, type SearchParams } from "./raw.js";
 import { UnmeteredQuotaGovernor, type QuotaView } from "./quota.js";
 import type { CallOpts, ClientLimits, CurrentsClient, SearchResult } from "./client.js";
@@ -33,10 +33,10 @@ export class FixtureCurrentsClient implements CurrentsClient {
     const { params: clamped, adjustments } = clampSearchParams(params, this.limits);
     const pageSize = clamped.pageSize ?? this.limits.maxPageSize;
     const raw = this.store.search(clamped, { maxPageSize: this.limits.maxPageSize });
-    const { articles, stats } = normalizeArticles(raw);
+    const { sightings, stats } = normalizeSightings(raw);
 
     return {
-      articles,
+      sightings,
       requestedAt: new Date(),
       rawCount: raw.length,
       isLastPage: raw.length < pageSize,

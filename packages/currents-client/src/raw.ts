@@ -146,8 +146,8 @@ export function clampSearchParams(
     // Asking past the cap must FAIL, not quietly resolve to the last page.
     // Upstream answers such a request with 400 "Max retrievable results for Free
     // tier is 100", and clamping down would be actively worse than that error:
-    // page 6 would return page 5's articles, so a pager would ingest the same
-    // twenty articles forever and count them as new history.
+    // page 6 would return page 5's sightings, so a pager would ingest the same
+    // twenty sightings forever and count them as new history.
     if (Math.trunc(params.pageNumber) > maxPageNumber) {
       throw new CurrentsInvalidQueryError(
         `pageNumber ${params.pageNumber} exceeds the retrievable cap: ` +

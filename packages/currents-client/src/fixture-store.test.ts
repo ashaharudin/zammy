@@ -90,7 +90,7 @@ describe("FixtureStore", () => {
 
   it("preserves the duplication the real API exhibits", () => {
     // This is the point of using recorded payloads: fixture mode must reproduce
-    // the upstream's actual misbehaviour, or clustering gets built against data
+    // the upstream's actual misbehaviour, or the collapse gets built against data
     // that never needed it. Synthetic fixtures would hide exactly this.
     const all = store.search({ pageSize: 20, pageNumber: 1 }, { maxPageSize: 1000 });
     expect(all.length).toBeGreaterThan(0);

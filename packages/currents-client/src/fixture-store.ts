@@ -28,7 +28,7 @@ interface ReferenceFixture {
 }
 
 export class FixtureStore {
-  private articles: RawArticle[] = [];
+  private sightings: RawArticle[] = [];
   private loaded = false;
   private languages: Record<string, string> = {};
   private regions: Record<string, string> = {};
@@ -81,12 +81,12 @@ export class FixtureStore {
 
     // Newest-first, matching upstream's own default ordering.
     collected.sort((a, b) => parsePublished(b.published) - parsePublished(a.published));
-    this.articles = collected;
+    this.sightings = collected;
     this.loaded = true;
   }
 
   get size(): number {
-    return this.articles.length;
+    return this.sightings.length;
   }
 
   /** Name → code, verbatim from the capture — including the "Vietnamise" typo. */
@@ -114,23 +114,23 @@ export class FixtureStore {
       throw new Error("FixtureStore.load() must be awaited before search()");
     }
 
-    let results = this.articles;
+    let results = this.sightings;
 
     if (params.keywords?.length) {
       const terms = params.keywords.map((term) => term.toLowerCase());
-      results = results.filter((article) => {
+      results = results.filter((sighting) => {
         const haystack =
-          `${article.title ?? ""} ${article.description ?? ""}`.toLowerCase();
+          `${sighting.title ?? ""} ${sighting.description ?? ""}`.toLowerCase();
         return terms.every((term) => haystack.includes(term));
       });
     }
     if (params.language) {
-      results = results.filter((article) => article.language === params.language);
+      results = results.filter((sighting) => sighting.language === params.language);
     }
     if (params.category) {
       const wanted = params.category.toLowerCase();
-      results = results.filter((article) =>
-        (article.category ?? []).some((c) => c.toLowerCase() === wanted),
+      results = results.filter((sighting) =>
+        (sighting.category ?? []).some((c) => c.toLowerCase() === wanted),
       );
     }
     if (params.startDate) {

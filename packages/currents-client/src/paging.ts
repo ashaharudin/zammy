@@ -1,4 +1,4 @@
-import type { NormalizedArticle } from "@zammy/shared";
+import type { Sighting } from "./sighting.js";
 import { emptyStats, type NormalizationStats } from "./normalize.js";
 import type { SearchParams } from "./raw.js";
 import type { QuotaSnapshot } from "./quota.js";
@@ -31,18 +31,19 @@ export type StopReason =
   | "error";
 
 export interface PagedResult {
-  articles: NormalizedArticle[];
+  sightings: Sighting[];
   /** Pages actually fetched. Each is one upstream call and one quota token. */
   pages: number;
   /** Raw articles returned, before normalization drops. */
   rawCount: number;
   /**
-   * Distinct dedup keys across all pages — the numerator of the
+   * Distinct articles across all pages — sightings sharing a dedup key count
+   * once. This is the numerator of the
    * unique-articles-per-upstream-call metric (ARCHITECTURE 12). The probe
-   * baseline is ~8 unique per 20-article call; a fall means duplication is
+   * baseline is ~8 unique per 20-sighting call; a fall means duplication is
    * worsening and timelines are thinning.
    */
-  uniqueDedupKeys: number;
+  uniqueArticles: number;
   stoppedBy: StopReason;
   /** Where a continuation should resume, or null when there is nothing left. */
   nextPageNumber: number | null;
@@ -63,7 +64,7 @@ export interface CollectPagesOptions extends CallOpts {
   maxCalls?: number;
   /** First page to fetch. 1-indexed, as upstream requires. */
   startPage?: number;
-  onPage?: (articles: NormalizedArticle[], pageNumber: number) => void;
+  onPage?: (sightings: Sighting[], pageNumber: number) => void;
 }
 
 export async function collectPages(
@@ -88,7 +89,7 @@ export async function collectPages(
   );
   const callBudget = Math.max(1, maxCalls ?? maxPageNumber);
 
-  const articles: NormalizedArticle[] = [];
+  const sightings: Sighting[] = [];
   const dedupKeys = new Set<string>();
   const normalization = emptyStats();
   const adjustments: string[] = [];
@@ -109,10 +110,10 @@ export async function collectPages(
       // than discarding them.
       if (pages === 0) throw error;
       return {
-        articles,
+        sightings,
         pages,
         rawCount,
-        uniqueDedupKeys: dedupKeys.size,
+        uniqueArticles: dedupKeys.size,
         stoppedBy: "error",
         nextPageNumber: pageNumber,
         normalization,
@@ -124,21 +125,21 @@ export async function collectPages(
 
     pages += 1;
     rawCount += result.rawCount;
-    articles.push(...result.articles);
-    for (const article of result.articles) dedupKeys.add(article.dedupKey);
+    sightings.push(...result.sightings);
+    for (const sighting of result.sightings) dedupKeys.add(sighting.dedupKey);
     accumulate(normalization, result.normalization);
     for (const adjustment of result.adjustments) {
       if (!adjustments.includes(adjustment)) adjustments.push(adjustment);
     }
     if (result.quota) quota = result.quota;
-    onPage?.(result.articles, pageNumber);
+    onPage?.(result.sightings, pageNumber);
 
     if (result.isLastPage) {
       return {
-        articles,
+        sightings,
         pages,
         rawCount,
-        uniqueDedupKeys: dedupKeys.size,
+        uniqueArticles: dedupKeys.size,
         stoppedBy: "end_of_results",
         nextPageNumber: null,
         normalization,
@@ -153,10 +154,10 @@ export async function collectPages(
     // off and the window needs subdividing (ARCHITECTURE 6.3).
     if (pageNumber > maxPageNumber) {
       return {
-        articles,
+        sightings,
         pages,
         rawCount,
-        uniqueDedupKeys: dedupKeys.size,
+        uniqueArticles: dedupKeys.size,
         stoppedBy: "cap",
         nextPageNumber: null,
         normalization,
@@ -167,10 +168,10 @@ export async function collectPages(
 
     if (pages >= callBudget) {
       return {
-        articles,
+        sightings,
         pages,
         rawCount,
-        uniqueDedupKeys: dedupKeys.size,
+        uniqueArticles: dedupKeys.size,
         stoppedBy: "call_budget",
         nextPageNumber: pageNumber,
         normalization,

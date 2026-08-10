@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { TimelineItem } from "./article.js";
+import { Article } from "./article.js";
 
 export const MAX_KEYWORDS_LENGTH = 200;
 export const DEFAULT_PAGE_LIMIT = 25;
@@ -16,8 +16,8 @@ export const TimelineQuery = z.object({
   /** Opaque keyset cursor from a previous response. */
   cursor: z.string().max(512).optional(),
   /**
-   * A CEILING, not a promise. One upstream call is 20 raw articles, which after
-   * clustering can be as few as 6 — so a short page is normal. Distinguish
+   * A CEILING, not a promise. One upstream call is 20 raw sightings, which after
+   * collapsing can be as few as 6 articles — so a short page is normal. Distinguish
    * "still arriving" from "that's all" via `meta.ingest`, never via item count.
    */
   limit: z.coerce.number().int().min(1).max(MAX_PAGE_LIMIT).default(DEFAULT_PAGE_LIMIT),
@@ -70,7 +70,7 @@ export type TopicSummary = z.infer<typeof TopicSummary>;
 
 export const TimelinePage = z.object({
   topic: TopicSummary,
-  items: z.array(TimelineItem),
+  items: z.array(Article),
   page: z.object({
     nextCursor: z.string().nullable(),
     hasMore: z.boolean(),

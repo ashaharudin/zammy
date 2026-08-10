@@ -37,7 +37,7 @@ function scriptedClient(rawCounts: number[], errorAt?: number): CurrentsClient &
       stats.kept = rawCount;
 
       return {
-        articles: Array.from({ length: rawCount }, (_, item) => ({
+        sightings: Array.from({ length: rawCount }, (_, item) => ({
           id: "00000000-0000-4000-8000-000000000000",
           url: `https://example.com/p${index}-${item}`,
           dedupKey: `${index}-${item}`.padStart(64, "0"),
@@ -100,7 +100,7 @@ describe("stopping at the true end of results", () => {
     const result = await collectPages(client, { keywords: ["nothing"] });
 
     expect(result.pages).toBe(1);
-    expect(result.articles).toHaveLength(0);
+    expect(result.sightings).toHaveLength(0);
     expect(result.stoppedBy).toBe("end_of_results");
   });
 });
@@ -196,7 +196,7 @@ describe("failures", () => {
     const result = await collectPages(client, { keywords: ["x"] });
 
     expect(result.pages).toBe(2);
-    expect(result.articles).toHaveLength(40);
+    expect(result.sightings).toHaveLength(40);
     expect(result.stoppedBy).toBe("error");
     expect(result.nextPageNumber).toBe(3);
     expect(result.error).toBeInstanceOf(Error);
@@ -212,7 +212,7 @@ describe("aggregation across pages", () => {
     // The scripted client emits unique keys, so this is the ceiling case. On real
     // data the probe baseline is ~8 unique per 20 (ARCHITECTURE 12).
     expect(result.rawCount).toBe(25);
-    expect(result.uniqueDedupKeys).toBe(25);
+    expect(result.uniqueArticles).toBe(25);
   });
 
   it("sums normalization stats across pages", async () => {

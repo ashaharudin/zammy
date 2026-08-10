@@ -1,9 +1,14 @@
 # Zammy — Architectural Proposal
 
-**Status:** Draft for review · **Date:** 2026-08-04 · **Scope:** Task 1 (architecture only, no implementation)
+**Status:** Phases 0–1 built · **Scope:** the design; decisions live in ADRs
 
 A news aggregator that takes keywords from a user and returns a time-ordered timeline of
 headlines and topic summaries, backed by [Currents API](https://currentsapi.services/en/docs/).
+
+Read alongside:
+[CONTEXT.md](../CONTEXT.md) for the domain vocabulary — **sighting** and **article** are distinct
+things here, and the difference is load-bearing — [PROBE-FINDINGS.md](./PROBE-FINDINGS.md) for what
+the upstream actually does, and [docs/adr/](./adr/) for decisions and the alternatives they beat.
 
 ---
 
@@ -16,13 +21,20 @@ headlines and topic summaries, backed by [Currents API](https://currentsapi.serv
   populates it, everyone after reads from storage.
 - Accumulate articles over time so a topic's timeline deepens beyond what one upstream call returns —
   driven by actual use, not by a scheduled watchlist (§9).
-- **A landing page wordcloud of the day's most-referenced topics**, each word sized by how many
-  *unique* articles reference it, and clickable to run that search (§10).
+- **A landing page wordcloud of the day's most-referenced terms**, each word sized by how many
+  *unique articles* reference it, and clickable to run that search (§10). Note the vocabulary: a
+  **term** is a word extracted from headlines; a **topic** is a saved canonical query. They meet when
+  a click turns one into the other.
 - A clean, fast front end; keywords in, timeline out.
 
 **Non-goals for v1**
 
 - User accounts, saved feeds, notifications.
+- A coverage-gap map. A topic can have holes — deferred backfill not yet run — and we *could* tell the
+  reader which stretch is "nothing published" versus "not fetched yet". `meta.ingest.state` already
+  says whether more may arrive, which covers the honest-freshness requirement; a per-range gap map
+  means a second range structure on the wire for something nobody has asked for. A deliberate no,
+  recorded so it is not mistaken for an oversight.
 - Multiple upstream news providers (the client is abstracted so this stays cheap to add — see §5.6).
 - LLM-generated topic summaries. The schema reserves a place for them (§7.2); generation is a later phase.
 
@@ -102,7 +114,7 @@ flowchart LR
     W --> C
     W --> S
     C -->|Authorization header<br/>+ explicit User-Agent| X[(Currents API)]
-    S --- PG[(Postgres<br/>articles + clusters + coverage)]
+    S --- PG[(Postgres<br/>sightings + articles + coverage)]
     S --- R[(Redis<br/>page cache, locks, quota)]
 ```
 
@@ -120,7 +132,8 @@ is a shared type rather than a document that drifts.
 ```
 zammy/
 ├── packages/
-│   ├── shared/            # Zod schemas + inferred types: Article, TimelineQuery, TimelinePage
+│   ├── shared/            # wire contract ONLY — what ships to the browser (ADR-0004)
+│   ├── config/            # server-only env validation; holds the API key
 │   └── currents-client/   # Component 1 — upstream SDK, zero app knowledge
 ├── apps/
 │   ├── api/               # Component 2 — Fastify. HTTP surface, query planning,
@@ -133,8 +146,10 @@ zammy/
 ```
 
 Runtime choices: **Fastify** (schema-first, fast JSON), **Zod** (one schema validates the HTTP
-request *and* generates the TS type), **Kysely** or **Drizzle** for typed SQL — deliberately not a
-heavy ORM, because §7.3's keyset pagination and `tstzrange` coverage query are hand-written SQL.
+request *and* generates the TS type), and **Kysely** for typed SQL — deliberately not an ORM, because
+§7.3's keyset pagination and the `tstzrange` coverage query are hand-written SQL
+([ADR-0003](adr/0003-kysely-and-hand-written-sql-instead-of-an-orm.md)). Migrations use Kysely's own
+`Migrator` and run as a discrete deploy step, never on application boot.
 
 ### 4.1 Deployment target — AWS; local development on Docker Compose
 
@@ -197,7 +212,7 @@ that remains a deployment decision with no code change.
 
 **What the AWS move will actually require** — infrastructure, not application code: task definitions,
 RDS and ElastiCache provisioning, secret wiring, an ALB using the existing `/healthz` and `/readyz`
-probes (§6.1), and a migration runner for Liquibase-style schema application on deploy. Images are
+probes (§6.1), and Kysely's `Migrator` run as a discrete deploy task rather than on boot. Images are
 multi-stage with `pnpm deploy --filter` to prune workspace dependencies, so they are already
 deploy-shaped. Worth writing the IaC (Terraform or CDK) at the point of the move rather than now,
 since provisioning nothing yet costs nothing.
@@ -228,7 +243,7 @@ type SearchParams = {
 };
 
 type SearchResult = {
-  articles: NormalizedArticle[];
+  sightings: Sighting[];
   requestedAt: Date;
   isLastPage: boolean;              // articles.length < pageSize
   quota: QuotaSnapshot;             // parsed from x-ratelimit-* headers
@@ -307,7 +322,7 @@ end talks exclusively to our own API. The key is redacted from all logs and erro
 
 ### 5.6 Extensibility
 
-`search()` returning `NormalizedArticle[]` is the seam for a future second provider. Adding one
+`search()` returning `Sighting[]` is the seam for a future second provider. Adding one
 means a new client satisfying the same interface plus a `provider` column on `articles`; nothing in
 §6–§8 changes.
 
@@ -331,7 +346,10 @@ upstream query at all.
 
 ```
 q          string   required   raw keyword input, ≤200 chars
-language   string   optional   validated against cached /available/languages
+language   string   optional   defaults to DEFAULT_LANGUAGE (en); validated against
+                              cached /available/languages. Omitting it upstream returns
+                              every language mixed together, so "all" is an explicit
+                              choice, never the accident of leaving a field unset.
 country    string   optional   validated against /available/regions
 category   string   optional   validated against /available/categories
 from, to   ISO-8601 optional   timeline window
@@ -344,7 +362,7 @@ Response:
 ```jsonc
 {
   "topic":  { "fingerprint": "…", "keywords": ["…"], "coverage": { "from": "…", "to": "…" } },
-  "items":  [ /* NormalizedArticle, published DESC */ ],
+  "items":  [ /* Article, published DESC */ ],
   "page":   { "nextCursor": "…|null", "hasMore": true },
   "meta":   {
     "servedFrom": "cache|store|upstream",
@@ -407,7 +425,7 @@ that ceiling.
 5. Execute only as much of the plan as fits a WALL-CLOCK DEADLINE (default 1200ms),
    with a floor of 1 call and a ceiling of 5. Everything unfinished is enqueued (§9).
 6. Dispatch through the client (quota-governed, single-flighted). Upsert results and
-   update clusters (§7.4), extend recorded coverage, then answer the page from Postgres
+   collapse them into articles (§7.4), extend recorded coverage, then answer from Postgres
    — never from the raw upstream response, which is neither deduplicated nor guaranteed
    ordered across our own sliced calls.
 ```
@@ -453,7 +471,7 @@ scales with readership rather than with the size of a watchlist, which is what m
 A cold search returns as soon as the first upstream call lands and is persisted; pages 2..5 and any
 subdivisions arrive via the queue. Four consequences that have to be designed, not discovered:
 
-**1. `limit` becomes a ceiling.** One upstream call is 20 raw articles, which after clustering may be
+**1. `limit` becomes a ceiling.** One upstream call is 20 raw sightings, which after collapsing may be
 as few as **6** (measured — probe page 4 collapsed 20 → 6). A request with `limit=25` can therefore
 legitimately return 6 items. The response must not pad, must not block to fill, and must signal
 `ingest.state: "in_progress"` so a short list reads as "still arriving" rather than "that's all".
@@ -504,37 +522,46 @@ lives only in Redis.
 
 ### 7.2 Postgres (durable)
 
+Vocabulary matters here, because the table names are the vocabulary: a **sighting** is one
+upstream emission, an **article** is the real story (see [CONTEXT.md](../CONTEXT.md) and
+[ADR-0002](adr/0002-articles-are-deduplicated-stories-sightings-are-emissions.md)).
+
 ```sql
-CREATE TABLE articles (
-  id            uuid PRIMARY KEY,              -- upstream id; faithful record of what we were sent
-  url           text NOT NULL,
-  dedup_key     bytea NOT NULL,                -- sha256(normalized url) — NOT unique, see §7.4
-  title         text NOT NULL,
-  description   text,
-  author        text,
-  image_url     text,
-  language      text,
-  categories    text[] NOT NULL DEFAULT '{}',
-  source_category text[] NOT NULL DEFAULT '{}',-- undocumented upstream field, kept verbatim
-  source_domain text,
-  published     timestamptz NOT NULL,          -- normalized; the timeline axis
+-- One row per upstream emission. The faithful record of what we were sent.
+-- Upstream re-emits the same story under fresh UUIDs — one link-roundup page
+-- arrived 50 times in 100 results — so a row here is an observation, not a story.
+CREATE TABLE sightings (
+  id            uuid PRIMARY KEY,              -- upstream id; unique per emission
+  article_id    bigint NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+  dedup_key     bytea NOT NULL,                -- sha256(canonical url); NOT unique here
+  published     timestamptz NOT NULL,
   first_seen_at timestamptz NOT NULL DEFAULT now(),
   raw           jsonb NOT NULL                 -- original payload; re-normalize without refetching
 );
+CREATE INDEX sightings_article_idx ON sightings (article_id);
+CREATE INDEX sightings_dedup_idx   ON sightings (dedup_key);
 
-CREATE INDEX articles_dedup_idx ON articles (dedup_key, published);
-
--- One row per real-world story. This is what the timeline actually pages over.
--- Upstream re-emits the same URL under new UUIDs (one post seen 50x in 100 results),
--- so collapsing is a first-class entity, not an incidental cleanup step.
-CREATE TABLE article_clusters (
-  dedup_key       bytea PRIMARY KEY,
-  representative  uuid NOT NULL REFERENCES articles(id),
-  published       timestamptz NOT NULL,        -- EARLIEST published across members
-  latest_seen     timestamptz NOT NULL,        -- most recent re-emission
-  member_count    int NOT NULL DEFAULT 1
+-- One row per real-world story. This is what the timeline pages over and what
+-- anything countable counts. Display fields are denormalized from the earliest
+-- sighting so a timeline read needs no join back to sightings.
+CREATE TABLE articles (
+  id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  dedup_key       bytea NOT NULL,
+  url             text NOT NULL,
+  title           text NOT NULL,
+  description     text,
+  author          text,
+  image_url       text,
+  language        text,
+  categories      text[] NOT NULL DEFAULT '{}',
+  source_category text[] NOT NULL DEFAULT '{}',-- undocumented upstream field, kept verbatim
+  source_domain   text,
+  published       timestamptz NOT NULL,        -- EARLIEST sighting; the timeline axis
+  latest_seen     timestamptz NOT NULL,        -- most recent sighting
+  sighting_count  int NOT NULL DEFAULT 1
 );
-CREATE INDEX clusters_timeline_idx ON article_clusters (published DESC, dedup_key DESC);
+CREATE UNIQUE INDEX articles_dedup_key_idx  ON articles (dedup_key);
+CREATE INDEX        articles_timeline_idx   ON articles (published DESC, id DESC);
 
 CREATE TABLE topics (
   fingerprint   bytea PRIMARY KEY,
@@ -547,12 +574,12 @@ CREATE TABLE topics (
   hit_count     bigint NOT NULL DEFAULT 0
 );
 
--- Topic membership is recorded at CLUSTER granularity, so a topic's timeline
--- cannot be flooded by one repeatedly-re-ingested post.
-CREATE TABLE topic_clusters (
-  fingerprint bytea REFERENCES topics ON DELETE CASCADE,
-  dedup_key   bytea REFERENCES article_clusters ON DELETE CASCADE,
-  PRIMARY KEY (fingerprint, dedup_key)
+-- Topic membership is recorded per ARTICLE, so a topic's timeline cannot be
+-- flooded by one repeatedly-re-emitted post.
+CREATE TABLE topic_articles (
+  fingerprint bytea  REFERENCES topics   ON DELETE CASCADE,
+  article_id  bigint REFERENCES articles ON DELETE CASCADE,
+  PRIMARY KEY (fingerprint, article_id)
 );
 
 -- Which time windows have actually been fetched for a topic. This is what makes
@@ -567,7 +594,7 @@ CREATE INDEX topic_coverage_gist ON topic_coverage USING gist (fingerprint, span
 CREATE TABLE fetch_log (                       -- quota accounting + observability
   id bigserial PRIMARY KEY, fingerprint bytea, params jsonb,
   requested_at timestamptz NOT NULL, duration_ms int,
-  http_status int, article_count int, error_kind text
+  http_status int, sighting_count int, error_kind text
 );
 ```
 
@@ -576,51 +603,61 @@ spans are merged on write so the table stays small. Without it, we could not dis
 articles exist in this window" from "we never asked about this window" — and would either re-fetch
 constantly or show false gaps in the timeline.
 
-### 7.3 Timeline reads — keyset pagination over clusters
+### 7.3 Timeline reads — keyset pagination over articles
 
 ```sql
-SELECT a.*, c.member_count, c.latest_seen
-FROM topic_clusters tc
-JOIN article_clusters c ON c.dedup_key = tc.dedup_key
-JOIN articles a         ON a.id        = c.representative
-WHERE tc.fingerprint = $1
-  AND c.published >= $2 AND c.published < $3
-  AND (c.published, c.dedup_key) < ($4, $5)   -- cursor; omitted on first page
-ORDER BY c.published DESC, c.dedup_key DESC
+SELECT a.*
+FROM topic_articles ta
+JOIN articles a ON a.id = ta.article_id
+WHERE ta.fingerprint = $1
+  AND a.published >= $2 AND a.published < $3
+  AND (a.published, a.id) < ($4, $5)          -- cursor; omitted on first page
+ORDER BY a.published DESC, a.id DESC
 LIMIT $6;
 ```
 
-Paging over `article_clusters` rather than `articles` is what makes deduplication a *property of the
-timeline* instead of a filter applied afterwards. Post-filtering would be wrong here: with one URL
+Deduplication is a *property of the table*, not a filter applied afterwards — which is the whole
+reason `articles` and `sightings` are separate. Post-filtering would be wrong here: with one URL
 occupying 50 of 100 upstream slots, a page of 25 could collapse to 3 rows, so page size would become
 unpredictable and `hasMore` unreliable.
 
 Keyset, not `OFFSET`: cost is constant regardless of depth, and — critically for a feed where new
 articles arrive constantly — rows cannot shift between pages and cause duplicates or skips. The
-cursor is a base64 `(published, dedup_key)` tuple; `dedup_key` breaks ties among the many articles
-sharing a timestamp, giving a total order that upstream does not provide.
+cursor is a base64 `(published, id)` tuple; `id` breaks ties among the many articles sharing a
+timestamp, giving a total order that upstream does not provide.
 
-### 7.4 Writes — idempotent upsert and cluster maintenance
+The id half is the surrogate key, deliberately not the URL hash. Canonicalization is a rule we keep
+widening, and a natural key would re-key live cursors every time it changed
+([ADR-0002](adr/0002-articles-are-deduplicated-stories-sightings-are-emissions.md)).
 
-Per fetched article, in one transaction:
+### 7.4 Writes — idempotent upsert and the sighting→article collapse
 
-1. `INSERT INTO articles … ON CONFLICT (id) DO UPDATE` on mutable metadata.
-2. Upsert `article_clusters` on `dedup_key`: `published = LEAST(existing, incoming)`,
-   `latest_seen = GREATEST(…)`, `member_count = member_count + 1` on genuinely new members, and
-   `representative` set to the **earliest-published** member.
-3. Upsert `topic_clusters (fingerprint, dedup_key)`.
+The collapse belongs to the storage layer, not the client: it needs state across responses that a
+single upstream page cannot have, so `@zammy/currents-client` stays stateless and returns
+`Sighting[]` ([ADR-0004](adr/0004-shared-contains-only-what-ships-to-the-browser.md)).
+
+Per fetched sighting, in one transaction:
+
+1. Upsert `articles` on `dedup_key`: on conflict, `published = LEAST(existing, incoming)`,
+   `latest_seen = GREATEST(…)`, and `sighting_count = sighting_count + 1`. Display fields are taken
+   from the earliest sighting, so a later re-emission does not rewrite the headline.
+2. `INSERT INTO sightings … ON CONFLICT (id) DO NOTHING`, linked to that `article_id`. The conflict
+   clause is what makes a re-fetch idempotent: seeing the same upstream UUID twice must not inflate
+   `sighting_count`.
+3. Upsert `topic_articles (fingerprint, article_id)`.
 
 Every fetch is safely repeatable, which is what lets the worker and a user request race harmlessly.
 
 **`dedup_key` derivation** — `sha256` of the URL after lowercasing scheme/host, stripping the
 fragment, removing tracking params (`utm_*`, `fbclid`, `gclid`), and trimming the trailing slash.
 Verified on probe data: normalization neither over- nor under-collapsed (42 unique raw URLs → 42
-unique normalized). Deliberately **not** a unique constraint on `articles` — that was an error in the
-first draft of this proposal, and would have rejected 58% of live rows.
+unique normalized). It is unique on `articles` and deliberately **not** on `sightings`, where 58% of
+live rows would violate it.
 
-A `(title, source_domain)` secondary key is *available* but not enabled by default: probe data showed
-41 unique title+domain pairs against 42 unique URLs, so it would collapse one extra pair — too little
-evidence to justify the risk of merging genuinely distinct stories that share a title.
+A `(title, source_domain)` secondary key stays disabled: probe data showed 41 unique title+domain
+pairs against 42 unique URLs, so it would merge exactly one pair — no evidence, and a false merge is
+worse than a visible duplicate. Syndicated stories across different outlets do not collapse either,
+on purpose; the wordcloud's breadth gate counts distinct sources and needs those rows (§10.3).
 
 **Ordering across sliced calls.** Upstream sorts each response by `published` DESC, but our sliced
 window queries return several independently-sorted batches. Nothing downstream may assume the fetch
@@ -628,8 +665,13 @@ order is the display order; `ORDER BY` in §7.3 is the only source of truth.
 
 ### 7.5 Retention
 
-A nightly job drops clusters (and their member articles) older than `RETENTION_DAYS` (default 90)
-belonging to no recently-hit topic, and deletes topics with `last_hit_at` older than 30 days.
+A nightly job reports articles (and their sightings) older than `RETENTION_DAYS` (default 90)
+belonging to no recently-hit topic, plus topics with `last_hit_at` older than 30 days.
+
+**It reports and does not delete.** Point-in-time recovery protects against accidents, not against
+this job doing exactly what it was told — a legitimate prune noticed three months later is outside
+any recovery window. Enabling deletion is a later, deliberate decision
+([ADR-0001](adr/0001-postgres-is-the-archive-beyond-the-upstream-lookback.md)).
 
 Worth stating plainly: because upstream caps lookback at **30 days**, anything older than that in our
 store is **unreachable upstream and unrecoverable if deleted**. Retention beyond 30 days is therefore
@@ -662,7 +704,7 @@ modern; keywords in, timeline out.
 - **Timeline** — a single reverse-chronological column with sticky day dividers ("Today",
   "Yesterday", then dates). Each card: headline, source chip + relative time, description snippet,
   thumbnail when `image_url` is non-null. Whole card links out, `target="_blank" rel="noopener"`.
-  One card = one **cluster**, timestamped by earliest publication. Where `member_count > 1` — a
+  One card = one **article**, timestamped by its earliest sighting. Where `sighting_count > 1` — a
   continuously-updated post like a daily link roundup — the card shows a quiet "updated <relative
   time>" line from `latest_seen` rather than repeating the story. This is the user-visible half of
   §7.4; without it, over half of a typical timeline is one post repeated.
@@ -720,7 +762,7 @@ The worker also handles two non-upstream chores: coverage-span merging and reten
 daily `/available/*` refresh (3 calls).
 
 **User A pays, User B doesn't** — exactly as intended. User A's search populates `articles`,
-`article_clusters`, `topic_clusters` and `topic_coverage`. User B's identical search canonicalizes to
+`sightings`, `articles`, `topic_articles` and `topic_coverage`. User B's identical search canonicalizes to
 the same fingerprint (§6.2), finds the window already covered, and is served from Postgres with zero
 upstream calls. If they search *concurrently*, the single-flight lock (§6.3) collapses them into one
 upstream call rather than two.
@@ -794,7 +836,7 @@ naive scoring does not** — see §10.3, which is the part worth reading.
 Demand-driven ingestion alone cannot feed this: a wordcloud must know what is prominent *before*
 anyone searches. So the corpus is a union of two sources:
 
-1. **Everything already stored for today** — clusters with `published` inside the current UTC day,
+1. **Everything already stored for today** — articles with `published` inside the current local day,
    accumulated from user searches. Free, zero upstream calls, and it broadens through the day.
 2. **A breadth sample** — verified: `/search` works with **no `keywords` at all**, taking just
    `language` + `category`, and category slices return disjoint sets (tech vs politics: 0 overlap).
@@ -809,6 +851,16 @@ served instantly while a refresh runs behind it, reusing the same stale-while-re
 "First visitor" needs a **Redis lock** (`lock:daily-sample:<day>:<language>`) — a no-op in single-replica
 local dev, but without it the day's first concurrent requests across multiple Fargate tasks (§4.1) would
 each enqueue the full 12–24 call sample, turning a 2% quota cost into 6% or worse under a spike.
+
+**"Today" is the `APP_TIMEZONE` day, not the UTC day.** Under UTC, a Vancouver afternoon is already
+tomorrow, so the most-visited surface in the product would show a near-empty cloud every day after
+about 5pm local. A configured timezone keeps the stable daily aggregate that the 7-day baseline and
+the Redis cache are built on while fixing that.
+
+**Today's aggregate is recomputed on each sample; a day freezes once it closes.** Articles for
+yesterday can still arrive — a slow feed, a deferred backfill — and they are still stored and still
+appear in timelines, but they do not retroactively rewrite a closed day's cloud. A baseline built on
+shifting history cannot be reasoned about, and nobody looks at Tuesday's cloud on Thursday.
 
 One measured caveat: a day-bounded keywordless call returns the *newest* 20 in that window, not a
 sample spread across it. Covering the whole day means paging (capped at 100) or slicing, so the sample
@@ -837,9 +889,9 @@ cve-, earlier, jenkins, plugin, attackers, permission, credentials, how, not, ju
 Three distinct failures, all of which the design has to answer:
 
 1. **A single-source burst captured the whole cloud.** A run of near-identical Jenkins security
-   advisories dominated. These were many *distinct, non-duplicate* articles, so clustering (§7.4)
-   does **not** catch it — this is a different problem from the 50×-duplicate finding, and it needs a
-   different fix.
+   advisories dominated. These were many *distinct, non-duplicate* articles, so the sighting→article
+   collapse (§7.4) does **not** catch it — a different problem from the 50×-duplicate finding, needing
+   a different fix.
 2. **Generic news vocabulary survived stopwording** — "earlier", "found", "read", "how", "just". These
    are frequent in *all* news, so raw frequency can never distinguish them from real topics.
 3. **A tokenization artifact ranked first** (`cve-`).
@@ -860,14 +912,14 @@ So three mechanisms are **required for the first cut**, not deferred as polish:
 Starting formula, explicitly expected to need tuning against real data:
 
 ```
-score(term) = sqrt(df_domains) × df_clusters / (baseline_7d + k)
+score(term) = sqrt(df_domains) × df_articles / (baseline_7d + k)
 ```
 
-with `df_clusters` counted over **`article_clusters`, never raw `articles`** — the 50×-repeated
+with `df_articles` counted over **`articles`, never `sightings`** — the 50×-repeated
 link-roundup post would otherwise weight its headline terms 50 times and swamp everything. The
-clustering layer earns its keep twice.
+collapse earns its keep twice.
 
-Additional guards: cap any single domain's contribution to `df_clusters` (default 3), and cap the
+Additional guards: cap any single domain's contribution to `df_articles` (default 3), and cap the
 cloud at ~40–50 terms, beyond which it becomes visual mush.
 
 **The baseline needs a week to exist**, which matters for launch: on day one `baseline_7d` is empty and
@@ -885,7 +937,7 @@ CREATE TABLE daily_terms (
   language     text    NOT NULL,
   term         text    NOT NULL,
   is_bigram    boolean NOT NULL,
-  df_clusters  int     NOT NULL,       -- distinct clusters (the displayed "unique articles")
+  df_articles  int     NOT NULL,       -- distinct articles (the displayed "unique articles")
   df_domains   int     NOT NULL,       -- distinct source domains
   score        real    NOT NULL,
   PRIMARY KEY (day, language, term)
@@ -965,7 +1017,7 @@ it already has. Redis-cached under `trending:<day>:<language>` for ~15 minutes.
 
   | Fixture | Guards | Assertions |
   | --- | --- | --- |
-  | `search-climate-duplicates.json`<br/>100 articles, 42 unique URLs, one URL ×50 | Clustering (§7.4) | 100 rows in `articles` → **42** rows in `article_clusters`; the ×50 cluster has `member_count = 50` and one representative; a `limit=25` timeline page returns ≤25 **clusters**, never 25 raw articles; `dedup_key` normalization neither over- nor under-collapses (42 → 42) |
+  | `search-climate-duplicates.json`<br/>100 sightings, 42 unique URLs, one URL ×50 | The collapse (§7.4) | 100 rows in `sightings` → **42** rows in `articles`; the ×50 article has `sighting_count = 50`; re-ingesting the same payload leaves both counts unchanged; a `limit=25` timeline page returns ≤25 **articles**, never 25 sightings; `dedup_key` normalization neither over- nor under-collapses (42 → 42) |
   | `search-keywordless-category-sample.json`<br/>80 articles incl. a single-source Jenkins CVE burst | Term scoring (§10.3) | `cve-`-style identifier fragments never appear as terms; no term whose `df_domains < 2` is emitted, so the Jenkins burst is absent from the top 50; generic vocabulary (`earlier`, `found`, `read`, `how`) is absent via the stopword list; **with `term_baseline` empty** the top 50 is still free of all three failure classes — the day-one case (§10.3) |
   | `error-and-reference-bodies.json` | Client error taxonomy (§5.3) | each `400` maps to `CurrentsInvalidQueryError` with `details.errors` preserved; `401` → `CurrentsAuthError`; a non-JSON `403` → `CurrentsBlockedError`, **not** an auth error; `{"status":"ok","news":[]}` → `isLastPage: true`, not an error; reference maps parse as name→code with values used verbatim |
 
@@ -981,7 +1033,8 @@ it already has. Redis-cached under `trending:<day>:<language>` for ~15 minutes.
 | --- | --- |
 | 0 | Monorepo scaffold, shared Zod schemas, config validation, multi-stage Dockerfiles, `docker-compose` local dev stack, `CURRENTS_MODE=fixture` offline mode (§4.1). |
 | 1 | `currents-client`: normalization, explicit UA, typed errors, header-driven quota, paging. Error taxonomy tested against `fixtures/error-and-reference-bodies.json`. |
-| 2 | Postgres schema + migrations; **cluster upsert** and keyset-read repositories. Dedup tested here against `fixtures/search-climate-duplicates.json`, not later. |
+| 1b | Vocabulary reconciliation: `Sighting`/`Article` split, `Sighting` moved out of `@zammy/shared`, docs aligned to [CONTEXT.md](../CONTEXT.md). |
+| 2 | Postgres schema + migrations; the **sighting→article collapse** and keyset-read repositories. Dedup tested here against `fixtures/search-climate-duplicates.json`, not later. |
 | 3 | Query Service: canonicalization, coverage-gap planning with adaptive subdivision, single-flight, Redis page cache, **plus the in-process job queue and `meta.ingest` contract** — the deadline-bounded fill (§6.3) produces deferred work by construction, so the queue lands here, not later. |
 | 4 | Front end: search → timeline → infinite scroll → freshness states → progressive fill (§6.5). |
 | 5 | Refresh-on-read, adaptive subdivision backfill, budget guards (§9.4), retention, metrics. |
@@ -993,9 +1046,9 @@ Phases 1–4 are the walking skeleton: a working keyword→timeline product with
 searcher populates and everyone after reads from storage. Phase 5 adds depth and self-repairing
 freshness. Because the queue runs in-process (§9.1), no phase introduces a second deployable.
 
-Phase 2 is now the highest-risk phase, not Phase 3. Deduplication is the difference between a usable
+Phase 2 is the highest-risk phase, not Phase 3. Deduplication is the difference between a usable
 timeline and an unusable one, and it is cheapest to get right at schema time — the recorded probe
-payload (100 articles, 42 unique URLs, one repeated 50×) is a ready-made regression fixture.
+payload (100 sightings, 42 unique URLs, one repeated 50×) is a ready-made regression fixture.
 
 ---
 
@@ -1003,6 +1056,16 @@ payload (100 articles, 42 unique URLs, one repeated 50×) is a ready-made regres
 
 Resolved by the probe (2026-08-04): paging params exist and are usable; plan limits are 1000/day and
 60/60s; keyword terms narrow rather than OR. Details in [PROBE-FINDINGS.md](./PROBE-FINDINGS.md).
+
+Resolved by design review, each with an ADR: the archive boundary and report-only retention
+([0001](adr/0001-postgres-is-the-archive-beyond-the-upstream-lookback.md)); sightings versus articles,
+the dedup boundaries in both directions, and surrogate article identity
+([0002](adr/0002-articles-are-deduplicated-stories-sightings-are-emissions.md)); Kysely over an ORM
+and migrations as a deploy step ([0003](adr/0003-kysely-and-hand-written-sql-instead-of-an-orm.md));
+and the package boundary that keeps server concerns out of the browser bundle
+([0004](adr/0004-shared-contains-only-what-ships-to-the-browser.md)). Also settled without needing an
+ADR, being cheap to reverse: `APP_TIMEZONE` rather than UTC for the cloud's day, closed days freeze
+(§10.1), `DEFAULT_LANGUAGE=en` (§6.1), and no coverage-gap map (§1).
 
 Resolved by decision: **deployment target is AWS** (ECS Fargate + RDS + ElastiCache), with Docker
 Compose as the local development environment (§4.1). Correcting the earlier claim that the deployment
