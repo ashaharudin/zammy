@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import { Pool } from "pg";
 // Named import: ioredis is CJS, so the default import resolves to a namespace
 // rather than the class under NodeNext resolution.
@@ -10,6 +11,8 @@ import { createDb } from "@zammy/storage";
 import { registerHealthRoutes } from "./health.js";
 import { registerQueryRoutes } from "./routes.js";
 import { IngestQueue } from "./ingest-queue.js";
+import { ChoreQueue, runRetentionChore } from "./chores.js";
+import { Metrics, registerMetricsRoute } from "./metrics.js";
 import { processSegmentJob, type TimelineDeps } from "./timeline-service.js";
 
 /**
@@ -54,6 +57,17 @@ export async function buildApp(config: Config): Promise<App> {
 
   await app.register(cors, { origin: config.CORS_ORIGIN.split(",").map((o) => o.trim()) });
 
+  // Per-IP limit on /api/v1/* only (§9.4, §12): novel-fingerprint spam can
+  // mint topics and spend quota, but the ALB health check and the Prometheus
+  // scrape must never 429. Counters are in-process on purpose — per-task
+  // limiting is bounded enough, and a Redis-held counter would add a shared
+  // failure mode to the request path for precision nobody needs.
+  await app.register(rateLimit, {
+    max: config.RATE_LIMIT_PER_MINUTE,
+    timeWindow: 60_000,
+    allowList: (request) => !request.url.startsWith("/api/"),
+  });
+
   // One interface for both modes: nothing below this line knows or cares whether
   // articles come from the live API or from the recorded payloads
   // (ARCHITECTURE 4.1 — a code path that branches on environment is a code path
@@ -69,6 +83,10 @@ export async function buildApp(config: Config): Promise<App> {
 
   registerHealthRoutes(app, { pool, redis, currents });
 
+  // §12 observability: everything the planner counts, scraped from one place.
+  const metrics = new Metrics({ quota: () => currents.quota() });
+  registerMetricsRoute(app, metrics);
+
   // The query service (§6) and its in-process job consumer (§9.1). The
   // consumer shares this process — Fargate keeps CPU allocated for the life
   // of a task, so no separate deployable is needed (§4.1).
@@ -79,17 +97,32 @@ export async function buildApp(config: Config): Promise<App> {
     redis,
     currents,
     queue,
+    metrics,
     config: {
       syncFillDeadlineMs: config.SYNC_FILL_DEADLINE_MS,
       maxSyncUpstreamCalls: config.MAX_SYNC_UPSTREAM_CALLS,
       lookbackDays: config.CURRENTS_MAX_LOOKBACK_DAYS,
       minSegmentMs: MIN_SEGMENT_MS,
+      perTopicDailyCallCap: config.PER_TOPIC_DAILY_CALL_CAP,
     },
     now: () => new Date(),
     log: app.log,
   };
   queue.startConsumer((job) => processSegmentJob(deps, job));
   await registerQueryRoutes(app, { deps, defaultLanguage: config.DEFAULT_LANGUAGE });
+
+  // Nightly retention report (§7.5) — the one chore with a clock (§9.1).
+  const chores = new ChoreQueue(config.REDIS_URL);
+  chores.startConsumer({
+    retention: () =>
+      runRetentionChore({
+        db,
+        config: { retentionDays: config.RETENTION_DAYS },
+        now: () => new Date(),
+        log: app.log,
+      }),
+  });
+  await chores.scheduleNightlyRetention();
 
   app.log.info({ config: redactConfig(config) }, "configuration loaded");
 
@@ -98,6 +131,7 @@ export async function buildApp(config: Config): Promise<App> {
     // The queue first (it holds Redis connections and may be mid-job), then
     // the stores. db.destroy() ends the shared pool — nothing ends it twice.
     await queue.close().catch(() => {});
+    await chores.close().catch(() => {});
     await Promise.allSettled([db.destroy(), redis.quit(), currents.close()]);
   };
 

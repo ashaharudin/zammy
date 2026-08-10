@@ -32,6 +32,7 @@ export function TimelinePage({
   const pages = timeline.data?.pages ?? [];
   const latest = pages.at(-1);
   const items = pages.flatMap((page) => page.items);
+  const { visible, newCount, reveal } = useHeldNewItems(items, JSON.stringify(topic));
   const ingesting = latest?.meta.ingest.state === "in_progress";
   const terminal = latest !== undefined && !timeline.hasNextPage && isTerminalPage(latest);
 
@@ -54,7 +55,9 @@ export function TimelinePage({
 
         {latest && (
           <Rail
-            items={items}
+            items={visible}
+            newCount={newCount}
+            onReveal={reveal}
             ingesting={ingesting ?? false}
             pendingJobs={latest.meta.ingest.pendingJobs}
             terminal={terminal}
@@ -69,8 +72,40 @@ export function TimelinePage({
   );
 }
 
+/**
+ * §6.5: refresh-on-read adds articles NEWER than what the reader is looking
+ * at. Splicing them in above a reading user silently shifts everything under
+ * their eyes, so arrivals newer than the newest item they have SEEN are held
+ * back behind an explicit "N new articles" affordance, applied on click.
+ *
+ * The anchor is the published timestamp of the newest item first shown for
+ * this topic. Progressive fill is unaffected — it appends OLDER items, which
+ * pass straight through (§6.5 point 3).
+ */
+function useHeldNewItems(items: Article[], topicKey: string) {
+  const [anchor, setAnchor] = useState<string | null>(null);
+  const keyRef = useRef(topicKey);
+  if (keyRef.current !== topicKey) {
+    keyRef.current = topicKey;
+    setAnchor(null);
+  }
+  const newest = items[0]?.published ?? null;
+  if (anchor === null && newest !== null) setAnchor(newest);
+
+  const effective = anchor ?? newest;
+  const visible =
+    effective === null ? items : items.filter((item) => item.published <= effective);
+  return {
+    visible,
+    newCount: items.length - visible.length,
+    reveal: () => setAnchor(newest),
+  };
+}
+
 function Rail({
   items,
+  newCount,
+  onReveal,
   ingesting,
   pendingJobs,
   terminal,
@@ -80,6 +115,8 @@ function Rail({
   onLoadOlder,
 }: {
   items: Article[];
+  newCount: number;
+  onReveal: () => void;
   ingesting: boolean;
   pendingJobs: number;
   terminal: boolean;
@@ -110,6 +147,24 @@ function Rail({
           borderRadius: "2px",
         }}
       />
+      {newCount > 0 && (
+        <RailEntry marker="▲">
+          <button
+            onClick={onReveal}
+            style={{
+              border: "1px solid var(--border)",
+              background: "var(--surface)",
+              color: "var(--amber)",
+              borderRadius: "6px",
+              padding: "0.3rem 0.9rem",
+              cursor: "pointer",
+              fontSize: "0.85rem",
+            }}
+          >
+            {newCount} new article{newCount === 1 ? "" : "s"}
+          </button>
+        </RailEntry>
+      )}
       {ingesting && (
         <RailEntry marker="◌" pulse>
           <em style={{ color: "var(--amber)", fontSize: "0.9rem" }}>

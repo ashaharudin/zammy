@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { TimelinePage } from "@zammy/shared";
 import { canonicalize } from "./canonical.js";
+import { registerMetricsRoute } from "./metrics.js";
 import { registerQueryRoutes } from "./routes.js";
 import { createTestHarness, purgeTopicKeys, type TestHarness } from "./test-support.js";
 
@@ -24,6 +25,7 @@ async function setup(): Promise<void> {
   harness = await createTestHarness();
   app = Fastify({ logger: false });
   await registerQueryRoutes(app, { deps: harness.deps, defaultLanguage: "en" });
+  registerMetricsRoute(app, harness.metrics);
   await app.ready();
 
   // Deterministic fingerprints collide with previous runs via shared Redis.
@@ -125,6 +127,21 @@ describe("GET /api/v1/reference", () => {
     // the UI picker, because a stored sighting may legitimately carry one.
     expect(body.categories).toContain("crap");
     expect(body.categories).toContain("technology");
+  });
+});
+
+describe("GET /metrics", () => {
+  it("exposes the §12 counters in Prometheus text format", async () => {
+    await setup();
+    await app.inject({ method: "GET", url: `${TIMELINE}?q=climate&${QS}` });
+
+    const response = await app.inject({ method: "GET", url: "/metrics" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/plain");
+    expect(response.body).toContain("zammy_upstream_calls_total 1");
+    expect(response.body).toContain('zammy_page_cache_reads_total{tier="historical",result="miss"}');
+    expect(response.body).toContain("zammy_quota_daily_remaining");
   });
 });
 

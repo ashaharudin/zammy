@@ -11,3 +11,4 @@ export * from "./ingest.js";
 export * from "./timeline.js";
 export * from "./coverage.js";
 export * from "./topics.js";
+export * from "./retention.js";

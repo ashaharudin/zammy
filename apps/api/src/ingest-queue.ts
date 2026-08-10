@@ -20,6 +20,13 @@ export interface SegmentJob {
   to: string;
   /** Resume point when a deadline cut a segment mid-paging. */
   startPage: number;
+  /**
+   * A §6.4 incremental top-up: [max(coverage.upper), now]. Deduplicated by its
+   * leading edge alone, because every poll re-reads "now" — under the full
+   * (from, to) identity each 1.5s poll would mint a fresh job and multiply
+   * quota spend until the first one landed.
+   */
+  kind?: "topup";
 }
 
 /** Entries older than this are presumed lost to a crashed consumer (see below). */
@@ -123,5 +130,6 @@ export class IngestQueue {
 
 function segmentJobId(job: SegmentJob): string {
   // Underscores, not colons — BullMQ reserves ':' as its key separator.
+  if (job.kind === "topup") return `topup_${job.fingerprint}_${Date.parse(job.from)}`;
   return `seg_${job.fingerprint}_${Date.parse(job.from)}_${Date.parse(job.to)}_p${job.startPage}`;
 }

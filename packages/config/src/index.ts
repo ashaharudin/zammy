@@ -45,6 +45,8 @@ const EnvSchema = z
     INTERACTIVE_RESERVE: z.coerce.number().int().min(0).default(250),
     PER_TOPIC_DAILY_CALL_CAP: z.coerce.number().int().min(1).default(20),
     INGEST_POLL_MAX: z.coerce.number().int().min(1).max(60).default(8),
+    /** §9.4: per-IP ceiling on /api/v1/*, so novel-fingerprint spam can't mint topics. */
+    RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).default(60),
 
     RETENTION_DAYS: z.coerce.number().int().min(1).default(90),
 
