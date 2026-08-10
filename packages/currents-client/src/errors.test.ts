@@ -204,7 +204,7 @@ describe("reference bodies — name→code maps, values used verbatim", () => {
   it("parses categories as an array, including the junk values", () => {
     const parsed = RawCategories.parse(fixture.reference_categories);
     // Junk survives parsing on purpose: filtering belongs to the UI picker, not to
-    // the wire layer, because a stored article may legitimately carry one.
+    // the wire layer, because a stored sighting may legitimately carry one.
     expect(parsed.categories).toContain("technology");
     expect(parsed.categories).toContain("crap");
   });

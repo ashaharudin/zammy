@@ -78,7 +78,7 @@ const HEADER = {
  * degraded observation path and a quota overrun.
  *
  * `resetTime` is a normal ISO-8601 timestamp with an offset, so `new Date()` is
- * correct here. That is NOT true of article `published` values, which use a
+ * correct here. That is NOT true of sighting `published` values, which use a
  * different format entirely — see `parsePublished`.
  */
 export function parseQuotaHeaders(

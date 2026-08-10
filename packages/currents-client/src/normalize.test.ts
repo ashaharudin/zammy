@@ -11,20 +11,20 @@ import {
   parsePublished,
   sourceDomain,
 } from "./normalize.js";
-import { RawArticle } from "./raw.js";
-import { FIXTURES_DIR, rawArticle } from "./test-support.js";
+import { RawSighting } from "./raw.js";
+import { FIXTURES_DIR, rawSighting } from "./test-support.js";
 
 /**
  * Normalization, tested against the recorded payloads (ARCHITECTURE 5.2).
  *
- * Synthetic articles are exactly what would hide these bugs: a hand-written
+ * Synthetic sightings are exactly what would hide these bugs: a hand-written
  * fixture has a valid ISO timestamp, a real image URL and no duplicates, so it
  * exercises none of the three things this code exists to absorb.
  */
 
-function loadRaw(file: string, extract: (data: never) => unknown[]): RawArticle[] {
+function loadRaw(file: string, extract: (data: never) => unknown[]): RawSighting[] {
   const data = JSON.parse(readFileSync(join(FIXTURES_DIR, file), "utf8")) as never;
-  return extract(data).map((item) => RawArticle.parse(item));
+  return extract(data).map((item) => RawSighting.parse(item));
 }
 
 const duplicates = loadRaw("search-climate-duplicates.json", (data: never) =>
@@ -54,7 +54,7 @@ describe("recorded payloads normalize cleanly", () => {
   });
 
   it("turns the literal string \"None\" into null", () => {
-    // 47 of the 180 recorded articles carry image: "None". Rendered as a src
+    // 47 of the 180 recorded sightings carry image: "None". Rendered as a src
     // attribute that is a broken-image icon on every fourth card.
     const noneCount = allRaw.filter((sighting) => sighting.image === "None").length;
     expect(noneCount).toBeGreaterThan(0);
@@ -75,10 +75,10 @@ describe("recorded payloads normalize cleanly", () => {
 });
 
 describe("dedup keys over the duplication fixture", () => {
-  // The headline probe finding: 100 articles, 100 unique ids, 42 unique URLs, one
-  // link-roundup post appearing 50 times (PROBE-FINDINGS 4). Clustering itself is
-  // Phase 2, but the key it groups sightings by is produced here, so it is
-  // tested here.
+  // The headline probe finding: 100 sightings, 100 unique ids, 42 unique URLs,
+  // one link-roundup page appearing 50 times (PROBE-FINDINGS 4). The
+  // sighting→article collapse itself is Phase 2, but the key it groups
+  // sightings by is produced here, so it is tested here.
   const { sightings } = normalizeSightings(duplicates);
 
   it("collapses 100 sightings onto 42 keys", () => {
@@ -139,7 +139,7 @@ describe("canonicalizeUrl", () => {
     );
   });
 
-  it("trims the trailing slash so /story and /story/ are one story", () => {
+  it("trims the trailing slash so /story and /story/ are one article", () => {
     expect(canonicalizeUrl("https://example.com/story/")).toBe(
       canonicalizeUrl("https://example.com/story"),
     );
@@ -218,7 +218,7 @@ describe("normalizeImage", () => {
 
 describe("drop rules", () => {
   const drop = (overrides: Record<string, unknown>): string => {
-    const outcome = normalizeSighting(RawArticle.parse(rawArticle(overrides)));
+    const outcome = normalizeSighting(RawSighting.parse(rawSighting(overrides)));
     if (outcome.ok) throw new Error("expected the sighting to be dropped");
     return outcome.reason;
   };
@@ -245,19 +245,19 @@ describe("drop rules", () => {
 
   it("drops an id that is not a UUID, as the shared contract requires", () => {
     // Upstream sends UUID strings despite the spec declaring `integer`, and all
-    // 180 recorded articles comply. Something else would mean the contract and
+    // 180 recorded sightings comply. Something else would mean the contract and
     // reality have diverged — a fact worth a metric, not a silent coercion.
     expect(drop({ id: "42" })).toBe("schema");
   });
 
   it("keeps the rest of the batch when one sighting is malformed", () => {
     const { sightings, stats } = normalizeSightings([
-      RawArticle.parse(rawArticle()),
-      RawArticle.parse(
-        rawArticle({ id: "6f1e2d3c-4b5a-4968-8877-665544332211", published: "nonsense" }),
+      RawSighting.parse(rawSighting()),
+      RawSighting.parse(
+        rawSighting({ id: "6f1e2d3c-4b5a-4968-8877-665544332211", published: "nonsense" }),
       ),
-      RawArticle.parse(
-        rawArticle({
+      RawSighting.parse(
+        rawSighting({
           id: "11223344-5566-4778-899a-bbccddeeff00",
           url: "https://example.com/other",
         }),
@@ -272,7 +272,7 @@ describe("drop rules", () => {
 
 describe("field normalization", () => {
   const normalize = (overrides: Record<string, unknown> = {}) => {
-    const outcome = normalizeSighting(RawArticle.parse(rawArticle(overrides)));
+    const outcome = normalizeSighting(RawSighting.parse(rawSighting(overrides)));
     if (!outcome.ok) throw new Error(`unexpectedly dropped: ${outcome.reason}`);
     return outcome.sighting;
   };

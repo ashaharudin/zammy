@@ -26,7 +26,7 @@ describe("parsePublished", () => {
 
   it("returns NaN rather than guessing on garbage", () => {
     // A wrong timestamp silently corrupts the timeline, which is the one thing
-    // the product promises. Better to drop the article and count it.
+    // the product promises. Better to drop the sighting and count it.
     expect(Number.isNaN(parsePublished("not a date"))).toBe(true);
     expect(Number.isNaN(parsePublished(""))).toBe(true);
   });

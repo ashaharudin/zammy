@@ -71,7 +71,7 @@ describe("the factory hides which client you got", () => {
   });
 
   it("signals the last page on a short page", async () => {
-    // 16 of the recorded articles carry "climate" in the text fixture mode can
+    // 16 of the recorded sightings carry "climate" in the text fixture mode can
     // match on, so one page covers them and the short page ends the query.
     const result = await client.search({ keywords: ["climate"], pageSize: 20 });
 
@@ -138,7 +138,7 @@ describe("reference data offline", () => {
 
 describe("paging over fixture mode reproduces the cap", () => {
   it("stops at the 100-result cap with a full final page", async () => {
-    // 180 recorded articles is more than the tier can retrieve for one query, so
+    // 180 recorded sightings is more than the tier can retrieve for one query, so
     // offline mode exercises the truncation path rather than only the tidy one —
     // and `cap`, not `end_of_results`, is what makes Phase 3 subdivide the window.
     const result = await collectPages(client, {});

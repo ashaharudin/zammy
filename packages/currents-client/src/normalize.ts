@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { Sighting } from "./sighting.js";
-import type { RawArticle } from "./raw.js";
+import type { RawSighting } from "./raw.js";
 
 /**
  * Normalization — the client's most important job (ARCHITECTURE 5.2).
@@ -20,7 +20,7 @@ import type { RawArticle } from "./raw.js";
  * promise, so defaulting it to "now" would silently corrupt the thing users came for.
  */
 
-/** Why an article was dropped. Each is a counter, so a rising rate is visible. */
+/** Why a sighting was dropped. Each is a counter, so a rising rate is visible. */
 export type DropReason =
   | "no_title"
   | "no_url"
@@ -60,7 +60,7 @@ export function emptyStats(): NormalizationStats {
  * page" when it only means "one sighting was malformed". The raw count is the
  * only valid page-boundary signal — see `SearchResult.isLastPage`.
  */
-export function normalizeSightings(raw: readonly RawArticle[]): {
+export function normalizeSightings(raw: readonly RawSighting[]): {
   sightings: Sighting[];
   stats: NormalizationStats;
 } {
@@ -81,7 +81,7 @@ export function normalizeSightings(raw: readonly RawArticle[]): {
   return { sightings, stats };
 }
 
-export function normalizeSighting(raw: RawArticle): NormalizeOutcome {
+export function normalizeSighting(raw: RawSighting): NormalizeOutcome {
   const title = collapseWhitespace(raw.title);
   if (!title) return { ok: false, reason: "no_title", detail: raw.id };
 
@@ -206,8 +206,8 @@ export function canonicalizeUrl(raw: string): string | null {
 }
 
 /**
- * sha256 of the canonical URL, hex. Articles sharing this are the same story
- * re-emitted under a new UUID — upstream sent one link-roundup post 50 times in
+ * sha256 of the canonical URL, hex. Sightings sharing this are the same article
+ * re-emitted under a new UUID — upstream sent one link-roundup page 50 times in
  * 100 results (PROBE-FINDINGS 4).
  */
 export function deriveDedupKey(canonicalUrl: string): string {
@@ -236,7 +236,7 @@ const SECOND_LEVEL_SUFFIXES = new Set([
 ]);
 
 /**
- * Registrable domain of an article's link, for display as a source chip and as
+ * Registrable domain of a sighting's link, for display as a source chip and as
  * the grouping key behind `df_domains` (ARCHITECTURE 10.3). Strips a leading
  * `www.`, which the dedup key deliberately does not — mis-grouping a source is
  * cosmetic, whereas over-collapsing dedup keys merges distinct articles.

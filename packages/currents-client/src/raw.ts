@@ -14,7 +14,7 @@ import { CurrentsInvalidQueryError } from "./errors.js";
  * Unknown fields pass through rather than failing: upstream already shipped one
  * undocumented field, so it will ship another.
  */
-export const RawArticle = z
+export const RawSighting = z
   .object({
     id: z.string(),
     title: z.string().nullish(),
@@ -29,12 +29,12 @@ export const RawArticle = z
     published: z.string(),
   })
   .loose();
-export type RawArticle = z.infer<typeof RawArticle>;
+export type RawSighting = z.infer<typeof RawSighting>;
 
 export const RawSearchResponse = z
   .object({
     status: z.string(),
-    news: z.array(RawArticle).nullish(),
+    news: z.array(RawSighting).nullish(),
   })
   .loose();
 export type RawSearchResponse = z.infer<typeof RawSearchResponse>;

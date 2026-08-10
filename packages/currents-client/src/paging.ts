@@ -34,7 +34,7 @@ export interface PagedResult {
   sightings: Sighting[];
   /** Pages actually fetched. Each is one upstream call and one quota token. */
   pages: number;
-  /** Raw articles returned, before normalization drops. */
+  /** Raw sightings returned, before normalization drops. */
   rawCount: number;
   /**
    * Distinct articles across all pages — sightings sharing a dedup key count

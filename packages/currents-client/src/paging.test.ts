@@ -9,7 +9,7 @@ import type { QuotaView } from "./quota.js";
  * Paging (ARCHITECTURE 6.3 step 4).
  *
  * The assertion that matters most is the distinction between "upstream ran out of
- * articles" and "the 100-result cap cut us off". They look identical from a single
+ * sightings" and "the 100-result cap cut us off". They look identical from a single
  * response — both are just a full page — and conflating them permanently hides
  * history behind the cap with no error anywhere to report it.
  */

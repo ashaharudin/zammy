@@ -91,8 +91,8 @@ export function makeClient(
   });
 }
 
-/** One well-formed raw article, for tests that care about a single field. */
-export function rawArticle(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+/** One well-formed raw sighting, for tests that care about a single field. */
+export function rawSighting(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: "827a8757-4627-5126-9878-1c026ee9f06c",
     title: "A headline",

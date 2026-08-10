@@ -18,7 +18,7 @@ export const Sighting = z.object({
   id: z.uuid(),
   url: z.url(),
   /**
-   * sha256 of the canonical URL, hex. Sightings sharing this are the same story;
+   * sha256 of the canonical URL, hex. Sightings sharing this are the same article;
    * it is the key the storage layer groups on. Server-side only.
    */
   dedupKey: z.string().regex(/^[0-9a-f]{64}$/),

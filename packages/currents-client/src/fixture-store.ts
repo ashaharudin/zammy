@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { RawArticle, type SearchParams } from "./raw.js";
+import { RawSighting, type SearchParams } from "./raw.js";
 import { parsePublished } from "./normalize.js";
 
 /**
@@ -28,7 +28,7 @@ interface ReferenceFixture {
 }
 
 export class FixtureStore {
-  private sightings: RawArticle[] = [];
+  private sightings: RawSighting[] = [];
   private loaded = false;
   private languages: Record<string, string> = {};
   private regions: Record<string, string> = {};
@@ -39,7 +39,7 @@ export class FixtureStore {
   async load(): Promise<void> {
     if (this.loaded) return;
 
-    const collected: RawArticle[] = [];
+    const collected: RawSighting[] = [];
 
     const duplicates = await this.readJson<DuplicatesFixture>(
       "search-climate-duplicates.json",
@@ -109,7 +109,7 @@ export class FixtureStore {
    * (PROBE-FINDINGS 3). Fixture mode matches on the text we DO have, which is a
    * strictly narrower filter — fine for development, not a relevance oracle.
    */
-  search(params: SearchParams, limits: { maxPageSize: number }): RawArticle[] {
+  search(params: SearchParams, limits: { maxPageSize: number }): RawSighting[] {
     if (!this.loaded) {
       throw new Error("FixtureStore.load() must be awaited before search()");
     }
@@ -160,10 +160,10 @@ export class FixtureStore {
     }
   }
 
-  private parseAll(items: unknown[]): RawArticle[] {
-    const parsed: RawArticle[] = [];
+  private parseAll(items: unknown[]): RawSighting[] {
+    const parsed: RawSighting[] = [];
     for (const item of items) {
-      const result = RawArticle.safeParse(item);
+      const result = RawSighting.safeParse(item);
       if (result.success) parsed.push(result.data);
     }
     return parsed;

@@ -11,7 +11,7 @@ import {
 } from "./errors.js";
 import { HttpCurrentsClient } from "./http.js";
 import { InProcessQuotaGovernor } from "./quota.js";
-import { makeClient, quotaHeaders, rawArticle, stubFetch } from "./test-support.js";
+import { makeClient, quotaHeaders, rawSighting, stubFetch } from "./test-support.js";
 
 /**
  * The live client's reliability behaviour (ARCHITECTURE 5.3).
@@ -24,7 +24,7 @@ import { makeClient, quotaHeaders, rawArticle, stubFetch } from "./test-support.
 const okBody = (count = 1) => ({
   status: "ok",
   news: Array.from({ length: count }, (_, index) =>
-    rawArticle({
+    rawSighting({
       id: `0000000${index}-0000-4000-8000-000000000000`.slice(-36),
       url: `https://example.com/story-${index}`,
     }),
@@ -93,8 +93,8 @@ describe("query construction", () => {
   });
 
   it("refuses a page past the cap locally instead of re-serving the last one", async () => {
-    // Clamping down would hand back page 5's articles under page 6, and a pager
-    // would count the same twenty articles as new history indefinitely. Upstream
+    // Clamping down would hand back page 5's sightings under page 6, and a pager
+    // would count the same twenty sightings as new history indefinitely. Upstream
     // answers this with a 400, so we raise the same error without spending a call.
     const { fetch, calls } = stubFetch([]);
     const client = makeClient({ fetch });
@@ -120,12 +120,12 @@ describe("query construction", () => {
 
 describe("end-of-results signalling", () => {
   it("uses the RAW count, so a dropped sighting is not read as the last page", async () => {
-    // 20 raw articles of which one is malformed leaves 19 normalized. Treating
+    // 20 raw sightings of which one is malformed leaves 19 normalized. Treating
     // that as "fewer than pageSize, therefore done" would permanently hide the
     // rest of a topic's history with no error to report it.
     const news = [
       ...okBody(19).news,
-      rawArticle({ id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", published: "garbage" }),
+      rawSighting({ id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", published: "garbage" }),
     ];
     const { fetch } = stubFetch([
       { body: { status: "ok", news }, headers: quotaHeaders() },
@@ -516,7 +516,7 @@ describe("response validation and secrecy", () => {
       {
         body: {
           status: "ok",
-          news: [rawArticle({ some_new_field: "surprise" })],
+          news: [rawSighting({ some_new_field: "surprise" })],
           also_new: true,
         },
         headers: quotaHeaders(),
@@ -545,7 +545,7 @@ describe("response validation and secrecy", () => {
       {
         body: {
           status: "ok",
-          news: [rawArticle(), rawArticle({ published: "nope" })],
+          news: [rawSighting(), rawSighting({ published: "nope" })],
         },
         headers: quotaHeaders(),
       },
