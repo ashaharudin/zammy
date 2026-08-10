@@ -845,9 +845,11 @@ anyone searches. So the corpus is a union of two sources:
 1. **Everything already stored for today** — articles with `published` inside the current local day,
    accumulated from user searches. Free, zero upstream calls, and it broadens through the day.
 2. **A breadth sample from `/latest-news`** — the upstream's own editorially-mixed feed of the
-   newest ~20 articles. It takes only `language`: no keywords, no category, no dates, no paging —
-   so a sample is **one call per language**, and what it returns is what upstream considers the
-   news of the moment across all categories at once.
+   newest ~20 articles, **one call per language**. Two versions exist: v1 takes only `language`,
+   while the vendor docs state the **v2 endpoint also accepts a category filter with multiple
+   categories** ([docs](https://currentsapi.services/en/docs/latest_news)) — so one v2 call can
+   carry the whole curated category list that the old design spent 12 `/search` calls on. The
+   sample targets v2 for exactly that reason: breadth *steering* at single-call cost.
 
 One call buys ~20 articles where the old category-sliced `/search` sample bought a few hundred for
 12–24 calls, so a single daily sample would starve the corpus. The budget freed by the cheaper call
@@ -861,13 +863,18 @@ costs nothing, so this stays consistent with §9 rather than smuggling a schedul
 stored cloud is served instantly while a refresh runs behind it, reusing the same
 stale-while-revalidate and `meta.ingest` machinery as §6.5.
 
-Two things this trades away, named rather than hidden. **Category control is gone** — `/latest-news`
-returns whatever mix upstream curates, so a slow news day in one domain cannot be compensated by
-deliberately sampling another; the `df_domains >= 2` gate (§10.3) is what keeps a lopsided feed from
-minting a lopsided cloud. And **the endpoint is less probed than `/search`** — the ~20-per-call size
-and language parameter are verified by the client, but the feed's internal duplication rate and how
-fast it turns over between samples are not; the hourly cadence is the tuning knob if turnover proves
-slower than hoped.
+Two things this trades away, named rather than hidden. **Category control is coarser** — v2's
+multi-category filter scopes the feed to the curated list, but *within* that scope upstream curates
+the mix; a slow news day in one domain cannot be compensated by deliberately over-sampling another
+the way per-category `/search` calls could. The `df_domains >= 2` gate (§10.3) is what keeps a
+lopsided feed from minting a lopsided cloud. And **the endpoint is less probed than `/search`** —
+the `/v2/latest-news` route's existence is verified (an unauthenticated status probe, 2026-08-10:
+401 where a nonexistent route 404s), but the multi-category parameter is known from the vendor docs
+only: its wire format, whether the ~20-item page is shared across or multiplied by categories, and
+the feed's turnover rate between samples all need **one keyed probe call before implementation leans
+on them**, in keeping with how every other upstream behaviour in this document was established. Note
+also that the client pins the API version in `CURRENTS_BASE_URL` (default `…/v1`), so adopting v2
+here is a client change, not just a parameter.
 
 "First visitor" still needs a **Redis lock** (`lock:sample:<language>`, TTL = the freshness window) —
 a no-op in single-replica local dev, but without it the first concurrent requests across multiple
@@ -1116,3 +1123,8 @@ Still open:
 4. **Summary scope** — per-topic rollup, or per-article abstractive summary? Only affects Phase 6.
 5. **`type` parameter** — the one probe result that changed output without an obvious meaning
    (17/20 overlap with the control). Unexplored; not needed for v1.
+6. **`/v2/latest-news` multi-category filter (§10.1)** — the route exists (status-probe verified,
+   2026-08-10) and the vendor docs say it accepts multiple categories, but the parameter's wire
+   format, whether the ~20-item page is shared across or multiplied by categories, and the feed's
+   turnover between hourly samples are docs-only claims. One keyed probe call settles all three;
+   do it before the sample implementation moves off keywordless `/search`.
