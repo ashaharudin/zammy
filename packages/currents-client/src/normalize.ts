@@ -115,6 +115,7 @@ export function normalizeSighting(raw: RawSighting): NormalizeOutcome {
     sourceCategories: dedupeStrings((raw.source_category ?? []).map(collapseWhitespace)),
     sourceDomain: sourceDomain(url),
     published: new Date(publishedMs).toISOString(),
+    raw,
   };
 
   // Validate against the shared contract rather than trusting our own mapping.

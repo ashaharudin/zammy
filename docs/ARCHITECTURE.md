@@ -1,6 +1,6 @@
 # Zammy — Architectural Proposal
 
-**Status:** Phases 0–1 built · **Scope:** the design; decisions live in ADRs
+**Status:** Phases 0–2 built · **Scope:** the design; decisions live in ADRs
 
 A news aggregator that takes keywords from a user and returns a time-ordered timeline of
 headlines and topic summaries, backed by [Currents API](https://currentsapi.services/en/docs/).
@@ -134,7 +134,9 @@ zammy/
 ├── packages/
 │   ├── shared/            # wire contract ONLY — what ships to the browser (ADR-0004)
 │   ├── config/            # server-only env validation; holds the API key
-│   └── currents-client/   # Component 1 — upstream SDK, zero app knowledge
+│   ├── currents-client/   # Component 1 — upstream SDK, zero app knowledge
+│   └── storage/           # Component 3 — schema, migrations, the collapse (§7.4),
+│                          #   keyset timeline reads (§7.3)
 ├── apps/
 │   ├── api/               # Component 2 — Fastify. HTTP surface, query planning,
 │   │                      #   in-process job consumer (§9.1), term aggregation (§10)
@@ -503,7 +505,7 @@ Bounded, so a stuck job can't poll forever: the client gives up after `INGEST_PO
 
 ---
 
-## 7. Component 3 — Storage layer
+## 7. Component 3 — Storage layer (`packages/storage`)
 
 Two tiers with distinct jobs. Redis makes repeat reads free; Postgres makes the timeline *exist*.
 

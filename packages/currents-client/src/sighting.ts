@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RawSighting } from "./raw.js";
 
 /**
  * A **sighting**: one emission of an article by the upstream API, normalized
@@ -34,5 +35,12 @@ export const Sighting = z.object({
   sourceDomain: z.string().nullable(),
   /** ISO-8601. Upstream sends "2026-08-04 20:45:56 +0000", which `new Date()` mis-parses. */
   published: z.iso.datetime(),
+  /**
+   * The upstream item exactly as received, unknown fields included. Stored in
+   * `sightings.raw` (ARCHITECTURE 7.2) so a widened canonicalization rule can
+   * re-normalize history without refetching — often impossible anyway, since
+   * upstream only reaches back 30 days.
+   */
+  raw: RawSighting,
 });
 export type Sighting = z.infer<typeof Sighting>;

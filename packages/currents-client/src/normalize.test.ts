@@ -74,6 +74,26 @@ describe("recorded payloads normalize cleanly", () => {
   });
 });
 
+describe("the original payload travels with the sighting", () => {
+  it("carries the raw upstream item verbatim, unknown fields included", () => {
+    // Storage keeps the original payload (sightings.raw, ARCHITECTURE 7.2) so a
+    // widened canonicalization rule can re-normalize history without refetching —
+    // upstream only reaches back 30 days, so a refetch is often impossible. That
+    // only works if normalization never strips fields it doesn't recognize.
+    const { sightings } = normalizeSightings(allRaw);
+
+    for (const [index, sighting] of sightings.entries()) {
+      expect(sighting.raw).toEqual(allRaw[index]);
+    }
+
+    // The undocumented field the spec omits must survive into `raw` too.
+    const withSourceCategory = sightings.find(
+      (sighting) => (sighting.raw as RawSighting).source_category?.length,
+    );
+    expect(withSourceCategory).toBeDefined();
+  });
+});
+
 describe("dedup keys over the duplication fixture", () => {
   // The headline probe finding: 100 sightings, 100 unique ids, 42 unique URLs,
   // one link-roundup page appearing 50 times (PROBE-FINDINGS 4). The
