@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { TimelinePage } from "@zammy/shared";
 import type { Reference, TopicQuery } from "./api.js";
-import { dayLabel, timeLabel } from "./format.js";
 import { MONO } from "./theme.js";
 
 /**
@@ -17,17 +16,14 @@ import { MONO } from "./theme.js";
 export function CommandBar({
   topic,
   page,
-  articleCount,
   ingesting,
   reference,
   onSearch,
   onClear,
 }: {
   topic: TopicQuery;
-  /** The newest response — the authority on meta and coverage. */
+  /** The newest response — the authority on meta. */
   page: TimelinePage | undefined;
-  /** Total articles across all loaded pages, not just the newest one. */
-  articleCount: number;
   ingesting: boolean;
   reference: Reference | undefined;
   onSearch: (topic: TopicQuery) => void;
@@ -122,11 +118,8 @@ export function CommandBar({
           color: "var(--fg-faint)",
         }}
       >
-        <span aria-live="polite">
-          {page ? `${articleCount} articles` : "searching…"}
-          {page?.topic.coverage && (
-            <> · covered since {dayLabel(page.topic.coverage.from).toLowerCase()}</>
-          )}
+        <span>
+          {page ? <AsOf iso={page.meta.asOf} /> : "searching…"}
         </span>
         <span>
           {page?.meta.degraded && (
@@ -140,11 +133,27 @@ export function CommandBar({
           {ingesting ? (
             <span style={{ color: "var(--amber)" }}>▮▯▯ ingesting from upstream…</span>
           ) : (
-            page && <>as of {timeLabel(page.meta.asOf)} · {page.meta.servedFrom}</>
+            page?.meta.servedFrom
           )}
         </span>
       </div>
     </header>
+  );
+}
+
+/** The response's asOf freshness stamp: day, date, time, timezone (§8.1). */
+function AsOf({ iso }: { iso: string }) {
+  return (
+    <time dateTime={iso}>
+      {new Intl.DateTimeFormat(undefined, {
+        weekday: "long",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZoneName: "short",
+      }).format(new Date(iso))}
+    </time>
   );
 }
 

@@ -40,7 +40,6 @@ export function TimelinePage({
       <CommandBar
         topic={topic}
         page={latest}
-        articleCount={items.length}
         ingesting={ingesting ?? false}
         reference={reference.data}
         onSearch={onSearch}
