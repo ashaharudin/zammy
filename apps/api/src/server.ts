@@ -6,7 +6,18 @@ import { Pool } from "pg";
 import { Redis } from "ioredis";
 import { type Config, redactConfig } from "@zammy/config";
 import { createCurrentsClient, type CurrentsClient } from "@zammy/currents-client";
+import { createDb } from "@zammy/storage";
 import { registerHealthRoutes } from "./health.js";
+import { registerQueryRoutes } from "./routes.js";
+import { IngestQueue } from "./ingest-queue.js";
+import { processSegmentJob, type TimelineDeps } from "./timeline-service.js";
+
+/**
+ * Subdivision floor (§6.3): a truncated segment this short is accepted as
+ * truncated rather than split further, or a pathologically dense keyword
+ * would recurse until it consumed the whole daily quota.
+ */
+const MIN_SEGMENT_MS = 60 * 60 * 1000;
 
 export interface App {
   app: FastifyInstance;
@@ -58,11 +69,36 @@ export async function buildApp(config: Config): Promise<App> {
 
   registerHealthRoutes(app, { pool, redis, currents });
 
+  // The query service (§6) and its in-process job consumer (§9.1). The
+  // consumer shares this process — Fargate keeps CPU allocated for the life
+  // of a task, so no separate deployable is needed (§4.1).
+  const db = createDb(pool);
+  const queue = new IngestQueue(config.REDIS_URL);
+  const deps: TimelineDeps = {
+    db,
+    redis,
+    currents,
+    queue,
+    config: {
+      syncFillDeadlineMs: config.SYNC_FILL_DEADLINE_MS,
+      maxSyncUpstreamCalls: config.MAX_SYNC_UPSTREAM_CALLS,
+      lookbackDays: config.CURRENTS_MAX_LOOKBACK_DAYS,
+      minSegmentMs: MIN_SEGMENT_MS,
+    },
+    now: () => new Date(),
+    log: app.log,
+  };
+  queue.startConsumer((job) => processSegmentJob(deps, job));
+  await registerQueryRoutes(app, { deps, defaultLanguage: config.DEFAULT_LANGUAGE });
+
   app.log.info({ config: redactConfig(config) }, "configuration loaded");
 
   const close = async (): Promise<void> => {
     await app.close();
-    await Promise.allSettled([pool.end(), redis.quit(), currents.close()]);
+    // The queue first (it holds Redis connections and may be mid-job), then
+    // the stores. db.destroy() ends the shared pool — nothing ends it twice.
+    await queue.close().catch(() => {});
+    await Promise.allSettled([db.destroy(), redis.quit(), currents.close()]);
   };
 
   return { app, pool, redis, currents, close };

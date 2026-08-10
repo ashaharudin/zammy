@@ -1,6 +1,6 @@
 # Zammy — Architectural Proposal
 
-**Status:** Phases 0–2 built · **Scope:** the design; decisions live in ADRs
+**Status:** Phases 0–3 built · **Scope:** the design; decisions live in ADRs
 
 A news aggregator that takes keywords from a user and returns a time-ordered timeline of
 headlines and topic summaries, backed by [Currents API](https://currentsapi.services/en/docs/).

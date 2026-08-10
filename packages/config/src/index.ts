@@ -48,6 +48,12 @@ const EnvSchema = z
 
     RETENTION_DAYS: z.coerce.number().int().min(1).default(90),
 
+    /**
+     * Applied when a search omits language. Omitting it upstream returns every
+     * language mixed together, so "all" must be an explicit choice (§6.1).
+     */
+    DEFAULT_LANGUAGE: z.string().trim().min(2).max(8).default("en"),
+
     CORS_ORIGIN: NonEmpty.default("http://localhost:5173"),
     FIXTURES_DIR: z.string().trim().default("./fixtures"),
   })

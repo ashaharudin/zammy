@@ -1,0 +1,101 @@
+import { randomUUID } from "node:crypto";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { IngestQueue, type SegmentJob } from "./ingest-queue.js";
+
+/**
+ * The in-process job consumer's queue (ARCHITECTURE 9.1). At-least-once
+ * delivery is a deployment requirement, not a nicety: Fargate recycles tasks
+ * on every deploy, and a naive LPOP loses whatever the dying task held (§4.1).
+ * Runs against the compose Redis; every test gets its own queue name.
+ */
+
+const REDIS_URL = process.env.TEST_REDIS_URL ?? "redis://localhost:6379";
+
+const segment = (over: Partial<SegmentJob> = {}): SegmentJob => ({
+  fingerprint: "f".repeat(64),
+  from: "2026-08-08T00:00:00.000Z",
+  to: "2026-08-09T00:00:00.000Z",
+  startPage: 1,
+  ...over,
+});
+
+let queue: IngestQueue;
+
+afterEach(async () => {
+  await queue.obliterate();
+  await queue.close();
+});
+
+function makeQueue() {
+  return new IngestQueue(REDIS_URL, { queueName: `test-ingest-${randomUUID()}` });
+}
+
+describe("IngestQueue", () => {
+  it("delivers an enqueued segment to the consumer", async () => {
+    queue = makeQueue();
+    const processed: SegmentJob[] = [];
+
+    await queue.enqueueSegment(segment());
+    queue.startConsumer(async (job) => {
+      processed.push(job);
+    });
+
+    await vi.waitFor(() => expect(processed).toHaveLength(1), { timeout: 5_000 });
+    expect(processed[0]).toEqual(segment());
+  });
+
+  it("deduplicates identical pending segments", async () => {
+    // The same gap gets planned by every reader who arrives while it is
+    // unfilled; without dedup, a popular cold topic enqueues its own segment
+    // once per reader and the queue multiplies quota spend (§6.3).
+    queue = makeQueue();
+    const processed: SegmentJob[] = [];
+
+    await queue.enqueueSegment(segment());
+    await queue.enqueueSegment(segment());
+    await queue.enqueueSegment(segment({ startPage: 3 })); // genuinely different
+
+    queue.startConsumer(async (job) => {
+      processed.push(job);
+    });
+
+    await vi.waitFor(() => expect(processed).toHaveLength(2), { timeout: 5_000 });
+    // Settle briefly: a third delivery arriving late would prove dedup failed.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(processed).toHaveLength(2);
+  });
+
+  it("counts pending work per topic for meta.ingest", async () => {
+    queue = makeQueue();
+    const other = "e".repeat(64);
+
+    await queue.enqueueSegment(segment());
+    await queue.enqueueSegment(segment({ startPage: 2 }));
+
+    expect(await queue.pendingCount(segment().fingerprint)).toBe(2);
+    expect(await queue.pendingCount(other)).toBe(0);
+
+    queue.startConsumer(async () => {});
+    await vi.waitFor(
+      async () => expect(await queue.pendingCount(segment().fingerprint)).toBe(0),
+      { timeout: 5_000 },
+    );
+  });
+
+  it("retries a failed job — at least once, not at most once", async () => {
+    queue = makeQueue();
+    let attempts = 0;
+
+    await queue.enqueueSegment(segment());
+    queue.startConsumer(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("transient upstream failure");
+    });
+
+    await vi.waitFor(() => expect(attempts).toBe(2), { timeout: 10_000 });
+    await vi.waitFor(
+      async () => expect(await queue.pendingCount(segment().fingerprint)).toBe(0),
+      { timeout: 5_000 },
+    );
+  });
+});

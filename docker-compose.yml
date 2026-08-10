@@ -33,10 +33,13 @@ services:
 
   redis:
     image: redis:7-alpine
-    # Pure cache (ARCHITECTURE 7.1): a flush costs latency and quota, never
-    # correctness. Bounded memory with LRU eviction mirrors that intent, and
-    # means a runaway cache cannot starve the laptop.
-    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    # volatile-lru, not allkeys-lru: cache keys all carry TTLs and may be
+    # evicted freely (ARCHITECTURE 7.1 — a flush costs latency and quota, never
+    # correctness), but the ingest queue's keys (§9.1) have no TTL and evicting
+    # one mid-job would silently drop deferred work instead of retrying it.
+    # Losing a job still only re-opens a coverage gap the next reader repairs
+    # (§11), but there is no reason to invite that under routine memory pressure.
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "volatile-lru"]
     ports:
       - "6379:6379"
     healthcheck:

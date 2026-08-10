@@ -116,21 +116,23 @@ export interface Database {
 }
 
 /**
- * A Kysely instance over a pg pool.
+ * A Kysely instance over a pg pool — either a fresh one from a connection
+ * string, or an existing pool the app already health-checks. `destroy()` ends
+ * the pool in both cases, so an app sharing its pool must not end it twice.
  *
  * NOTE: `migrateToLatest` needs a pool of at least two connections — it pins one
  * for the advisory lock while the migrator borrows others. The default (10) is
  * fine; just don't pass `max: 1` to a handle you intend to migrate through.
  */
 export function createDb(
-  connectionString: string,
+  connection: string | pg.Pool,
   options: { max?: number } = {},
 ): Kysely<Database> {
-  return new Kysely<Database>({
-    dialect: new PostgresDialect({
-      pool: new pg.Pool({ connectionString, max: options.max ?? 10 }),
-    }),
-  });
+  const pool =
+    typeof connection === "string"
+      ? new pg.Pool({ connectionString: connection, max: options.max ?? 10 })
+      : connection;
+  return new Kysely<Database>({ dialect: new PostgresDialect({ pool }) });
 }
 
 /** sha256-hex (fingerprints, dedup keys) → the bytea the schema stores. */
