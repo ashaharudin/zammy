@@ -45,12 +45,12 @@ export function Hero({ onSearch }: { onSearch: (q: string) => void }) {
             aria-label="Search topics"
             style={{
               width: "100%",
-              padding: "0.9rem 3.25rem 0.9rem 1.25rem",
+              padding: "0.9rem 3.25rem 0.9rem 0.25rem",
               fontSize: "1.1rem",
-              borderRadius: "999px",
               border: "none",
-              background: "var(--surface)",
-              boxShadow: "var(--shadow)",
+              borderBottom: "1px solid var(--fg)",
+              borderRadius: 0,
+              background: "transparent",
               outline: "none",
             }}
           />
