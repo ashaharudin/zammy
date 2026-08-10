@@ -1,73 +1,54 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import type { TopicQuery } from "./api.js";
+import { Hero } from "./Hero.js";
+import { TimelinePage } from "./TimelinePage.js";
 
 /**
- * Phase 0 placeholder. Its only job is to prove the wiring: browser → Vite proxy
- * → API → Postgres/Redis. The timeline and wordcloud land in Phase 4 / 5b.
+ * Phase 4 root: keywords in, timeline out (ARCHITECTURE 8).
+ *
+ * Query state lives in the URL (§8.2) — `/?q=climate+policy&lang=en` — so
+ * searches are shareable and back/forward works. React state is only ever a
+ * mirror of location.search; every transition goes through the history API.
  */
-type Readiness =
-  | { state: "loading" }
-  | { state: "error"; message: string }
-  | { state: "ok"; status: string; checks: Record<string, { ok: boolean; error?: string }> };
+const PARAM_KEYS = { language: "lang", country: "country", category: "category" } as const;
+
+function topicFromLocation(): TopicQuery | null {
+  const params = new URLSearchParams(window.location.search);
+  const q = params.get("q")?.trim();
+  if (!q) return null;
+  return {
+    q,
+    language: params.get(PARAM_KEYS.language) ?? undefined,
+    country: params.get(PARAM_KEYS.country) ?? undefined,
+    category: params.get(PARAM_KEYS.category) ?? undefined,
+  };
+}
+
+function searchFor(topic: TopicQuery | null): string {
+  if (!topic) return "";
+  const params = new URLSearchParams({ q: topic.q });
+  if (topic.language) params.set(PARAM_KEYS.language, topic.language);
+  if (topic.country) params.set(PARAM_KEYS.country, topic.country);
+  if (topic.category) params.set(PARAM_KEYS.category, topic.category);
+  return `?${params}`;
+}
 
 export function App() {
-  const [readiness, setReadiness] = useState<Readiness>({ state: "loading" });
+  const [topic, setTopic] = useState<TopicQuery | null>(topicFromLocation);
 
   useEffect(() => {
-    const controller = new AbortController();
-    fetch("/readyz", { signal: controller.signal })
-      .then(async (response) => {
-        const body = (await response.json()) as {
-          status: string;
-          checks: Record<string, { ok: boolean; error?: string }>;
-        };
-        setReadiness({ state: "ok", status: body.status, checks: body.checks });
-      })
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) return;
-        setReadiness({
-          state: "error",
-          message: error instanceof Error ? error.message : String(error),
-        });
-      });
-    return () => controller.abort();
+    const onPopState = () => setTopic(topicFromLocation());
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  return (
-    <main
-      style={{
-        fontFamily: "system-ui, -apple-system, sans-serif",
-        maxWidth: "720px",
-        margin: "4rem auto",
-        padding: "0 1.5rem",
-        lineHeight: 1.6,
-      }}
-    >
-      <h1 style={{ marginBottom: "0.25rem" }}>Zammy</h1>
-      <p style={{ color: "#666", marginTop: 0 }}>
-        News aggregator — Phase 0 scaffold.
-      </p>
+  const navigate = useCallback((next: TopicQuery | null) => {
+    window.history.pushState(null, "", `${window.location.pathname}${searchFor(next)}`);
+    setTopic(next);
+  }, []);
 
-      <h2 style={{ fontSize: "1rem", marginTop: "2rem" }}>API readiness</h2>
-      {readiness.state === "loading" && <p>Checking…</p>}
-      {readiness.state === "error" && (
-        <p style={{ color: "#b00" }}>
-          Could not reach the API: {readiness.message}
-          <br />
-          <small>Is it running? `pnpm dev` in another terminal.</small>
-        </p>
-      )}
-      {readiness.state === "ok" && (
-        <ul>
-          <li>
-            <strong>status:</strong> {readiness.status}
-          </li>
-          {Object.entries(readiness.checks).map(([name, check]) => (
-            <li key={name}>
-              <strong>{name}:</strong> {check.ok ? "ok" : `failed — ${check.error ?? "unknown"}`}
-            </li>
-          ))}
-        </ul>
-      )}
-    </main>
-  );
+  if (topic === null) {
+    return <Hero onSearch={(q) => navigate({ q })} />;
+  }
+  return <TimelinePage topic={topic} onSearch={navigate} onClear={() => navigate(null)} />;
 }

@@ -1,0 +1,80 @@
+/*
+ * Design tokens for the one-accent monochrome look chosen in the timeline UI
+ * prototype (branch prototype/timeline-ui): the hero and the timeline read as
+ * the same page in both themes (ARCHITECTURE 8.3).
+ */
+:root {
+  --bg: #fafafa;
+  --surface: #ffffff;
+  --surface-translucent: rgba(255, 255, 255, 0.93);
+  --border: #e5e5e5;
+  --fg: #1a1a1a;
+  --fg-muted: #555555;
+  --fg-faint: #999999;
+  --chip-bg: #f0f0f0;
+  --rail: #d9d9d9;
+  --amber: #b58900;
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121212;
+    --surface: #1c1c1c;
+    --surface-translucent: rgba(28, 28, 28, 0.93);
+    --border: #2a2a2a;
+    --fg: #ececec;
+    --fg-muted: #b0b0b0;
+    --fg-faint: #7a7a7a;
+    --chip-bg: #262626;
+    --rail: #3a3a3a;
+    --amber: #caa53d;
+    --shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+a {
+  color: inherit;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+
+/* Skeleton/progressive-fill rows (ARCHITECTURE 8.2). */
+@keyframes shimmer {
+  0% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.45;
+  }
+}
+
+.shimmer {
+  animation: shimmer 1.4s ease-in-out infinite;
+  background: var(--chip-bg);
+  border-radius: 8px;
+}
