@@ -756,7 +756,7 @@ Three trigger types, all originating from a user request:
 | --- | --- | --- |
 | **Fill visible page** — coverage gap for the requested window | synchronous, in-request | deadline-bounded, ~1 call (§6.3) |
 | **Complete the plan** — pages 2..5 the deadline cut off | queued, background | ≤ 4 calls |
-| **Daily breadth sample** — first landing-page visit of the day (§10.1) | queued, background | 12–24 calls/day |
+| **Breadth sample** — first landing-page visit after the last `/latest-news` snapshot staled (§10.1) | queued, background | 1 call/sample, ≤24/day per language |
 | **Deferred backfill** — gap segments and subdivisions §6.3 didn't have budget for | queued, background | metered |
 | **Refresh-on-read** — stale coverage noticed while serving (§6.4) | queued, background | ~1 call |
 
@@ -805,9 +805,10 @@ Three real trade-offs, each with a mitigation:
    people actually use" rather than "for everything". Since the 30-day lookback bounds any gap, a topic
    revisited after a long silence needs a bounded catch-up, not an unbounded one.
 3. **Cold start.** A first-ever visitor to an empty database sees nothing until they type something.
-   Mitigation: the landing-page wordcloud (§10), whose breadth sample is triggered by the first visitor
-   of the day. It fills the empty state *and* gives users something to click before they know what to
-   search — the one place where a small amount of non-search-driven fetching earns its cost.
+   Mitigation: the landing-page wordcloud (§10), whose `/latest-news` sample is triggered by the first
+   visitor after the previous snapshot staled. It fills the empty state *and* gives users something to
+   click before they know what to search — the one place where a small amount of non-search-driven
+   fetching earns its cost.
 
 ### 9.4 Budget guards that demand-driven ingestion requires
 
@@ -830,8 +831,11 @@ The day's most-referenced topics, each word sized by the number of unique articl
 clicking a word runs that search. It doubles as the answer to cold start (§9.3): the landing page is
 never blank, and it gives users something to act on before they know what to type.
 
-I probed this feature's assumptions before specifying it (4 calls). The corpus mechanism works. **The
-naive scoring does not** — see §10.3, which is the part worth reading.
+I probed this feature's assumptions before specifying it (4 calls). The corpus mechanism works, and
+**the naive scoring does not** — see §10.3, which is the part worth reading. The probe exercised
+keywordless `/search`; the sample has since moved to `/latest-news` (below), which changes the cost
+arithmetic but none of the scoring findings — those are properties of headline corpora, not of the
+endpoint that fetched them.
 
 ### 10.1 Corpus — where the day's articles come from
 
@@ -840,19 +844,35 @@ anyone searches. So the corpus is a union of two sources:
 
 1. **Everything already stored for today** — articles with `published` inside the current local day,
    accumulated from user searches. Free, zero upstream calls, and it broadens through the day.
-2. **A breadth sample** — verified: `/search` works with **no `keywords` at all**, taking just
-   `language` + `category`, and category slices return disjoint sets (tech vs politics: 0 overlap).
-   So ~12 curated categories × 1–2 pages = **12–24 calls** for a few hundred articles across the
-   day's news. That is 1–2% of the daily quota.
+2. **A breadth sample from `/latest-news`** — the upstream's own editorially-mixed feed of the
+   newest ~20 articles. It takes only `language`: no keywords, no category, no dates, no paging —
+   so a sample is **one call per language**, and what it returns is what upstream considers the
+   news of the moment across all categories at once.
 
-The sample is **triggered by the first visitor of the day, not by a cron** — the stored cloud is
-served instantly while a refresh runs behind it, reusing the same stale-while-revalidate and
-`meta.ingest` machinery as §6.5. A day with no visitors costs nothing, so this stays consistent with
-§9 rather than smuggling a scheduler back in.
+One call buys ~20 articles where the old category-sliced `/search` sample bought a few hundred for
+12–24 calls, so a single daily sample would starve the corpus. The budget freed by the cheaper call
+goes back into **cadence** instead of breadth: a sample is considered fresh for
+`SAMPLE_REFRESH_MINUTES` (default 60), and the first visitor after it goes stale triggers the next
+one. A fully-visited day costs **≤24 calls per language** — the same 1–2% of quota as before — but
+spread across the day, which repairs the old design's weakness of sampling only the morning's news.
+Successive samples overlap; overlap is free, because re-ingested articles collapse into their
+existing rows (§7.4) and only the genuinely new ones extend the corpus. A day with no visitors still
+costs nothing, so this stays consistent with §9 rather than smuggling a scheduler back in — the
+stored cloud is served instantly while a refresh runs behind it, reusing the same
+stale-while-revalidate and `meta.ingest` machinery as §6.5.
 
-"First visitor" needs a **Redis lock** (`lock:daily-sample:<day>:<language>`) — a no-op in single-replica
-local dev, but without it the day's first concurrent requests across multiple Fargate tasks (§4.1) would
-each enqueue the full 12–24 call sample, turning a 2% quota cost into 6% or worse under a spike.
+Two things this trades away, named rather than hidden. **Category control is gone** — `/latest-news`
+returns whatever mix upstream curates, so a slow news day in one domain cannot be compensated by
+deliberately sampling another; the `df_domains >= 2` gate (§10.3) is what keeps a lopsided feed from
+minting a lopsided cloud. And **the endpoint is less probed than `/search`** — the ~20-per-call size
+and language parameter are verified by the client, but the feed's internal duplication rate and how
+fast it turns over between samples are not; the hourly cadence is the tuning knob if turnover proves
+slower than hoped.
+
+"First visitor" still needs a **Redis lock** (`lock:sample:<language>`, TTL = the freshness window) —
+a no-op in single-replica local dev, but without it the first concurrent requests across multiple
+Fargate tasks (§4.1) would each enqueue a sample. The waste is smaller than under the old 12–24 call
+design, but the 60/60s burst budget still says one election, not N.
 
 **"Today" is the `APP_TIMEZONE` day, not the UTC day.** Under UTC, a Vancouver afternoon is already
 tomorrow, so the most-visited surface in the product would show a near-empty cloud every day after
@@ -864,10 +884,12 @@ yesterday can still arrive — a slow feed, a deferred backfill — and they are
 appear in timelines, but they do not retroactively rewrite a closed day's cloud. A baseline built on
 shifting history cannot be reasoned about, and nobody looks at Tuesday's cloud on Thursday.
 
-One measured caveat: a day-bounded keywordless call returns the *newest* 20 in that window, not a
-sample spread across it. Covering the whole day means paging (capped at 100) or slicing, so the sample
-is a **breadth-first snapshot of recent news per category**, not a census of the day. Worth saying
-plainly, because "top topics of the day" implies more completeness than the source can give.
+One caveat carried over from the probe, sharper now: `/latest-news` is a snapshot of *this moment's*
+news, with no way to ask about earlier in the day at all. The day's corpus is therefore an
+**accumulation of hourly snapshots plus whatever user searches stored** — a rolling record of what
+was prominent while people were looking, not a census of the day. Hours with no visitors are simply
+absent. Worth saying plainly, because "top topics of the day" implies more completeness than the
+source can give.
 
 ### 10.2 Term extraction
 
