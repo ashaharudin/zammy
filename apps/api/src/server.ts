@@ -9,11 +9,12 @@ import { type Config, redactConfig } from "@zammy/config";
 import { createCurrentsClient, type CurrentsClient } from "@zammy/currents-client";
 import { createDb } from "@zammy/storage";
 import { registerHealthRoutes } from "./health.js";
-import { registerQueryRoutes } from "./routes.js";
+import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
 import { IngestQueue } from "./ingest-queue.js";
 import { ChoreQueue, runRetentionChore } from "./chores.js";
 import { Metrics, registerMetricsRoute } from "./metrics.js";
 import { processSegmentJob, type TimelineDeps } from "./timeline-service.js";
+import { processSampleJob, type TrendingDeps } from "./trending-service.js";
 
 /**
  * Subdivision floor (§6.3): a truncated segment this short is accepted as
@@ -21,6 +22,32 @@ import { processSegmentJob, type TimelineDeps } from "./timeline-service.js";
  * would recurse until it consumed the whole daily quota.
  */
 const MIN_SEGMENT_MS = 60 * 60 * 1000;
+
+/**
+ * The §10.1 breadth-sample slices: ~12 curated categories × 1–2 pages =
+ * 12–24 calls, 1–2% of the daily quota. Curated rather than everything
+ * /available/categories returns — that list includes junk values and dozens
+ * of slices whose marginal breadth is not worth their quota (PROBE-FINDINGS 6).
+ */
+const SAMPLE_CATEGORIES = [
+  "business",
+  "entertainment",
+  "finance",
+  "food",
+  "health",
+  "lifestyle",
+  "national",
+  "politics",
+  "science",
+  "sports",
+  "technology",
+  "world",
+] as const;
+
+const SAMPLE_PAGES_PER_CATEGORY = 2;
+
+/** §10.3: the trailing mean's window. A week of history makes the cloud good. */
+const BASELINE_WINDOW_DAYS = 7;
 
 export interface App {
   app: FastifyInstance;
@@ -108,8 +135,21 @@ export async function buildApp(config: Config): Promise<App> {
     now: () => new Date(),
     log: app.log,
   };
-  queue.startConsumer((job) => processSegmentJob(deps, job));
+  const trendingDeps: TrendingDeps = {
+    ...deps,
+    trending: {
+      appTimezone: config.APP_TIMEZONE,
+      sampleCategories: SAMPLE_CATEGORIES,
+      samplePagesPerCategory: SAMPLE_PAGES_PER_CATEGORY,
+      baselineWindowDays: BASELINE_WINDOW_DAYS,
+    },
+  };
+
+  queue.startConsumer((job) =>
+    job.kind === "sample" ? processSampleJob(trendingDeps, job) : processSegmentJob(deps, job),
+  );
   await registerQueryRoutes(app, { deps, defaultLanguage: config.DEFAULT_LANGUAGE });
+  registerTrendingRoute(app, { deps: trendingDeps });
 
   // Nightly retention report (§7.5) — the one chore with a clock (§9.1).
   const chores = new ChoreQueue(config.REDIS_URL);

@@ -148,8 +148,11 @@ export function canonicalize(
  * shared by every replica and every stored topic, so a key reorder or a new
  * field silently orphans all existing topics. Change it only with a migration
  * story for `topics.fingerprint`.
+ *
+ * Exported for the §10.1 breadth sample, whose keyword-less per-category
+ * fetches are ordinary topics — same identity, same storage, same dedup.
  */
-function fingerprintOf(identity: {
+export function fingerprintOf(identity: {
   keywords: string[];
   language: string | null;
   country: string | null;

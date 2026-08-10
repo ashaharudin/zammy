@@ -56,6 +56,24 @@ const EnvSchema = z
      */
     DEFAULT_LANGUAGE: z.string().trim().min(2).max(8).default("en"),
 
+    /**
+     * The wordcloud's calendar day (ARCHITECTURE 10.1). Under UTC a Vancouver
+     * afternoon is already tomorrow, and the landing page would go near-empty
+     * every day after ~5pm local. IANA name, validated against Intl.
+     */
+    APP_TIMEZONE: z
+      .string()
+      .trim()
+      .default("UTC")
+      .refine((zone) => {
+        try {
+          new Intl.DateTimeFormat("en-US", { timeZone: zone });
+          return true;
+        } catch {
+          return false;
+        }
+      }, "must be an IANA timezone name Intl recognises (e.g. America/Vancouver)"),
+
     CORS_ORIGIN: NonEmpty.default("http://localhost:5173"),
     FIXTURES_DIR: z.string().trim().default("./fixtures"),
   })

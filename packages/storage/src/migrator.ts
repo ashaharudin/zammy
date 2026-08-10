@@ -1,6 +1,7 @@
 import { Migrator, sql, type Kysely, type Migration, type MigrationResultSet } from "kysely";
 import type { Database } from "./database.js";
 import * as initialSchema from "./migrations/0001-initial-schema.js";
+import * as dailyTerms from "./migrations/0002-daily-terms.js";
 
 /**
  * Migrations as a static record rather than a directory scan: the file provider
@@ -10,6 +11,7 @@ import * as initialSchema from "./migrations/0001-initial-schema.js";
  */
 const migrations: Record<string, Migration> = {
   "0001-initial-schema": initialSchema,
+  "0002-daily-terms": dailyTerms,
 };
 
 /**

@@ -29,13 +29,32 @@ export interface SegmentJob {
   kind?: "topup";
 }
 
+/**
+ * The §10.1 daily breadth sample, triggered by the first landing-page visitor
+ * of the day. One per (day, language): the Redis first-visitor lock elects
+ * the enqueuer and the jobId dedups whatever slips past it.
+ */
+export interface SampleJob {
+  kind: "sample";
+  /** APP_TIMEZONE day key, YYYY-MM-DD (§10.1). */
+  day: string;
+  language: string;
+}
+
+export type IngestJob = SegmentJob | SampleJob;
+
+/** The pending-set identity a trending read polls (§10.4 meta.ingest). */
+export function samplePendingId(job: Pick<SampleJob, "day" | "language">): string {
+  return `sample_${job.day}_${job.language}`;
+}
+
 /** Entries older than this are presumed lost to a crashed consumer (see below). */
 const STALE_PENDING_MS = 5 * 60 * 1000;
 
 export class IngestQueue {
-  private readonly queue: Queue<SegmentJob>;
+  private readonly queue: Queue<IngestJob>;
   private readonly redis: Redis;
-  private worker: Worker<SegmentJob> | null = null;
+  private worker: Worker<IngestJob> | null = null;
   private readonly queueName: string;
 
   constructor(
@@ -45,7 +64,7 @@ export class IngestQueue {
     this.queueName = options.queueName ?? "ingest";
     // BullMQ requires maxRetriesPerRequest: null on its connections.
     this.redis = new Redis(redisUrl, { maxRetriesPerRequest: null });
-    this.queue = new Queue<SegmentJob>(this.queueName, { connection: this.redis });
+    this.queue = new Queue<IngestJob>(this.queueName, { connection: this.redis });
   }
 
   /**
@@ -54,7 +73,7 @@ export class IngestQueue {
    * cold topic would enqueue once per reader and multiply quota spend.
    */
   async enqueueSegment(job: SegmentJob): Promise<void> {
-    const jobId = segmentJobId(job);
+    const jobId = ingestJobId(job);
     await this.queue.add("segment", job, {
       jobId,
       attempts: 3,
@@ -69,11 +88,25 @@ export class IngestQueue {
     await this.redis.zadd(this.pendingKey(job.fingerprint), "NX", Date.now(), jobId);
   }
 
+  /** Enqueue the day's breadth sample (§10.1). One per (day, language). */
+  async enqueueSample(job: SampleJob): Promise<void> {
+    const jobId = ingestJobId(job);
+    await this.queue.add("sample", job, {
+      jobId,
+      attempts: 3,
+      backoff: { type: "exponential", delay: 1000 },
+      removeOnComplete: true,
+      removeOnFail: true,
+    });
+    await this.redis.zadd(this.pendingKey(samplePendingId(job)), "NX", Date.now(), jobId);
+  }
+
   /**
-   * Outstanding jobs for a topic — meta.ingest.pendingJobs (§6.1). Entries
-   * older than STALE_PENDING_MS are pruned as crashed-consumer residue, so a
-   * lost decrement degrades to "in_progress for five minutes", never to a
-   * topic that reads as perpetually warming.
+   * Outstanding jobs for a topic — meta.ingest.pendingJobs (§6.1) — or for a
+   * daily sample when given a samplePendingId. Entries older than
+   * STALE_PENDING_MS are pruned as crashed-consumer residue, so a lost
+   * decrement degrades to "in_progress for five minutes", never to a topic
+   * that reads as perpetually warming.
    */
   async pendingCount(fingerprint: string): Promise<number> {
     const key = this.pendingKey(fingerprint);
@@ -83,12 +116,12 @@ export class IngestQueue {
 
   /** Start the in-process consumer (§9.1). One per process. */
   startConsumer(
-    handler: (job: SegmentJob) => Promise<void>,
+    handler: (job: IngestJob) => Promise<void>,
     options: { concurrency?: number } = {},
   ): void {
     if (this.worker) throw new Error("consumer already started");
 
-    this.worker = new Worker<SegmentJob>(
+    this.worker = new Worker<IngestJob>(
       this.queueName,
       async (job) => handler(job.data),
       {
@@ -97,9 +130,11 @@ export class IngestQueue {
       },
     );
 
-    const settle = async (job: Job<SegmentJob> | undefined): Promise<void> => {
+    const settle = async (job: Job<IngestJob> | undefined): Promise<void> => {
       if (!job) return;
-      await this.redis.zrem(this.pendingKey(job.data.fingerprint), segmentJobId(job.data));
+      const pendingId =
+        job.data.kind === "sample" ? samplePendingId(job.data) : job.data.fingerprint;
+      await this.redis.zrem(this.pendingKey(pendingId), ingestJobId(job.data));
     };
 
     this.worker.on("completed", (job) => void settle(job));
@@ -128,8 +163,9 @@ export class IngestQueue {
   }
 }
 
-function segmentJobId(job: SegmentJob): string {
+function ingestJobId(job: IngestJob): string {
   // Underscores, not colons — BullMQ reserves ':' as its key separator.
+  if (job.kind === "sample") return samplePendingId(job);
   if (job.kind === "topup") return `topup_${job.fingerprint}_${Date.parse(job.from)}`;
   return `seg_${job.fingerprint}_${Date.parse(job.from)}_${Date.parse(job.to)}_p${job.startPage}`;
 }

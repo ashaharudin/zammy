@@ -1,9 +1,10 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
-import { TimelinePage } from "@zammy/shared";
+import { TimelinePage, TrendingResponse } from "@zammy/shared";
 import { canonicalize } from "./canonical.js";
 import { registerMetricsRoute } from "./metrics.js";
-import { registerQueryRoutes } from "./routes.js";
+import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
+import type { TrendingDeps } from "./trending-service.js";
 import { createTestHarness, purgeTopicKeys, type TestHarness } from "./test-support.js";
 
 /**
@@ -24,9 +25,28 @@ afterEach(async () => {
 async function setup(): Promise<void> {
   harness = await createTestHarness();
   app = Fastify({ logger: false });
+  const trendingDeps: TrendingDeps = {
+    ...harness.deps,
+    trending: {
+      appTimezone: "UTC",
+      sampleCategories: ["technology", "politics"],
+      samplePagesPerCategory: 2,
+      baselineWindowDays: 7,
+    },
+  };
   await registerQueryRoutes(app, { deps: harness.deps, defaultLanguage: "en" });
+  registerTrendingRoute(app, { deps: trendingDeps });
   registerMetricsRoute(app, harness.metrics);
   await app.ready();
+
+  // Day-keyed Redis state (sample lock, trending cache) outlives ephemeral
+  // test databases; clear today's so reruns see a fresh day.
+  const today = new Date().toISOString().slice(0, 10);
+  await harness.redis.del(
+    `lock:daily-sample:${today}:en`,
+    `trending:${today}:en`,
+    `ingest:pending:sample_${today}_en`,
+  );
 
   // Deterministic fingerprints collide with previous runs via shared Redis.
   const canonical = canonicalize(
@@ -127,6 +147,30 @@ describe("GET /api/v1/reference", () => {
     // the UI picker, because a stored sighting may legitimately carry one.
     expect(body.categories).toContain("crap");
     expect(body.categories).toContain("technology");
+  });
+});
+
+describe("GET /api/v1/trending", () => {
+  it("answers with the §10.4 contract and queues the day's sample", async () => {
+    await setup();
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/trending" });
+
+    expect(response.statusCode).toBe(200);
+    const body = TrendingResponse.parse(response.json()); // shared contract IS the assertion
+    expect(body.language).toBe("en");
+    // A fresh day: the cloud warms behind this very request (§10.1).
+    expect(body.meta.ingest.state).toBe("in_progress");
+    expect(body.meta.ingest.pendingJobs).toBeGreaterThanOrEqual(1);
+  });
+
+  it("rejects a malformed day without touching anything", async () => {
+    await setup();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/trending?day=not-a-day",
+    });
+    expect(response.statusCode).toBe(400);
   });
 });
 
