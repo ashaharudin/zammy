@@ -198,7 +198,7 @@ function LoadOlder({ loading, onLoadOlder }: { loading: boolean; onLoadOlder: ()
 
 function ArticleCard({ article }: { article: Article }) {
   const [open, setOpen] = useState(false);
-  const expandable = article.description !== null || article.imageUrl !== null;
+  const expandable = article.description !== null;
 
   return (
     <article
@@ -208,28 +208,49 @@ function ArticleCard({ article }: { article: Article }) {
         border: "1px solid var(--border)",
         padding: "0.6rem 0.9rem",
         maxWidth: "640px",
+        display: "flex",
+        gap: "0.75rem",
       }}
     >
-      <div style={{ display: "flex", gap: "0.6rem", alignItems: "baseline" }}>
-        <small
+      {article.imageUrl && (
+        // Fixed aspect box so late-loading images never shift the rail (§8.3).
+        <div
           style={{
-            color: "var(--fg-faint)",
+            width: "72px",
+            aspectRatio: "3 / 2",
             flexShrink: 0,
-            fontVariantNumeric: "tabular-nums",
+            alignSelf: "center",
+            background: "var(--chip-bg)",
+            borderRadius: "6px",
+            overflow: "hidden",
           }}
         >
+          <img
+            src={article.imageUrl}
+            alt=""
+            loading="lazy"
+            // Hotlink-blocked or dead upstream images collapse to the neutral
+            // box rather than the browser's broken-image glyph.
+            onError={(event) => {
+              event.currentTarget.style.display = "none";
+            }}
+            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          />
+        </div>
+      )}
+      <div style={{ minWidth: 0, flex: 1 }}>
+      <a
+        href={article.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ fontSize: "0.95rem", lineHeight: 1.35, textDecoration: "none", display: "block" }}
+      >
+        {article.title}
+      </a>
+      <div style={{ marginTop: "0.25rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
+        <small style={{ fontSize: "0.7rem", color: "var(--fg-faint)", fontVariantNumeric: "tabular-nums" }}>
           <time dateTime={article.published}>{timeLabel(article.published)}</time>
         </small>
-        <a
-          href={article.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{ fontSize: "0.95rem", lineHeight: 1.35, textDecoration: "none" }}
-        >
-          {article.title}
-        </a>
-      </div>
-      <div style={{ marginTop: "0.25rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
         {article.sourceDomain && (
           <span
             style={{
@@ -265,35 +286,12 @@ function ArticleCard({ article }: { article: Article }) {
           </button>
         )}
       </div>
-      {open && (
-        <div style={{ marginTop: "0.5rem" }}>
-          {article.imageUrl && (
-            // Fixed aspect box so late-loading images never shift the rail (§8.3).
-            <div
-              style={{
-                aspectRatio: "3 / 2",
-                maxWidth: "240px",
-                marginBottom: "0.5rem",
-                background: "var(--chip-bg)",
-                borderRadius: "6px",
-                overflow: "hidden",
-              }}
-            >
-              <img
-                src={article.imageUrl}
-                alt=""
-                loading="lazy"
-                style={{ width: "100%", height: "100%", objectFit: "cover" }}
-              />
-            </div>
-          )}
-          {article.description && (
-            <p style={{ fontSize: "0.85rem", color: "var(--fg-muted)", margin: 0 }}>
-              {article.description}
-            </p>
-          )}
-        </div>
+      {open && article.description && (
+        <p style={{ marginTop: "0.5rem", marginBottom: 0, fontSize: "0.85rem", color: "var(--fg-muted)" }}>
+          {article.description}
+        </p>
       )}
+      </div>
     </article>
   );
 }
