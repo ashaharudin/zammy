@@ -3,8 +3,8 @@ import { MONO } from "./theme.js";
 import { TrendingCloud } from "./TrendingCloud.js";
 
 /**
- * The empty state: the command-bar prompt scaled up and centered, with the
- * day's wordcloud beneath it (ARCHITECTURE 10) — the landing page is never
+ * The empty state: the day's wordcloud with the command-bar prompt scaled up
+ * and centered beneath it (ARCHITECTURE 10) — the landing page is never
  * blank, and the cloud gives users something to click before they know what
  * to type (§9.3 cold start).
  */
@@ -23,6 +23,7 @@ export function Hero({ onSearch }: { onSearch: (q: string) => void }) {
         padding: "3rem 1rem",
       }}
     >
+      <TrendingCloud onSearch={onSearch} />
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -84,7 +85,6 @@ export function Hero({ onSearch }: { onSearch: (q: string) => void }) {
           </button>
         </div>
       </form>
-      <TrendingCloud onSearch={onSearch} />
     </main>
   );
 }

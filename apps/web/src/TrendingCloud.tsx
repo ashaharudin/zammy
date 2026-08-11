@@ -24,6 +24,36 @@ const LAYOUT_HEIGHT = 340;
 const FONT_MIN = 12;
 const FONT_MAX = 56;
 
+/**
+ * Warm→cool ramp keyed to score rank: the hottest topics burn red, the tail
+ * cools to blue — a second visual channel alongside font size. Decorative
+ * only (the cloud is aria-hidden); the list view keeps plain --fg because
+ * mid-ramp hues (the yellow especially) don't clear body-text contrast.
+ */
+const PALETTE = [
+  "#F94144",
+  "#F3722C",
+  "#F8961E",
+  "#F9844A",
+  "#F9C74F",
+  "#90BE6D",
+  "#43AA8B",
+  "#4D908E",
+  "#577590",
+  "#277DA1",
+] as const;
+
+/** Score rank → palette bucket. */
+function rankColors(terms: readonly TrendingTerm[]): Map<string, string> {
+  const ranked = [...terms].sort((a, b) => b.score - a.score);
+  return new Map(
+    ranked.map((t, i) => [
+      t.term,
+      PALETTE[Math.min(PALETTE.length - 1, Math.floor((i / ranked.length) * PALETTE.length))]!,
+    ]),
+  );
+}
+
 export function useTrending() {
   const pollsUsed = useRef(0);
   return useQuery({
@@ -84,6 +114,7 @@ export function TrendingCloud({ onSearch }: { onSearch: (q: string) => void }) {
   const data: TrendingResponse | undefined = trending.data;
   const terms = data?.terms ?? [];
   const warming = data !== undefined && data.meta.ingest.state === "in_progress";
+  const colors = rankColors(terms);
 
   useEffect(() => {
     if (terms.length === 0) {
@@ -131,29 +162,42 @@ export function TrendingCloud({ onSearch }: { onSearch: (q: string) => void }) {
           color: "var(--fg-faint)",
         }}
       >
-        <span>
-          {warming
-            ? "gathering today's news…"
-            : terms.length > 0
-              ? `today's topics — ${data?.day}`
-              : ""}
-        </span>
+        <span>{warming ? "gathering today's news…" : ""}</span>
         {terms.length > 0 && (
           <button
             onClick={() => setAsList(!asList)}
             aria-pressed={asList}
+            aria-label={asList ? "View as cloud" : "View as list"}
+            title={asList ? "View as cloud" : "View as list"}
             style={{
               border: "none",
               background: "none",
               color: "var(--fg-faint)",
               cursor: "pointer",
-              fontFamily: MONO,
-              fontSize: "0.8rem",
-              textDecoration: "underline",
-              padding: 0,
+              padding: "0.25rem",
+              display: "flex",
+              alignItems: "center",
             }}
           >
-            {asList ? "view as cloud" : "view as list"}
+            {asList ? (
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                <path
+                  d="M5.5 13.5a3 3 0 1 1 .43-5.97 4 4 0 0 1 7.77 1.06A2.5 2.5 0 0 1 13 13.5H5.5Z"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            ) : (
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                <circle cx="3" cy="4.5" r="1.25" fill="currentColor" />
+                <circle cx="3" cy="9" r="1.25" fill="currentColor" />
+                <circle cx="3" cy="13.5" r="1.25" fill="currentColor" />
+                <line x1="6.5" y1="4.5" x2="16" y2="4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                <line x1="6.5" y1="9" x2="16" y2="9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                <line x1="6.5" y1="13.5" x2="16" y2="13.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            )}
           </button>
         )}
       </div>
@@ -186,7 +230,7 @@ export function TrendingCloud({ onSearch }: { onSearch: (q: string) => void }) {
                 fontSize: `${word.size}px`,
                 lineHeight: 1,
                 whiteSpace: "nowrap",
-                color: "var(--fg)",
+                color: colors.get(word.term.term) ?? "var(--fg)",
                 padding: 0,
               }}
             >
@@ -209,7 +253,10 @@ export function TrendingCloud({ onSearch }: { onSearch: (q: string) => void }) {
             asList
               ? {
                   columns: 2,
-                  margin: "1rem 0 0",
+                  columnGap: "3rem",
+                  width: "max-content",
+                  maxWidth: "100%",
+                  margin: "1rem auto 0",
                   paddingLeft: "1.5rem",
                   fontFamily: MONO,
                   fontSize: "0.95rem",
