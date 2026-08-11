@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { MONO } from "./theme.js";
-import { TrendingCloud } from "./TrendingCloud.js";
+import { TrendingCloud, useTrending } from "./TrendingCloud.js";
+import { searchPlaceholder } from "./searchPlaceholder.js";
 
 /**
  * The empty state: the day's wordcloud with the command-bar prompt scaled up
@@ -10,6 +11,8 @@ import { TrendingCloud } from "./TrendingCloud.js";
  */
 export function Hero({ onSearch }: { onSearch: (q: string) => void }) {
   const [q, setQ] = useState("");
+  // Same query key as the cloud below, so this costs no extra request.
+  const trending = useTrending();
 
   return (
     <main
@@ -45,7 +48,7 @@ export function Hero({ onSearch }: { onSearch: (q: string) => void }) {
             autoFocus
             value={q}
             onChange={(event) => setQ(event.target.value)}
-            placeholder="e.g. ai regulation, wildfires, interest rates…"
+            placeholder={searchPlaceholder(trending.data?.terms ?? [])}
             aria-label="Search topics"
             style={{
               width: "100%",
