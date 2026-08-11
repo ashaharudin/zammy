@@ -1272,6 +1272,12 @@ Still open:
      earliest member, so the seed, the position and the headline are frequently three different
      articles.
 
+   - **Plurals are folded before comparison, in grouping only.** `chiefs` and `chief` are the same
+     word when asking whether two headlines describe one story; they are two different terms in the
+     cloud, where a term is a surface form (§10.3). So the stemmer sits over the shared tokenizer in
+     grouping and `contentTokens` still returns what was written. Plurals only: measured at +44
+     grouped articles with no new single-outlet merges, where `-ing`/`-ed` stripping bought less and
+     risked more (ADR-0005).
    - **Headlines that quote contradictory figures are not the same story.** The tokenizer drops
      anything containing a digit (§10.2's fix for `cve-` fragments), which is right for the cloud and
      wrong here: templated headlines differ ONLY in their numbers. Ten distinct marketbeat.com
@@ -1304,6 +1310,14 @@ Still open:
    - **Grouping is forward-looking.** Articles stored before the migration have no tokens, so they
      are never candidates and never join a group. Regrouping the archive would move rows under live
      cursors for no reader's benefit.
+   - **Grouping is one-shot, and an article joins its single best match.** An article ingested before
+     its story's cluster forms stays a singleton however similar later coverage turns out to be: it
+     is evaluated once, at creation, and nothing revisits it. Measured live — a Daily Mail piece sat
+     beside a 6-article group it scored 0.538 against, because when it arrived the group did not
+     exist, and when the group's BBC article arrived it had a 0.750 match elsewhere. The fixes are
+     re-evaluating singletons, or merging two groups when a newcomer bridges them; the second is the
+     transitive chaining the day window exists to bound. Recorded, not answered
+     ([ADR-0005](adr/0005-headline-tokens-not-embeddings-decide-article-grouping.md)).
 4. **Summary scope** — per-topic rollup, or per-article abstractive summary? Only affects Phase 6.
 5. **`type` parameter** — the one probe result that changed output without an obvious meaning
    (17/20 overlap with the control). Unexplored; not needed for v1.

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { contentTokens } from "./term-scoring.js";
 import {
   chooseGroup,
   headlineFigures,
@@ -50,6 +51,37 @@ describe("headlineTokens", () => {
     ]);
   });
 
+  it("singularizes, so `chiefs` and `chief` are one word", () => {
+    expect(headlineTokens("Police chiefs urge action")).toEqual(
+      headlineTokens("Police chief urges action"),
+    );
+  });
+
+  it("leaves short words and -ss words alone", () => {
+    // `gas` must not become `ga`, and `press` must not become `pres`: the
+    // floor and the -ss guard are what keep the stemmer from inventing words.
+    expect(headlineTokens("Gas press releases")).toEqual(["gas", "press", "release"]);
+  });
+
+  it("maps -ies plurals onto their singular", () => {
+    expect(headlineTokens("Studies show a shift")).toEqual(headlineTokens("Study shows a shift"));
+  });
+
+  it("never mangles a word to reach a tidier stem", () => {
+    // The rejected rule (strip `es` after s/x/z/ch/sh) reaches `box` from
+    // `boxes` but turns `releases` into `releas`. Dropping the final `s` and
+    // nothing more leaves `boxe` — ugly, consistent, and harmless.
+    expect(headlineTokens("Prisoner releases announced")).toContain("release");
+    expect(headlineTokens("Boxes of ballots")).toEqual(["boxe", "ballot"]);
+  });
+
+  it("does not stem the CLOUD's tokens — a term is a surface form", () => {
+    // §10.3 and CONTEXT.md: "China" and "Chinese" are two terms and both may
+    // appear. Grouping asks a different question, so the stemmer belongs to
+    // grouping alone and contentTokens must keep returning what was written.
+    expect(contentTokens("Police chiefs urge action")).toContain("chiefs");
+  });
+
   it("drops identifiers whole rather than shredding them into fragments", () => {
     // The §10.2 lesson: a regex that splits CVE-2026-1234 leaves a `cve-`
     // token behind. Grouping shares the cloud's tokenizer so it inherits the
@@ -57,7 +89,10 @@ describe("headlineTokens", () => {
     const tokens = headlineTokens("Jenkins plugin flaw CVE-2026-1234 patched");
     expect(tokens).not.toContain("cve");
     expect(tokens).not.toContain("cve-");
-    expect(tokens).toContain("jenkins");
+    // `jenkin`, not `jenkins`: the stemmer treats a proper noun's trailing `s`
+    // like any other, which is consistent on both sides of a comparison and so
+    // costs nothing here. The cloud, which shows terms to people, does not stem.
+    expect(tokens).toContain("jenkin");
   });
 
   it("is a set: a word repeated in one headline counts once", () => {
@@ -209,6 +244,20 @@ describe("chooseGroup", () => {
 
     expect(chooseGroup(mirror, [firstArrival], RULES)).toBeNull(); // what shipped
     expect(chooseGroup(mirror, [firstArrival, bbcMember], RULES)?.groupId).toBe("12523");
+  });
+
+  it("joins coverage that differs only in plurals", () => {
+    // Live pair (2026-08-11) separated by `chiefs`/`chief` and `killers`/
+    // `killer`: 0.43 as surface forms, 0.538 singularized.
+    const bbc = candidate({
+      id: "70",
+      title: "Police chiefs call for PM to prevent early release of PC Harper's killers",
+    });
+    const dailyMail = headline(
+      "Every police chief is urging PM to stop release of PC Harper's killers",
+    );
+
+    expect(chooseGroup(dailyMail, [bbc], RULES)?.groupId).toBe("70");
   });
 
   it("refuses two templated headlines whose figures disagree", () => {

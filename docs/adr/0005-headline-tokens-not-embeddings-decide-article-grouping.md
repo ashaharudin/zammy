@@ -86,10 +86,41 @@ the numbers were the only difference. Grouping now refuses when both headlines
 quote figures and none agree. Across the corpus this changed exactly one group —
 that one — leaving the genuine wire clusters (Big Sur ×6, Gaza ×9) untouched.
 
-Stemming (`chiefs`→`chief`, `urging`→`urge`) is the next available step: +25
-grouped for +1 single-outlet merge. Not taken yet — §14.7's warning about
-orthographic tricks applies, though far more weakly to multi-token headline
-overlap than to merging single terms, and it deserves its own measurement.
+**Plural stemming was measured next and taken.** Over 8,240 live articles it
+added 44 grouped articles (1,368 → 1,412) with the single-outlet merge count
+unchanged at 114, and every sampled new group was genuine wire syndication
+(one story on 7 outlets, another on 4). Extending it to strip `-ing`/`-ed`
+added 22 more with no such improvement and did not even unify `urge`/`urging`
+— that needs Porter's consonant-vowel restoration, a different order of
+complexity for an unmeasured gain. Not taken.
+
+The stemmer drops a trailing `s` and nothing more (plus `-ies`→`y`, and `-ss`
+left alone). The tempting extra rule — strip `es` after s/x/z/ch/sh, to reach
+`box` from `boxes` — turns `releases` into `releas`, and mangling a word that
+appears in half the day's political headlines costs more than `boxe` does.
+Consistency beats linguistic correctness here: both sides map alike.
+
+**Grouping stems; the cloud does not.** A term is a surface form, not a concept
+(CONTEXT.md, §10.3) — "China" and "Chinese" are two terms and both may appear.
+Grouping asks whether two headlines describe one story, where `chiefs` and
+`chief` are the same word. `contentTokens` keeps returning surface forms.
+
+## Known limitation: grouping is one-shot, and best-match-wins
+
+Stemming did NOT fix the third card in the report that prompted it, and the
+measurement says why. The Daily Mail's "Every police chief is urging PM to stop
+release of PC Harper's killers" was ingested **before** any of the cluster
+existed, so at its one evaluation there was nothing to join. When the BBC
+article arrived later, the Daily Mail piece *was* a valid candidate — 0.538
+singularized, above the bar — but the Independent scored 0.750, and a newcomer
+joins its single best match. The two groups never meet.
+
+So an article that arrives before its story's cluster forms stays a singleton
+however similar later coverage turns out to be. Fixing it means either
+re-evaluating singletons when a group forms, or merging two groups when a
+newcomer bridges them — and the second is transitive merging, which is the
+chaining the day-window exists to bound. Neither is attempted here; the
+question is recorded rather than answered.
 
 ## Consequences
 
