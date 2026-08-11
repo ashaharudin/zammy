@@ -49,7 +49,14 @@ const EnvSchema = z
     SYNC_FILL_DEADLINE_MS: z.coerce.number().int().min(100).max(10_000).default(1200),
     MAX_SYNC_UPSTREAM_CALLS: z.coerce.number().int().min(1).max(5).default(5),
     INTERACTIVE_RESERVE: z.coerce.number().int().min(0).default(250),
-    PER_TOPIC_DAILY_CALL_CAP: z.coerce.number().int().min(1).default(20),
+    /**
+     * §9.4's per-topic budget. Raised 20 → 50 once the 7-day range ceiling
+     * (PROBE-FINDINGS 6d) made dense backfills slice-and-subdivide: 20 was
+     * gone before a single tokyo-class slice completed, recording no
+     * coverage at all. 50 (5% of the pool per topic) completes moderate
+     * keywords in a day; pathological ones still deepen across days.
+     */
+    PER_TOPIC_DAILY_CALL_CAP: z.coerce.number().int().min(1).default(50),
     INGEST_POLL_MAX: z.coerce.number().int().min(1).max(60).default(8),
     /** §9.4: per-IP ceiling on /api/v1/*, so novel-fingerprint spam can't mint topics. */
     RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).default(60),
