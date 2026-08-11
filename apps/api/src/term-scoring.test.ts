@@ -69,6 +69,21 @@ describe("scoreTerms against the recorded keywordless sample (§10.3)", () => {
     }
   });
 
+  it("drops generic non-proper unigrams; proper nouns and phrases carry the cloud", () => {
+    // Measured failure (2026-08-11 dev cloud): "community", "finally", "rise"
+    // topped the day-one cloud — generic vocabulary the baseline would need a
+    // week to suppress. Unigrams now need capitalization evidence; these were
+    // all in the old top output of THIS fixture and must be gone.
+    const emitted = new Set(top50.map((t) => t.term));
+    for (const generic of ["set", "use", "learn", "development", "launch", "code", "using"]) {
+      expect(emitted.has(generic), `generic unigram "${generic}" survived`).toBe(false);
+    }
+
+    // The named entities that made the old output credible must remain.
+    expect(emitted.has("trump")).toBe(true);
+    expect(emitted.has("ai")).toBe(true);
+  });
+
   it("still yields a usable cloud: some terms, sized by unique articles", () => {
     expect(top50.length).toBeGreaterThan(5);
     for (const t of top50) {
@@ -88,7 +103,7 @@ describe("scoring mechanisms in isolation", () => {
     description: string | null = null,
   ): CorpusArticle => ({ title, description, sourceDomain: domain });
 
-  it("bigrams are terms of their own", () => {
+  it("bigrams are terms of their own — and generic words survive ONLY inside them", () => {
     const corpus = [
       article("Climate policy shift announced", "a.com"),
       article("New climate policy criticised", "b.com"),
@@ -98,48 +113,68 @@ describe("scoring mechanisms in isolation", () => {
     expect(bigram).toBeDefined();
     expect(bigram!.isBigram).toBe(true);
     expect(bigram!.dfArticles).toBe(2);
+
+    // "climate" and "policy" are common nouns (seen lowercase in running
+    // text): as unigrams they are noise, as a phrase they are a topic.
+    const emitted = new Set(terms.map((t) => t.term));
+    expect(emitted.has("climate")).toBe(false);
+    expect(emitted.has("policy")).toBe(false);
+  });
+
+  it("proper nouns qualify by mid-sentence capitalization, not by Title Case", () => {
+    const corpus = [
+      article("Community Rallies Around Kelowna", "a.com", "The community gathered in Kelowna."),
+      article("Community Fund Launched In Kelowna", "b.com", "A fund for the community near Kelowna."),
+    ];
+    const emitted = new Set(scoreTerms(corpus, EMPTY_BASELINE).map((t) => t.term));
+
+    // Title Case capitalizes "Community", but the descriptions show it
+    // lowercase in prose — a common noun. "Kelowna" is never lowercase and
+    // appears capitalized mid-sentence: a place.
+    expect(emitted.has("kelowna")).toBe(true);
+    expect(emitted.has("community")).toBe(false);
   });
 
   it("the rolling baseline suppresses perennial vocabulary (§10.3)", () => {
     const corpus = [
-      article("Wildfire evacuation ordered", "a.com"),
-      article("Wildfire spreads north", "b.com"),
-      article("Election evacuation debate", "a.com"),
-      article("Election results contested wildfire", "b.com"),
+      article("Evacuations near Kelowna ordered", "a.com"),
+      article("Crews battle the Kelowna fires", "b.com"),
+      article("Budget vote in Congress delayed", "a.com"),
+      article("Shutdown looms as Congress stalls near Kelowna", "b.com"),
     ];
-    // "wildfire" and "election" have similar frequency today, but "election"
-    // is like this EVERY day — the baseline is what makes today visible.
+    // "kelowna" and "congress" both qualify as proper nouns, but Congress is
+    // in the news EVERY day — the baseline is what makes today visible.
     const flat = scoreTerms(corpus, EMPTY_BASELINE);
-    const biased = scoreTerms(corpus, new Map([["election", 5]]));
+    const biased = scoreTerms(corpus, new Map([["congress", 5]]));
 
     const rank = (terms: typeof flat, term: string) =>
       terms.findIndex((t) => t.term === term);
-    expect(rank(biased, "wildfire")).toBeLessThan(rank(biased, "election"));
+    expect(rank(biased, "kelowna")).toBeLessThan(rank(biased, "congress"));
     expect(
-      biased.find((t) => t.term === "election")!.score,
-    ).toBeLessThan(flat.find((t) => t.term === "election")!.score);
+      biased.find((t) => t.term === "congress")!.score,
+    ).toBeLessThan(flat.find((t) => t.term === "congress")!.score);
   });
 
   it("caps any single domain's contribution to df_articles (§10.3)", () => {
     const flood = [
-      article("Breach breach update 1", "loud.com"),
-      article("Breach breach update 2", "loud.com"),
-      article("Breach breach update 3", "loud.com"),
-      article("Breach breach update 4", "loud.com"),
-      article("Breach breach update 5", "loud.com"),
-      article("Breach also here", "quiet.com"),
-      article("Drought hits farms", "a.com"),
-      article("Drought worsens", "b.com"),
-      article("Drought emergency declared", "c.com"),
-      article("Drought aid promised", "d.com"),
+      article("Advisory on Equifax issue 1", "loud.com"),
+      article("Advisory on Equifax issue 2", "loud.com"),
+      article("Advisory on Equifax issue 3", "loud.com"),
+      article("Advisory on Equifax issue 4", "loud.com"),
+      article("Advisory on Equifax issue 5", "loud.com"),
+      article("Statement from Equifax today", "quiet.com"),
+      article("Flooding along the Danube worsens", "a.com"),
+      article("Towns by the Danube evacuate", "b.com"),
+      article("Emergency declared on the Danube", "c.com"),
+      article("Aid promised along the Danube", "d.com"),
     ];
     const terms = scoreTerms(flood, EMPTY_BASELINE);
-    const breach = terms.find((t) => t.term === "breach")!;
-    const drought = terms.find((t) => t.term === "drought")!;
+    const equifax = terms.find((t) => t.term === "equifax")!;
+    const danube = terms.find((t) => t.term === "danube")!;
 
-    // Six articles say "breach" but five are one outlet; four outlets say
-    // "drought". Displayed count stays honest; the SCORE ranks drought first.
-    expect(breach.dfArticles).toBe(6);
-    expect(drought.score).toBeGreaterThan(breach.score);
+    // Six articles say "Equifax" but five are one outlet; four outlets say
+    // "Danube". Displayed count stays honest; the SCORE ranks the Danube first.
+    expect(equifax.dfArticles).toBe(6);
+    expect(danube.score).toBeGreaterThan(equifax.score);
   });
 });

@@ -67,6 +67,12 @@ export function extractTerms(article: CorpusArticle): Set<string> {
  * returned `dfArticles` stays the TRUE count (it is what users see); the
  * per-domain cap applies only inside the score, damping single-outlet floods
  * that the domain gate alone lets through.
+ *
+ * Unigrams must additionally be PROPER NOUNS (§10.3): the day-one cloud
+ * otherwise fills with generic vocabulary ("community", "finally") that the
+ * baseline needs a week of history to suppress. Phrases stay eligible as
+ * they are — "climate policy" is a topic even though both words alone are
+ * noise.
  */
 export function scoreTerms(
   corpus: readonly CorpusArticle[],
@@ -74,6 +80,7 @@ export function scoreTerms(
   options: ScoreOptions = {},
 ): ScoredTerm[] {
   const { k, perDomainCap, minDomains } = { ...DEFAULTS, ...options };
+  const isProperNoun = properNounEvidence(corpus);
 
   const stats = new Map<
     string,
@@ -101,6 +108,7 @@ export function scoreTerms(
 
   const scored: ScoredTerm[] = [];
   for (const [term, entry] of stats) {
+    if (!term.includes(" ") && !isProperNoun(term)) continue;
     const dfDomains = entry.byDomain.size;
     if (dfDomains < minDomains) continue;
 
@@ -133,12 +141,52 @@ export function scoreTerms(
  * identifiers, versions, years — as is anything short or stopworded.
  */
 function tokenize(text: string): string[] {
+  return splitTokens(text.toLowerCase());
+}
+
+function splitTokens(text: string): string[] {
   return text
     .normalize("NFKC")
-    .toLowerCase()
     .split(/[^\p{L}\p{N}'-]+/u)
-    .map((token) => token.replaceAll(/^['-]+|['-]+$/g, "").replace(/'s$/u, ""))
+    .map((token) => token.replaceAll(/^['-]+|['-]+$/g, "").replace(/'s$/iu, ""))
     .filter((token) => token.length > 0);
+}
+
+/**
+ * Proper-noun evidence from case in RUNNING TEXT (§10.3). Headlines are
+ * often Title Case, so a capital there proves nothing on its own — but a
+ * generic word will betray itself in lowercase somewhere in the corpus's
+ * prose, and a name never will. A term qualifies when it is capitalized at
+ * least once mid-sentence and NEVER seen lowercase. Conservative by
+ * construction: a name that only ever opens sentences fails the test and
+ * waits for a corpus that uses it mid-sentence.
+ */
+function properNounEvidence(
+  corpus: readonly CorpusArticle[],
+): (term: string) => boolean {
+  const capitalizedMidSentence = new Set<string>();
+  const seenLowercase = new Set<string>();
+
+  for (const article of corpus) {
+    for (const text of [article.title, article.description ?? ""]) {
+      // Capitalization at a sentence start proves nothing, so split on
+      // sentence-ish punctuation and ignore each segment's first token.
+      for (const segment of text.split(/[.!?;:…]+\s+/)) {
+        const tokens = splitTokens(segment);
+        tokens.forEach((token, index) => {
+          const lower = token.toLowerCase();
+          if (!keepable(lower)) return;
+          if (/^\p{Ll}/u.test(token)) {
+            seenLowercase.add(lower);
+          } else if (index > 0 && /^\p{Lu}/u.test(token)) {
+            capitalizedMidSentence.add(lower);
+          }
+        });
+      }
+    }
+  }
+
+  return (term) => capitalizedMidSentence.has(term) && !seenLowercase.has(term);
 }
 
 function keepable(token: string): boolean {

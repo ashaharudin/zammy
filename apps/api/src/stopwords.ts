@@ -28,7 +28,21 @@ const SNOWBALL_ENGLISH = [
   "can", "will", "just", "don", "should", "now",
 ];
 
+/**
+ * Weekdays and months: grammatically proper nouns, so the §10.3 propriety
+ * gate cannot catch them — "Wednesday" is capitalized and never lowercase,
+ * yet is exactly as generic in news as "yesterday".
+ */
+const CALENDAR = [
+  "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+  "january", "february", "march", "april", "june", "july", "august",
+  "september", "october", "november", "december",
+  "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct",
+  "nov", "dec",
+];
+
 const NEWS_EXTENSION = [
+  ...CALENDAR,
   "report", "reports", "reported", "reportedly", "say", "says", "said",
   "saying", "told", "tells", "announced", "announces", "revealed", "reveals",
   "found", "earlier", "read", "watch", "video", "live", "breaking", "latest",
