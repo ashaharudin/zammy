@@ -111,16 +111,22 @@ describe("cold search — the synchronous fill", () => {
 });
 
 describe("truncation — a full final page means hidden history, not success", () => {
-  it("subdivides the segment and reports in_progress, hasMore stays honest", async () => {
+  it("records the fetched frontier as covered and enqueues ONLY the remainder", async () => {
     harness = await createTestHarness({}, NOW);
 
     const result = await readTimeline(harness.deps, broadQuery(), { limit: 100 });
 
-    // 180 recorded sightings > the 100-result cap: five full pages, then the
-    // segment splits in half and both halves go to the queue (§6.3 step 4).
+    // 180 recorded sightings > the 100-result cap: five full pages fetched.
+    // Those five calls are not thrown away — coverage advances to the oldest
+    // sighting seen, and one remainder job carries the rest (§6.3 step 4).
     expect(harness.counting.searchCalls).toBe(5);
     expect(result.meta.ingest.state).toBe("in_progress");
-    expect(result.meta.ingest.pendingJobs).toBe(2);
+    expect(result.meta.ingest.pendingJobs).toBe(1);
+
+    const covered = await readCoverage(harness.deps.db, broadQuery().fingerprint);
+    expect(covered.length).toBe(1);
+    expect(covered[0]!.to.getTime()).toBeGreaterThanOrEqual(WINDOW.to.getTime());
+    expect(covered[0]!.from.getTime()).toBeGreaterThan(WINDOW.from.getTime());
 
     // §12 race: everything STORED fits the page (hasMore false) while more is
     // still ARRIVING (in_progress). Conflating these tells the user "that's
@@ -129,7 +135,7 @@ describe("truncation — a full final page means hidden history, not success", (
     expect(result.items.length).toBeGreaterThan(0);
   });
 
-  it("the queue consumer drains the subdivision to full coverage", async () => {
+  it("the consumer walks the frontier to full coverage without refetching", async () => {
     harness = await createTestHarness({}, NOW);
 
     await readTimeline(harness.deps, broadQuery(), { limit: 100 });
@@ -145,12 +151,50 @@ describe("truncation — a full final page means hidden history, not success", (
     const gaps = subtractCoverage(WINDOW, covered, { now: NOW, lookbackDays: 30 });
     expect(gaps).toEqual([]);
 
+    // The efficiency claim: 180 sightings at 20/page is 9 productive calls
+    // plus an end-of-results page. Halving-and-refetching burned ~15 on the
+    // same fixture — every call must advance the frontier, none may re-buy.
+    expect(harness.counting.searchCalls).toBeLessThanOrEqual(11);
+
     const result = await readTimeline(harness.deps, broadQuery(), { limit: 100 });
     expect(result.meta.ingest.state).toBe("complete");
-    // The subdivision reached past the cap: more unique articles than one
+    // The frontier reached past the cap: more unique articles than one
     // truncated query could ever return (~42 of the first 100 slots).
     expect(result.items.length).toBeGreaterThan(42);
   }, 30_000);
+
+  it("falls back to halving when the frontier cannot advance (timestamp pileup)", async () => {
+    harness = await createTestHarness({}, NOW);
+
+    // 100 sightings sharing ONE published instant: the oldest-seen frontier
+    // equals the segment end, so recording it would cover zero width and the
+    // remainder would loop forever. Only subdivision can make progress here.
+    const search = harness.counting.search.bind(harness.counting);
+    harness.counting.search = async (params: SearchParams, opts?: CallOpts) => {
+      const result = await search(
+        { ...params, keywords: ["climate"] },
+        opts,
+      );
+      return {
+        ...result,
+        rawCount: 20,
+        isLastPage: false,
+        sightings: result.sightings.slice(0, 1).map((s, i) => ({
+          ...s,
+          id: `00000000-0000-4000-8000-${String(harness.counting.searchCalls).padStart(4, "0")}${String(i).padStart(8, "0")}`,
+          url: `https://pileup.example/${harness.counting.searchCalls}-${i}`,
+          published: WINDOW.to.toISOString(),
+        })),
+      };
+    };
+
+    const result = await readTimeline(harness.deps, broadQuery(), { limit: 100 });
+
+    // Degenerate frontier → the §6.3 halving fallback, both halves queued.
+    expect(result.meta.ingest.pendingJobs).toBe(2);
+
+    harness.counting.search = search;
+  });
 });
 
 describe("the deadline is wall-clock, not a call count", () => {

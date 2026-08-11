@@ -198,7 +198,7 @@ async function planAndRead(
         if (outcome.kind === "deferred") {
           deferred.push(segmentJob(query.fingerprint, gap, outcome.resumePage));
         } else if (outcome.kind === "truncated") {
-          deferred.push(...(await onTruncated(deps, query.fingerprint, gap)));
+          deferred.push(...(await onTruncated(deps, query.fingerprint, gap, outcome.oldestSeen)));
         } else if (outcome.kind === "capped") {
           capped = true;
         }
@@ -327,7 +327,7 @@ export async function processSegmentJob(deps: TimelineDeps, job: SegmentJob): Pr
         "background",
       );
       if (outcome.kind === "truncated") {
-        for (const half of await onTruncated(deps, job.fingerprint, slice)) {
+        for (const half of await onTruncated(deps, job.fingerprint, slice, outcome.oldestSeen)) {
           await deps.queue.enqueueSegment(half);
         }
       } else if (outcome.kind === "capped") {
@@ -348,7 +348,9 @@ interface FillBudget {
 type FillOutcome =
   | { kind: "completed"; callsMade: number }
   | { kind: "deferred"; resumePage: number; callsMade: number }
-  | { kind: "truncated"; callsMade: number }
+  /** `oldestSeen`: the frontier the fetched pages reached — null only when
+   * normalization dropped everything. */
+  | { kind: "truncated"; callsMade: number; oldestSeen: Date | null }
   /** §9.4: the topic's daily cap is spent. Stop deepening; resume tomorrow. */
   | { kind: "capped"; callsMade: number };
 
@@ -369,6 +371,7 @@ async function fillSegment(
   const { maxPageSize, maxRetrievableResults } = deps.currents.limits;
   const maxPages = Math.floor(maxRetrievableResults / maxPageSize);
   let callsMade = 0;
+  let oldestSeen: Date | null = null;
 
   for (let pageNumber = startPage; pageNumber <= maxPages; pageNumber += 1) {
     // The floor of one call is unconditional: the first synchronous call is
@@ -423,27 +426,52 @@ async function fillSegment(
     });
     deps.metrics?.articlesIngested(ingested.articlesCreated);
 
+    for (const sighting of result.sightings) {
+      const published = new Date(sighting.published);
+      if (oldestSeen === null || published < oldestSeen) oldestSeen = published;
+    }
+
     if (result.isLastPage) {
       await recordCoverage(deps.db, query.fingerprint, segment);
       return { kind: "completed", callsMade };
     }
   }
 
-  return { kind: "truncated", callsMade };
+  return { kind: "truncated", callsMade, oldestSeen };
 }
 
 /**
- * Adaptive subdivision (§6.3 step 4): the only way to reach articles the
- * 100-cap hides. Depth-limited — at the floor the truncation is accepted and
- * the segment recorded as covered, or a pathologically dense keyword would
- * recurse until it consumed the whole daily quota.
+ * Coverage frontier (§6.3 step 4): a truncated segment's five pages are not
+ * wasted work — they covered [oldest sighting seen → segment end], so record
+ * exactly that and enqueue only the remainder. Every 5 calls advance ~100
+ * articles, monotonically, with nothing refetched; under the 7-day range
+ * ceiling (§2 drift) the old halve-and-refetch converged so slowly that a
+ * dense keyword burned its whole §9.4 cap re-buying page 1.
+ *
+ * The boundary sits 1ms PAST the frontier: sightings tied at the frontier
+ * timestamp may exist beyond the 100-cap, so the covered claim must exclude
+ * the frontier instant and leave it to the remainder — re-fetching the tied
+ * instant is free (idempotent collapse), silently skipping it is data loss.
+ *
+ * Halving survives only as the fallback for a frontier that cannot advance
+ * (a timestamp pileup), depth-limited at the floor as before.
  */
 async function onTruncated(
   deps: TimelineDeps,
   fingerprint: string,
   segment: Span,
+  oldestSeen: Date | null,
 ): Promise<SegmentJob[]> {
   deps.metrics?.truncatedSegment();
+
+  if (oldestSeen !== null) {
+    const boundary = new Date(oldestSeen.getTime() + 1);
+    if (boundary.getTime() > segment.from.getTime() && boundary.getTime() < segment.to.getTime()) {
+      await recordCoverage(deps.db, fingerprint, { from: boundary, to: segment.to });
+      return [segmentJob(fingerprint, { from: segment.from, to: boundary }, 1)];
+    }
+  }
+
   const length = segment.to.getTime() - segment.from.getTime();
   if (length <= deps.config.minSegmentMs) {
     await recordCoverage(deps.db, fingerprint, segment);

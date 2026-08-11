@@ -427,9 +427,13 @@ that ceiling.
 4. Plan a bounded set of upstream calls per gap segment:
      - page through the segment (page_number 1..5, page_size 20) until a page returns
        fewer than page_size rows, which is the clean end-of-results signal;
-     - if a segment yields a FULL 5 pages, it is truncated by the 100-cap: split the
-       segment in half and enqueue the halves. This adaptive subdivision is the only
-       way to reach articles the cap hides.
+     - if a segment yields a FULL 5 pages, it is truncated by the 100-cap — but those
+       pages are not wasted: record coverage from the OLDEST SIGHTING SEEN (plus 1ms,
+       excluding the frontier instant in case of ties beyond the cap) to the segment
+       end, and enqueue only the remainder. Every 5 calls advance the frontier ~100
+       articles with nothing refetched. Halve-and-enqueue survives only as the
+       fallback for a frontier that cannot advance (a timestamp pileup),
+       depth-limited at the 1h floor.
 5. Execute only as much of the plan as fits a WALL-CLOCK DEADLINE (default 1200ms),
    with a floor of 1 call and a ceiling of 5. Everything unfinished is enqueued (§9).
 6. Dispatch through the client (quota-governed, single-flighted). Upsert results and
@@ -1043,7 +1047,7 @@ it already has. Redis-cached under `trending:<day>:<language>` for ~15 minutes.
 | Upstream `403` non-JSON (Cloudflare `1010`) | Distinct alert: "client blocked, check User-Agent". Diagnosing this as an auth failure cost the probe its first 11 calls. |
 | Upstream `400` | A bug in *our* query construction. Log `details.errors` verbatim, alert, never retry. Pre-flight validation (30-day clamp, `page_size ≤ 20`, `page_number ≥ 1`) should make it unreachable. |
 | Upstream 5xx / timeout | Retry per §5.3, then circuit-break; serve stale with `meta.degraded = "upstream"`. |
-| Segment returns a full 5 pages | Truncated by the 100-cap, **not** complete: subdivide and enqueue (§6.3). Metric on this — a rising rate means timelines are silently thinning. |
+| Segment returns a full 5 pages | Truncated by the 100-cap, **not** complete: record the fetched frontier as covered and enqueue the remainder (§6.3). Metric on this — a rising rate means dense windows are walking, not sprinting. |
 | First synchronous call fails on a cold topic | Nothing to show: normal error state with retry. This is the only case with no content to fall back on, which is why it gets the one guaranteed synchronous call. |
 | Deferred ingest job fails or stalls | Coverage is not extended, so the gap simply remains and the next reader retries it. Client stops polling after `INGEST_POLL_MAX` and shows `degraded: "ingest_timeout"` — never an indefinite spinner. |
 | Ingest still running when user scrolls past loaded rows | `hasMore: false` with `ingest.state: "in_progress"` → "still gathering", **not** "end of results" (§6.1). |
