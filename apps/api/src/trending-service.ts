@@ -10,6 +10,7 @@ import {
 } from "@zammy/storage";
 import { zonedDayBounds, zonedDayKey } from "./app-day.js";
 import { fingerprintOf } from "./canonical.js";
+import { groupCreatedArticles, groupingDepsFor } from "./grouping-service.js";
 import { samplePendingId, type SampleJob } from "./ingest-queue.js";
 import { readCachedPage, writeCachedPage } from "./page-cache.js";
 import { scoreTerms } from "./term-scoring.js";
@@ -184,6 +185,13 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
       sightings: result.sightings,
     });
     deps.metrics?.articlesIngested(ingested.articlesCreated);
+    // The sample is a write path into `articles` like any other, so it owes
+    // grouping the same call the timeline fill makes (§14.3). It is also the
+    // most syndication-dense source we have — one latest-news page spans every
+    // category and outlet — and an article ingested here without tokens is
+    // both un-groupable itself and invisible as a candidate to every article
+    // ingested after it.
+    await groupCreatedArticles(groupingDepsFor(deps), ingested.createdArticles);
     if (result.isLastPage) break;
   }
 

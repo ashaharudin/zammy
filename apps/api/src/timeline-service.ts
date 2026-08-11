@@ -29,7 +29,7 @@ import type { Metrics } from "./metrics.js";
 import { refreshLockKey, release, tryAcquire } from "./single-flight.js";
 import { reserveTopicCall } from "./topic-budget.js";
 import type { IngestQueue, SegmentJob } from "./ingest-queue.js";
-import { groupCreatedArticles } from "./grouping-service.js";
+import { groupCreatedArticles, groupingDepsFor } from "./grouping-service.js";
 import { chooseRepresentative } from "./source-authority.js";
 
 /**
@@ -459,15 +459,7 @@ async function fillSegment(
     // created: the two are one write path — one deduplicates by URL, the other
     // groups what URLs alone cannot. Grouping never throws (see the service),
     // so a reader waiting on this fill cannot be failed by it.
-    await groupCreatedArticles(
-      {
-        db: deps.db,
-        config: deps.config.grouping,
-        ...(deps.metrics ? { metrics: deps.metrics } : {}),
-        ...(deps.log ? { log: deps.log } : {}),
-      },
-      ingested.createdArticles,
-    );
+    await groupCreatedArticles(groupingDepsFor(deps), ingested.createdArticles);
 
     for (const sighting of result.sightings) {
       const published = new Date(sighting.published);

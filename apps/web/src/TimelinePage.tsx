@@ -3,7 +3,7 @@ import type { Article, TimelineEntry } from "@zammy/shared";
 import { isTerminalPage } from "@zammy/shared";
 import { ApiError, type TopicQuery } from "./api.js";
 import { isCollapsed, noDaysCollapsed, toggleDay } from "./dayCollapse.js";
-import { groupByDay, relativeTime, timeLabel } from "./format.js";
+import { groupByDay, hasLaterCoverage, relativeTime, timeLabel } from "./format.js";
 import { MONO } from "./theme.js";
 import { CommandBar } from "./CommandBar.js";
 import { useReference, useTimeline } from "./useTimeline.js";
@@ -299,7 +299,7 @@ function LoadOlder({ loading, onLoadOlder }: { loading: boolean; onLoadOlder: ()
  */
 function GroupCard({ entry }: { entry: TimelineEntry }) {
   const [showRelated, setShowRelated] = useState(false);
-  const updated = entry.updatedAt !== entry.published;
+  const updated = hasLaterCoverage(entry);
 
   return (
     <div style={{ maxWidth: "640px" }}>

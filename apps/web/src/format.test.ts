@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Article, TimelineEntry } from "@zammy/shared";
-import { groupByDay } from "./format.js";
+import { groupByDay, hasLaterCoverage } from "./format.js";
 
 /**
  * Day bucketing over timeline slots (§8.1's sticky day dividers).
@@ -33,6 +33,38 @@ const entry = (id: string, published: string, headlinePublished = published): Ti
   updatedAt: headlinePublished,
   article: article(id, headlinePublished),
   related: [],
+});
+
+describe("hasLaterCoverage", () => {
+  it("says nothing about a syndication burst", () => {
+    // The live check on the recorded payload: two Seven West outlets ran one
+    // headline a SECOND apart. "updated 9d ago" on that claims a story
+    // developed when all that happened is the wire went out twice.
+    expect(
+      hasLaterCoverage({
+        published: "2026-08-02T21:02:38.000Z",
+        updatedAt: "2026-08-02T21:02:39.000Z",
+      }),
+    ).toBe(false);
+  });
+
+  it("stamps a story that was still being covered hours later", () => {
+    expect(
+      hasLaterCoverage({
+        published: "2026-08-02T09:00:00.000Z",
+        updatedAt: "2026-08-02T18:00:00.000Z",
+      }),
+    ).toBe(true);
+  });
+
+  it("says nothing about a group of one, whose times are equal", () => {
+    expect(
+      hasLaterCoverage({
+        published: "2026-08-02T09:00:00.000Z",
+        updatedAt: "2026-08-02T09:00:00.000Z",
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("groupByDay", () => {

@@ -34,6 +34,29 @@ export interface GroupingDeps {
 }
 
 /**
+ * Narrow a caller's deps to what grouping needs.
+ *
+ * Every write path into `articles` owes the same call, so the wiring lives
+ * here rather than at each site: an ingest that skips grouping leaves articles
+ * without tokens, which silently makes them un-groupable AND invisible as
+ * candidates to everything ingested afterwards. The sampler was exactly that
+ * bug for one release.
+ */
+export function groupingDepsFor(deps: {
+  db: Kysely<Database>;
+  config: { grouping: GroupingDeps["config"] };
+  metrics?: Metrics;
+  log?: { warn: (obj: object, msg: string) => void };
+}): GroupingDeps {
+  return {
+    db: deps.db,
+    config: deps.config.grouping,
+    ...(deps.metrics ? { metrics: deps.metrics } : {}),
+    ...(deps.log ? { log: deps.log } : {}),
+  };
+}
+
+/**
  * Safety valve for a pathological day, not a tuning knob: a token appearing in
  * thousands of same-day headlines would otherwise make grouping one article an
  * unbounded scan. Taking the most recent N yields a worse grouping, never a
