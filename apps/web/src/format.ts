@@ -1,4 +1,4 @@
-import type { Article } from "@zammy/shared";
+import type { TimelineEntry } from "@zammy/shared";
 
 /** Date/time presentation shared by the timeline and its meta row. */
 
@@ -26,11 +26,15 @@ export function timeLabel(iso: string): string {
 }
 
 /**
- * Group consecutive articles by calendar day. The input is already in timeline
- * order (published DESC — §7), so adjacency is all that grouping needs.
+ * Bucket consecutive timeline slots by calendar day. The input is already in
+ * timeline order (published DESC — §7), so adjacency is all this needs.
+ *
+ * The day comes from the slot's own `published` — the group's earliest member
+ * (§14.3), which is where the slot sits — never from the headline article's,
+ * which can be hours later and would file the slot under the wrong divider.
  */
-export function groupByDay(items: Article[]): { day: string; items: Article[] }[] {
-  const groups: { day: string; items: Article[] }[] = [];
+export function groupByDay(items: TimelineEntry[]): { day: string; items: TimelineEntry[] }[] {
+  const groups: { day: string; items: TimelineEntry[] }[] = [];
   for (const item of items) {
     const day = dayLabel(item.published);
     const last = groups[groups.length - 1];

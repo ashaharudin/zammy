@@ -144,6 +144,18 @@ export function scoreTerms(
 }
 
 /**
+ * The content-bearing tokens of a text, in order, duplicates included.
+ *
+ * Exported because article grouping (§14.3) compares headlines and must use
+ * THIS tokenizer rather than its own: a second regex would re-acquire the
+ * `cve-` bug independently, and two tokenizers disagreeing about what a word
+ * is would make the cloud and the timeline disagree about what a story is.
+ */
+export function contentTokens(text: string): string[] {
+  return tokenize(text).filter(keepable);
+}
+
+/**
  * Tokens keep internal hyphens/apostrophes so identifiers stay WHOLE and can
  * be dropped whole: the probe's regex shredded CVE-2026-1234 into a `cve-`
  * fragment that ranked #1 (§10.2). Anything containing a digit is filtered —

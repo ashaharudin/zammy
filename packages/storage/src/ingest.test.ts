@@ -57,11 +57,15 @@ describe("the collapse over the recorded duplication payload", () => {
       sightings,
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       sightingsReceived: 100,
       sightingsInserted: 100,
       articlesCreated: 42,
     });
+    // Every created article — and only those — is handed on to grouping
+    // (§14.3). An article that already existed has already been offered a
+    // group, and regrouping it on every re-sighting would let a group drift.
+    expect(result.createdArticles).toHaveLength(42);
 
     const [sightingRows, articleRows] = await Promise.all([
       harness.db.selectFrom("sightings").select(({ fn }) => fn.countAll().as("n")).executeTakeFirstOrThrow(),
@@ -112,6 +116,7 @@ describe("the collapse over the recorded duplication payload", () => {
       sightingsReceived: 100,
       sightingsInserted: 0,
       articlesCreated: 0,
+      createdArticles: [],
     });
 
     const roundup = await harness.db
@@ -177,6 +182,7 @@ describe("the collapse over the recorded duplication payload", () => {
       sightingsReceived: 0,
       sightingsInserted: 0,
       articlesCreated: 0,
+      createdArticles: [],
     });
   });
 });

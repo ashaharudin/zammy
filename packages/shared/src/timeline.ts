@@ -68,9 +68,43 @@ export const TopicSummary = z.object({
 });
 export type TopicSummary = z.infer<typeof TopicSummary>;
 
+/**
+ * One slot in the timeline: a story as this topic saw it covered (§14.3).
+ *
+ * Most slots are one article. Where several outlets ran the same story at
+ * different URLs — which URL-based dedup deliberately does not collapse, since
+ * the wordcloud's breadth signal counts those rows (§10.3) — the slot carries
+ * one member as the headline and the rest as `related`.
+ */
+export const TimelineEntry = z.object({
+  /** Stable per group; the id half of this page's cursor. */
+  groupId: z.string().regex(/^\d+$/),
+  /**
+   * The group's earliest published, NOT the representative's.
+   *
+   * This is both where the slot sits and the time the UI shows, and the two
+   * must agree: positioning a slot at 6 hours ago while showing the
+   * representative's own "3 hours ago" reads as a bug in a time-ordered
+   * timeline. Render the difference as an "updated" badge instead — the
+   * pattern ADR-0002 already uses for an article's earliest sighting.
+   */
+  published: z.iso.datetime(),
+  /** The newest member's published. Equals `published` for a group of one. */
+  updatedAt: z.iso.datetime(),
+  /**
+   * The headline: any tier-1 source in the group, else its earliest member.
+   * Chosen per topic, so it is always an article that matched this search.
+   */
+  article: Article,
+  /** The group's other members in this topic, newest first. Usually empty. */
+  related: z.array(Article),
+});
+export type TimelineEntry = z.infer<typeof TimelineEntry>;
+
 export const TimelinePage = z.object({
   topic: TopicSummary,
-  items: z.array(Article),
+  /** Slots, not articles: `limit` counts these (§7.3 keyset over groups). */
+  items: z.array(TimelineEntry),
   page: z.object({
     nextCursor: z.string().nullable(),
     hasMore: z.boolean(),

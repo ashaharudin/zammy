@@ -1,16 +1,24 @@
 /**
- * Keyset pagination cursor: the `(published, articleId)` tuple of the last article seen.
+ * Keyset pagination cursor: the `(published, id)` tuple of the last timeline
+ * slot seen — a GROUP's position and identity (§14.3).
  *
  * Keyset rather than OFFSET because articles arrive continuously — with OFFSET,
  * rows shift between requests and readers get duplicates or silent gaps. The
- * article id breaks ties among the many articles sharing a timestamp, giving a
- * total order that upstream does not provide. See ARCHITECTURE 7.3.
+ * id breaks ties among the many slots sharing a timestamp, giving a total order
+ * that upstream does not provide. See ARCHITECTURE 7.3.
  *
- * The id half is the article's surrogate key, not its URL hash. That is what keeps
- * a cursor valid when URL canonicalization rules widen (ADR-0002).
+ * The id half is an article's surrogate key — the group's seed — never a URL
+ * hash. That is what keeps a cursor valid when URL canonicalization rules widen
+ * (ADR-0002). An ungrouped article is a group of one whose seed is itself, so
+ * cursors minted before grouping existed still resolve.
  */
 export interface Cursor {
   published: string;
+  /**
+   * The seed article's id, which is the group's id. Named for the article
+   * because that is what it is and what makes it stable; the field predates
+   * grouping and renaming it would break every cursor in flight.
+   */
   articleId: string;
 }
 

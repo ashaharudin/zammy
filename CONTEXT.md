@@ -20,6 +20,23 @@ A single real-world news story, identified by its canonical URL. An article has 
 more sightings. This is the unit users see and the unit anything countable counts.
 _Avoid_: cluster, story, item, post
 
+**Group**:
+A day's coverage of one story: the articles several outlets published about it, kept as separate
+articles and joined rather than merged. One group is one slot in the timeline. Most groups hold a
+single article, and a group never spans two calendar days.
+_Avoid_: cluster, duplicate, merge, story
+
+**Representative**:
+The member of a group whose headline the timeline shows. Chosen per topic, from the members that
+matched that search, by source authority — never by how often upstream re-emitted it.
+_Avoid_: primary, canonical, best, winner
+
+**Seed**:
+The article a group started from, and its identity. Fixed for the group's life: later candidates are
+compared against the seed, which is what stops a group drifting through its own members. The seed is
+not the representative and need not be the group's earliest article.
+_Avoid_: parent, root, head
+
 **Source**:
 The outlet that published an article, identified by its registrable domain. Two sources
 covering the same story yield two articles, deliberately.

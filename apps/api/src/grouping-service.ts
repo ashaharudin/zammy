@@ -1,0 +1,115 @@
+import type { Kysely } from "kysely";
+import {
+  readGroupSeeds,
+  recordGrouping,
+  type CreatedArticle,
+  type Database,
+} from "@zammy/storage";
+import { zonedDayBounds, zonedDayKey } from "./app-day.js";
+import { chooseGroup, headlineTokens } from "./grouping.js";
+import type { Metrics } from "./metrics.js";
+
+/**
+ * Grouping, wired up (ARCHITECTURE 14.3): run over the articles an ingest call
+ * just created, once each, at write time.
+ *
+ * Write time is not an optimization here, it is the design. ADR-0002 rejected
+ * collapsing at READ time because a page of 25 can collapse to 3, making page
+ * size unpredictable and `hasMore` unreliable — and that objection is about
+ * paging, so grouping does not escape it by being a gentler operation. The
+ * group is materialized on the row; the read stays a keyset scan (§7.3).
+ */
+
+export interface GroupingDeps {
+  db: Kysely<Database>;
+  config: {
+    /** §14.3 was explicit that whether to build this at all stayed open. */
+    enabled: boolean;
+    threshold: number;
+    /** The calendar day candidates are drawn from — §10.1's rule, not UTC. */
+    timeZone: string;
+  };
+  metrics?: Metrics;
+  log?: { warn: (obj: object, msg: string) => void };
+}
+
+/**
+ * Safety valve for a pathological day, not a tuning knob: a token appearing in
+ * thousands of same-day headlines would otherwise make grouping one article an
+ * unbounded scan. Taking the most recent N yields a worse grouping, never a
+ * wrong row — grouping fails soft, which is the whole reason §14.3 judged this
+ * a materially better risk profile than merging.
+ */
+const CANDIDATE_LIMIT = 200;
+
+/**
+ * Group each newly-created article, and return how many joined an existing
+ * group.
+ *
+ * Never throws. A grouping failure must not fail the read that triggered the
+ * ingest: the articles are already stored and already paged, and the worst
+ * case of skipping this is a timeline that shows two cards where it could have
+ * shown one. Reserving that judgement for the caller would mean every caller
+ * making it correctly.
+ */
+export async function groupCreatedArticles(
+  deps: GroupingDeps,
+  created: readonly CreatedArticle[],
+): Promise<number> {
+  if (!deps.config.enabled || created.length === 0) return 0;
+
+  let grouped = 0;
+  for (const article of created) {
+    try {
+      if (await groupOne(deps, article)) grouped += 1;
+    } catch (error) {
+      deps.log?.warn(
+        { err: error, articleId: article.id },
+        "grouping failed for one article; it stays a group of one",
+      );
+    }
+  }
+
+  deps.metrics?.articlesGrouped(grouped);
+  return grouped;
+}
+
+async function groupOne(deps: GroupingDeps, article: CreatedArticle): Promise<boolean> {
+  const tokens = headlineTokens(article.title);
+
+  // A headline that reduces to fewer than two tokens can never clear the
+  // shared-token floor, in either direction. Recording the tokens anyway keeps
+  // one rule — "an article's tokens are what its headline says" — rather than
+  // a column that is sometimes populated and sometimes not.
+  if (tokens.length < 2) {
+    await recordGrouping(deps.db, {
+      articleId: article.id,
+      titleTokens: tokens,
+      groupId: null,
+    });
+    return false;
+  }
+
+  const day = zonedDayBounds(
+    zonedDayKey(article.published, deps.config.timeZone),
+    deps.config.timeZone,
+  );
+
+  const seeds = await readGroupSeeds(deps.db, {
+    from: day.from,
+    to: day.to,
+    language: article.language,
+    titleTokens: tokens,
+    excludeArticleId: article.id,
+    limit: CANDIDATE_LIMIT,
+  });
+
+  const chosen = chooseGroup(tokens, seeds, { threshold: deps.config.threshold });
+  await recordGrouping(deps.db, {
+    articleId: article.id,
+    titleTokens: tokens,
+    groupId: chosen?.groupId ?? null,
+  });
+
+  return chosen !== null;
+}
