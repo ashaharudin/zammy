@@ -1168,3 +1168,32 @@ Still open:
    in a single sitting: how much of the ~20-item feed is new after an hour. Cheap to measure once
    the sampler runs (compare consecutive samples' ids in the logs); `SAMPLE_REFRESH_MINUTES` is the
    knob it informs.
+7. **Term variants in the cloud** — "China" and "Chinese" can both survive §10.3's gates and occupy
+   two slots for one story, as can "sanction"/"sanctions". Designed and **not built**: the cost was
+   out of proportion to the benefit. Recorded because the shape of the answer is not obvious and the
+   question will recur.
+
+   The workable design was: at read time, merge two unigrams when they share a 4-character prefix
+   **and** their embeddings exceed a measured cosine threshold; the higher-ranked term survives, the
+   other is dropped with no transfer of counts (matching the bigram-subsumption rule in §10.3), with
+   over-fetch from `daily_terms` to refill the freed slot. Both conditions are load-bearing and cover
+   each other's blind spot: orthography alone merges `iran`/`iraq` and `austria`/`australia`;
+   embeddings alone merge `trump`/`biden` and `israel`/`palestine`, because they measure *relatedness*,
+   not *sameness*. Neither is safe on its own, which is why the cheap version of this feature does
+   not exist. ADR-0002's principle governs — **a false merge is worse than a visible duplicate**.
+
+   The costs that ended it: the first ML dependency in the codebase, model weights baked into an
+   image whose runtime filesystem is deliberately read-only (§4.1), an English-only affordance in a
+   product where language is user-selectable, and a threshold whose validity was **unmeasured** — the
+   design assumes `cos(china, chinese) > cos(iran, iraq)` with daylight between them, and that was
+   never confirmed. Any revival starts by measuring that on labelled pairs; if the classes do not
+   separate, the feature is not buildable as designed.
+
+   **A Redis vector index (`FT.*`) was evaluated and rejected**, twice over. At ~45 terms per cloud
+   the vectors are ~70 KB and an all-pairs cosine is ~1,200 operations — there is nothing for an ANN
+   index to accelerate. And it does not become justified by future article deduplication: that would
+   use the `(title, source_domain)` key in §7.4 rather than vectors, and item 3 above plus ADR-0002
+   refuse the syndication case outright, since collapsing syndicates would destroy the `df_domains`
+   breadth signal §10.3 depends on. Were article vectors ever wanted, they belong in Postgres beside
+   the rows they describe (RDS ships pgvector; ElastiCache has no search engine at any version, so
+   the Redis path means migrating to MemoryDB or Valkey).

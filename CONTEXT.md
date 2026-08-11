@@ -39,7 +39,8 @@ _Avoid_: term, tag, phrase
 **Term**:
 A proper noun or two-word phrase extracted from article headlines and ranked for the
 landing-page cloud. Generic single words never qualify, however frequent. Terms are output,
-keywords are input; clicking a term opens a topic.
+keywords are input; clicking a term opens a topic. A term is a surface form, not a concept:
+"China" and "Chinese" are two terms and both may appear.
 _Avoid_: topic, keyword, trend, tag
 
 **Fingerprint**:
