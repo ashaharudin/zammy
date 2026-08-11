@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Article } from "@zammy/shared";
 import { isTerminalPage } from "@zammy/shared";
 import { ApiError, type TopicQuery } from "./api.js";
+import { isCollapsed, noDaysCollapsed, toggleDay } from "./dayCollapse.js";
 import { groupByDay, relativeTime, timeLabel } from "./format.js";
 import { MONO } from "./theme.js";
 import { CommandBar } from "./CommandBar.js";
@@ -102,6 +103,23 @@ function useHeldNewItems(items: Article[], topicKey: string) {
   };
 }
 
+/**
+ * One centre line for the whole rail, measured from the container's left edge.
+ * The spine straddles it and every marker is centred on it — markers position
+ * from a RailEntry's own box, which the container's RAIL_INSET padding has
+ * already shifted, so each subtracts that inset plus its own half-width.
+ * Derive from these rather than hand-tuning offsets: the glyphs sat 0.9px off
+ * the spine when the two were picked independently.
+ */
+const RAIL_CENTER = "0.7rem";
+const RAIL_WIDTH = "3px";
+const RAIL_INSET = "2.5rem";
+
+/** Left offset that centres a marker of the given width on RAIL_CENTER. */
+function markerLeft(width: string) {
+  return `calc(${RAIL_CENTER} - ${RAIL_INSET} - ${width} / 2)`;
+}
+
 function Rail({
   items,
   newCount,
@@ -125,6 +143,8 @@ function Rail({
   isFetchingNextPage: boolean;
   onLoadOlder: () => void;
 }) {
+  const [collapsed, setCollapsed] = useState(noDaysCollapsed);
+
   if (items.length === 0 && !ingesting) {
     return (
       <p style={{ color: "var(--fg-faint)", textAlign: "center", marginTop: "3rem" }}>
@@ -134,15 +154,15 @@ function Rail({
   }
 
   return (
-    <div style={{ position: "relative", paddingLeft: "2.5rem" }}>
+    <div style={{ position: "relative", paddingLeft: RAIL_INSET }}>
       <div
         aria-hidden="true"
         style={{
           position: "absolute",
-          left: "0.55rem",
+          left: `calc(${RAIL_CENTER} - ${RAIL_WIDTH} / 2)`,
           top: 0,
           bottom: 0,
-          width: "3px",
+          width: RAIL_WIDTH,
           background: `linear-gradient(var(--rail), ${ingesting ? "var(--bg)" : "var(--rail)"})`,
           borderRadius: "2px",
         }}
@@ -172,27 +192,42 @@ function Rail({
           </em>
         </RailEntry>
       )}
-      {groupByDay(items).map((group) => (
-        <section key={group.day} aria-label={group.day}>
-          <RailEntry marker="●" big>
-            <h2
-              style={{
-                fontSize: "0.9rem",
-                textTransform: "uppercase",
-                letterSpacing: "0.08em",
-                margin: 0,
+      {groupByDay(items).map((group) => {
+        const dayCollapsed = isCollapsed(collapsed, group.day);
+        return (
+          <section key={group.day} aria-label={group.day}>
+            <RailEntry
+              // ▶ not the smaller ▸: at the rail's font size ▶ carries roughly
+              // the dot's ink, and its optical centre matches ●'s to the pixel,
+              // so both states sit on the same line without a nudge.
+              marker={dayCollapsed ? "▶" : "●"}
+              big
+              toggle={{
+                expanded: !dayCollapsed,
+                label: `${dayCollapsed ? "Expand" : "Collapse"} ${group.day}`,
+                onToggle: () => setCollapsed((days) => toggleDay(days, group.day)),
               }}
             >
-              {group.day}
-            </h2>
-          </RailEntry>
-          {group.items.map((article) => (
-            <RailEntry key={article.id} marker="○">
-              <ArticleCard article={article} />
+              <h2
+                style={{
+                  fontSize: "0.9rem",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.08em",
+                  margin: 0,
+                }}
+              >
+                {group.day}
+              </h2>
             </RailEntry>
-          ))}
-        </section>
-      ))}
+            {!dayCollapsed &&
+              group.items.map((article) => (
+                <RailEntry key={article.id} marker="○">
+                  <ArticleCard article={article} />
+                </RailEntry>
+              ))}
+          </section>
+        );
+      })}
       {ingesting && <ShimmerRows count={3} />}
       {!ingesting && hasNextPage && (
         <RailEntry marker="↓">
@@ -354,31 +389,70 @@ function RailEntry({
   marker,
   big,
   pulse,
+  toggle,
   children,
 }: {
   marker: string;
   big?: boolean;
   pulse?: boolean;
+  /** Makes the rail marker itself the control — the day dot collapses its articles. */
+  toggle?: { expanded: boolean; label: string; onToggle: () => void };
   children: React.ReactNode;
 }) {
+  // Decorative for every other entry; a real button only where it does something,
+  // so screen readers are not offered a dot per article.
+  const markerStyle = {
+    position: "absolute",
+    left: markerLeft("1.4rem"),
+    width: "1.4rem",
+    textAlign: "center",
+    color: pulse ? "var(--amber)" : "var(--fg)",
+    background: "var(--bg)",
+    fontSize: big ? "0.9rem" : "0.75rem",
+    // Day markers anchor to their heading's line. Everything else centres on
+    // its row: the entry's vertical padding is symmetric, so the entry's
+    // midpoint is the card's midpoint. Tall cards therefore carry their dot
+    // lower down the rail than short ones.
+    ...(big
+      ? { top: "1.55rem" }
+      : { top: "50%", transform: "translateY(-50%)", lineHeight: 1 }),
+  } as const;
+
   return (
     <div style={{ position: "relative", padding: big ? "1.5rem 0 0.5rem" : "0.35rem 0" }}>
-      <span
-        aria-hidden="true"
-        className={pulse ? "shimmer" : undefined}
-        style={{
-          position: "absolute",
-          left: "-2.5rem",
-          width: "1.4rem",
-          textAlign: "center",
-          color: pulse ? "var(--amber)" : "var(--fg)",
-          background: "var(--bg)",
-          fontSize: big ? "0.9rem" : "0.75rem",
-          top: big ? "1.55rem" : "0.45rem",
-        }}
-      >
-        {marker}
-      </span>
+      {toggle ? (
+        <button
+          onClick={toggle.onToggle}
+          aria-expanded={toggle.expanded}
+          aria-label={toggle.label}
+          style={{
+            // `font: inherit` first: the shorthand would otherwise reset the
+            // rail's marker size back to the button default.
+            font: "inherit",
+            ...markerStyle,
+            // A 1.5rem box keeps the glyph on the rail's centre line while
+            // giving the pointer a 24px target instead of the glyph's ~22×16.
+            width: "1.5rem",
+            height: "1.5rem",
+            left: markerLeft("1.5rem"),
+            // Same split as markerStyle, offset by the taller box's extra 4px.
+            ...(big ? { top: "1.32rem" } : { top: "50%", transform: "translateY(-50%)" }),
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            border: "none",
+            padding: 0,
+            lineHeight: 1,
+            cursor: "pointer",
+          }}
+        >
+          {marker}
+        </button>
+      ) : (
+        <span aria-hidden="true" className={pulse ? "shimmer" : undefined} style={markerStyle}>
+          {marker}
+        </span>
+      )}
       {children}
     </div>
   );
@@ -399,7 +473,7 @@ function ShimmerRows({ count }: { count: number }) {
 
 function SkeletonRail() {
   return (
-    <div style={{ position: "relative", paddingLeft: "2.5rem" }} aria-label="Loading timeline">
+    <div style={{ position: "relative", paddingLeft: RAIL_INSET }} aria-label="Loading timeline">
       <ShimmerRows count={6} />
     </div>
   );
