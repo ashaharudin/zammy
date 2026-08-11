@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import cloud from "d3-cloud";
 import type { TrendingResponse, TrendingTerm } from "@zammy/shared";
@@ -80,6 +80,45 @@ export function TrendingCloud({ onSearch }: { onSearch: (q: string) => void }) {
   const trending = useTrending();
   const [asList, setAsList] = useState(false);
   const [placed, setPlaced] = useState<PlacedWord[]>([]);
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const [sectionWidth, setSectionWidth] = useState(LAYOUT_WIDTH);
+  const [contentWidth, setContentWidth] = useState(LAYOUT_WIDTH);
+
+  // The layout always runs at LAYOUT_WIDTH and the result is scaled down to
+  // the viewport — re-running d3-cloud at the measured width would break the
+  // deterministic per-(day, language) placement (§10.5).
+  useEffect(() => {
+    const el = sectionRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      setSectionWidth(entries[0]?.contentRect.width ?? LAYOUT_WIDTH);
+    });
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  // d3-cloud does not confine word boxes to its size() — outer words routinely
+  // overhang the 700px box, so the scale must come from the rendered extent.
+  // offsetLeft/offsetWidth ignore transforms: with left: calc(50% + x) and
+  // translate(-50%, -50%), offsetLeft IS the word's center in stage space.
+  useLayoutEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    let half = LAYOUT_WIDTH / 2;
+    for (const child of stage.children) {
+      const word = child as HTMLElement;
+      half = Math.max(
+        half,
+        Math.abs(word.offsetLeft - LAYOUT_WIDTH / 2) + word.offsetWidth / 2,
+      );
+    }
+    setContentWidth(half * 2);
+  }, [placed, asList]);
+
+  const scale = Math.min(1, sectionWidth / contentWidth);
 
   const data: TrendingResponse | undefined = trending.data;
   const terms = data?.terms ?? [];
@@ -120,7 +159,11 @@ export function TrendingCloud({ onSearch }: { onSearch: (q: string) => void }) {
   if (trending.isError) return null; // the landing page still works as a search box
 
   return (
-    <section aria-label="Today's topics" style={{ width: "100%", maxWidth: "760px" }}>
+    <section
+      ref={sectionRef}
+      aria-label="Today's topics"
+      style={{ width: "100%", maxWidth: "760px" }}
+    >
       <div
         style={{
           display: "flex",
@@ -164,35 +207,51 @@ export function TrendingCloud({ onSearch }: { onSearch: (q: string) => void }) {
           style={{
             position: "relative",
             width: "100%",
-            height: `${LAYOUT_HEIGHT}px`,
+            height: `${LAYOUT_HEIGHT * scale}px`,
             overflow: "hidden",
           }}
         >
-          {placed.map((word) => (
-            <button
-              key={word.term.term}
-              tabIndex={-1}
-              onClick={() => onSearch(word.term.term)}
-              title={`${word.term.uniqueArticles} articles`}
-              style={{
-                position: "absolute",
-                left: `calc(50% + ${word.x}px)`,
-                top: `${LAYOUT_HEIGHT / 2 + word.y}px`,
-                transform: "translate(-50%, -50%)",
-                border: "none",
-                background: "none",
-                cursor: "pointer",
-                fontFamily: MONO,
-                fontSize: `${word.size}px`,
-                lineHeight: 1,
-                whiteSpace: "nowrap",
-                color: "var(--fg)",
-                padding: 0,
-              }}
-            >
-              {word.term.term}
-            </button>
-          ))}
+          {/* Fixed-size stage: words keep their layout coordinates; the stage
+              shrinks as one unit. Center-top origin + translateX(-50%) keeps
+              it horizontally centered at every scale. */}
+          <div
+            ref={stageRef}
+            style={{
+              position: "absolute",
+              left: "50%",
+              top: 0,
+              width: `${LAYOUT_WIDTH}px`,
+              height: `${LAYOUT_HEIGHT}px`,
+              transform: `translateX(-50%) scale(${scale})`,
+              transformOrigin: "center top",
+            }}
+          >
+            {placed.map((word) => (
+              <button
+                key={word.term.term}
+                tabIndex={-1}
+                onClick={() => onSearch(word.term.term)}
+                title={`${word.term.uniqueArticles} articles`}
+                style={{
+                  position: "absolute",
+                  left: `calc(50% + ${word.x}px)`,
+                  top: `${LAYOUT_HEIGHT / 2 + word.y}px`,
+                  transform: "translate(-50%, -50%)",
+                  border: "none",
+                  background: "none",
+                  cursor: "pointer",
+                  fontFamily: MONO,
+                  fontSize: `${word.size}px`,
+                  lineHeight: 1,
+                  whiteSpace: "nowrap",
+                  color: "var(--fg)",
+                  padding: 0,
+                }}
+              >
+                {word.term.term}
+              </button>
+            ))}
+          </div>
           {warming && placed.length === 0 && (
             <div className="shimmer" style={{ height: "100%" }} />
           )}
