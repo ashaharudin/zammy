@@ -2,7 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { deriveDedupKey, type Sighting } from "@zammy/currents-client";
 import { ingestSightings, upsertTopic } from "./ingest.js";
 import { migrateToLatest } from "./migrator.js";
-import { readGroupCandidates, recordGrouping } from "./grouping.js";
+import {
+  countStaleTokenArticles,
+  readGroupCandidates,
+  readStaleTokenArticles,
+  recordGrouping,
+} from "./grouping.js";
 import {
   createTestDatabase,
   testFingerprint,
@@ -165,7 +170,7 @@ describe("article groups in storage", () => {
     for (const created of [mine, yesterday, french]) {
       await recordGrouping(harness.db, {
         articleId: created.createdArticles[0]!.id,
-        titleTokens: tokens,
+        titleTokens: tokens, tokensVersion: 2,
         groupId: null,
       });
     }
@@ -210,7 +215,7 @@ describe("article groups in storage", () => {
     const seedId = seed.createdArticles[0]!.id;
     const joinerId = joiner.createdArticles[0]!.id;
 
-    await recordGrouping(harness.db, { articleId: seedId, titleTokens: tokens, groupId: null });
+    await recordGrouping(harness.db, { articleId: seedId, titleTokens: tokens, tokensVersion: 2, groupId: null });
     await recordGrouping(harness.db, {
       articleId: joinerId,
       titleTokens: [...tokens, "overnight"],
@@ -244,7 +249,7 @@ describe("article groups in storage", () => {
       }),
     );
     const seedId = seed.createdArticles[0]!.id;
-    await recordGrouping(harness.db, { articleId: seedId, titleTokens: tokens, groupId: null });
+    await recordGrouping(harness.db, { articleId: seedId, titleTokens: tokens, tokensVersion: 2, groupId: null });
 
     // An EARLIER member joins: the group moves back to it, even though the
     // seed — the comparison anchor, and possibly the headline — does not move.
@@ -307,10 +312,10 @@ describe("article groups in storage", () => {
       }),
     );
     const seedId = seed.createdArticles[0]!.id;
-    await recordGrouping(harness.db, { articleId: seedId, titleTokens: tokens, groupId: null });
+    await recordGrouping(harness.db, { articleId: seedId, titleTokens: tokens, tokensVersion: 2, groupId: null });
     await recordGrouping(harness.db, {
       articleId: member.createdArticles[0]!.id,
-      titleTokens: tokens,
+      titleTokens: tokens, tokensVersion: 2,
       groupId: seedId,
     });
 
@@ -356,16 +361,80 @@ describe("article groups in storage", () => {
     const seedId = seed.createdArticles[0]!.id;
     const otherId = other.createdArticles[0]!.id;
 
-    await recordGrouping(harness.db, { articleId: seedId, titleTokens: tokens, groupId: null });
+    await recordGrouping(harness.db, { articleId: seedId, titleTokens: tokens, tokensVersion: 2, groupId: null });
     await recordGrouping(harness.db, {
       articleId: member.createdArticles[0]!.id,
-      titleTokens: tokens,
+      titleTokens: tokens, tokensVersion: 2,
       groupId: seedId,
     });
-    await recordGrouping(harness.db, { articleId: otherId, titleTokens: tokens, groupId: null });
+    await recordGrouping(harness.db, { articleId: otherId, titleTokens: tokens, tokensVersion: 2, groupId: null });
 
-    await recordGrouping(harness.db, { articleId: seedId, titleTokens: tokens, groupId: otherId });
+    await recordGrouping(harness.db, { articleId: seedId, titleTokens: tokens, tokensVersion: 2, groupId: otherId });
 
     expect((await readArticle(seedId)).group_id).toBe(seedId);
+  });
+});
+
+describe("tokenizer staleness is findable", () => {
+  let harness: TestDatabase;
+  const OLD = 1;
+  const CURRENT = 2;
+
+  beforeAll(async () => {
+    harness = await createTestDatabase();
+    await migrateToLatest(harness.db);
+    await upsertTopic(harness.db, { fingerprint: TOPIC, keywords: ["group"] });
+  });
+
+  afterAll(async () => {
+    await harness.drop();
+  });
+
+  it("counts and returns only rows behind the current tokenizer", async () => {
+    // `title_tokens` is a materialized derivation of a rule that keeps
+    // changing. Without the version, a row written under an older tokenizer
+    // degrades every comparison it takes part in and nothing can find it.
+    const stale = await ingestSightings(harness.db, {
+      fingerprint: TOPIC,
+      sightings: [
+        story({
+          url: "https://stale.example/one",
+          title: "Police chiefs urge action",
+          published: "2026-08-11T10:00:00.000Z",
+        }),
+      ],
+    });
+    const fresh = await ingestSightings(harness.db, {
+      fingerprint: TOPIC,
+      sightings: [
+        story({
+          url: "https://fresh.example/one",
+          title: "Police chief urges action",
+          published: "2026-08-11T11:00:00.000Z",
+        }),
+      ],
+    });
+
+    await recordGrouping(harness.db, {
+      articleId: stale.createdArticles[0]!.id,
+      titleTokens: ["police", "chiefs", "urge", "action"],
+      tokensVersion: OLD,
+      groupId: null,
+    });
+    await recordGrouping(harness.db, {
+      articleId: fresh.createdArticles[0]!.id,
+      titleTokens: ["police", "chief", "urge", "action"],
+      tokensVersion: CURRENT,
+      groupId: null,
+    });
+
+    const from = new Date("2026-08-11T00:00:00.000Z");
+    expect(await countStaleTokenArticles(harness.db, { version: CURRENT, from })).toBe(1);
+
+    const rows = await readStaleTokenArticles(harness.db, { version: CURRENT, from, limit: 50 });
+    expect(rows.map((row) => row.id)).toEqual([stale.createdArticles[0]!.id]);
+    // A group of one is what the maintenance pass is allowed to move.
+    expect(rows[0]?.isGroupOfOne).toBe(true);
+    expect(rows[0]?.groupId).toBe(stale.createdArticles[0]!.id);
   });
 });

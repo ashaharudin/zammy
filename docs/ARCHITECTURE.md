@@ -1151,6 +1151,7 @@ it already has. Redis-cached under `trending:<day>:<language>` for ~15 minutes.
 | 4 | Front end: search → timeline → infinite scroll → freshness states → progressive fill (§6.5). |
 | 5 | Refresh-on-read, adaptive subdivision backfill, budget guards (§9.4), retention, metrics. |
 | 5b | **Wordcloud (§10):** breadth sample, term aggregation with domain-breadth gating and rolling baseline, `/api/v1/trending`, d3-cloud landing page with accessible list equivalent. Scorer tested against `fixtures/search-keywordless-category-sample.json` including the empty-baseline day-one case. |
+| 5d | **Grouping maintenance:** `articles.tokens_version`, and `pnpm regroup [--days=N] [--tokens-only]` to re-derive stored tokens and re-run the grouping decision for groups of one after a rule change (ADR-0005). |
 | 5c | **Article grouping (§14.3):** `group_id` / `group_published` / `title_tokens` on `articles`, write-time grouping after the collapse, the keyset moved onto the group axis, per-topic representative from the source-authority list, and the "related" disclosure in the timeline. |
 | 6 *(later)* | **AWS deploy:** Terraform/CDK, Fargate task definitions, RDS + ElastiCache, secret wiring, migration-on-deploy (§4.1). |
 | 7 *(later)* | Topic summaries into `topics.summary`; second provider behind the client interface. |
@@ -1307,9 +1308,19 @@ Still open:
      one story, where two outlets share a subject and almost no vocabulary. That gap is the honest
      case for vectors; it is not a case for lowering the threshold, which would merely merge
      different stories that share words.
-   - **Grouping is forward-looking.** Articles stored before the migration have no tokens, so they
-     are never candidates and never join a group. Regrouping the archive would move rows under live
-     cursors for no reader's benefit.
+   - **Grouping is forward-looking, and `pnpm regroup` is how you change that deliberately.** Every
+     rule above decides at write time, so articles stored before a rule existed keep the grouping —
+     and the tokens — they were given. `title_tokens` is a materialized derivation of a rule that has
+     already changed twice, and a row written under an older tokenizer degrades every comparison it
+     takes part in: measured live, a pair scoring 0.538 today scored 0.429 against the stored
+     tokens, on either side of the bar. `articles.tokens_version` makes that backlog countable
+     instead of invisible, and the command re-derives it in two passes — tokens first, then the
+     grouping decision for articles that are still a group of one.
+
+     It is a command, not a chore, because its second pass moves rows under live cursors: an article
+     folding into a group takes that group's position. `--tokens-only` is the half that cannot, and
+     `--days=N` bounds the rest. Bump `TOKENIZER_VERSION` whenever `headlineTokens` changes, or the
+     backlog stays invisible again.
    - **An arrival adopts the groups of one it also matched.** Grouping still evaluates an article
      once, at creation, but best-match no longer decides who is left out: it decides which group the
      newcomer joins, and every *other* match that is still a group of one joins that group too. This

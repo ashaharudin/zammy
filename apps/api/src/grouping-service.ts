@@ -6,7 +6,12 @@ import {
   type Database,
 } from "@zammy/storage";
 import { zonedDayBounds, zonedDayKey } from "./app-day.js";
-import { headlineFigures, headlineTokens, rankedMatches } from "./grouping.js";
+import {
+  headlineFigures,
+  headlineTokens,
+  rankedMatches,
+  TOKENIZER_VERSION,
+} from "./grouping.js";
 import type { Metrics } from "./metrics.js";
 
 /**
@@ -98,7 +103,7 @@ export async function groupCreatedArticles(
   let grouped = 0;
   for (const article of created) {
     try {
-      if (await groupOne(deps, article)) grouped += 1;
+      if ((await groupArticle(deps, article)) !== null) grouped += 1;
     } catch (error) {
       deps.log?.warn(
         { err: error, articleId: article.id },
@@ -111,7 +116,16 @@ export async function groupCreatedArticles(
   return grouped;
 }
 
-async function groupOne(deps: GroupingDeps, article: CreatedArticle): Promise<boolean> {
+/**
+ * Decide one article's group and write it. Exported because the maintenance
+ * pass (`regroup`) re-runs exactly this for articles that are still a group of
+ * one — a second implementation of the decision would be a second set of rules
+ * to keep in step.
+ */
+export async function groupArticle(
+  deps: GroupingDeps,
+  article: CreatedArticle,
+): Promise<string | null> {
   const tokens = headlineTokens(article.title);
 
   // A headline that reduces to fewer than two tokens can never clear the
@@ -122,9 +136,10 @@ async function groupOne(deps: GroupingDeps, article: CreatedArticle): Promise<bo
     await recordGrouping(deps.db, {
       articleId: article.id,
       titleTokens: tokens,
+      tokensVersion: TOKENIZER_VERSION,
       groupId: null,
     });
-    return false;
+    return null;
   }
 
   const day = zonedDayBounds(
@@ -148,12 +163,15 @@ async function groupOne(deps: GroupingDeps, article: CreatedArticle): Promise<bo
   await recordGrouping(deps.db, {
     articleId: article.id,
     titleTokens: tokens,
+    tokensVersion: TOKENIZER_VERSION,
     groupId: chosen?.groupId ?? null,
   });
 
   if (chosen) await adoptStragglers(deps, chosen.groupId, matches);
 
-  return chosen !== null;
+  // The group joined, so a caller re-running this over stored rows can tell a
+  // real move from a verdict that merely confirmed where the article already is.
+  return chosen?.groupId ?? null;
 }
 
 /**
@@ -174,7 +192,7 @@ async function groupOne(deps: GroupingDeps, article: CreatedArticle): Promise<bo
 async function adoptStragglers(
   deps: GroupingDeps,
   groupId: string,
-  matches: readonly { id: string; groupId: string; titleTokens: string[] }[],
+  matches: readonly { id: string; groupId: string; title: string }[],
 ): Promise<void> {
   let adopted = 0;
   for (const match of matches) {
@@ -184,7 +202,11 @@ async function adoptStragglers(
 
     await recordGrouping(deps.db, {
       articleId: match.id,
-      titleTokens: match.titleTokens,
+      // Re-derived from the headline rather than copied from the row: the
+      // stored tokens may predate the current tokenizer, and writing them back
+      // under today's version number would make a stale row look fresh.
+      titleTokens: headlineTokens(match.title),
+      tokensVersion: TOKENIZER_VERSION,
       groupId,
     });
     adopted += 1;

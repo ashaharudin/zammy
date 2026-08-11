@@ -15,6 +15,7 @@
     "dev": "pnpm --filter @zammy/api dev",
     "dev:web": "pnpm --filter @zammy/web dev",
     "db:migrate": "pnpm --filter @zammy/storage migrate",
+    "regroup": "pnpm --filter @zammy/api regroup",
     "infra:up": "docker compose up -d postgres redis",
     "infra:down": "docker compose down",
     "infra:reset": "docker compose down -v"

@@ -50,6 +50,21 @@ export interface GroupingRules {
 const MIN_SHARED_TOKENS = 2;
 
 /**
+ * Bump this whenever `headlineTokens` changes what it produces.
+ *
+ * `title_tokens` is a materialized derivation of a rule that has already
+ * changed twice, and every row written under the old rule keeps comparing with
+ * the old vocabulary — silently. Live measurement after plural folding shipped:
+ * a pair scoring 0.538 under today's tokenizer scored 0.429 against the stored
+ * tokens, on either side of the 0.50 bar. The version is what turns that from
+ * invisible decay into a countable backlog `pnpm regroup` can clear.
+ *
+ *   1 — content tokens, digits dropped (§10.2)
+ *   2 — plurals folded (ADR-0005)
+ */
+export const TOKENIZER_VERSION = 2;
+
+/**
  * The distinct content-bearing tokens of a headline (§10.2's tokenizer),
  * singularized.
  *

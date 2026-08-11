@@ -103,13 +103,15 @@ export async function recordGrouping(
   input: {
     articleId: string;
     titleTokens: readonly string[];
+    /** Which tokenizer produced them, so staleness stays findable (ADR-0005). */
+    tokensVersion: number;
     groupId: string | null;
   },
 ): Promise<void> {
   await db.transaction().execute(async (trx) => {
     await trx
       .updateTable("articles")
-      .set({ title_tokens: [...input.titleTokens] })
+      .set({ title_tokens: [...input.titleTokens], tokens_version: input.tokensVersion })
       .where("id", "=", input.articleId)
       .execute();
 
@@ -180,4 +182,71 @@ export async function lowerGroupPosition(
     where group_id = (select group_id from articles where id = ${input.articleId})
       and group_published > ${input.published}
   `.execute(db);
+}
+
+/** An article the maintenance pass may need to re-derive (ADR-0005). */
+export interface StoredArticle {
+  id: string;
+  title: string;
+  language: string | null;
+  published: Date;
+  /** The group it is in now — what a re-run compares its verdict against. */
+  groupId: string;
+  /** True when nothing else shares this article's group. */
+  isGroupOfOne: boolean;
+}
+
+/**
+ * Articles whose tokens predate `version`, oldest first.
+ *
+ * Oldest first so a resumed backfill makes monotonic progress: each batch
+ * raises the version of what it touched, so the next call skips it. A crashed
+ * run costs the batch it was in and nothing else.
+ */
+export async function readStaleTokenArticles(
+  db: Kysely<Database>,
+  query: { version: number; from: Date; limit: number },
+): Promise<StoredArticle[]> {
+  const rows = await db
+    .selectFrom("articles as a")
+    .select([
+      "a.id",
+      "a.title",
+      "a.language",
+      "a.published",
+      "a.group_id",
+      sql<boolean>`not exists (
+        select 1 from articles other
+        where other.group_id = a.group_id and other.id <> a.id
+      )`.as("is_group_of_one"),
+    ])
+    .where("a.tokens_version", "<", query.version)
+    .where("a.published", ">=", query.from)
+    .orderBy("a.published", "asc")
+    .orderBy("a.id", "asc")
+    .limit(query.limit)
+    .execute();
+
+  return rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    language: row.language,
+    published: row.published,
+    groupId: row.group_id,
+    isGroupOfOne: row.is_group_of_one,
+  }));
+}
+
+/** How many articles are still behind the current tokenizer. */
+export async function countStaleTokenArticles(
+  db: Kysely<Database>,
+  query: { version: number; from: Date },
+): Promise<number> {
+  const row = await db
+    .selectFrom("articles")
+    .select(({ fn }) => fn.countAll<string>().as("n"))
+    .where("tokens_version", "<", query.version)
+    .where("published", ">=", query.from)
+    .executeTakeFirstOrThrow();
+  return Number(row.n);
 }
