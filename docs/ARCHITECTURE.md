@@ -693,6 +693,11 @@ alone cannot. Only new articles are grouped — regrouping on every re-sighting 
 with no bound — and the pass never throws, because a grouping failure must not fail the read that
 triggered the ingest.
 
+**Every** path that writes `articles` owes that call, not just the timeline fill: the §10.1 breadth
+sample ingests here too, and it is the most syndication-dense source we have. An article stored
+without headline tokens is not merely ungrouped — it is invisible as a candidate to everything
+ingested after it, so one silent path degrades grouping for all of them.
+
 **`dedup_key` derivation** — `sha256` of the URL after lowercasing scheme/host, stripping the
 fragment, removing tracking params (`utm_*`, `fbclid`, `gclid`), and trimming the trailing slash.
 Verified on probe data: normalization neither over- nor under-collapsed (42 unique raw URLs → 42
@@ -754,7 +759,9 @@ modern; keywords in, timeline out.
   group's headline article with the others behind a "N related" disclosure (§14.3). The card is
   timestamped by the **group's** earliest published, not the headline article's, with an "updated
   <relative time>" stamp when later members exist: showing a 3-hours-ago headline in a slot sitting
-  below rows from five hours ago reads as a bug. Where `sighting_count > 1` — a continuously-updated
+  below rows from five hours ago reads as a bug. The stamp needs a real gap (an hour) to appear —
+  syndication is near-simultaneous, and stamping "updated" on wire copies seconds apart claims a
+  story developed when nothing did. Where `sighting_count > 1` — a continuously-updated
   post like a daily link roundup — the card shows the same quiet treatment from `latest_seen` rather
   than repeating the story. This is the user-visible half of §7.4; without it, over half of a typical
   timeline is one post repeated.

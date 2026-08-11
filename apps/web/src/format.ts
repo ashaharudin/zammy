@@ -11,6 +11,23 @@ export function relativeTime(iso: string): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
+/**
+ * Below this, later coverage is the same burst rather than a story that
+ * developed. Syndication is near-simultaneous by nature — the recorded payload
+ * has one story on two outlets a SECOND apart — and stamping "updated 9d ago"
+ * on that says something happened when nothing did.
+ */
+const UPDATE_GAP_MS = 60 * 60 * 1000;
+
+/**
+ * Whether a slot's newest member is late enough to be worth an "updated"
+ * stamp (§14.3). The contract always carries `updatedAt`; whether it is worth
+ * a reader's attention is a presentation question, answered here.
+ */
+export function hasLaterCoverage(slot: { published: string; updatedAt: string }): boolean {
+  return Date.parse(slot.updatedAt) - Date.parse(slot.published) >= UPDATE_GAP_MS;
+}
+
 export function dayLabel(iso: string): string {
   const date = new Date(iso);
   const today = new Date();

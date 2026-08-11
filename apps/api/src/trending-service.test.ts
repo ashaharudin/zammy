@@ -134,6 +134,36 @@ describe("the first visitor after the snapshot staled (§10.1)", () => {
   }, 30_000);
 });
 
+describe("the sample is a write path, so it groups what it creates (§14.3)", () => {
+  it("tokenizes every article it ingests, making it groupable and a candidate", async () => {
+    // The sampler shipped for one release ingesting straight into `articles`
+    // with no grouping pass. An article stored without tokens can never join
+    // a group AND is invisible as a candidate to everything ingested after
+    // it — and this is the most syndication-dense source we have, one
+    // latest-news page spanning every category and outlet.
+    harness = await createTestHarness({}, NOW);
+    await purgeTrendingKeys(harness, DAY, "en");
+    const deps = trendingDeps(harness);
+
+    await processSampleJob(deps, { kind: "sample", day: DAY, language: "en" });
+
+    const rows = await harness.deps.db
+      .selectFrom("articles")
+      .select(["id", "title", "title_tokens", "group_id"])
+      .execute();
+
+    expect(rows.length).toBeGreaterThan(0);
+    const untokenized = rows.filter(
+      // A headline of pure stopwords legitimately tokenizes to nothing; every
+      // other article must carry the tokens the next arrival matches against.
+      (row) => row.title_tokens.length === 0 && row.title.split(/\s+/).length > 3,
+    );
+    expect(untokenized).toEqual([]);
+    // Every article is in a group, its own until something joins it.
+    expect(rows.every((row) => row.group_id !== null)).toBe(true);
+  }, 30_000);
+});
+
 describe("closed days are frozen (§10.1)", () => {
   it("requesting yesterday triggers no sample and spends nothing", async () => {
     harness = await createTestHarness({}, NOW);
