@@ -1161,6 +1161,40 @@ Still open:
 3. **Duplicate policy for syndicated stories** — the same story republished at *different* URLs across
    outlets will not collapse under URL-based dedup. Whether that is desirable (multiple sources are
    informative) or noise is a product call; §7.4's secondary key is the lever if we want it.
+
+   There is a **third option this list previously omitted: grouping rather than collapsing.** Keep
+   every article row and add a group, showing one member as the timeline entry with the rest reachable
+   as "related". ADR-0002 does not forbid this — its refusal of syndicate collapse is grounded in the
+   `df_domains` breadth signal (§10.3), and grouping leaves every row and every `source_domain`
+   intact, so the cloud reads exactly as it does today. Sketched, not designed; the open questions
+   are the interesting part:
+
+   - **It must be materialised at write time.** ADR-0002 rejected read-time collapse because a page
+     of 25 can collapse to 3, making page size unpredictable and `hasMore` unreliable — and that
+     objection is about paging, so a rename does not escape it. A `group_id` on `articles` with the
+     timeline selecting representatives keeps the §7.3 keyset and page size intact.
+   - **The ordering key must not be the display choice.** Positioning a group by "its best member"
+     re-sorts the timeline whenever a new article lands, which is the row-shifting that keyset
+     pagination exists to prevent (§7.3). Position by earliest published — already ADR-0002's rule
+     for articles — and let the headline be chosen separately.
+   - **There is no article ranking to choose a headline with**, and the obvious candidate is
+     poisoned: `sighting_count` measures upstream re-emission, not importance (PROBE-FINDINGS 4 —
+     one page emitted 50×), so ranking by it would promote exactly what §7.4 exists to neutralise.
+     "Show the highest-ranked article" is a separate feature, not a detail of this one.
+   - **Groups are global; the representative is per-topic.** A global headline can surface an article
+     that never matched the topic the user searched, hiding the matching one under "related".
+   - **`df_articles` should not become `df_groups`.** It is the size input *and* the displayed number
+     (§10.3); the cloud/timeline count mismatch is a labelling problem, fixable in the timeline header.
+   - **Similarity should be gated by time, not trusted alone.** Two articles about one country days
+     apart are not one event whatever their vectors say; a tight publication window is a cheap
+     orthogonal signal, and shared proper nouns are already extracted for §10.2.
+
+   Unlike variant merging (item 7), the failure mode here is *soft*: a wrong grouping demotes an
+   article behind a toggle rather than deleting it, which is a materially better risk profile and the
+   strongest case in this product for vectors at all. If they are ever wanted, `group_id` is durable
+   state on `articles` and belongs in **Postgres** (RDS ships pgvector) — Redis could not filter the
+   candidate window without copying `published` and `language` out of Postgres and keeping a second
+   copy in sync.
 4. **Summary scope** — per-topic rollup, or per-article abstractive summary? Only affects Phase 6.
 5. **`type` parameter** — the one probe result that changed output without an obvious meaning
    (17/20 overlap with the control). Unexplored; not needed for v1.
@@ -1194,6 +1228,8 @@ Still open:
    index to accelerate. And it does not become justified by future article deduplication: that would
    use the `(title, source_domain)` key in §7.4 rather than vectors, and item 3 above plus ADR-0002
    refuse the syndication case outright, since collapsing syndicates would destroy the `df_domains`
-   breadth signal §10.3 depends on. Were article vectors ever wanted, they belong in Postgres beside
+   breadth signal §10.3 depends on. (Article *grouping* — item 3 — is a different proposition and is
+   not refused; it would plausibly want vectors. It does not change this conclusion, for the reason
+   below.) Were article vectors ever wanted, they belong in Postgres beside
    the rows they describe (RDS ships pgvector; ElastiCache has no search engine at any version, so
    the Redis path means migrating to MemoryDB or Valkey).
