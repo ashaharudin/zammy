@@ -181,6 +181,20 @@ keywordless `/search`. 8 calls; recorded in `fixtures/latest-news-v2-sample.json
 Unmeasured: feed turnover between hourly samples — needs observations an hour apart, and the §10.1
 cadence knob exists precisely to absorb whatever it turns out to be.
 
+## 6d. Drift: per-call date range now capped at 7 days (observed 2026-08-11)
+
+The first live run after the wordcloud work surfaced a constraint that did not exist on
+2026-08-04: `/search` with a 30-day `start_date`/`end_date` span — which §1 verified working —
+now returns `400` with `details.errors.date_range: "Max range is 7 days"`. Lookback is still 30
+days; what changed is how much of it one CALL may span. Consequences taken into the design:
+
+- The planner slices gap segments to `CURRENTS_MAX_RANGE_DAYS` (§6.3), so a 30-day cold window is
+  ~5 fetchable segments instead of one 400.
+- The client refuses over-range requests locally (same posture as the page-cap wall): clamping
+  down instead would record coverage for days that were never fetched.
+- A reminder that upstream limits DRIFT. §1's table is a snapshot of 2026-08-04; treat any limit
+  not enforced by our own pre-flight checks as subject to silent change.
+
 ## 7. Quota cost of this exercise
 
 41 calls total; `x-ratelimit-remaining` went 999 → 977 over the measured span, day resetting at

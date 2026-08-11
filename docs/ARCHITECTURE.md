@@ -56,6 +56,7 @@ spec, which is incomplete and in places wrong.
 | `page_number` | supported, **1-indexed**; past-end → `200` + empty array |
 | **Max retrievable results** | **100 per query** (5 pages) |
 | **Max lookback** | **30 days** |
+| **Max date range per call** | **7 days** (drift: observed live 2026-08-11; the 2026-08-04 probe's single 30-day call now 400s — `date_range: Max range is 7 days`) |
 | Default sort | `published` DESC (undocumented, but consistent and page-stable) |
 | `domain` | supported |
 | `offset`, `sort_by` | silently ignored — no sort control exists |
@@ -417,7 +418,12 @@ that ceiling.
 2. Postgres: is the requested window fully inside this topic's recorded coverage (§7.3)
    and recent enough per §6.4?                                       → serve from store, done.
 3. Otherwise compute the coverage GAP = requested window − covered ranges,
-   clamped to the last 30 days (beyond that upstream 400s — never spend a call to learn this).
+   clamped to the last 30 days (beyond that upstream 400s — never spend a call to learn this),
+   and SLICED to CURRENTS_MAX_RANGE_DAYS (7) per segment, newest first — upstream now rejects
+   wider single calls (§2 drift, 2026-08-11), so every planned segment must be individually
+   fetchable. The client refuses over-range requests locally as a backstop; it never clamps
+   them, because coverage is recorded for the span that was ASKED, and a silently narrowed
+   fetch would become coverage over days nobody fetched.
 4. Plan a bounded set of upstream calls per gap segment:
      - page through the segment (page_number 1..5, page_size 20) until a page returns
        fewer than page_size rows, which is the clean end-of-results signal;
@@ -461,6 +467,10 @@ A recent-news window needs re-checking far more often than a window from last mo
 
 Serve-stale-while-revalidate throughout: a stale hit returns immediately with `meta.stale = true` and
 **enqueues an incremental top-up** — a single call for the window since `max(coverage.upper)`.
+
+Refresh-on-read applies to slivers up to the per-call range ceiling (§2 drift). A trailing gap wider
+than that is missing *history*, not staleness — the reader takes the synchronous fill of the newest
+slice rather than a stale flag over week-old content, and the remaining slices queue as usual.
 
 This is the mechanism that replaces scheduled polling (§9). Freshness is repaired **by the next
 reader**, not by a clock. A reader arriving six hours after the last fetch gets the stored timeline

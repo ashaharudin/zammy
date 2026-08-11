@@ -644,3 +644,38 @@ describe("latestNews — the /v2 breadth-sample endpoint (PROBE-FINDINGS 6c)", (
     expect(calls).toHaveLength(0);
   });
 });
+
+describe("per-call date range ceiling (observed live 2026-08-11)", () => {
+  it("refuses a search wider than maxRangeDays locally — never spends the call", async () => {
+    const { fetch, calls } = stubFetch([{ body: okBody(20), headers: quotaHeaders() }]);
+    const client = makeClient({ fetch });
+
+    // Upstream: 400 "date_range: Max range is 7 days". Clamping down instead
+    // of throwing would be worse than the error: the planner records coverage
+    // for the span it ASKED for, so a silently narrowed fetch turns into
+    // coverage over days nobody fetched — invisible data loss.
+    await expect(
+      client.search({
+        keywords: ["climate"],
+        startDate: new Date("2026-08-01T00:00:00Z"),
+        endDate: new Date("2026-08-09T00:00:01Z"), // 8 days and change
+      }),
+    ).rejects.toMatchObject({
+      name: "CurrentsInvalidQueryError",
+      fieldErrors: { date_range: expect.stringContaining("7") },
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("allows exactly the ceiling", async () => {
+    const { fetch, calls } = stubFetch([{ body: okBody(1), headers: quotaHeaders() }]);
+    const client = makeClient({ fetch });
+
+    await client.search({
+      keywords: ["climate"],
+      startDate: new Date("2026-08-03T00:00:00Z"),
+      endDate: new Date("2026-08-10T00:00:00Z"),
+    });
+    expect(calls).toHaveLength(1);
+  });
+});

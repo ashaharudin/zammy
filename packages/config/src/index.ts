@@ -36,6 +36,12 @@ const EnvSchema = z
     CURRENTS_MAX_PAGE_SIZE: z.coerce.number().int().min(1).max(200).default(20),
     CURRENTS_MAX_RETRIEVABLE_RESULTS: z.coerce.number().int().min(20).default(100),
     CURRENTS_MAX_LOOKBACK_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+    /**
+     * Per-call date-range ceiling on /search. Observed live 2026-08-11:
+     * "date_range: Max range is 7 days" — the 2026-08-04 probe's single
+     * 30-day call no longer works. The planner slices gaps to this.
+     */
+    CURRENTS_MAX_RANGE_DAYS: z.coerce.number().int().min(1).default(7),
     CURRENTS_DAILY_CALL_LIMIT: z.coerce.number().int().min(1).default(1000),
     CURRENTS_BURST_CALL_LIMIT: z.coerce.number().int().min(1).default(60),
 

@@ -457,6 +457,86 @@ describe("metrics (§12) — the numbers that make the design observable", () =>
   });
 });
 
+describe("the 7-day per-call range ceiling (observed live 2026-08-11)", () => {
+  const DAY = 86_400_000;
+
+  it("slices a wide cold search into fetchable segments — no call over the ceiling, no 400", async () => {
+    harness = await createTestHarness({}, NOW);
+    // ~26 days: upstream's probe-era single-call answer no longer exists.
+    const wide = {
+      ...climateQuery(),
+      window: { from: new Date("2026-07-11T12:00:00.000Z"), to: WINDOW.to },
+    };
+
+    const result = await readTimeline(harness.deps, wide, { limit: 25 });
+
+    expect(result.meta.degraded).toBeNull();
+    expect(result.items.length).toBeGreaterThan(0);
+    expect(harness.counting.ranges.length).toBeGreaterThanOrEqual(4); // ceil(26/7)
+    for (const range of harness.counting.ranges) {
+      expect(range).toBeLessThanOrEqual(7 * DAY);
+    }
+
+    // Empty slices record coverage too (§11: "we asked" ≠ "nothing there"),
+    // so the whole clamped window ends up covered.
+    const covered = await readCoverage(harness.deps.db, wide.fingerprint);
+    const gaps = subtractCoverage(wide.window, covered, { now: NOW, lookbackDays: 30 });
+    expect(gaps).toEqual([]);
+  });
+
+  it("a wide legacy job is sliced by the consumer — deploys must not strand queued work", async () => {
+    harness = await createTestHarness({}, NOW);
+    await upsertTopic(harness.deps.db, {
+      fingerprint: climateFingerprint,
+      keywords: ["climate"],
+      language: "en",
+      country: null,
+      category: null,
+    });
+
+    // A 16-day segment, as a job enqueued before the ceiling existed.
+    await processSegmentJob(harness.deps, {
+      fingerprint: climateFingerprint,
+      from: "2026-07-25T00:00:00.000Z",
+      to: NOW.toISOString(),
+      startPage: 1,
+    });
+
+    for (const range of harness.counting.ranges) {
+      expect(range).toBeLessThanOrEqual(7 * DAY);
+    }
+    const covered = await readCoverage(harness.deps.db, climateFingerprint);
+    expect(covered[0]?.from.toISOString()).toBe("2026-07-25T00:00:00.000Z");
+    expect(covered.at(-1)?.to.getTime()).toBeGreaterThanOrEqual(NOW.getTime());
+  });
+
+  it("a topic idle past the ceiling takes the sync fill, not a stale top-up", async () => {
+    harness = await createTestHarness({}, NOW);
+    const live = { ...climateQuery(), window: { from: new Date("2026-07-20T00:00:00.000Z"), to: NOW } };
+    await upsertTopic(harness.deps.db, {
+      fingerprint: live.fingerprint,
+      keywords: live.keywords,
+      language: live.language,
+      country: null,
+      category: null,
+    });
+    await recordCoverage(harness.deps.db, live.fingerprint, {
+      from: new Date("2026-07-20T00:00:00.000Z"),
+      to: new Date("2026-07-25T00:00:00.000Z"),
+    });
+
+    const result = await readTimeline(harness.deps, live, { limit: 25 });
+
+    // 16 missing days is missing HISTORY, not staleness: the reader gets the
+    // newest slice synchronously instead of a stale flag over week-old data.
+    expect(result.meta.stale).toBe(false);
+    expect(harness.counting.searchCalls).toBeGreaterThanOrEqual(1);
+    for (const range of harness.counting.ranges) {
+      expect(range).toBeLessThanOrEqual(7 * DAY);
+    }
+  });
+});
+
 describe("cursor plumbing through the service", () => {
   it("pages with an opaque cursor and never repeats an article", async () => {
     harness = await createTestHarness({}, NOW);

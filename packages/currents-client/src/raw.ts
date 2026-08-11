@@ -111,6 +111,8 @@ export interface ClampLimits {
   maxPageSize: number;
   maxRetrievableResults: number;
   maxLookbackDays: number;
+  /** Per-call date-range ceiling. 7 days, observed live 2026-08-11. */
+  maxRangeDays: number;
 }
 
 /**
@@ -168,6 +170,24 @@ export function clampSearchParams(
           `(${limits.maxLookbackDays}-day lookback limit)`,
       );
       clamped.startDate = earliest;
+    }
+  }
+
+  // A range past the ceiling must FAIL, not quietly narrow (observed live
+  // 2026-08-11: 400 "date_range: Max range is 7 days"). The planner records
+  // coverage for the span it ASKED for, so a silently narrowed fetch would
+  // become coverage over days nobody fetched — data loss with no error
+  // anywhere. Slicing wide windows is the planner's job (ARCHITECTURE 6.3).
+  if (clamped.startDate && clamped.endDate) {
+    const rangeMs = clamped.endDate.getTime() - clamped.startDate.getTime();
+    if (rangeMs > limits.maxRangeDays * 86_400_000) {
+      throw new CurrentsInvalidQueryError(
+        `date range ${clamped.startDate.toISOString()} → ` +
+          `${clamped.endDate.toISOString()} exceeds the ${limits.maxRangeDays}-day ` +
+          "per-call ceiling. Slice the window instead — the planner's gap " +
+          "segments must each be individually fetchable (ARCHITECTURE 6.3).",
+        { date_range: `Max range is ${limits.maxRangeDays} days` },
+      );
     }
   }
 

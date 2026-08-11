@@ -77,7 +77,7 @@ export function makeClient(
     baseUrl: "https://api.currentsapi.services/v1",
     apiKey: "test-key",
     userAgent: "zammy-test/0.0",
-    limits: { maxPageSize: 20, maxRetrievableResults: 100, maxLookbackDays: 30 },
+    limits: { maxPageSize: 20, maxRetrievableResults: 100, maxLookbackDays: 30, maxRangeDays: 7 },
     quotaBounds: { dailyLimit: 1000, burstLimit: 60 },
     quota: new InProcessQuotaGovernor({
       dailyLimit: 1000,

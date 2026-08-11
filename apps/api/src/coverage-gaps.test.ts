@@ -115,3 +115,43 @@ describe("subtractCoverage", () => {
     expect(iso(gaps)).toEqual(["2026-08-08T00:00:00.000Z/2026-08-09T00:00:00.000Z"]);
   });
 });
+
+describe("maxSpanMs — the upstream per-call range ceiling (observed 2026-08-11)", () => {
+  const DAY = 86_400_000;
+  const sliced = { ...bounds, maxSpanMs: 7 * DAY };
+
+  it("slices a wide gap into ceiling-sized spans, newest first, remainder oldest", () => {
+    const gaps = subtractCoverage(
+      span("2026-07-24T12:00:00Z", "2026-08-10T12:00:00Z"), // 17 days
+      [],
+      sliced,
+    );
+    expect(iso(gaps)).toEqual([
+      "2026-08-03T12:00:00.000Z/2026-08-10T12:00:00.000Z",
+      "2026-07-27T12:00:00.000Z/2026-08-03T12:00:00.000Z",
+      "2026-07-24T12:00:00.000Z/2026-07-27T12:00:00.000Z", // 3-day remainder
+    ]);
+  });
+
+  it("leaves gaps at or under the ceiling untouched", () => {
+    const gaps = subtractCoverage(
+      span("2026-08-03T12:00:00Z", "2026-08-10T12:00:00Z"), // exactly 7 days
+      [],
+      sliced,
+    );
+    expect(iso(gaps)).toEqual(["2026-08-03T12:00:00.000Z/2026-08-10T12:00:00.000Z"]);
+  });
+
+  it("keeps global newest-first ordering across multiple sliced gaps", () => {
+    const gaps = subtractCoverage(
+      span("2026-07-15T12:00:00Z", "2026-08-10T12:00:00Z"),
+      [span("2026-07-30T12:00:00Z", "2026-08-01T12:00:00Z")],
+      sliced,
+    );
+    const times = gaps.map((g) => g.to.getTime());
+    expect(times).toEqual([...times].sort((a, b) => b - a));
+    for (const gap of gaps) {
+      expect(gap.to.getTime() - gap.from.getTime()).toBeLessThanOrEqual(7 * DAY);
+    }
+  });
+});
