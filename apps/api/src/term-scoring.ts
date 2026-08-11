@@ -126,9 +126,18 @@ export function scoreTerms(
     });
   }
 
+  // A unigram subsumed by a surviving bigram is the same story twice: every
+  // "Ben Carroll" headline also produced "ben", so the cloud showed both.
+  // Keep only the phrase — it is the more specific name for the topic.
+  const bigramWords = new Set<string>();
+  for (const { term, isBigram } of scored) {
+    if (isBigram) for (const word of term.split(" ")) bigramWords.add(word);
+  }
+  const deduped = scored.filter((t) => t.isBigram || !bigramWords.has(t.term));
+
   // Deterministic order: score, then breadth, then the term itself — the
   // cloud must not reshuffle between identical recomputes (§10.5).
-  return scored.sort(
+  return deduped.sort(
     (a, b) =>
       b.score - a.score || b.dfArticles - a.dfArticles || a.term.localeCompare(b.term),
   );

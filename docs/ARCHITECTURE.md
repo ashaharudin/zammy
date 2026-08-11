@@ -964,6 +964,9 @@ So four mechanisms are **required for the first cut**, not deferred as polish:
   they are: "climate policy" is a topic even though both words alone are noise. Weekdays and months
   — grammatically proper, journalistically generic — are stopworded instead, since no case evidence
   can catch them.
+- **A unigram subsumed by a surviving bigram is suppressed.** The live cloud showed "ben" beside
+  "ben carroll" — the same story twice. When a bigram survives every gate, any unigram that is one
+  of its words is dropped; the phrase is the more specific name for the topic.
 
 Starting formula, explicitly expected to need tuning against real data:
 
@@ -1074,7 +1077,7 @@ it already has. Redis-cached under `trending:<day>:<language>` for ~15 minutes.
   | Fixture | Guards | Assertions |
   | --- | --- | --- |
   | `search-climate-duplicates.json`<br/>100 sightings, 42 unique URLs, one URL ×50 | The collapse (§7.4) | 100 rows in `sightings` → **42** rows in `articles`; the ×50 article has `sighting_count = 50`; re-ingesting the same payload leaves both counts unchanged; a `limit=25` timeline page returns ≤25 **articles**, never 25 sightings; `dedup_key` normalization neither over- nor under-collapses (42 → 42) |
-  | `search-keywordless-category-sample.json`<br/>80 articles incl. a single-source Jenkins CVE burst | Term scoring (§10.3) | `cve-`-style identifier fragments never appear as terms; no term whose `df_domains < 2` is emitted, so the Jenkins burst is absent from the top 50; generic vocabulary (`earlier`, `found`, `read`, `how`) is absent via the stopword list; generic non-proper unigrams (`set`, `use`, `learn`, `development`) are absent via the propriety gate while named entities (`trump`, `ai`) and phrases survive; **with `term_baseline` empty** the top 50 is still free of all four failure classes — the day-one case (§10.3) |
+  | `search-keywordless-category-sample.json`<br/>80 articles incl. a single-source Jenkins CVE burst | Term scoring (§10.3) | `cve-`-style identifier fragments never appear as terms; no term whose `df_domains < 2` is emitted, so the Jenkins burst is absent from the top 50; generic vocabulary (`earlier`, `found`, `read`, `how`) is absent via the stopword list; generic non-proper unigrams (`set`, `use`, `learn`, `development`) are absent via the propriety gate while named entities (`ai`) and phrases (`donald trump`, subsuming the bare `trump`) survive; **with `term_baseline` empty** the top 50 is still free of all four failure classes — the day-one case (§10.3) |
   | `error-and-reference-bodies.json` | Client error taxonomy (§5.3) | each `400` maps to `CurrentsInvalidQueryError` with `details.errors` preserved; `401` → `CurrentsAuthError`; a non-JSON `403` → `CurrentsBlockedError`, **not** an auth error; `{"status":"ok","news":[]}` → `isLastPage: true`, not an error; reference maps parse as name→code with values used verbatim |
 
   The scorer test asserts against *failure classes*, not an expected term list — the day's news is not

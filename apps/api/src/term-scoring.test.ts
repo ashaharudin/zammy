@@ -79,8 +79,10 @@ describe("scoreTerms against the recorded keywordless sample (§10.3)", () => {
       expect(emitted.has(generic), `generic unigram "${generic}" survived`).toBe(false);
     }
 
-    // The named entities that made the old output credible must remain.
-    expect(emitted.has("trump")).toBe(true);
+    // The named entities that made the old output credible must remain —
+    // "trump" as the fuller phrase now that subsumed unigrams are suppressed.
+    expect(emitted.has("donald trump")).toBe(true);
+    expect(emitted.has("trump")).toBe(false);
     expect(emitted.has("ai")).toBe(true);
   });
 
@@ -119,6 +121,20 @@ describe("scoring mechanisms in isolation", () => {
     const emitted = new Set(terms.map((t) => t.term));
     expect(emitted.has("climate")).toBe(false);
     expect(emitted.has("policy")).toBe(false);
+  });
+
+  it("suppresses a unigram subsumed by a surviving bigram (ben vs ben carroll)", () => {
+    const corpus = [
+      article("Minister Ben Carroll announces funding", "a.com", "Praise for Ben Carroll followed."),
+      article("Statement from Ben Carroll on transport", "b.com", "Critics answered Ben Carroll."),
+    ];
+    const emitted = new Set(scoreTerms(corpus, EMPTY_BASELINE).map((t) => t.term));
+
+    // Both words qualify as proper nouns, but every sighting of "ben" is a
+    // sighting of "ben carroll" — the phrase alone represents the topic.
+    expect(emitted.has("ben carroll")).toBe(true);
+    expect(emitted.has("ben")).toBe(false);
+    expect(emitted.has("carroll")).toBe(false);
   });
 
   it("proper nouns qualify by mid-sentence capitalization, not by Title Case", () => {
