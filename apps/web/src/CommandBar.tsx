@@ -6,9 +6,13 @@ import { MONO } from "./theme.js";
 /**
  * The persistent chrome once a topic is open: prompt + query + the language
  * picker, and underneath a terse meta row that renders the response's
- * freshness honestly (§8.1) — count, coverage, asOf/servedFrom, ingest
- * progress, stale and degraded states. The count line is aria-live so screen
- * readers hear the timeline grow during progressive fill.
+ * freshness honestly (§8.1) — count, coverage, asOf/servedFrom, stale and
+ * degraded states. The count line is aria-live so screen readers hear the
+ * timeline grow during progressive fill.
+ *
+ * Ingest progress is deliberately not here: the timeline owns that state and
+ * says it in motion (see IngestBeacon/IngestGhosts). A second, textual copy in
+ * the chrome duplicated it and pushed servedFrom off the row while it showed.
  *
  * Country and category filters were dropped from the UI (2026-08-10) — the
  * API still accepts them, and shared links carrying them keep working.
@@ -16,7 +20,6 @@ import { MONO } from "./theme.js";
 export function CommandBar({
   topic,
   page,
-  ingesting,
   reference,
   onSearch,
   onClear,
@@ -24,7 +27,6 @@ export function CommandBar({
   topic: TopicQuery;
   /** The newest response — the authority on meta. */
   page: TimelinePage | undefined;
-  ingesting: boolean;
   reference: Reference | undefined;
   onSearch: (topic: TopicQuery) => void;
   onClear: () => void;
@@ -130,11 +132,7 @@ export function CommandBar({
           {page?.meta.stale && (
             <span style={{ color: "var(--amber)", marginRight: "0.75rem" }}>stale</span>
           )}
-          {ingesting ? (
-            <span style={{ color: "var(--amber)" }}>▮▯▯ ingesting from upstream…</span>
-          ) : (
-            page?.meta.servedFrom
-          )}
+          {page?.meta.servedFrom}
         </span>
       </div>
     </header>

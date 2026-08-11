@@ -14,6 +14,7 @@
   --chip-bg: #f0f0f0;
   --rail: #d9d9d9;
   --amber: #b58900;
+  --activity: #0f8b8d;
   --shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
@@ -29,6 +30,7 @@
     --chip-bg: #262626;
     --rail: #3a3a3a;
     --amber: #caa53d;
+    --activity: #56c4c6;
     --shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
   }
 }
@@ -77,6 +79,147 @@ select {
   animation: shimmer 1.4s ease-in-out infinite;
   background: var(--chip-bg);
   border-radius: 8px;
+}
+
+/*
+ * Ingest activity (ARCHITECTURE 8.2). While upstream is still fetching, the
+ * rail says so in motion rather than in words — a beacon at the head, where
+ * newer articles arrive (§6.5), charge running down the spine, and ghost slots
+ * at the tail standing where the arriving articles will land.
+ *
+ * --activity, not --amber: amber means attention (stale, degraded), and one
+ * colour cannot also mean "working" without saying two things at once.
+ * Geometry stays in the rail's TSX; only the motion lives here.
+ *
+ * Verdict of branch prototype/timeline-ingest-animation.
+ */
+.ingest-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0.7rem;
+  height: 0.7rem;
+  margin: -0.35rem 0 0 -0.35rem;
+  border: 2px solid var(--activity);
+  border-radius: 50%;
+  animation: ingest-ring 2.1s ease-out infinite;
+}
+@keyframes ingest-ring {
+  0% {
+    transform: scale(0.4);
+    opacity: 0.85;
+  }
+  100% {
+    transform: scale(3.4);
+    opacity: 0;
+  }
+}
+
+/* Keeps the pulse's origin readable between rings. */
+.ingest-core {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0.45rem;
+  height: 0.45rem;
+  margin: -0.225rem 0 0 -0.225rem;
+  border-radius: 50%;
+  background: var(--activity);
+}
+
+/* A gradient twice the spine's height, scrolled to read as flow. */
+.ingest-charge {
+  background: linear-gradient(
+    180deg,
+    var(--activity) 0%,
+    var(--rail) 22%,
+    var(--rail) 78%,
+    var(--activity) 100%
+  );
+  background-size: 100% 220%;
+  animation: ingest-charge 3.2s linear infinite;
+}
+@keyframes ingest-charge {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 0 -220%;
+  }
+}
+
+.ingest-ghost-marker {
+  animation: ingest-marker 2.2s ease-in-out infinite;
+}
+@keyframes ingest-marker {
+  0%,
+  100% {
+    transform: translateY(-50%) scale(0.55);
+    opacity: 0.3;
+  }
+  45% {
+    transform: translateY(-50%) scale(1);
+    opacity: 1;
+  }
+}
+
+.ingest-ghost {
+  animation: ingest-ghost 2.2s ease-in-out infinite;
+}
+@keyframes ingest-ghost {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(4px);
+  }
+  45% {
+    opacity: 0.9;
+    transform: translateY(0);
+  }
+}
+
+.ingest-sweep {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--activity) 26%, transparent),
+    transparent
+  );
+  animation: ingest-sweep 2.2s ease-in-out infinite;
+}
+@keyframes ingest-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Motion is the whole message here, so the reduced-motion fallback has to hold
+   every part still in a state that still reads as "something is pending". */
+@media (prefers-reduced-motion: reduce) {
+  .shimmer,
+  .ingest-ring,
+  .ingest-charge,
+  .ingest-ghost-marker,
+  .ingest-ghost,
+  .ingest-sweep {
+    animation: none;
+  }
+  .ingest-ring {
+    opacity: 0.5;
+    transform: scale(1.8);
+  }
+  .ingest-ghost-marker {
+    transform: translateY(-50%);
+    opacity: 1;
+  }
+  .ingest-ghost {
+    opacity: 0.6;
+  }
 }
 
 /* Visually hidden but present for assistive tech (ARCHITECTURE 10.5). Reveals
