@@ -15,7 +15,7 @@ import { useReference, useTimeline } from "./useTimeline.js";
  * State model (§6.1, §8.2): page.hasMore and meta.ingest.state answer
  * different questions and both gate the rail's tail —
  *   more rows in store            → sentinel + "Load older" fallback
- *   ingest still running upstream → shimmer rows + pulsing rail entry
+ *   ingest still running upstream → the rail's ingest animation
  *   neither (isTerminalPage)      → the ■ "start of coverage" terminus
  */
 export function TimelinePage({
@@ -42,7 +42,6 @@ export function TimelinePage({
       <CommandBar
         topic={topic}
         page={latest}
-        ingesting={ingesting ?? false}
         reference={reference.data}
         onSearch={onSearch}
         onClear={onClear}
@@ -160,16 +159,21 @@ function Rail({
     <div style={{ position: "relative", paddingLeft: RAIL_INSET }}>
       <div
         aria-hidden="true"
+        // The spine carries the ingest animation's charge while a fetch is in
+        // flight; the class owns the background in that state.
+        className={ingesting ? "ingest-charge" : undefined}
         style={{
           position: "absolute",
           left: `calc(${RAIL_CENTER} - ${RAIL_WIDTH} / 2)`,
           top: 0,
           bottom: 0,
           width: RAIL_WIDTH,
-          background: `linear-gradient(var(--rail), ${ingesting ? "var(--bg)" : "var(--rail)"})`,
+          background: ingesting ? undefined : "var(--rail)",
           borderRadius: "2px",
         }}
       />
+      {ingesting && <IngestStatus pendingJobs={pendingJobs} />}
+      {ingesting && <IngestBeacon />}
       {newCount > 0 && (
         <RailEntry marker="▲">
           <button
@@ -177,7 +181,7 @@ function Rail({
             style={{
               border: "1px solid var(--border)",
               background: "var(--surface)",
-              color: "var(--amber)",
+              color: "var(--activity)",
               borderRadius: "6px",
               padding: "0.3rem 0.9rem",
               cursor: "pointer",
@@ -186,13 +190,6 @@ function Rail({
           >
             {newCount} new article{newCount === 1 ? "" : "s"}
           </button>
-        </RailEntry>
-      )}
-      {ingesting && (
-        <RailEntry marker="◌" pulse>
-          <em style={{ color: "var(--amber)", fontSize: "0.9rem" }}>
-            fetching from upstream — {pendingJobs} jobs pending…
-          </em>
         </RailEntry>
       )}
       {groupByDay(items).map((day) => {
@@ -231,7 +228,7 @@ function Rail({
           </section>
         );
       })}
-      {ingesting && <ShimmerRows count={3} />}
+      {ingesting && <IngestGhosts pendingJobs={pendingJobs} />}
       {!ingesting && hasNextPage && (
         <RailEntry marker="↓">
           <LoadOlder loading={isFetchingNextPage} onLoadOlder={onLoadOlder} />
@@ -502,7 +499,9 @@ function RailEntry({
     left: markerLeft("1.4rem"),
     width: "1.4rem",
     textAlign: "center",
-    color: pulse ? "var(--amber)" : "var(--fg)",
+    // Pulsing marks work in flight, the same thing the ingest animation marks,
+    // so it takes the activity colour rather than amber's "pay attention".
+    color: pulse ? "var(--activity)" : "var(--fg)",
     background: "var(--bg)",
     fontSize: big ? "0.9rem" : "0.75rem",
     // Day markers anchor to their heading's line. Everything else centres on
@@ -551,6 +550,107 @@ function RailEntry({
       )}
       {children}
     </div>
+  );
+}
+
+/**
+ * The head of the ingest animation: a radar pulse on the spine's centre line,
+ * above the newest slot. It sits at the TOP because that is where refresh-on-
+ * read puts what it finds (§6.5) — an indicator at the tail would point at
+ * where older backfill lands and misdescribe what is happening.
+ */
+function IngestBeacon() {
+  return (
+    <div style={{ position: "relative", height: "2.6rem" }}>
+      <span
+        aria-hidden="true"
+        style={{ position: "absolute", left: markerLeft("0px"), top: "50%", width: 0, height: 0 }}
+      >
+        {INGEST_RING_DELAYS.map((delay) => (
+          <span key={delay} className="ingest-ring" style={{ animationDelay: `${delay}s` }} />
+        ))}
+        <span className="ingest-core" />
+      </span>
+    </div>
+  );
+}
+
+/** Evenly spaced across the ring animation's 2.1s, so pulses read as steady. */
+const INGEST_RING_DELAYS = [0, 0.7, 1.4];
+
+/** How many ghost slots the tail will ever show, however deep the queue is. */
+const MAX_INGEST_GHOSTS = 4;
+
+/**
+ * The tail of the ingest animation: ghost slots standing where the arriving
+ * articles will land, in the same marker-plus-card shape they will take, so
+ * their arrival is a resolve rather than a jump.
+ *
+ * The count tracks pendingJobs, capped — the rail is showing that work is
+ * outstanding, not plotting the queue, and a tail of twenty ghosts would bury
+ * the articles the reader already has.
+ */
+function IngestGhosts({ pendingJobs }: { pendingJobs: number }) {
+  const count = Math.min(Math.max(pendingJobs, 1), MAX_INGEST_GHOSTS);
+  return (
+    <>
+      {Array.from({ length: count }, (_, i) => {
+        // Staggered so the stack settles in sequence rather than as one block.
+        const delay = `${i * 0.22}s`;
+        return (
+          <div key={i} style={{ position: "relative", padding: "0.35rem 0" }}>
+            <span
+              aria-hidden="true"
+              className="ingest-ghost-marker"
+              style={{
+                position: "absolute",
+                left: markerLeft("1.4rem"),
+                top: "50%",
+                width: "1.4rem",
+                textAlign: "center",
+                fontSize: "0.75rem",
+                lineHeight: 1,
+                color: "var(--activity)",
+                background: "var(--bg)",
+                animationDelay: delay,
+              }}
+            >
+              ○
+            </span>
+            <div
+              className="ingest-ghost"
+              style={{
+                height: "3.4rem",
+                maxWidth: "640px",
+                borderRadius: "8px",
+                border: "1px solid var(--border)",
+                background: "var(--chip-bg)",
+                position: "relative",
+                overflow: "hidden",
+                animationDelay: delay,
+              }}
+            >
+              <span className="ingest-sweep" style={{ animationDelay: delay }} />
+            </div>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+/**
+ * What the animation cannot say. Motion is invisible to a screen reader, and
+ * §8.1 asks the UI to be honest about freshness — so the state the rail now
+ * shows in teal is still announced here, including the count the text row used
+ * to print.
+ */
+function IngestStatus({ pendingJobs }: { pendingJobs: number }) {
+  return (
+    <p className="sr-only" role="status" aria-live="polite">
+      Gathering articles from upstream — {pendingJobs} job
+      {pendingJobs === 1 ? "" : "s"} pending.
+    </p>
   );
 }
 
