@@ -1166,28 +1166,47 @@ Still open:
    every article row and add a group, showing one member as the timeline entry with the rest reachable
    as "related". ADR-0002 does not forbid this — its refusal of syndicate collapse is grounded in the
    `df_domains` breadth signal (§10.3), and grouping leaves every row and every `source_domain`
-   intact, so the cloud reads exactly as it does today. Sketched, not designed; the open questions
-   are the interesting part:
+   intact, so the cloud reads exactly as it does today. **Not built; the shape below is decided, and
+   what stays open is whether to build it at all.**
 
-   - **It must be materialised at write time.** ADR-0002 rejected read-time collapse because a page
-     of 25 can collapse to 3, making page size unpredictable and `hasMore` unreliable — and that
-     objection is about paging, so a rename does not escape it. A `group_id` on `articles` with the
-     timeline selecting representatives keeps the §7.3 keyset and page size intact.
-   - **The ordering key must not be the display choice.** Positioning a group by "its best member"
+   - **Grouping is a day's coverage of a story, not an event.** The looser unit is what a reader
+     scanning a timeline wants, and it lets the time bucket do the constraining that a tight
+     similarity threshold would otherwise have to. Naming it matters: "grouped" invites the event
+     reading, and the two want different thresholds.
+   - **Materialised at write time.** ADR-0002 rejected read-time collapse because a page of 25 can
+     collapse to 3, making page size unpredictable and `hasMore` unreliable — and that objection is
+     about paging, so a rename does not escape it. A `group_id` on `articles` with the timeline
+     selecting representatives keeps the §7.3 keyset and page size intact.
+   - **The ordering key is not the display choice.** Positioning a group by "its best member"
      re-sorts the timeline whenever a new article lands, which is the row-shifting that keyset
-     pagination exists to prevent (§7.3). Position by earliest published — already ADR-0002's rule
-     for articles — and let the headline be chosen separately.
-   - **There is no article ranking to choose a headline with**, and the obvious candidate is
-     poisoned: `sighting_count` measures upstream re-emission, not importance (PROBE-FINDINGS 4 —
-     one page emitted 50×), so ranking by it would promote exactly what §7.4 exists to neutralise.
-     "Show the highest-ranked article" is a separate feature, not a detail of this one.
+     pagination exists to prevent (§7.3). Groups are positioned by **earliest published** — already
+     ADR-0002's rule for articles — and the headline is chosen independently, so it may change in
+     place without ever moving the group.
+   - **The headline comes from a two-tier source-authority list**, not from a score. Representative =
+     any tier-1 member (AP, BBC, CBC and the like), tie-broken by earliest published then `id`;
+     with no tier-1 member, earliest published wins. Two tiers rather than a ranking, because a total
+     ordering of outlets would mean adjudicating Reuters against AFP — unmaintainable and
+     indefensible. The list is a checked-in constant, following `stopwords.ts`, so it goes through
+     review. Note what it is: an editorial stance living in the codebase, and an Anglophone one — on a
+     Spanish or Arabic timeline no member is tier 1 and it silently falls back to earliest published.
+     Say so where the constant is defined.
+   - **`sighting_count` must not be the ranking signal.** It measures upstream re-emission, not
+     importance (PROBE-FINDINGS 4 — one page emitted 50×), so ranking by it would promote exactly
+     what §7.4 exists to neutralise.
+   - **The displayed time is the group's, not the representative's.** Position by earliest published
+     while showing a later article's own timestamp puts "3 hours ago" below rows from five hours ago,
+     which reads as a bug in a time-ordered timeline. Show first-reported time with an "updated"
+     badge — the same pattern ADR-0002 already uses for an article's earliest sighting.
    - **Groups are global; the representative is per-topic.** A global headline can surface an article
      that never matched the topic the user searched, hiding the matching one under "related".
-   - **`df_articles` should not become `df_groups`.** It is the size input *and* the displayed number
+   - **`df_articles` does not become `df_groups`.** It is the size input *and* the displayed number
      (§10.3); the cloud/timeline count mismatch is a labelling problem, fixable in the timeline header.
-   - **Similarity should be gated by time, not trusted alone.** Two articles about one country days
-     apart are not one event whatever their vectors say; a tight publication window is a cheap
-     orthogonal signal, and shared proper nouns are already extracted for §10.2.
+   - **Time buckets the similarity, and bounds the drift.** Candidates come from the same
+     `APP_TIMEZONE` calendar day (§10.1's rule, not UTC), and a new article is compared against its
+     group's representative only. A rolling window would chain — A–B twenty hours apart, B–C twenty
+     hours apart, A and C in one group forty hours apart having never been compared — the same
+     unbounded drift the greedy rule in item 7 avoids. The cost is a midnight cliff: 23:50 and 00:10
+     never group. Accepted as bounded and explicable, where chaining is neither.
 
    Unlike variant merging (item 7), the failure mode here is *soft*: a wrong grouping demotes an
    article behind a toggle rather than deleting it, which is a materially better risk profile and the
