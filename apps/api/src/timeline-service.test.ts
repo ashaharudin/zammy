@@ -6,7 +6,7 @@ import {
   type SearchParams,
   type SearchResult,
 } from "@zammy/currents-client";
-import { readCoverage } from "@zammy/storage";
+import { readCoverage, recordCoverage, upsertTopic } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
 import { subtractCoverage } from "./coverage-gaps.js";
 import { refreshLockKey, tryAcquire } from "./single-flight.js";
@@ -233,6 +233,227 @@ describe("quota exhaustion is a designed-for state, not an incident", () => {
     expect(result.meta.servedFrom).toBe("store");
 
     harness.counting.search = search;
+  });
+});
+
+describe("refresh-on-read (§6.4) — freshness is repaired by the next reader", () => {
+  /** A window that reaches the present: NOW sits on the 15-minute grid. */
+  const liveWindow = () => ({ from: new Date(WINDOW.from), to: new Date(NOW) });
+
+  it("serves a covered window with a sliver inside the tier as fresh: zero calls, nothing enqueued", async () => {
+    harness = await createTestHarness({}, NOW);
+    const query = { ...climateQuery(), window: liveWindow() };
+
+    // Covered until 30s ago — inside the 60s tier for a window ending now.
+    await upsertTopic(harness.deps.db, {
+      fingerprint: query.fingerprint,
+      keywords: query.keywords,
+      language: query.language,
+      country: null,
+      category: null,
+    });
+    await recordCoverage(harness.deps.db, query.fingerprint, {
+      from: WINDOW.from,
+      to: new Date(NOW.getTime() - 30_000),
+    });
+
+    const result = await readTimeline(harness.deps, query, { limit: 25 });
+
+    expect(harness.counting.searchCalls).toBe(0);
+    expect(result.meta.stale).toBe(false);
+    expect(result.meta.servedFrom).toBe("store");
+    expect(result.meta.ingest).toEqual({ state: "complete", pendingJobs: 0 });
+  });
+
+  it("serves a stale trailing sliver instantly, flags stale, and enqueues one background top-up", async () => {
+    harness = await createTestHarness({}, NOW);
+
+    // Warm the topic honestly: coverage ends 2026-08-06, 4.5 days before NOW.
+    await readTimeline(harness.deps, climateQuery(), { limit: 25 });
+    expect(harness.counting.searchCalls).toBe(1);
+
+    const live = { ...climateQuery(), window: liveWindow() };
+    const result = await readTimeline(harness.deps, live, { limit: 25 });
+
+    // The reader gets the stored timeline instantly — the sliver is repaired
+    // BEHIND them, never in front of them (§6.4).
+    expect(harness.counting.searchCalls).toBe(1);
+    expect(result.meta.stale).toBe(true);
+    expect(result.meta.servedFrom).toBe("store");
+    expect(result.items.length).toBeGreaterThan(0);
+    expect(result.meta.ingest.state).toBe("in_progress");
+    expect(result.meta.ingest.pendingJobs).toBe(1);
+
+    // The top-up closes the gap; the reader after them sees the fresher result.
+    harness.queue.startConsumer((job) => processSegmentJob(harness.deps, job));
+    await vi.waitFor(
+      async () =>
+        expect(await harness.queue.pendingCount(live.fingerprint)).toBe(0),
+      { timeout: 20_000, interval: 250 },
+    );
+
+    const repaired = await readTimeline(harness.deps, live, { limit: 25 });
+    expect(repaired.meta.stale).toBe(false);
+    expect(repaired.meta.ingest.state).toBe("complete");
+    const covered = await readCoverage(harness.deps.db, live.fingerprint);
+    expect(covered.at(-1)?.to.getTime()).toBeGreaterThanOrEqual(NOW.getTime());
+  }, 30_000);
+
+  it("a stale response is never cached, even when the top-up lands mid-read", async () => {
+    harness = await createTestHarness({}, NOW);
+    await readTimeline(harness.deps, climateQuery(), { limit: 25 });
+
+    // The consumer is in-process and a fixture top-up takes milliseconds, so
+    // it can finish BEFORE the reader counts pending jobs. That makes the
+    // stale read look settled (state "complete") — but caching it would
+    // freeze stale:true and hide the repaired timeline for the whole TTL.
+    const racingDeps = {
+      ...harness.deps,
+      queue: {
+        enqueueSegment: async () => {},
+        pendingCount: async () => 0,
+      } as unknown as typeof harness.deps.queue,
+    };
+    const live = { ...climateQuery(), window: liveWindow() };
+    const first = await readTimeline(racingDeps, live, { limit: 25 });
+    expect(first.meta.stale).toBe(true);
+    expect(first.meta.ingest.state).toBe("complete");
+
+    const second = await readTimeline(racingDeps, live, { limit: 25 });
+    expect(second.meta.servedFrom).not.toBe("cache");
+  });
+
+  it("polling readers do not multiply top-ups: dedup by the sliver's leading edge", async () => {
+    harness = await createTestHarness({}, NOW);
+    await readTimeline(harness.deps, climateQuery(), { limit: 25 });
+
+    const live = { ...climateQuery(), window: liveWindow() };
+    await readTimeline(harness.deps, live, { limit: 25 });
+
+    // A poll 5s later re-canonicalizes: same sliver start, later window end.
+    // Without leading-edge dedup every 1.5s poll would mint a fresh job.
+    const laterNow = new Date(NOW.getTime() + 5_000);
+    const laterDeps = { ...harness.deps, now: () => laterNow };
+    const poll = await readTimeline(
+      laterDeps,
+      { ...live, window: { from: live.window.from, to: new Date(NOW.getTime() + 15 * 60_000) } },
+      { limit: 25 },
+    );
+
+    expect(poll.meta.stale).toBe(true);
+    expect(poll.meta.ingest.pendingJobs).toBe(1);
+    expect(harness.counting.searchCalls).toBe(1); // warm-up only; never a sync spend
+  });
+});
+
+describe("call priority (§9.4) — queued work draws as background", () => {
+  it("sync fills are interactive; segment jobs run under the interactive reserve", async () => {
+    harness = await createTestHarness({}, NOW);
+
+    await readTimeline(harness.deps, climateQuery(), { limit: 25 });
+    expect(harness.counting.priorities).toEqual(["interactive"]);
+
+    // The same fill machinery, driven by the queue consumer instead of a
+    // waiting reader, must identify itself as background — that flag is the
+    // entire mechanism by which the reserve protects live searches.
+    await processSegmentJob(harness.deps, {
+      fingerprint: climateFingerprint,
+      from: WINDOW.to.toISOString(),
+      to: NOW.toISOString(),
+      startPage: 1,
+      kind: "topup",
+    });
+    expect(harness.counting.priorities.slice(1)).toEqual(["background"]);
+  });
+});
+
+describe("per-topic daily cap (§9.4) — one curious user cannot drain the pool", () => {
+  it("stops the sync fill at the cap and enqueues nothing more for the day", async () => {
+    harness = await createTestHarness({ perTopicDailyCallCap: 3 }, NOW);
+
+    // The broad query needs 5 calls before it even truncates; the cap must
+    // bind first. The topic stops deepening — no error, no queued IOUs that
+    // would burn tomorrow's budget on today's enthusiasm.
+    const result = await readTimeline(harness.deps, broadQuery(), { limit: 100 });
+
+    expect(harness.counting.searchCalls).toBe(3);
+    expect(result.items.length).toBeGreaterThan(0);
+    expect(result.meta.ingest).toEqual({ state: "complete", pendingJobs: 0 });
+
+    // ...and resumes tomorrow: the counter is keyed by UTC day.
+    const tomorrow = new Date(NOW.getTime() + 24 * 60 * 60 * 1000);
+    const nextDay = { ...harness.deps, now: () => tomorrow };
+    await readTimeline(nextDay, broadQuery(), { limit: 100 });
+    expect(harness.counting.searchCalls).toBeGreaterThan(3);
+  });
+
+  it("a queued job against an exhausted topic completes without spending or covering", async () => {
+    harness = await createTestHarness({ perTopicDailyCallCap: 1 }, NOW);
+    await readTimeline(harness.deps, climateQuery(), { limit: 25 }); // spends the 1
+    expect(harness.counting.searchCalls).toBe(1);
+
+    await processSegmentJob(harness.deps, {
+      fingerprint: climateFingerprint,
+      from: WINDOW.to.toISOString(),
+      to: NOW.toISOString(),
+      startPage: 1,
+      kind: "topup",
+    });
+
+    // No call, no error (an error would just churn BullMQ retries against the
+    // same wall), and no coverage claim — the gap stays visibly unfetched so
+    // tomorrow's reader repairs it (§7.2).
+    expect(harness.counting.searchCalls).toBe(1);
+    const covered = await readCoverage(harness.deps.db, climateFingerprint);
+    expect(covered.at(-1)?.to.getTime()).toBeLessThanOrEqual(WINDOW.to.getTime());
+  });
+});
+
+describe("metrics (§12) — the numbers that make the design observable", () => {
+  const value = async (
+    name: string,
+    labels: Record<string, string> = {},
+  ): Promise<number> => {
+    const metrics = (await harness.metrics.registry.getMetricsAsJSON()) as Array<{
+      name: string;
+      values: Array<{ value: number; labels: Record<string, string>; metricName?: string }>;
+    }>;
+    for (const metric of metrics) {
+      const match = metric.values?.find(
+        (v) =>
+          (v.metricName ?? metric.name) === name &&
+          Object.entries(labels).every(([k, val]) => v.labels[k] === val),
+      );
+      if (match) return match.value;
+    }
+    return Number.NaN;
+  };
+
+  it("counts cache tiers, upstream spend, truncation, and reads by source", async () => {
+    harness = await createTestHarness({}, NOW);
+
+    await readTimeline(harness.deps, climateQuery(), { limit: 25 }); // miss → upstream
+    await readTimeline(harness.deps, climateQuery(), { limit: 25 }); // hit
+    await readTimeline(harness.deps, broadQuery(), { limit: 100 }); // miss → truncates
+
+    // Cache hit ratio BY TIER: both windows end >24h before NOW → historical.
+    expect(await value("zammy_page_cache_reads_total", { tier: "historical", result: "miss" })).toBe(2);
+    expect(await value("zammy_page_cache_reads_total", { tier: "historical", result: "hit" })).toBe(1);
+
+    // The key efficiency number: upstream calls per user request (§12).
+    expect(await value("zammy_upstream_calls_total")).toBe(6); // 1 climate + 5 broad
+
+    // unique-articles-per-upstream-call = created / calls; a fall means
+    // upstream duplication is worsening (baseline ~8 of 20).
+    expect(await value("zammy_articles_created_total")).toBeGreaterThan(0);
+    expect(await value("zammy_sightings_received_total")).toBeGreaterThanOrEqual(100);
+
+    // A rising truncation rate means timelines are silently thinning (§11).
+    expect(await value("zammy_truncated_segments_total")).toBe(1);
+
+    // p95 by servedFrom needs reads labeled by source.
+    expect(await value("zammy_timeline_read_seconds_count", { served_from: "upstream" })).toBe(2);
+    expect(await value("zammy_timeline_read_seconds_count", { served_from: "cache" })).toBe(1);
   });
 });
 

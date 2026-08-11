@@ -106,6 +106,26 @@ export interface FetchLogTable {
   error_kind: string | null;
 }
 
+/** A day's recomputed cloud aggregate (§10.4); frozen once the day closes. */
+export interface DailyTermsTable {
+  /** date: read back as Date by pg, written as 'YYYY-MM-DD'. */
+  day: ColumnType<Date, string, string>;
+  language: string;
+  term: string;
+  is_bigram: boolean;
+  df_articles: number;
+  df_domains: number;
+  score: number;
+}
+
+/** Trailing per-term mean — the suppressor for perennial vocabulary (§10.3). */
+export interface TermBaselineTable {
+  language: string;
+  term: string;
+  mean_df: number;
+  updated_on: ColumnType<Date, string, string>;
+}
+
 export interface Database {
   sightings: SightingsTable;
   articles: ArticlesTable;
@@ -113,6 +133,8 @@ export interface Database {
   topic_articles: TopicArticlesTable;
   topic_coverage: TopicCoverageTable;
   fetch_log: FetchLogTable;
+  daily_terms: DailyTermsTable;
+  term_baseline: TermBaselineTable;
 }
 
 /**

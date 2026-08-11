@@ -79,4 +79,21 @@ describe("buildApp", () => {
     expect(body.meta.ingest.state).toBe("complete");
     expect(body.topic.coverage).not.toBeNull();
   });
+
+  it("rate-limits /api/v1/* per IP but never the operational endpoints (§9.4)", async () => {
+    // Novel-fingerprint spam is the §9.4 attack: each junk keyword mints a
+    // topic and can trigger upstream spend. The limiter must sit in front of
+    // /api/v1/* — and ONLY there, or the ALB health check would take the API
+    // out of rotation exactly when someone hammers it.
+    let limited = false;
+    for (let i = 0; i < 100 && !limited; i += 1) {
+      const response = await built.app.inject({ method: "GET", url: "/api/v1/reference" });
+      limited = response.statusCode === 429;
+    }
+    expect(limited).toBe(true);
+
+    expect((await built.app.inject({ method: "GET", url: "/healthz" })).statusCode).toBe(200);
+    expect((await built.app.inject({ method: "GET", url: "/metrics" })).statusCode).toBe(200);
+  });
+
 });

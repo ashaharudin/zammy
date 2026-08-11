@@ -1,0 +1,1501 @@
+{
+ "_provenance": {
+  "endpoint": "GET /v2/latest-news (and /v1/latest-news control)",
+  "captured": "2026-08-10",
+  "tier": "free",
+  "calls_spent": 8,
+  "why": "Probe fixture for the \u00a710.1 breadth sample's move to /v2/latest-news (ARCHITECTURE \u00a714 open question 6, resolved). Verifies: comma-separated multi-category filter; the ~20-item page is SHARED across categories, not multiplied; the filter does not balance categories (19/1 skew measured); v2 uses a NEW fixed 16-value category taxonomy \u2014 v1 names like 'technology' are 400s; v1 and v2 return the same articles relabeled (20/20 id overlap); page_number works on v2 (pages disjoint)."
+ },
+ "calls": [
+  {
+   "label": "v2_plain",
+   "params": {
+    "language": "en"
+   },
+   "news": [
+    {
+     "id": "fbf23261-3bba-5c17-a655-e8605c19fd52",
+     "title": "Driver 'incredibly fortunate' to avoid serious injury after hitting tree",
+     "description": "Police said a vehicle crashed into a tree in Adelaide's southern suburbs, but the driver has managed to escape with just \"minor injuries\".",
+     "url": "https://www.abc.net.au/news/2026-08-11/sa-driver-escape-tree-crash-with-minor-injuries/107024080",
+     "author": "",
+     "image": "https://live-production.wcms.abc-cdn.net.au/68d8219d5a3c1acc7e2462d0dcb2bd4e?impolicy=wcms_watermark_news&cropH=626&cropW=1112&xPos=0&yPos=74&width=862&height=485&imformat=generic",
+     "language": "en",
+     "category": [
+      "economy_business_finance"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:13:08 +0000"
+    },
+    {
+     "id": "d3e66ea0-d197-51e9-9536-c830b3f6bf70",
+     "title": "Alexandria Ocasio-Cortez open to presidential run, announces she will freeze eggs",
+     "description": "The 36-year-old said she felt \"empowered\" by her decision, while adding that it came with political risk.",
+     "url": "https://www.abc.net.au/news/2026-08-11/alexandria-ocasio-cortez-egg-freezing/107022606",
+     "author": "Nelli Saarinen",
+     "image": "https://live-production.wcms.abc-cdn.net.au/ed314c4ae9bbe07b631c78d217dd99cc?impolicy=wcms_watermark_news&cropH=466&cropW=828&xPos=0&yPos=349&width=862&height=485&imformat=generic",
+     "language": "en",
+     "category": [
+      "economy_business_finance"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:13:08 +0000"
+    },
+    {
+     "id": "aa5d1ed4-e27d-5e63-adbf-00ab0b00699c",
+     "title": "Bird flu vaccine to be rolled out to vulnerable species in captivity",
+     "description": "A vaccine will be rolled out to protect Australia's native species from the deadly H5N1 bird flu, with a focus on birds in captivity.",
+     "url": "https://www.abc.net.au/news/2026-08-11/federal-politics-agriculture-minister-bird-flu-vaccine-rollout/107023868",
+     "author": "Monte Bovill",
+     "image": "https://live-production.wcms.abc-cdn.net.au/f7db5baa644ce1216c1f13b448572b93?impolicy=wcms_watermark_news&cropH=2813&cropW=5000&xPos=0&yPos=0&width=862&height=485&imformat=generic",
+     "language": "en",
+     "category": [
+      "economy_business_finance"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:13:08 +0000"
+    },
+    {
+     "id": "8ff7e5de-3619-56cc-a6d0-424c5c4d624d",
+     "title": "Aussie open water swim queen Johnson triumphs at Pan Pacs",
+     "description": "Moesha Johnson opens Australia's medal account at the Pan Pacific swimming titles, winning gold in the 10km open water race.",
+     "url": "https://www.abc.net.au/news/2026-08-11/aussie-open-water-swim-queen-johnson-triumphs-pan-pacs/107023748",
+     "author": "",
+     "image": "https://live-production.wcms.abc-cdn.net.au/efe0cb65a0a1113c66954594a2fc7932?impolicy=wcms_watermark_news&cropH=2552&cropW=4536&xPos=0&yPos=68&width=862&height=485&imformat=generic",
+     "language": "en",
+     "category": [
+      "economy_business_finance"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:13:08 +0000"
+    },
+    {
+     "id": "8ff15691-36bd-5211-9c12-357fd79738df",
+     "title": "How Gianni Infantino's FIFA leadership imploded over two weeks",
+     "description": "The FIFA president has faced more than a fortnight of international turmoil, embroiled in a World Cup sell-off saga that sparked loss of confidence in his leadership.",
+     "url": "https://www.abc.net.au/news/2026-08-11/gianni-infantino-fifa-ffe-controversy-timeline-explained/107021760",
+     "author": "Luke Cooper",
+     "image": "https://live-production.wcms.abc-cdn.net.au/58b5742a9c42b985d65a3d284c107be0?impolicy=wcms_watermark_news&cropH=1259&cropW=2238&xPos=2095&yPos=693&width=862&height=485&imformat=generic",
+     "language": "en",
+     "category": [
+      "economy_business_finance"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:13:08 +0000"
+    },
+    {
+     "id": "50163a28-8bd5-51a0-80e3-58480e278ac3",
+     "title": "'We deserve to be counted': Gender, sexuality to be asked about in census",
+     "description": "The 2026 census will include questions about sexual orientation and gender identity for the first time to help build a clearer picture of Australia's LGBTQ+ population, and support planning for health and community services.",
+     "url": "https://www.abc.net.au/news/2026-08-11/2026-census-ask-gender-sexual-orientation-lgbtq-data-gaps/107018232",
+     "author": "Lily Nothling",
+     "image": "https://live-production.wcms.abc-cdn.net.au/f08c34cf6fb887d0a8b6b01c828d9dce?impolicy=wcms_watermark_news&cropH=2592&cropW=4608&xPos=0&yPos=0&width=862&height=485&imformat=generic",
+     "language": "en",
+     "category": [
+      "economy_business_finance"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:13:08 +0000"
+    },
+    {
+     "id": "1afaddc7-8167-5683-bdea-98db48cf4232",
+     "title": "'Never forgotten where he's from': Outback community pride for Crows legend",
+     "description": "Taylor 'Tex' Walker has etched himself into the Adelaide Crows' history books, but his hometown of Broken Hill holds so much admiration for his career.",
+     "url": "https://www.abc.net.au/news/2026-08-11/broken-hill-community-celebrates-taylor-walker-retirement/107023176",
+     "author": "Sophie Holder; Andrew Schmidt",
+     "image": "https://live-production.wcms.abc-cdn.net.au/ec0483e8b4e7072d077282c779a642d6?impolicy=wcms_watermark_news&cropH=1080&cropW=1920&xPos=0&yPos=0&width=862&height=485&imformat=generic",
+     "language": "en",
+     "category": [
+      "economy_business_finance"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:13:08 +0000"
+    },
+    {
+     "id": "17a03cb0-cad2-5f1a-9f93-aa03e4e2e1b2",
+     "title": "US had hottest month on record in July, England's drought worsens",
+     "description": "July 2026 was the hottest month ever in the United States, whilst almost three-quarters of England is now in drought.",
+     "url": "https://www.abc.net.au/news/2026-08-11/the-united-states-sizzled-to-its-hottest-month-ever-last-month/107023080",
+     "author": "",
+     "image": "https://live-production.wcms.abc-cdn.net.au/a81c68825bda492f3e6506fd128c1937?impolicy=wcms_watermark_news&cropH=2250&cropW=4000&xPos=0&yPos=208&width=862&height=485&imformat=generic",
+     "language": "en",
+     "category": [
+      "economy_business_finance"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:13:08 +0000"
+    },
+    {
+     "id": "01cb5d8b-3bdd-59f2-b417-b347c627d343",
+     "title": "Children encountering extremism at 'disturbing' rate, inquiry told",
+     "description": "Children at an increasingly young age are engaging with violent extremist material at a \"disturbing\" rate, Australia's counter-terrorism coordinator says.",
+     "url": "https://www.abc.net.au/news/2026-08-11/antisemitism-royal-commission-children-extremism-material-online/107023572",
+     "author": "Phoebe Pin",
+     "image": "https://live-production.wcms.abc-cdn.net.au/75fb2322822fa404cb370a4b90c4d332?impolicy=wcms_watermark_news&cropH=791&cropW=1407&xPos=0&yPos=73&width=862&height=485&imformat=generic",
+     "language": "en",
+     "category": [
+      "economy_business_finance"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:13:08 +0000"
+    },
+    {
+     "id": "d65eb903-8d33-5a66-888a-c11c8bc08901",
+     "title": "Opposition MPs Walk Out Of Special Sitting On Tabung Haji RCI Report",
+     "description": "Dewan Rakyat, special sitting, RCI, Tabung Haji, o",
+     "url": "https://www.bernama.com/en/news.php/?id=2592901",
+     "author": "",
+     "image": "https://www.bernama.com/storage/photos/3634cc938e9affbfe31e8b39c137752d6a7a9a1ea8a14-medium",
+     "language": "en",
+     "category": [],
+     "source_category": [],
+     "published": "2026-08-11 04:12:53 +0000"
+    },
+    {
+     "id": "4b87ddce-fcbb-5671-a03e-95e8582c76d1",
+     "title": "Dewan Rakyat Gives Ample Opportunity To Debate TH RCI Report - Speaker",
+     "description": "Parliament, special sitting, RCI, TH, MPs, debate,",
+     "url": "https://www.bernama.com/en/news.php/?id=2592907",
+     "author": "",
+     "image": "https://www.bernama.com/storage/photos/093f8ee990757971bb3c4606b19037356a7a99d35f6ed-medium",
+     "language": "en",
+     "category": [],
+     "source_category": [],
+     "published": "2026-08-11 04:12:51 +0000"
+    },
+    {
+     "id": "4c7c4006-e53d-511a-8361-7719979d6930",
+     "title": "Dewan Rakyat Speaker Confirms Subang MP Wong Chen's Resignation",
+     "description": "MP, Subang, Johari Abdul, Dewan Rakyat, resignatio",
+     "url": "https://www.bernama.com/en/news.php/?id=2592908",
+     "author": "",
+     "image": "https://www.bernama.com/storage/photos/059e3aeb82bf9bf0107866716348b6ae6a4dc32465c52-medium",
+     "language": "en",
+     "category": [],
+     "source_category": [],
+     "published": "2026-08-11 04:12:50 +0000"
+    },
+    {
+     "id": "8a881f59-5179-5216-bcb1-dbaf48b89320",
+     "title": "TH Depositors Need Not Worry, Zakat Obligations Fulfilled, Syariah-Compliant - Zulkifli",
+     "description": "Parliament, Zulkifli Hasan, report, RCI, Lembaga",
+     "url": "https://www.bernama.com/en/news.php/?id=2592911",
+     "author": "",
+     "image": "https://www.bernama.com/storage/photos/85ca8f0b22b9ea49d5c94336dc6006836a6058c1de28c-medium",
+     "language": "en",
+     "category": [],
+     "source_category": [],
+     "published": "2026-08-11 04:12:48 +0000"
+    },
+    {
+     "id": "a9a151bf-dde4-5f72-9ebc-e223bb0926b2",
+     "title": "Risk Of Hidden Kidney Stones Behind Persistent Back Pain, Warns Urologist",
+     "description": "SMC, Sunway Medical Centre, Urology specialist, Dr",
+     "url": "https://www.bernama.com/en/news.php/?id=2592916",
+     "author": "",
+     "image": "https://www.bernama.com/storage/photos/108504669557ecc3a1fa1010c76a743d6a7a9e30265ec-medium",
+     "language": "en",
+     "category": [],
+     "source_category": [],
+     "published": "2026-08-11 04:12:47 +0000"
+    },
+    {
+     "id": "95fee3c1-cadb-51c4-93c3-89c77142ae89",
+     "title": "Director Oscar Boyson: \u2018An indie film can be a lot more fun than a big Marvel movie\u2019",
+     "description": "The provocative satire Our Hero, Balthazar is the debut feature of a filmmaker who has \u2018a fear of boring the audience\u2019",
+     "url": "https://www.irishtimes.com/culture/film/2026/08/11/director-oscar-boyson-an-indie-film-can-be-a-lot-more-fun-than-a-big-marvel-movie/",
+     "author": "Tara Brady",
+     "image": "https://www.irishtimes.com/resizer/v2/APAQQ22FKRHMFJZHTMENSFC75E.jpg?smart=true&auth=f49d17ae93e18e42bc5b38d2aa270ae628e373346f00d8b68ffa28e0f1c0330d&width=1200&height=630",
+     "language": "en",
+     "category": [
+      "arts_culture_entertainment"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:12:00 +0000"
+    },
+    {
+     "id": "cd9b341f-9759-5b1b-959b-bf5c145f0a06",
+     "title": "I\u2019m making good money. So why does it feel like a slog?",
+     "description": "We are often sold this idea that \u201cease\u201d exists at a specific milestone in the future. But the truth is far less simple.",
+     "url": "https://www.smh.com.au/money/planning-and-budgeting/i-m-making-good-money-so-why-does-everything-still-feel-like-a-slog-20260811-p60nbs.html",
+     "author": "Paridhi Jain",
+     "image": "https://static.ffx.io/images/$zoom_0.2353%2C$multiply_0.7554%2C$ratio_1.777778%2C$width_1059%2C$x_0%2C$y_0/t_crop_custom/q_86%2Cf_auto/t_metro_opinion_no_age_social_wm/d3517cce28d8df3ae26eaddcaf8d26ebd2c9b320",
+     "language": "en",
+     "category": [
+      "society"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:11:26 +0000"
+    },
+    {
+     "id": "76d903d7-ba0d-59bb-9dd6-b47d8f56eacc",
+     "title": "Work-from-home law delayed by Carroll weeks before planned start",
+     "description": "Victoria\u2019s new premier, Ben Carroll, says the decision to push back the legislation is part of Labor\u2019s \u201creset with the business community\u201d. But the new timing casts doubt over its implementation.",
+     "url": "https://www.smh.com.au/politics/victoria/work-from-home-law-delayed-by-carroll-weeks-before-planned-start-20260811-p60n7e.html",
+     "author": "Angus Delaney",
+     "image": "https://static.ffx.io/images/$zoom_0.2133%2C$multiply_0.7554%2C$ratio_1.777778%2C$width_1059%2C$x_0%2C$y_85/t_crop_custom/q_86%2Cf_auto/3f985113919538064d710b8c3a4613231bec8287",
+     "language": "en",
+     "category": [
+      "society"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:11:08 +0000"
+    },
+    {
+     "id": "c117267f-4e75-56ab-ad42-c19cf6cf2523",
+     "title": "Powerball winning numbers drawn for $905M jackpot. Check your ticket",
+     "description": "The eighth-largest Powerball jackpot in history is worth an estimated $905 million. Here are the winning numbers.",
+     "url": "https://www.usatoday.com/story/money/lottery/2026/08/10/powerball-jackpot-aug-10-drawing-winning-numbers/91250552007/",
+     "author": "USA TODAY",
+     "image": "https://www.gannett-cdn.com/authoring/authoring-images/2026/08/10/USAT/91250557007-getty-images-2252768508-26.jpg?auto=webp&crop=1023,576,x0,y53&format=pjpg&width=1200",
+     "language": "en",
+     "category": [
+      "society"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:10:24 +0000"
+    },
+    {
+     "id": "fa60dd3d-28a3-538a-a0b0-7b7fb655fdc0",
+     "title": "Jury selection begins for Tupac murder suspect's trial",
+     "description": "The killing of hip-hop star Tupac Shakur has been a mystery for decades with the man accused of orchestrating the 1996 shooting finally headed to trial.",
+     "url": "https://thewest.com.au/politics/law-and-order/jury-selection-begins-for-tupac-murder-suspects-trial-c-22706988",
+     "author": "Erica Stapleton; Steve Gorman Reuters Premium",
+     "image": "https://images.thewest.com.au/publication/C-22706988/9315410c123cd515937a2fad6d852fbcc8a27731-16x9-x0y0w1280h720.jpg?imwidth=1200",
+     "language": "en",
+     "category": [
+      "general"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:10:07 +0000"
+    },
+    {
+     "id": "3d4cd34d-17a5-54a8-8149-11897d5e71ea",
+     "title": "Ideaforge Technology Share Price Slides 5% Even As Q1 Net Loss Narrows, Revenue Soars",
+     "description": "The company reported a 434.4% year-on-year rise in revenue to Rs 68.5 crore from Rs 12.8 crore for the June quarter.",
+     "url": "https://www.ndtvprofit.com/markets/ideaforge-technology-share-price-slides-even-as-q1-net-loss-narrows-revenue-soars-11892858",
+     "author": "Khushi Maheshwari",
+     "image": "https://c.ndtvimg.com/2025-12/f396ba8c_drone.jpg?im=FeatureCrop,algorithm=dnn,width=1600,height=900",
+     "language": "en",
+     "category": [
+      "economy_business_finance"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:09:54 +0000"
+    }
+   ],
+   "page": 1
+  },
+  {
+   "label": "v2_page2",
+   "params": {
+    "language": "en",
+    "page_number": "2"
+   },
+   "news": [
+    {
+     "id": "311344c2-d8b7-510f-979c-7c509a146faa",
+     "title": "Stock Jumps 19%: Kolte-Patil Developers Hits Fresh 52-Week High After Q1 Net Profit Surges 8X",
+     "description": "During the quarter, Kolte-Patil launched around 0.78 million sq ft of saleable area. Its Life Republic township in Pune and the Mumbai Metropolitan Region (MMR) contributed nearly 34% and 30%, respectively, to overall pre-sales.",
+     "url": "https://www.ndtvprofit.com/markets/stock-jumps-19-percent-kolte-patil-developers-hits-fresh-52-week-high-after-q1-net-profit-surges-8x-11892853",
+     "author": "NDTV Profit Desk",
+     "image": "https://c.ndtvimg.com/2026-08/quphn6e4_koltepatil-developers-q1-results_625x300_11_August_26.png?im=FitAndFill,algorithm=dnn,width=1600,height=900",
+     "language": "en",
+     "category": [
+      "economy_business_finance"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:09:23 +0000"
+    },
+    {
+     "id": "bad2af6f-f742-5aa9-90b2-77c789bebec5",
+     "title": "House from The Block finally sells after $400,000 price cut",
+     "description": "Contestants pocket any cash above the property\u2019s reserve if it sells at auction, but the latest price guide was far less.",
+     "url": "https://www.smh.com.au/property/news/house-from-the-block-finally-sells-after-400-000-price-cut-20260806-p60m34.html",
+     "author": "Wes Mountain; Elizabeth Redman",
+     "image": "https://static.ffx.io/images/$zoom_0.4065%2C$multiply_0.7554%2C$ratio_1.777778%2C$width_1059%2C$x_400%2C$y_24/t_crop_custom/q_86%2Cf_auto/d99c8f474b18d59273a737da3a8cc023fe349467",
+     "language": "en",
+     "category": [
+      "society"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:09:14 +0000"
+    },
+    {
+     "id": "e40dd3e4-0fb2-5d2d-ac42-7b8796859005",
+     "title": "South Carolina Republicans hold primary to pick Senate replacement for the late Lindsey Graham",
+     "description": "COLUMBIA, S.C. (AP) \u2014 Just two months after nominating Lindsey Graham to return to the U.S. Senate, South Carolina Republicans are casting ballots Tuesday in a special primary to pick a replacement following the sudden death of the president",
+     "url": "https://www.winnipegfreepress.com/world/2026/08/10/south-carolina-republicans-hold-primary-to-pick-senate-replacement-for-the-late-lindsey-graham",
+     "author": "Meg Kinnard, The Associated Press; Meg Kinnard; The Associated Press; Feedloaderapi",
+     "image": "https://www.winnipegfreepress.com/wp-content/uploads/sites/2/2026/08/6a776f49274ed379ee5cee4fjpeg.jpg?w=1600",
+     "language": "en",
+     "category": [
+      "sport"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:08:58 +0000"
+    },
+    {
+     "id": "707f2039-d893-54c6-b5bc-2ac4fa62bc23",
+     "title": "TMK gas flows rise as Mongolian power play takes shape",
+     "description": "TMK Energy gas production in Mongolia is climbing, with August flows topping 800 cubic metres per day. It secured long-lead drilling equipment and advanced its gas-to-power project towards a year-end launch.",
+     "url": "https://thewest.com.au/business/bulls-n-bears/tmk-gas-flows-rise-as-mongolian-power-play-takes-shape-c-22706971",
+     "author": "Penny Taylor",
+     "image": "https://images.thewest.com.au/publication/C-22706971/69ffedd3f684a8de5f041e0ac4114b3c01068b83-16x9-x0y146w1440h810.jpg?imwidth=1200",
+     "language": "en",
+     "category": [
+      "general"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:08:43 +0000"
+    },
+    {
+     "id": "1be4f5d9-8138-5f14-baf8-64eb21159cff",
+     "title": "Word of the Day: Baptism Of Fire",
+     "description": "The military sense of baptism of fire can be found in, among other texts, a 1907 history of a Massachusetts regiment in the Civil War: 'That night we camped sixteen miles from Baton Rouge where we",
+     "url": "https://www.merriam-webster.com/word-of-the-day/baptism of fire-2026-08-11",
+     "author": "",
+     "image": "https://prod.cdn-mw.com/assets/mw/word-of-the-day/social/7c461c7df66f6368aa21eb9a203f7e3d.jpg",
+     "language": "en",
+     "category": [
+      "human_interest"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:08:10 +0000"
+    },
+    {
+     "id": "0e753325-d186-58d3-9673-08c765b5d915",
+     "title": "TMK gas flows rise as Mongolia power play takes shape",
+     "description": "TMK Energy lifted July gas production 5 per cent at its Mongolian project as it prepares for a new drilling campaign and a gas-to-power project targeting year-end operations.",
+     "url": "https://www.smh.com.au/business/companies/tmk-gas-flows-rise-as-mongolia-power-play-takes-shape-20260811-p60nc7.html",
+     "author": "Penny Taylor",
+     "image": "https://static.ffx.io/images/$zoom_0.7354%2C$multiply_0.7554%2C$ratio_1.777778%2C$width_1059%2C$x_0%2C$y_0/t_crop_custom/q_86%2Cf_auto/75fb197b6e990345d50790778b6f5b4357ddbd7ba956a76055da84fe75d81995",
+     "language": "en",
+     "category": [
+      "society"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:07:28 +0000"
+    },
+    {
+     "id": "8db8a2b9-69d2-569f-8a63-a807428f1b05",
+     "title": "Have trouble sleeping in a new place? Most do because of the first-night effect",
+     "description": "The first night in a new place is always the same for Robinson Leoni: He takes longer to fall asleep, wakes up more often during the night and gets less sleep overall.",
+     "url": "https://www.winnipegfreepress.com/arts-and-life/life/2026/08/10/have-trouble-sleeping-in-a-new-place-most-do-because-of-the-first-night-effect",
+     "author": "Albert Stumm, The Associated Press; Albert Stumm; The Associated Press; Feedloaderapi",
+     "image": "https://www.winnipegfreepress.com/wp-content/uploads/sites/2/2026/08/6a7a9ff6274ed379ee5ef950jpeg.jpg?w=1600",
+     "language": "en",
+     "category": [
+      "sport"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:07:21 +0000"
+    },
+    {
+     "id": "1483eda6-88d7-5aa7-b5f4-48e12ed680ca",
+     "title": "PM Shehbaz wishes speedy recovery to Malaysian counterpart Anwar Ibrahim",
+     "description": "ISLAMABAD - Prime Minister Shehbaz Sharif on Monday extended his warm wishes and prayers for a swift and smooth recovery to his Malaysian",
+     "url": "https://www.nation.com.pk/11-Aug-2026/pm-shehbaz-wishes-speedy-recovery-malaysian-counterpart-anwar-ibrahim",
+     "author": "NEWS WIRE",
+     "image": "https://www.nation.com.pk/print_images/large/2026-08-11/pm-shehbaz-wishes-speedy-recovery-malaysian-counterpart-anwar-ibrahim-1786421053-9523.jpg",
+     "language": "en",
+     "category": [
+      "general"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:07:00 +0000"
+    },
+    {
+     "id": "1ce949f0-0c59-5c55-8982-14b69066c045",
+     "title": "FIFA crisis: Infantino deputies in talks over breakaway competitions",
+     "description": "Three FIFA vice-presidents have accused Gianni Infantino of \u201cdeception\u201d and called for an independent investigation into the doomed World Cup sale, which was scrapped after widespread opposition",
+     "url": "https://www.smh.com.au/sport/fifa-crisis-infantino-deputies-in-talks-over-breakaway-competitions-20260811-p60nbg.html",
+     "author": "Jeremy Wilson",
+     "image": "https://static.ffx.io/images/$zoom_0.23269611074489122%2C$multiply_0.7554%2C$ratio_1.777778%2C$width_1059%2C$x_0%2C$y_55/t_crop_custom/q_86%2Cf_auto/688c4a1b5aa692b557bf4a37f818b3853c481a88",
+     "language": "en",
+     "category": [
+      "society"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:06:47 +0000"
+    },
+    {
+     "id": "26b3d28f-0275-553a-9421-478c871bc9ad",
+     "title": "Failed super fund boss forced to sell $9m mansion",
+     "description": "David Anderson was the director of the First Guardian Master Fund when it plunged into liquidation last year following a series of dubious investments.",
+     "url": "https://www.dailymail.com/news/article-16040687/first-guardian-super-boss-sells-mansion.html",
+     "author": "Alasdair Belling",
+     "image": "https://i.dailymail.com/1s/2026/08/10/07/110534135-0-image-m-19_1786341710550.jpg",
+     "language": "en",
+     "category": [
+      "society"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:06:44 +0000"
+    },
+    {
+     "id": "e2243116-8af9-58c8-a113-a2a65ac66c1c",
+     "title": "Soybeans Close with Gains on Monday, as Ratings Slip",
+     "description": "Soybeans futures posted modest strength on Monday, with contracts up 1 \u00bc to 5 \u00be cents across the board. The cmdtyView national average Cash Bean price was up 3 \u00bd cents at $11.36 1/4. Soymeal futures were down $1.80 to $4.40, with Soy Oil up 83 to 130 points. Weekly...",
+     "url": "https://www.nasdaq.com/articles/soybeans-close-gains-monday-ratings-slip",
+     "author": "Barchart",
+     "image": "/sites/acquia.prod/files/barchart/Pile%2520of%2520soybeans%2520by%2520PAVEL%2520IARUNICHEV%2520via%2520iStock.jpg",
+     "language": "en",
+     "category": [],
+     "source_category": [],
+     "published": "2026-08-11 04:06:36 +0000"
+    },
+    {
+     "id": "f688d251-6bcb-5afb-ab2f-8d47d19a70ae",
+     "title": "What to watch Tuesday: Primaries in Wisconsin and Minnesota showcase Democratic divide",
+     "description": "The latest battle over the Democratic ideological divide this year shifts to the upper Midwest on Tuesday as nominating contests for governor in Wisconsin and U.S. senator in Minnesota pit left-wing candidates against more traditional ones.",
+     "url": "https://www.winnipegfreepress.com/world/2026/08/10/what-to-watch-tuesday-primaries-in-wisconsin-and-minnesota-showcase-democratic-divide",
+     "author": "Nicholas Riccardi And Tom Beaumont, The Associated Press; Nicholas Riccardi; Tom Beaumont; The Associated Press; Feedloaderapi",
+     "image": "https://www.winnipegfreepress.com/wp-content/uploads/sites/2/2026/08/6a6ba19b814ed5c20da9fdf8jpeg.jpg?w=1600",
+     "language": "en",
+     "category": [
+      "sport"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:06:24 +0000"
+    },
+    {
+     "id": "fd06b287-f7c6-5ebf-ae73-2b19586c09a5",
+     "title": "For Nigel Farage, success brings new pressures and a showdown with Count Binface",
+     "description": "LONDON (AP) \u2014 Nigel Farage depicts himself as an outsider taking on the establishment, but now the tables have turned.",
+     "url": "https://www.winnipegfreepress.com/world/2026/08/10/for-nigel-farage-success-brings-new-pressures-and-a-showdown-with-count-binface",
+     "author": "Jill Lawless, The Associated Press; Jill Lawless; The Associated Press; Feedloaderapi",
+     "image": "https://www.winnipegfreepress.com/wp-content/uploads/sites/2/2026/08/6a7a9fa9274ed379ee5ef816jpeg.jpg?w=1600",
+     "language": "en",
+     "category": [
+      "sport"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:06:18 +0000"
+    },
+    {
+     "id": "69511b59-2f7a-56a9-9476-5bb2193a850c",
+     "title": "Anne Hathaway, Ewan McGregor Reveal Shocking Dinosaur Shoot Secrets & Screams I N18G",
+     "description": "In this candid interaction, Anne Hathaway and Ewan McGregor open up about the making of 'The End of Oak Street', a dinosaur survival thriller that blends terrifying creatures with an emotional family drama. While McGregor was drawn to the story of a struggling couple finding their way back to each o...",
+     "url": "https://www.news18.com/videos/movies/anne-hathaway-ewan-mcgregor-reveal-shocking-dinosaur-shoot-secrets-screams-i-n18g-10265272.html",
+     "author": "Abhijeet Bhatt",
+     "image": "https://images.news18.com/ibnlive/uploads/2026/08/1786421193_Pn8v0h0BL2-THUMBS-2026-08-11T093139653png-g4DItgXpNR-1200x675.png",
+     "language": "en",
+     "category": [
+      "arts_culture_entertainment"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:06:06 +0000"
+    },
+    {
+     "id": "241d795e-c8e8-588b-9bf4-023220d7743e",
+     "title": "Tarik Skubal gives up 3 runs in 5 innings, leaves with Dodgers trailing in his home debut",
+     "description": "LOS ANGELES (AP) \u2014 Tarik Skubal yielded three runs on four hits while pitching five innings in the back-to-back Cy Young Award winner",
+     "url": "https://www.winnipegfreepress.com/sports/baseball/2026/08/10/tarik-skubal-gives-up-3-runs-in-5-innings-leaves-with-dodgers-trailing-in-his-home-debut",
+     "author": "Greg Beacham, The Associated Press; Greg Beacham; The Associated Press; Feedloaderapi",
+     "image": "https://www.winnipegfreepress.com/wp-content/uploads/sites/2/2026/08/6a7a9f9f274ed379ee5ef79ajpeg.jpg?w=1600",
+     "language": "en",
+     "category": [
+      "sport"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:05:57 +0000"
+    },
+    {
+     "id": "e9d08b85-7ed2-5c0a-8c17-97912f93dac0",
+     "title": "Michigan programs help fledgling retailers try out storefront shops",
+     "description": "The concept is becoming more common across Michigan as retailers look for lower-risk ways to test a physical storefront, industry group says.",
+     "url": "https://www.detroitnews.com/story/business/retail/2026/08/11/retail-incubators-let-michigan-operators-try-out-brick-and-mortar-shops/91172725007/",
+     "author": "The Detroit News",
+     "image": "https://www.gannett-cdn.com/authoring/authoring-images/2026/08/05/PDTN/91187598007-20260805-dgtempretail-0414.jpg?auto=webp&crop=8029,4518,x0,y417&format=pjpg&width=1200",
+     "language": "en",
+     "category": [],
+     "source_category": [],
+     "published": "2026-08-11 04:05:39 +0000"
+    },
+    {
+     "id": "545e8dab-5fb8-5e52-a5a5-461d72a91335",
+     "title": "Minnesota primary is latest Democratic proxy fight for Senate and a test for Trump-backed hopefuls",
+     "description": "MINNEAPOLIS (AP) \u2014 The factional fight gripping the Democratic Party goes to Minnesota on Tuesday, when voters will settle another moderate-versus-progressive U.S. Senate primary.",
+     "url": "https://www.winnipegfreepress.com/world/2026/08/10/minnesota-primary-is-latest-democratic-proxy-fight-for-senate-and-a-test-for-trump-backed-hopefuls",
+     "author": "Jonathan J. Cooper, The Associated Press; Jonathan J Cooper; The Associated Press; Feedloaderapi",
+     "image": "https://www.winnipegfreepress.com/wp-content/uploads/sites/2/2026/08/6a7a9f6b092d41c9d32b8d40jpeg.jpg?w=1600",
+     "language": "en",
+     "category": [
+      "sport"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:05:15 +0000"
+    },
+    {
+     "id": "6d00a688-6823-5d26-95ac-e9c68a5e050b",
+     "title": "\u2018Big digital prize\u2019 in Southern Cross Media\u2019s growth plan",
+     "description": "Southern Cross Media boss Rohan Lund will step up the company\u2019s growth in digital markets after bedding down a merger and restructure in the opening months of 2026.",
+     "url": "https://thewest.com.au/business/media/southern-cross-media-chief-executive-rohan-lund-chasing-growth-in-digital-markets-c-22702420",
+     "author": "Matt Mckenzie",
+     "image": "https://images.thewest.com.au/publication/C-22702420/bdc5747ad479064032a85dc9d1c7716239060d01-16x9-x0y209w4009h2255.jpg?imwidth=1200",
+     "language": "en",
+     "category": [
+      "general"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:05:09 +0000"
+    },
+    {
+     "id": "c9b358ae-2494-5025-9f74-507a867495cc",
+     "title": "Clinton Township man on cyclosporiasis: It was the 'worst, worst, worst'",
+     "description": "Karl Hercula and his wife. Gina, of Clinton Township both became infected with cyclosporiasis after eating at a Taco Bell. They're now suing.",
+     "url": "https://www.detroitnews.com/story/news/local/michigan/2026/08/11/cyclosporiasis-worst-worst-worst-parasitic-illness-clinton-township-couple/91097163007/",
+     "author": "The Detroit News",
+     "image": "https://www.gannett-cdn.com/authoring/authoring-images/2026/07/24/PDTN/91034782007-img-1296-1.jpeg?auto=webp&crop=5711,3213,x0,y535&format=pjpg&width=1200",
+     "language": "en",
+     "category": [],
+     "source_category": [],
+     "published": "2026-08-11 04:04:50 +0000"
+    },
+    {
+     "id": "dd0d60c6-9c2f-5744-9cae-9bb2d7003b47",
+     "title": "AP News in Brief at 12:04 a.m. EDT",
+     "description": "Magnitude 7.4 quake rocks western Colombia, killing at least 111 people",
+     "url": "https://www.winnipegfreepress.com/world/2026/08/10/ap-news-in-brief-at-1204-a-m-edt-947",
+     "author": "The Associated Press; Feedloaderapi",
+     "image": "https://www.winnipegfreepress.com/wp-content/uploads/sites/2/2022/11/fb-og-image.png",
+     "language": "en",
+     "category": [
+      "sport"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:04:35 +0000"
+    }
+   ],
+   "page": 2
+  },
+  {
+   "label": "v2_multi_valid",
+   "params": {
+    "language": "en",
+    "category": "science_technology,politics_government"
+   },
+   "news": [
+    {
+     "id": "f5f7f50b-96d9-5df3-9b7b-2c3f26529593",
+     "title": "Malaca\u00f1ang sends proposed P7.2-trillion budget to House for review",
+     "description": "MANILA, Philippines \u2014 The House of Representatives on Tuesday received from Malaca\u00f1ang the proposed P7.2 trillion national budget prepared by the Department of Budget and Management. Following the receipt of the National Expenditure Program (NEP), it is now incumbent upon the House committee on appr...",
+     "url": "https://newsinfo.inquirer.net/2282018/marcos-cabinets-p7-2-t-budget-sent-by-malacanang-to-house-for-review",
+     "author": "mareyes",
+     "image": "None",
+     "language": "en",
+     "category": [
+      "politics_government"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:43 +0000"
+    },
+    {
+     "id": "ff674df1-ae46-5eca-8f87-8ef1ab7b23c8",
+     "title": "BDH-CQ: In-Context Learning with Recurrent Latent Reasoning",
+     "description": "We introduce BDH-CQ, a reasoning model that combines in-context learning with recurrent latent reasoning. Inputs presented at inference time continuously update the model's recurrent memory; the model then solves a query through iterative computation in a high-dimensional latent space, without verba...",
+     "url": "https://arxiv.org/abs/2608.09888v1",
+     "author": "Engdahl; Bj\u00f6rn; Kosowski; Adrian; Chorowski; Jan; Stamirowska; Zuzanna; Uzna\u0144ski; Przemys\u0142aw; Jiang; Junlin; Phadke; Rohan; Kinas; Remigiusz; Zhong; Richard",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "feb17c0c-24d9-5663-b441-aa09c1642f9f",
+     "title": "Effect of Photoplethysmogram Artifacts on Uncertainty in Atrial Fibrillation Detection",
+     "description": "Detection of atrial fibrillation (AF) from photoplethysmogram (PPG) is highly sensitive to artifacts, yet their effect on uncertainty of different AF detectors remains poorly understood. This work aims to quantify how different PPG artifact types affect the uncertainty of AF detectors. Two machine l...",
+     "url": "https://arxiv.org/abs/2608.09204v1",
+     "author": "Solo\u0161enko; Andrius; Vargova; Enik\u00f6; Coquelin; Lo\u00efc; Marozas; Vaidotas; Petr\u0117nas",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "fe4551fb-4977-5181-960d-a4e692290435",
+     "title": "The Voiceprint Fallacy: Why Voices Are Not Unique Biometric Imprints",
+     "description": "In recent years, the term voiceprint has regained attention, particularly in technological applications and policy-making contexts, often carrying the assumption that a person's voice constitutes a stable and unique biometric trace analogous to a fingerprint. Yet this conception has been repeatedly ...",
+     "url": "https://arxiv.org/abs/2608.07980v1",
+     "author": "Yang; Tianle; Zhang; Cuiling; Sun; Chengzhe; Lyu; Siwei; Rose; Phil",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "fd8ed38b-8aa7-5e85-a195-e67ab027d4e1",
+     "title": "SocialFiVis: A Visual Analytics Sandbox for LLM-Grounded Multi-Agent Simulation in Social Finance",
+     "description": "The emergence of social finance (SocialFi) transforms online communities into complex socio-economic systems. Within these spaces, collective decisions shape a \"digital commons\" characterized by social capital (e.g., community trust) and financial health (e.g., market liquidity). Governing such hybr...",
+     "url": "https://arxiv.org/abs/2608.08497v1",
+     "author": "Cao; Yi-Fan; Shi; Qing; Wang; Liangwei; Lo; Leo Yu-Ho; Chen; Lin; Han; Yuzi; Yang; Kani",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "fb240367-dc36-5a41-b0b1-dcc9853e32c0",
+     "title": "Analysis and Consensus Control of Emergent Dynamic Polarization in Minimally-Nonlinear Opinion Dynamics",
+     "description": "Collective opinions in social networks evolve through local interaction rules, yet how such local updates give rise to dynamic polarization--persistent oscillatory disagreement between opposing opinion clusters at the network level--remains unexplained. This paper proposes a Minimally-Nonlinear Opin...",
+     "url": "https://arxiv.org/abs/2608.09724v1",
+     "author": "Kumar; Rajul; Yao; Ningshi",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "f94ebea2-2306-5e23-93c6-24018ea0929b",
+     "title": "Preserved metallicity and tunable magnetism in Zr-based Janus MXenes",
+     "description": "Janus MXenes provide a chemically asymmetric platform to tailor the properties of two-dimensional transition metal carbides. Here, we present a systematic first-principles study of the structural, electronic, mechanical, and magnetic properties of Janus ZrMCX2 MXenes (M = Cr, Hf, Nb, Sc, Ti; X = F, ...",
+     "url": "https://arxiv.org/abs/2608.09645v1",
+     "author": "\u00d6zcan; S; Biel; B",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "f712dac9-66cb-51fd-81c8-ac39ffb30af7",
+     "title": "Quantum sensing composite excitations in an anisotropic ferromagnet via a qubit",
+     "description": "Ordered magnets harbor intrinsically squeezed ground states and magnonic excitations characterized by entanglement between spins and nonclassical magnon number composition. A pathway to detecting the superpositions of noneigenmode magnon number states underlying these nonclassical magnetic ground st...",
+     "url": "https://arxiv.org/abs/2608.09463v1",
+     "author": "Rodge; Amey S; Moussa; Tarek; Kamra; Akashdeep; Dey; Bashab",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "f568512c-0d85-5ea2-94aa-79665abd03b1",
+     "title": "JUMP-lite: Compact, reproducible benchmarking of cell representations",
+     "description": "Image-based profiling captures rich phenotypic signatures for drug discovery and functional genomics. Large public datasets like JUMP Cell Painting now provide millions of images for systematic study. However, the scale of these resources, 115 TB for JUMP alone, and fragmented evaluation practices m...",
+     "url": "https://arxiv.org/abs/2608.07632v1",
+     "author": "Mu\u00f1oz; Al\u00e1n F; Haslum; Johan Fredin; Shen; Runxi; Carpenter; Anne E; Singh; Shantanu",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "f3475cf0-7b0a-57c1-a1f2-cdb50ae49afb",
+     "title": "Parity-Resolved Quantum Capacitance and Quantum Inductance in Topological, Trivial, and Normal Nanowire Interferometers",
+     "description": "Quantum-capacitance measurements convert the curvature of a quantum-dot energy in a flux-threaded nanowire loop into fast parity-sensitive signals and, therefore, have become a promising readout tool for Majorana devices. However, Majorana-like quantum-capacitance responses can also arise from topol...",
+     "url": "https://arxiv.org/abs/2608.09334v1",
+     "author": "Pinchenkova; Viktoriia; Kozin; Valerii K; H\u00fcnenberger; Maximilian; Loss; Daniel; Klinovaja; Jelena",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "efc9c393-3d85-5e51-a796-93330f22d4a7",
+     "title": "Function approximation and nonparametric regression with binary and ternary ReLU networks",
+     "description": "We show that deep binary ReLU networks and deep sparse ternary ReLU networks can approximate $\u03b2$-H\u00f6lder functions on $[0,1]^d$. We also show that deep sparse ternary ReLU networks can achieve, up to a logarithmic factor, the minimax rate of prediction of $\u03b2$-smooth regression function.",
+     "url": "https://arxiv.org/abs/2206.13280v4",
+     "author": "Beknazaryan; Aleksandr",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "ee9cf879-410a-5dfd-b553-c619d90b56a7",
+     "title": "Noisy Braiding of Majorana Modes: A Comparison of Nanowire Trijunction and Quantum-Dot-Assisted Architectures",
+     "description": "Majorana zero modes have emerged as one of the most promising platforms for topological quantum computation, since their non-Abelian braiding statistics allow quantum information to be encoded nonlocally and manipulated through braiding operations that are, in principle, protected against local pert...",
+     "url": "https://arxiv.org/abs/2608.09416v1",
+     "author": "Sahu; Dibyajyoti; Gangadharaiah; Suhas",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "ee8f0c81-cd12-5991-a343-846f08d6577f",
+     "title": "Phonon-assisted transport and hole-phonon coupling in GaAs double quantum dots",
+     "description": "Hole-phonon interactions play an important role in transport and decoherence processes in semiconductor quantum dots. Here we investigate hole-phonon coupling in a gate-defined GaAs double quantum dot integrated with a quantum point contact charge sensor. Under finite source-drain bias, pronounced o...",
+     "url": "https://arxiv.org/abs/2608.09116v1",
+     "author": "Leng; Jin; Liao; Wei-Zhu; Jiang; Hao-Tian; Liu; Di; Wang; Bao-Chuan; Cao; Gang; Li; Hai-Ou; Guo",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "ed779dd1-9456-55c3-9b37-18b160158e6e",
+     "title": "Engineering correlated phases through manipulation of Van Hove singularities",
+     "description": "Controlling the ordered phases of correlated electron systems remains a central challenge in quantum materials design. Divergences in the electronic density of states, known as Van Hove singularities (VHSs), are one obvious route to such control. It is clear from recent work that the exact functiona...",
+     "url": "https://arxiv.org/abs/2608.07714v1",
+     "author": "Sheerin; Thomas P; Ramirez; Maria; Hooley; Chris A; Rhodes; Luke C",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "ed5c8a7e-cca5-5a11-b766-78ca3f80b110",
+     "title": "High second Chern number induced by long-range hopping in a four-dimensional Dirac model",
+     "description": "Four-dimensional (4D) topological systems provide a promising platform for exploring topological phenomena beyond three dimensions. So far, extensive recent studies on 4D topological insulators have focused on the 4D Dirac model, while its second Chern number is restricted to a limited set of values...",
+     "url": "https://arxiv.org/abs/2608.08670v1",
+     "author": "Liu; Zheng-Rong; Xiang; Chen; Rui; Zhou; Bin",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "eca28feb-49ff-523e-8c32-935958bd463d",
+     "title": "Nonequilibrium dynamics of doped Chern ferromagnets: a case study for false vacuum decay",
+     "description": "Even though metastable false vacuum decay is ubiquitous in physics, its underlying dynamics are still not well understood. Dissipative state preparation in moir\u00e9 quantum materials provides an exceptional setting for exploring this physics since it allows the possibility of generating exotic quantum ...",
+     "url": "https://arxiv.org/abs/2608.08937v1",
+     "author": "Kuhlbrodt; Kilian; Huber; Olivier; Breach; Oliver; Li; Weijie; Xu; Xiaodong; Watanabe; Kenji; Taniguchi; Takashi; Kroner; Martin; Parameswaran; Siddharth A; Imamoglu; Atac",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "ec4da210-6629-5965-9c30-8b639de590de",
+     "title": "Robust Fault Detection and Classification in Power Systems via Physics-Informed and Data-Driven Learning",
+     "description": "Electrical faults in power transmission systems can severely affect grid stability, equipment safety, and operational reliability. Traditional protection schemes, particularly distance relays, depend on apparent impedance computation and may suffer from relay overreach, underreach, or maloperation d...",
+     "url": "https://arxiv.org/abs/2608.08785v1",
+     "author": "Basnet; Biswash; Sen; Varsha",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "ebf1b33e-9d72-568c-a54e-c78e4597bc18",
+     "title": "Transfer Learning-Enabled Distortion Compensation for Amplitude-Phase-Time Block Modulation-Based Nonlinear Single-Carrier Wireless Communications",
+     "description": "Power amplifier (PA) nonlinearity and memory effects significantly limit the spectral compliance, reliability, and energy efficiency of communication systems. To address this, we propose a transfer-learning-enabled, fully digital transceiver-cooperative method for amplitude-phase-time block modulati...",
+     "url": "https://arxiv.org/abs/2608.08554v1",
+     "author": "Duan; Guoxing; Fan; Min; Yi; Cheng; Yang; Bensheng; Xu; Wei; Wang; Haiming; You; Xiaohu",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "eb91c7f9-a10e-5778-b11f-2583e0ee3a3c",
+     "title": "Out-of-equilibrium inhomogeneous XX chains: Exact results and the hydrodynamic limit",
+     "description": "We study the out-of-equilibrium dynamics in the XX chain with step-like magnetic field, which maps to an inhomogeneous tight-binding chain after Jordan-Wigner transformation. We obtain exact analytic expressions for the fermionic two-point correlation function after a quantum quench from several ini...",
+     "url": "https://arxiv.org/abs/2608.08205v1",
+     "author": "Alba; Vincenzo; Rottoli; Federico",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "e827cc08-a37a-5902-b157-592b78949469",
+     "title": "Retrieval-Augmented Generation-Based Color Restoration for Low-Light Image Enhancement",
+     "description": "Recent low-light image enhancement (LLIE) methods have driven brightness and structural fidelity close to that of normally-exposed images, yet their outputs still exhibit systematic color shifts such as greenish skies, yellowish faces, and warm-tinted white objects. We attribute this to end-to-end L...",
+     "url": "https://arxiv.org/abs/2608.08211v1",
+     "author": "Lu; Li-Wei; Miaou; Shaou-Gang",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    }
+   ],
+   "page": 1
+  },
+  {
+   "label": "v2_single_valid",
+   "params": {
+    "language": "en",
+    "category": "science_technology"
+   },
+   "news": [
+    {
+     "id": "ff674df1-ae46-5eca-8f87-8ef1ab7b23c8",
+     "title": "BDH-CQ: In-Context Learning with Recurrent Latent Reasoning",
+     "description": "We introduce BDH-CQ, a reasoning model that combines in-context learning with recurrent latent reasoning. Inputs presented at inference time continuously update the model's recurrent memory; the model then solves a query through iterative computation in a high-dimensional latent space, without verba...",
+     "url": "https://arxiv.org/abs/2608.09888v1",
+     "author": "Engdahl; Bj\u00f6rn; Kosowski; Adrian; Chorowski; Jan; Stamirowska; Zuzanna; Uzna\u0144ski; Przemys\u0142aw; Jiang; Junlin; Phadke; Rohan; Kinas; Remigiusz; Zhong; Richard",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "feb17c0c-24d9-5663-b441-aa09c1642f9f",
+     "title": "Effect of Photoplethysmogram Artifacts on Uncertainty in Atrial Fibrillation Detection",
+     "description": "Detection of atrial fibrillation (AF) from photoplethysmogram (PPG) is highly sensitive to artifacts, yet their effect on uncertainty of different AF detectors remains poorly understood. This work aims to quantify how different PPG artifact types affect the uncertainty of AF detectors. Two machine l...",
+     "url": "https://arxiv.org/abs/2608.09204v1",
+     "author": "Solo\u0161enko; Andrius; Vargova; Enik\u00f6; Coquelin; Lo\u00efc; Marozas; Vaidotas; Petr\u0117nas",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "fe4551fb-4977-5181-960d-a4e692290435",
+     "title": "The Voiceprint Fallacy: Why Voices Are Not Unique Biometric Imprints",
+     "description": "In recent years, the term voiceprint has regained attention, particularly in technological applications and policy-making contexts, often carrying the assumption that a person's voice constitutes a stable and unique biometric trace analogous to a fingerprint. Yet this conception has been repeatedly ...",
+     "url": "https://arxiv.org/abs/2608.07980v1",
+     "author": "Yang; Tianle; Zhang; Cuiling; Sun; Chengzhe; Lyu; Siwei; Rose; Phil",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "fd8ed38b-8aa7-5e85-a195-e67ab027d4e1",
+     "title": "SocialFiVis: A Visual Analytics Sandbox for LLM-Grounded Multi-Agent Simulation in Social Finance",
+     "description": "The emergence of social finance (SocialFi) transforms online communities into complex socio-economic systems. Within these spaces, collective decisions shape a \"digital commons\" characterized by social capital (e.g., community trust) and financial health (e.g., market liquidity). Governing such hybr...",
+     "url": "https://arxiv.org/abs/2608.08497v1",
+     "author": "Cao; Yi-Fan; Shi; Qing; Wang; Liangwei; Lo; Leo Yu-Ho; Chen; Lin; Han; Yuzi; Yang; Kani",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "fb240367-dc36-5a41-b0b1-dcc9853e32c0",
+     "title": "Analysis and Consensus Control of Emergent Dynamic Polarization in Minimally-Nonlinear Opinion Dynamics",
+     "description": "Collective opinions in social networks evolve through local interaction rules, yet how such local updates give rise to dynamic polarization--persistent oscillatory disagreement between opposing opinion clusters at the network level--remains unexplained. This paper proposes a Minimally-Nonlinear Opin...",
+     "url": "https://arxiv.org/abs/2608.09724v1",
+     "author": "Kumar; Rajul; Yao; Ningshi",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "f94ebea2-2306-5e23-93c6-24018ea0929b",
+     "title": "Preserved metallicity and tunable magnetism in Zr-based Janus MXenes",
+     "description": "Janus MXenes provide a chemically asymmetric platform to tailor the properties of two-dimensional transition metal carbides. Here, we present a systematic first-principles study of the structural, electronic, mechanical, and magnetic properties of Janus ZrMCX2 MXenes (M = Cr, Hf, Nb, Sc, Ti; X = F, ...",
+     "url": "https://arxiv.org/abs/2608.09645v1",
+     "author": "\u00d6zcan; S; Biel; B",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "f712dac9-66cb-51fd-81c8-ac39ffb30af7",
+     "title": "Quantum sensing composite excitations in an anisotropic ferromagnet via a qubit",
+     "description": "Ordered magnets harbor intrinsically squeezed ground states and magnonic excitations characterized by entanglement between spins and nonclassical magnon number composition. A pathway to detecting the superpositions of noneigenmode magnon number states underlying these nonclassical magnetic ground st...",
+     "url": "https://arxiv.org/abs/2608.09463v1",
+     "author": "Rodge; Amey S; Moussa; Tarek; Kamra; Akashdeep; Dey; Bashab",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "f568512c-0d85-5ea2-94aa-79665abd03b1",
+     "title": "JUMP-lite: Compact, reproducible benchmarking of cell representations",
+     "description": "Image-based profiling captures rich phenotypic signatures for drug discovery and functional genomics. Large public datasets like JUMP Cell Painting now provide millions of images for systematic study. However, the scale of these resources, 115 TB for JUMP alone, and fragmented evaluation practices m...",
+     "url": "https://arxiv.org/abs/2608.07632v1",
+     "author": "Mu\u00f1oz; Al\u00e1n F; Haslum; Johan Fredin; Shen; Runxi; Carpenter; Anne E; Singh; Shantanu",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "f3475cf0-7b0a-57c1-a1f2-cdb50ae49afb",
+     "title": "Parity-Resolved Quantum Capacitance and Quantum Inductance in Topological, Trivial, and Normal Nanowire Interferometers",
+     "description": "Quantum-capacitance measurements convert the curvature of a quantum-dot energy in a flux-threaded nanowire loop into fast parity-sensitive signals and, therefore, have become a promising readout tool for Majorana devices. However, Majorana-like quantum-capacitance responses can also arise from topol...",
+     "url": "https://arxiv.org/abs/2608.09334v1",
+     "author": "Pinchenkova; Viktoriia; Kozin; Valerii K; H\u00fcnenberger; Maximilian; Loss; Daniel; Klinovaja; Jelena",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "efc9c393-3d85-5e51-a796-93330f22d4a7",
+     "title": "Function approximation and nonparametric regression with binary and ternary ReLU networks",
+     "description": "We show that deep binary ReLU networks and deep sparse ternary ReLU networks can approximate $\u03b2$-H\u00f6lder functions on $[0,1]^d$. We also show that deep sparse ternary ReLU networks can achieve, up to a logarithmic factor, the minimax rate of prediction of $\u03b2$-smooth regression function.",
+     "url": "https://arxiv.org/abs/2206.13280v4",
+     "author": "Beknazaryan; Aleksandr",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "ee9cf879-410a-5dfd-b553-c619d90b56a7",
+     "title": "Noisy Braiding of Majorana Modes: A Comparison of Nanowire Trijunction and Quantum-Dot-Assisted Architectures",
+     "description": "Majorana zero modes have emerged as one of the most promising platforms for topological quantum computation, since their non-Abelian braiding statistics allow quantum information to be encoded nonlocally and manipulated through braiding operations that are, in principle, protected against local pert...",
+     "url": "https://arxiv.org/abs/2608.09416v1",
+     "author": "Sahu; Dibyajyoti; Gangadharaiah; Suhas",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "ee8f0c81-cd12-5991-a343-846f08d6577f",
+     "title": "Phonon-assisted transport and hole-phonon coupling in GaAs double quantum dots",
+     "description": "Hole-phonon interactions play an important role in transport and decoherence processes in semiconductor quantum dots. Here we investigate hole-phonon coupling in a gate-defined GaAs double quantum dot integrated with a quantum point contact charge sensor. Under finite source-drain bias, pronounced o...",
+     "url": "https://arxiv.org/abs/2608.09116v1",
+     "author": "Leng; Jin; Liao; Wei-Zhu; Jiang; Hao-Tian; Liu; Di; Wang; Bao-Chuan; Cao; Gang; Li; Hai-Ou; Guo",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "ed779dd1-9456-55c3-9b37-18b160158e6e",
+     "title": "Engineering correlated phases through manipulation of Van Hove singularities",
+     "description": "Controlling the ordered phases of correlated electron systems remains a central challenge in quantum materials design. Divergences in the electronic density of states, known as Van Hove singularities (VHSs), are one obvious route to such control. It is clear from recent work that the exact functiona...",
+     "url": "https://arxiv.org/abs/2608.07714v1",
+     "author": "Sheerin; Thomas P; Ramirez; Maria; Hooley; Chris A; Rhodes; Luke C",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "ed5c8a7e-cca5-5a11-b766-78ca3f80b110",
+     "title": "High second Chern number induced by long-range hopping in a four-dimensional Dirac model",
+     "description": "Four-dimensional (4D) topological systems provide a promising platform for exploring topological phenomena beyond three dimensions. So far, extensive recent studies on 4D topological insulators have focused on the 4D Dirac model, while its second Chern number is restricted to a limited set of values...",
+     "url": "https://arxiv.org/abs/2608.08670v1",
+     "author": "Liu; Zheng-Rong; Xiang; Chen; Rui; Zhou; Bin",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "eca28feb-49ff-523e-8c32-935958bd463d",
+     "title": "Nonequilibrium dynamics of doped Chern ferromagnets: a case study for false vacuum decay",
+     "description": "Even though metastable false vacuum decay is ubiquitous in physics, its underlying dynamics are still not well understood. Dissipative state preparation in moir\u00e9 quantum materials provides an exceptional setting for exploring this physics since it allows the possibility of generating exotic quantum ...",
+     "url": "https://arxiv.org/abs/2608.08937v1",
+     "author": "Kuhlbrodt; Kilian; Huber; Olivier; Breach; Oliver; Li; Weijie; Xu; Xiaodong; Watanabe; Kenji; Taniguchi; Takashi; Kroner; Martin; Parameswaran; Siddharth A; Imamoglu; Atac",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "ec4da210-6629-5965-9c30-8b639de590de",
+     "title": "Robust Fault Detection and Classification in Power Systems via Physics-Informed and Data-Driven Learning",
+     "description": "Electrical faults in power transmission systems can severely affect grid stability, equipment safety, and operational reliability. Traditional protection schemes, particularly distance relays, depend on apparent impedance computation and may suffer from relay overreach, underreach, or maloperation d...",
+     "url": "https://arxiv.org/abs/2608.08785v1",
+     "author": "Basnet; Biswash; Sen; Varsha",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "ebf1b33e-9d72-568c-a54e-c78e4597bc18",
+     "title": "Transfer Learning-Enabled Distortion Compensation for Amplitude-Phase-Time Block Modulation-Based Nonlinear Single-Carrier Wireless Communications",
+     "description": "Power amplifier (PA) nonlinearity and memory effects significantly limit the spectral compliance, reliability, and energy efficiency of communication systems. To address this, we propose a transfer-learning-enabled, fully digital transceiver-cooperative method for amplitude-phase-time block modulati...",
+     "url": "https://arxiv.org/abs/2608.08554v1",
+     "author": "Duan; Guoxing; Fan; Min; Yi; Cheng; Yang; Bensheng; Xu; Wei; Wang; Haiming; You; Xiaohu",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "eb91c7f9-a10e-5778-b11f-2583e0ee3a3c",
+     "title": "Out-of-equilibrium inhomogeneous XX chains: Exact results and the hydrodynamic limit",
+     "description": "We study the out-of-equilibrium dynamics in the XX chain with step-like magnetic field, which maps to an inhomogeneous tight-binding chain after Jordan-Wigner transformation. We obtain exact analytic expressions for the fermionic two-point correlation function after a quantum quench from several ini...",
+     "url": "https://arxiv.org/abs/2608.08205v1",
+     "author": "Alba; Vincenzo; Rottoli; Federico",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "e827cc08-a37a-5902-b157-592b78949469",
+     "title": "Retrieval-Augmented Generation-Based Color Restoration for Low-Light Image Enhancement",
+     "description": "Recent low-light image enhancement (LLIE) methods have driven brightness and structural fidelity close to that of normally-exposed images, yet their outputs still exhibit systematic color shifts such as greenish skies, yellowish faces, and warm-tinted white objects. We attribute this to end-to-end L...",
+     "url": "https://arxiv.org/abs/2608.08211v1",
+     "author": "Lu; Li-Wei; Miaou; Shaou-Gang",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    },
+    {
+     "id": "e7d62fd4-943b-5173-a102-95c1fb0b20e0",
+     "title": "Physically Constrained Agentic AI for Energy Scheduling",
+     "description": "Agentic AI extends energy management beyond fixed-form interaction by translating natural-language requests into coordinated scheduling actions. We present a hierarchical ReAct Energy Management System (EMS) in which one orchestrator coordinates specialist agent types for shiftable appliances, EV ch...",
+     "url": "https://arxiv.org/abs/2608.09029v1",
+     "author": "Zhao; Dafnag; Deng; Yang; Li; Zhengmao",
+     "image": "/static/browse/0.3.4/images/arxiv-logo-fb.png",
+     "language": "en",
+     "category": [
+      "science_technology"
+     ],
+     "source_category": [],
+     "published": "2026-08-11 04:00:00 +0000"
+    }
+   ],
+   "page": 1
+  },
+  {
+   "label": "v1_control",
+   "params": {
+    "language": "en"
+   },
+   "news": [
+    {
+     "id": "fbf23261-3bba-5c17-a655-e8605c19fd52",
+     "title": "Driver 'incredibly fortunate' to avoid serious injury after hitting tree",
+     "description": "Police said a vehicle crashed into a tree in Adelaide's southern suburbs, but the driver has managed to escape with just \"minor injuries\".",
+     "url": "https://www.abc.net.au/news/2026-08-11/sa-driver-escape-tree-crash-with-minor-injuries/107024080",
+     "author": "",
+     "image": "https://live-production.wcms.abc-cdn.net.au/68d8219d5a3c1acc7e2462d0dcb2bd4e?impolicy=wcms_watermark_news&cropH=626&cropW=1112&xPos=0&yPos=74&width=862&height=485&imformat=generic",
+     "language": "en",
+     "category": [
+      "mining"
+     ],
+     "source_category": [
+      "mining"
+     ],
+     "published": "2026-08-11 04:13:08 +0000"
+    },
+    {
+     "id": "d3e66ea0-d197-51e9-9536-c830b3f6bf70",
+     "title": "Alexandria Ocasio-Cortez open to presidential run, announces she will freeze eggs",
+     "description": "The 36-year-old said she felt \"empowered\" by her decision, while adding that it came with political risk.",
+     "url": "https://www.abc.net.au/news/2026-08-11/alexandria-ocasio-cortez-egg-freezing/107022606",
+     "author": "Nelli Saarinen",
+     "image": "https://live-production.wcms.abc-cdn.net.au/ed314c4ae9bbe07b631c78d217dd99cc?impolicy=wcms_watermark_news&cropH=466&cropW=828&xPos=0&yPos=349&width=862&height=485&imformat=generic",
+     "language": "en",
+     "category": [
+      "mining"
+     ],
+     "source_category": [
+      "mining"
+     ],
+     "published": "2026-08-11 04:13:08 +0000"
+    },
+    {
+     "id": "aa5d1ed4-e27d-5e63-adbf-00ab0b00699c",
+     "title": "Bird flu vaccine to be rolled out to vulnerable species in captivity",
+     "description": "A vaccine will be rolled out to protect Australia's native species from the deadly H5N1 bird flu, with a focus on birds in captivity.",
+     "url": "https://www.abc.net.au/news/2026-08-11/federal-politics-agriculture-minister-bird-flu-vaccine-rollout/107023868",
+     "author": "Monte Bovill",
+     "image": "https://live-production.wcms.abc-cdn.net.au/f7db5baa644ce1216c1f13b448572b93?impolicy=wcms_watermark_news&cropH=2813&cropW=5000&xPos=0&yPos=0&width=862&height=485&imformat=generic",
+     "language": "en",
+     "category": [
+      "mining"
+     ],
+     "source_category": [
+      "mining"
+     ],
+     "published": "2026-08-11 04:13:08 +0000"
+    },
+    {
+     "id": "8ff7e5de-3619-56cc-a6d0-424c5c4d624d",
+     "title": "Aussie open water swim queen Johnson triumphs at Pan Pacs",
+     "description": "Moesha Johnson opens Australia's medal account at the Pan Pacific swimming titles, winning gold in the 10km open water race.",
+     "url": "https://www.abc.net.au/news/2026-08-11/aussie-open-water-swim-queen-johnson-triumphs-pan-pacs/107023748",
+     "author": "",
+     "image": "https://live-production.wcms.abc-cdn.net.au/efe0cb65a0a1113c66954594a2fc7932?impolicy=wcms_watermark_news&cropH=2552&cropW=4536&xPos=0&yPos=68&width=862&height=485&imformat=generic",
+     "language": "en",
+     "category": [
+      "mining"
+     ],
+     "source_category": [
+      "mining"
+     ],
+     "published": "2026-08-11 04:13:08 +0000"
+    },
+    {
+     "id": "8ff15691-36bd-5211-9c12-357fd79738df",
+     "title": "How Gianni Infantino's FIFA leadership imploded over two weeks",
+     "description": "The FIFA president has faced more than a fortnight of international turmoil, embroiled in a World Cup sell-off saga that sparked loss of confidence in his leadership.",
+     "url": "https://www.abc.net.au/news/2026-08-11/gianni-infantino-fifa-ffe-controversy-timeline-explained/107021760",
+     "author": "Luke Cooper",
+     "image": "https://live-production.wcms.abc-cdn.net.au/58b5742a9c42b985d65a3d284c107be0?impolicy=wcms_watermark_news&cropH=1259&cropW=2238&xPos=2095&yPos=693&width=862&height=485&imformat=generic",
+     "language": "en",
+     "category": [
+      "mining"
+     ],
+     "source_category": [
+      "mining"
+     ],
+     "published": "2026-08-11 04:13:08 +0000"
+    },
+    {
+     "id": "50163a28-8bd5-51a0-80e3-58480e278ac3",
+     "title": "'We deserve to be counted': Gender, sexuality to be asked about in census",
+     "description": "The 2026 census will include questions about sexual orientation and gender identity for the first time to help build a clearer picture of Australia's LGBTQ+ population, and support planning for health and community services.",
+     "url": "https://www.abc.net.au/news/2026-08-11/2026-census-ask-gender-sexual-orientation-lgbtq-data-gaps/107018232",
+     "author": "Lily Nothling",
+     "image": "https://live-production.wcms.abc-cdn.net.au/f08c34cf6fb887d0a8b6b01c828d9dce?impolicy=wcms_watermark_news&cropH=2592&cropW=4608&xPos=0&yPos=0&width=862&height=485&imformat=generic",
+     "language": "en",
+     "category": [
+      "mining"
+     ],
+     "source_category": [
+      "mining"
+     ],
+     "published": "2026-08-11 04:13:08 +0000"
+    },
+    {
+     "id": "1afaddc7-8167-5683-bdea-98db48cf4232",
+     "title": "'Never forgotten where he's from': Outback community pride for Crows legend",
+     "description": "Taylor 'Tex' Walker has etched himself into the Adelaide Crows' history books, but his hometown of Broken Hill holds so much admiration for his career.",
+     "url": "https://www.abc.net.au/news/2026-08-11/broken-hill-community-celebrates-taylor-walker-retirement/107023176",
+     "author": "Sophie Holder; Andrew Schmidt",
+     "image": "https://live-production.wcms.abc-cdn.net.au/ec0483e8b4e7072d077282c779a642d6?impolicy=wcms_watermark_news&cropH=1080&cropW=1920&xPos=0&yPos=0&width=862&height=485&imformat=generic",
+     "language": "en",
+     "category": [
+      "mining"
+     ],
+     "source_category": [
+      "mining"
+     ],
+     "published": "2026-08-11 04:13:08 +0000"
+    },
+    {
+     "id": "17a03cb0-cad2-5f1a-9f93-aa03e4e2e1b2",
+     "title": "US had hottest month on record in July, England's drought worsens",
+     "description": "July 2026 was the hottest month ever in the United States, whilst almost three-quarters of England is now in drought.",
+     "url": "https://www.abc.net.au/news/2026-08-11/the-united-states-sizzled-to-its-hottest-month-ever-last-month/107023080",
+     "author": "",
+     "image": "https://live-production.wcms.abc-cdn.net.au/a81c68825bda492f3e6506fd128c1937?impolicy=wcms_watermark_news&cropH=2250&cropW=4000&xPos=0&yPos=208&width=862&height=485&imformat=generic",
+     "language": "en",
+     "category": [
+      "mining"
+     ],
+     "source_category": [
+      "mining"
+     ],
+     "published": "2026-08-11 04:13:08 +0000"
+    },
+    {
+     "id": "01cb5d8b-3bdd-59f2-b417-b347c627d343",
+     "title": "Children encountering extremism at 'disturbing' rate, inquiry told",
+     "description": "Children at an increasingly young age are engaging with violent extremist material at a \"disturbing\" rate, Australia's counter-terrorism coordinator says.",
+     "url": "https://www.abc.net.au/news/2026-08-11/antisemitism-royal-commission-children-extremism-material-online/107023572",
+     "author": "Phoebe Pin",
+     "image": "https://live-production.wcms.abc-cdn.net.au/75fb2322822fa404cb370a4b90c4d332?impolicy=wcms_watermark_news&cropH=791&cropW=1407&xPos=0&yPos=73&width=862&height=485&imformat=generic",
+     "language": "en",
+     "category": [
+      "mining"
+     ],
+     "source_category": [
+      "mining"
+     ],
+     "published": "2026-08-11 04:13:08 +0000"
+    },
+    {
+     "id": "d65eb903-8d33-5a66-888a-c11c8bc08901",
+     "title": "Opposition MPs Walk Out Of Special Sitting On Tabung Haji RCI Report",
+     "description": "Dewan Rakyat, special sitting, RCI, Tabung Haji, o",
+     "url": "https://www.bernama.com/en/news.php/?id=2592901",
+     "author": "",
+     "image": "https://www.bernama.com/storage/photos/3634cc938e9affbfe31e8b39c137752d6a7a9a1ea8a14-medium",
+     "language": "en",
+     "category": [
+      "regional"
+     ],
+     "source_category": [
+      "regional"
+     ],
+     "published": "2026-08-11 04:12:53 +0000"
+    },
+    {
+     "id": "4b87ddce-fcbb-5671-a03e-95e8582c76d1",
+     "title": "Dewan Rakyat Gives Ample Opportunity To Debate TH RCI Report - Speaker",
+     "description": "Parliament, special sitting, RCI, TH, MPs, debate,",
+     "url": "https://www.bernama.com/en/news.php/?id=2592907",
+     "author": "",
+     "image": "https://www.bernama.com/storage/photos/093f8ee990757971bb3c4606b19037356a7a99d35f6ed-medium",
+     "language": "en",
+     "category": [
+      "regional"
+     ],
+     "source_category": [
+      "regional"
+     ],
+     "published": "2026-08-11 04:12:51 +0000"
+    },
+    {
+     "id": "4c7c4006-e53d-511a-8361-7719979d6930",
+     "title": "Dewan Rakyat Speaker Confirms Subang MP Wong Chen's Resignation",
+     "description": "MP, Subang, Johari Abdul, Dewan Rakyat, resignatio",
+     "url": "https://www.bernama.com/en/news.php/?id=2592908",
+     "author": "",
+     "image": "https://www.bernama.com/storage/photos/059e3aeb82bf9bf0107866716348b6ae6a4dc32465c52-medium",
+     "language": "en",
+     "category": [
+      "regional"
+     ],
+     "source_category": [
+      "regional"
+     ],
+     "published": "2026-08-11 04:12:50 +0000"
+    },
+    {
+     "id": "8a881f59-5179-5216-bcb1-dbaf48b89320",
+     "title": "TH Depositors Need Not Worry, Zakat Obligations Fulfilled, Syariah-Compliant - Zulkifli",
+     "description": "Parliament, Zulkifli Hasan, report, RCI, Lembaga",
+     "url": "https://www.bernama.com/en/news.php/?id=2592911",
+     "author": "",
+     "image": "https://www.bernama.com/storage/photos/85ca8f0b22b9ea49d5c94336dc6006836a6058c1de28c-medium",
+     "language": "en",
+     "category": [
+      "regional"
+     ],
+     "source_category": [
+      "regional"
+     ],
+     "published": "2026-08-11 04:12:48 +0000"
+    },
+    {
+     "id": "a9a151bf-dde4-5f72-9ebc-e223bb0926b2",
+     "title": "Risk Of Hidden Kidney Stones Behind Persistent Back Pain, Warns Urologist",
+     "description": "SMC, Sunway Medical Centre, Urology specialist, Dr",
+     "url": "https://www.bernama.com/en/news.php/?id=2592916",
+     "author": "",
+     "image": "https://www.bernama.com/storage/photos/108504669557ecc3a1fa1010c76a743d6a7a9e30265ec-medium",
+     "language": "en",
+     "category": [
+      "regional"
+     ],
+     "source_category": [
+      "regional"
+     ],
+     "published": "2026-08-11 04:12:47 +0000"
+    },
+    {
+     "id": "95fee3c1-cadb-51c4-93c3-89c77142ae89",
+     "title": "Director Oscar Boyson: \u2018An indie film can be a lot more fun than a big Marvel movie\u2019",
+     "description": "The provocative satire Our Hero, Balthazar is the debut feature of a filmmaker who has \u2018a fear of boring the audience\u2019",
+     "url": "https://www.irishtimes.com/culture/film/2026/08/11/director-oscar-boyson-an-indie-film-can-be-a-lot-more-fun-than-a-big-marvel-movie/",
+     "author": "Tara Brady",
+     "image": "https://www.irishtimes.com/resizer/v2/APAQQ22FKRHMFJZHTMENSFC75E.jpg?smart=true&auth=f49d17ae93e18e42bc5b38d2aa270ae628e373346f00d8b68ffa28e0f1c0330d&width=1200&height=630",
+     "language": "en",
+     "category": [
+      "culture"
+     ],
+     "source_category": [
+      "culture"
+     ],
+     "published": "2026-08-11 04:12:00 +0000"
+    },
+    {
+     "id": "cd9b341f-9759-5b1b-959b-bf5c145f0a06",
+     "title": "I\u2019m making good money. So why does it feel like a slog?",
+     "description": "We are often sold this idea that \u201cease\u201d exists at a specific milestone in the future. But the truth is far less simple.",
+     "url": "https://www.smh.com.au/money/planning-and-budgeting/i-m-making-good-money-so-why-does-everything-still-feel-like-a-slog-20260811-p60nbs.html",
+     "author": "Paridhi Jain",
+     "image": "https://static.ffx.io/images/$zoom_0.2353%2C$multiply_0.7554%2C$ratio_1.777778%2C$width_1059%2C$x_0%2C$y_0/t_crop_custom/q_86%2Cf_auto/t_metro_opinion_no_age_social_wm/d3517cce28d8df3ae26eaddcaf8d26ebd2c9b320",
+     "language": "en",
+     "category": [
+      "general",
+      "world",
+      "regional"
+     ],
+     "source_category": [
+      "general",
+      "world",
+      "regional"
+     ],
+     "published": "2026-08-11 04:11:26 +0000"
+    },
+    {
+     "id": "76d903d7-ba0d-59bb-9dd6-b47d8f56eacc",
+     "title": "Work-from-home law delayed by Carroll weeks before planned start",
+     "description": "Victoria\u2019s new premier, Ben Carroll, says the decision to push back the legislation is part of Labor\u2019s \u201creset with the business community\u201d. But the new timing casts doubt over its implementation.",
+     "url": "https://www.smh.com.au/politics/victoria/work-from-home-law-delayed-by-carroll-weeks-before-planned-start-20260811-p60n7e.html",
+     "author": "Angus Delaney",
+     "image": "https://static.ffx.io/images/$zoom_0.2133%2C$multiply_0.7554%2C$ratio_1.777778%2C$width_1059%2C$x_0%2C$y_85/t_crop_custom/q_86%2Cf_auto/3f985113919538064d710b8c3a4613231bec8287",
+     "language": "en",
+     "category": [
+      "general",
+      "world",
+      "regional"
+     ],
+     "source_category": [
+      "general",
+      "world",
+      "regional"
+     ],
+     "published": "2026-08-11 04:11:08 +0000"
+    },
+    {
+     "id": "c117267f-4e75-56ab-ad42-c19cf6cf2523",
+     "title": "Powerball winning numbers drawn for $905M jackpot. Check your ticket",
+     "description": "The eighth-largest Powerball jackpot in history is worth an estimated $905 million. Here are the winning numbers.",
+     "url": "https://www.usatoday.com/story/money/lottery/2026/08/10/powerball-jackpot-aug-10-drawing-winning-numbers/91250552007/",
+     "author": "USA TODAY",
+     "image": "https://www.gannett-cdn.com/authoring/authoring-images/2026/08/10/USAT/91250557007-getty-images-2252768508-26.jpg?auto=webp&crop=1023,576,x0,y53&format=pjpg&width=1200",
+     "language": "en",
+     "category": [],
+     "source_category": [],
+     "published": "2026-08-11 04:10:24 +0000"
+    },
+    {
+     "id": "fa60dd3d-28a3-538a-a0b0-7b7fb655fdc0",
+     "title": "Jury selection begins for Tupac murder suspect's trial",
+     "description": "The killing of hip-hop star Tupac Shakur has been a mystery for decades with the man accused of orchestrating the 1996 shooting finally headed to trial.",
+     "url": "https://thewest.com.au/politics/law-and-order/jury-selection-begins-for-tupac-murder-suspects-trial-c-22706988",
+     "author": "Erica Stapleton; Steve Gorman Reuters Premium",
+     "image": "https://images.thewest.com.au/publication/C-22706988/9315410c123cd515937a2fad6d852fbcc8a27731-16x9-x0y0w1280h720.jpg?imwidth=1200",
+     "language": "en",
+     "category": [
+      "general"
+     ],
+     "source_category": [
+      "general"
+     ],
+     "published": "2026-08-11 04:10:07 +0000"
+    },
+    {
+     "id": "3d4cd34d-17a5-54a8-8149-11897d5e71ea",
+     "title": "Ideaforge Technology Share Price Slides 5% Even As Q1 Net Loss Narrows, Revenue Soars",
+     "description": "The company reported a 434.4% year-on-year rise in revenue to Rs 68.5 crore from Rs 12.8 crore for the June quarter.",
+     "url": "https://www.ndtvprofit.com/markets/ideaforge-technology-share-price-slides-even-as-q1-net-loss-narrows-revenue-soars-11892858",
+     "author": "Khushi Maheshwari",
+     "image": "https://c.ndtvimg.com/2025-12/f396ba8c_drone.jpg?im=FeatureCrop,algorithm=dnn,width=1600,height=900",
+     "language": "en",
+     "category": [
+      "general",
+      "business"
+     ],
+     "source_category": [
+      "general",
+      "business"
+     ],
+     "published": "2026-08-11 04:09:54 +0000"
+    }
+   ],
+   "page": 1
+  }
+ ],
+ "error_bodies": {
+  "v2_invalid_category_400": {
+   "status": "400",
+   "msg": "Bad request",
+   "details": {
+    "message": "Invalid parameters",
+    "errors": {
+     "category": "Invalid category value(s): technology. Allowed values: general, society, science_technology, politics_government, economy_business_finance, arts_culture_entertainment, lifestyle_leisure, human_interest, sport, crime_law_justice, education, environment, labour, health, automotive, real_estate"
+    }
+   }
+  }
+ }
+}

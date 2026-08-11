@@ -1,0 +1,146 @@
+import { STOPWORDS } from "./stopwords.js";
+
+/**
+ * Term extraction and scoring for the landing-page cloud (ARCHITECTURE 10.2,
+ * 10.3). Pure: the corpus, the baseline and every knob arrive as arguments.
+ *
+ * The probe ran naive document-frequency over a live 80-article sample and
+ * got `cve-, earlier, jenkins, plugin, …` — three distinct failures, so three
+ * mechanisms are REQUIRED here, not polish: the df_domains >= 2 gate, the
+ * rolling baseline, and tokenization that drops identifiers whole instead of
+ * shredding them into fragments that rank #1.
+ */
+
+export interface CorpusArticle {
+  title: string;
+  description: string | null;
+  sourceDomain: string | null;
+}
+
+export interface ScoredTerm {
+  term: string;
+  isBigram: boolean;
+  /** Distinct ARTICLES — the displayed number and the size input (§10.3). */
+  dfArticles: number;
+  /** Distinct source domains — the breadth gate. */
+  dfDomains: number;
+  score: number;
+}
+
+export interface ScoreOptions {
+  /** Baseline smoothing. Explicitly expected to need tuning (§10.3). */
+  k?: number;
+  /** Max articles one domain may contribute to the SCORE's df (§10.3). */
+  perDomainCap?: number;
+  /** Breadth gate: minimum distinct domains for a term to exist at all. */
+  minDomains?: number;
+}
+
+const DEFAULTS: Required<ScoreOptions> = { k: 3, perDomainCap: 3, minDomains: 2 };
+
+/**
+ * Headline terms for one article: distinct unigrams and bigrams over
+ * title + description — body text is unavailable (§2), and headlines are
+ * dense with topical nouns, so this works better than it sounds (§10.2).
+ */
+export function extractTerms(article: CorpusArticle): Set<string> {
+  const tokens = tokenize(`${article.title} ${article.description ?? ""}`);
+  const terms = new Set<string>();
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i]!;
+    if (!keepable(token)) continue;
+    terms.add(token);
+    // Bigrams only over ADJACENT survivors: "climate policy" is a topic,
+    // "climate the" is noise the unigram pass already refused.
+    const next = tokens[i + 1];
+    if (next !== undefined && keepable(next)) terms.add(`${token} ${next}`);
+  }
+  return terms;
+}
+
+/**
+ * score(term) = sqrt(df_domains) × capped_df_articles / (baseline_7d + k)
+ *
+ * `df_articles` is counted over ARTICLES, never sightings — the 50×-repeated
+ * link-roundup would otherwise weight its headline 50 times (§10.3). The
+ * returned `dfArticles` stays the TRUE count (it is what users see); the
+ * per-domain cap applies only inside the score, damping single-outlet floods
+ * that the domain gate alone lets through.
+ */
+export function scoreTerms(
+  corpus: readonly CorpusArticle[],
+  baseline: ReadonlyMap<string, number>,
+  options: ScoreOptions = {},
+): ScoredTerm[] {
+  const { k, perDomainCap, minDomains } = { ...DEFAULTS, ...options };
+
+  const stats = new Map<
+    string,
+    { articles: number; byDomain: Map<string, number>; unknownDomain: number }
+  >();
+
+  for (const article of corpus) {
+    for (const term of extractTerms(article)) {
+      let entry = stats.get(term);
+      if (!entry) {
+        entry = { articles: 0, byDomain: new Map(), unknownDomain: 0 };
+        stats.set(term, entry);
+      }
+      entry.articles += 1;
+      if (article.sourceDomain) {
+        entry.byDomain.set(
+          article.sourceDomain,
+          (entry.byDomain.get(article.sourceDomain) ?? 0) + 1,
+        );
+      } else {
+        entry.unknownDomain += 1;
+      }
+    }
+  }
+
+  const scored: ScoredTerm[] = [];
+  for (const [term, entry] of stats) {
+    const dfDomains = entry.byDomain.size;
+    if (dfDomains < minDomains) continue;
+
+    let cappedDf = Math.min(entry.unknownDomain, perDomainCap);
+    for (const count of entry.byDomain.values()) {
+      cappedDf += Math.min(count, perDomainCap);
+    }
+
+    scored.push({
+      term,
+      isBigram: term.includes(" "),
+      dfArticles: entry.articles,
+      dfDomains,
+      score: (Math.sqrt(dfDomains) * cappedDf) / ((baseline.get(term) ?? 0) + k),
+    });
+  }
+
+  // Deterministic order: score, then breadth, then the term itself — the
+  // cloud must not reshuffle between identical recomputes (§10.5).
+  return scored.sort(
+    (a, b) =>
+      b.score - a.score || b.dfArticles - a.dfArticles || a.term.localeCompare(b.term),
+  );
+}
+
+/**
+ * Tokens keep internal hyphens/apostrophes so identifiers stay WHOLE and can
+ * be dropped whole: the probe's regex shredded CVE-2026-1234 into a `cve-`
+ * fragment that ranked #1 (§10.2). Anything containing a digit is filtered —
+ * identifiers, versions, years — as is anything short or stopworded.
+ */
+function tokenize(text: string): string[] {
+  return text
+    .normalize("NFKC")
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}'-]+/u)
+    .map((token) => token.replaceAll(/^['-]+|['-]+$/g, "").replace(/'s$/u, ""))
+    .filter((token) => token.length > 0);
+}
+
+function keepable(token: string): boolean {
+  return token.length >= 2 && !/\d/.test(token) && !STOPWORDS.has(token);
+}

@@ -12,6 +12,7 @@ injectWorkspacePackages: true
 # run without it. Everything else stays blocked by default.
 allowBuilds:
   esbuild: true
+  msgpackr-extract: false
 
 # bullmq → msgpackr optionally builds a native accelerator; the pure-JS
 # fallback is fine at our volumes, so the build stays deliberately unrun.

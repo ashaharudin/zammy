@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { MONO } from "./theme.js";
+import { TrendingCloud } from "./TrendingCloud.js";
 
 /**
- * The empty state: the command-bar prompt scaled up and centered. Searching
- * "docks" this same prompt to the top of the timeline (CommandBar), which is
- * the continuity the prototype verdict picked. Filters deliberately absent
- * here — they appear once a topic is open.
+ * The empty state: the command-bar prompt scaled up and centered, with the
+ * day's wordcloud beneath it (ARCHITECTURE 10) — the landing page is never
+ * blank, and the cloud gives users something to click before they know what
+ * to type (§9.3 cold start).
  */
 export function Hero({ onSearch }: { onSearch: (q: string) => void }) {
   const [q, setQ] = useState("");
@@ -15,9 +16,11 @@ export function Hero({ onSearch }: { onSearch: (q: string) => void }) {
       style={{
         minHeight: "100vh",
         display: "flex",
+        flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        padding: "0 1rem",
+        gap: "2.5rem",
+        padding: "3rem 1rem",
       }}
     >
       <form
@@ -81,6 +84,7 @@ export function Hero({ onSearch }: { onSearch: (q: string) => void }) {
           </button>
         </div>
       </form>
+      <TrendingCloud onSearch={onSearch} />
     </main>
   );
 }

@@ -19,6 +19,12 @@ export function freshnessTtlMs(windowEnd: Date, now: Date): number {
   return 86_400_000; // historical
 }
 
+/** The same tiers as names, for the cache-hit-ratio-by-tier metric (§12). */
+export function freshnessTier(windowEnd: Date, now: Date): "hot" | "recent" | "historical" {
+  const ttl = freshnessTtlMs(windowEnd, now);
+  return ttl === 60_000 ? "hot" : ttl === 600_000 ? "recent" : "historical";
+}
+
 /** page:<fingerprint>:<windowHash>:<cursor>:<limit> (§7.1). */
 export function pageCacheKey(
   fingerprint: string,

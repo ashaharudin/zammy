@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { TimelineQuery } from "@zammy/shared";
+import { TimelineQuery, TrendingQuery } from "@zammy/shared";
 import { countTopicArticles, readCoverage, readTopic } from "@zammy/storage";
 import { canonicalize, type ReferenceCodes } from "./canonical.js";
 import {
@@ -7,6 +7,7 @@ import {
   readTimeline,
   type TimelineDeps,
 } from "./timeline-service.js";
+import { readTrending, type TrendingDeps } from "./trending-service.js";
 
 /**
  * The public HTTP surface (ARCHITECTURE 6.1). Thin on purpose: parse with the
@@ -130,6 +131,31 @@ export async function registerQueryRoutes(
       });
     },
   );
+}
+
+/** GET /api/v1/trending (§10.4) — the landing-page cloud. */
+export function registerTrendingRoute(
+  app: FastifyInstance,
+  options: { deps: TrendingDeps },
+): void {
+  app.get("/api/v1/trending", async (request, reply) => {
+    const parsed = TrendingQuery.safeParse(request.query);
+    if (!parsed.success) {
+      const fields: Record<string, string> = {};
+      for (const issue of parsed.error.issues) {
+        fields[String(issue.path[0] ?? "query")] ??= issue.message;
+      }
+      return reply.status(400).send({ error: { message: "invalid query", fields } });
+    }
+
+    return reply.send(
+      await readTrending(options.deps, {
+        ...(parsed.data.day ? { day: parsed.data.day } : {}),
+        language: parsed.data.language,
+        limit: parsed.data.limit,
+      }),
+    );
+  });
 }
 
 /**

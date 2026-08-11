@@ -1,6 +1,6 @@
 # Zammy — Architectural Proposal
 
-**Status:** Phases 0–3 built · **Scope:** the design; decisions live in ADRs
+**Status:** Phases 0–5b built · **Scope:** the design; decisions live in ADRs
 
 A news aggregator that takes keywords from a user and returns a time-ordered timeline of
 headlines and topic summaries, backed by [Currents API](https://currentsapi.services/en/docs/).
@@ -756,7 +756,7 @@ Three trigger types, all originating from a user request:
 | --- | --- | --- |
 | **Fill visible page** — coverage gap for the requested window | synchronous, in-request | deadline-bounded, ~1 call (§6.3) |
 | **Complete the plan** — pages 2..5 the deadline cut off | queued, background | ≤ 4 calls |
-| **Daily breadth sample** — first landing-page visit of the day (§10.1) | queued, background | 12–24 calls/day |
+| **Breadth sample** — first landing-page visit after the last `/latest-news` snapshot staled (§10.1) | queued, background | 1 call/sample, ≤24/day per language |
 | **Deferred backfill** — gap segments and subdivisions §6.3 didn't have budget for | queued, background | metered |
 | **Refresh-on-read** — stale coverage noticed while serving (§6.4) | queued, background | ~1 call |
 
@@ -805,9 +805,10 @@ Three real trade-offs, each with a mitigation:
    people actually use" rather than "for everything". Since the 30-day lookback bounds any gap, a topic
    revisited after a long silence needs a bounded catch-up, not an unbounded one.
 3. **Cold start.** A first-ever visitor to an empty database sees nothing until they type something.
-   Mitigation: the landing-page wordcloud (§10), whose breadth sample is triggered by the first visitor
-   of the day. It fills the empty state *and* gives users something to click before they know what to
-   search — the one place where a small amount of non-search-driven fetching earns its cost.
+   Mitigation: the landing-page wordcloud (§10), whose `/latest-news` sample is triggered by the first
+   visitor after the previous snapshot staled. It fills the empty state *and* gives users something to
+   click before they know what to search — the one place where a small amount of non-search-driven
+   fetching earns its cost.
 
 ### 9.4 Budget guards that demand-driven ingestion requires
 
@@ -830,8 +831,11 @@ The day's most-referenced topics, each word sized by the number of unique articl
 clicking a word runs that search. It doubles as the answer to cold start (§9.3): the landing page is
 never blank, and it gives users something to act on before they know what to type.
 
-I probed this feature's assumptions before specifying it (4 calls). The corpus mechanism works. **The
-naive scoring does not** — see §10.3, which is the part worth reading.
+I probed this feature's assumptions before specifying it (4 calls). The corpus mechanism works, and
+**the naive scoring does not** — see §10.3, which is the part worth reading. The probe exercised
+keywordless `/search`; the sample has since moved to `/latest-news` (below), which changes the cost
+arithmetic but none of the scoring findings — those are properties of headline corpora, not of the
+endpoint that fetched them.
 
 ### 10.1 Corpus — where the day's articles come from
 
@@ -840,19 +844,44 @@ anyone searches. So the corpus is a union of two sources:
 
 1. **Everything already stored for today** — articles with `published` inside the current local day,
    accumulated from user searches. Free, zero upstream calls, and it broadens through the day.
-2. **A breadth sample** — verified: `/search` works with **no `keywords` at all**, taking just
-   `language` + `category`, and category slices return disjoint sets (tech vs politics: 0 overlap).
-   So ~12 curated categories × 1–2 pages = **12–24 calls** for a few hundred articles across the
-   day's news. That is 1–2% of the daily quota.
+2. **A breadth sample from `/v2/latest-news`** — the upstream's own editorially-mixed feed of the
+   newest ~20 articles, **one call per language**. Probed (PROBE-FINDINGS 6c): v2 accepts a
+   **comma-separated multi-category filter** — one call can carry the whole curated category list
+   that the old design spent 12 `/search` calls on — against a **new fixed 16-value taxonomy**
+   (`science_technology`, `politics_government`, …; the v1 names 400). The 20-item page is shared
+   across categories, not multiplied, and `page_number` works if 20 proves thin.
 
-The sample is **triggered by the first visitor of the day, not by a cron** — the stored cloud is
-served instantly while a refresh runs behind it, reusing the same stale-while-revalidate and
-`meta.ingest` machinery as §6.5. A day with no visitors costs nothing, so this stays consistent with
-§9 rather than smuggling a scheduler back in.
+One call buys ~20 articles where the old category-sliced `/search` sample bought a few hundred for
+12–24 calls, so a single daily sample would starve the corpus. The budget freed by the cheaper call
+goes back into **cadence** instead of breadth: a sample is considered fresh for
+`SAMPLE_REFRESH_MINUTES` (default 60), and the first visitor after it goes stale triggers the next
+one. A fully-visited day costs **≤24 calls per language** — the same 1–2% of quota as before — but
+spread across the day, which repairs the old design's weakness of sampling only the morning's news.
+Successive samples overlap; overlap is free, because re-ingested articles collapse into their
+existing rows (§7.4) and only the genuinely new ones extend the corpus. A day with no visitors still
+costs nothing, so this stays consistent with §9 rather than smuggling a scheduler back in — the
+stored cloud is served instantly while a refresh runs behind it, reusing the same
+stale-while-revalidate and `meta.ingest` machinery as §6.5.
 
-"First visitor" needs a **Redis lock** (`lock:daily-sample:<day>:<language>`) — a no-op in single-replica
-local dev, but without it the day's first concurrent requests across multiple Fargate tasks (§4.1) would
-each enqueue the full 12–24 call sample, turning a 2% quota cost into 6% or worse under a spike.
+Two things this trades away, named rather than hidden — both now measured (PROBE-FINDINGS 6c).
+**The filter filters; it does not balance.** A probed two-category call came back 19:1 — newest-
+matching-any wins, so one busy category can crowd a multi-category sample. Category steering is
+*exclusion*, not *allocation*: a slow news day in one domain cannot be compensated by deliberately
+over-sampling another the way per-category `/search` calls could. The `df_domains >= 2` gate
+(§10.3) is what keeps a lopsided feed from minting a lopsided cloud, and paging deeper or splitting
+the curated list across 2–3 grouped calls are the levers if the skew shows up in practice. And
+**v2 is a second taxonomy living alongside v1**: its 16 category values are disjoint from
+`/v1/available/categories` (which must not be used to validate them), and since v1 and v2 serve
+the same articles under different labels (20/20 id overlap, relabeled), ingesting from both mixes
+taxonomies in `articles.categories` — harmless for the cloud, worth remembering for any future
+category-based feature. The client pins the API version in `CURRENTS_BASE_URL` (default `…/v1`),
+so adopting v2 is a client change, not just a parameter. Feed turnover between hourly samples
+remains the one unmeasured input; the cadence knob absorbs it either way.
+
+"First visitor" still needs a **Redis lock** (`lock:sample:<language>`, TTL = the freshness window) —
+a no-op in single-replica local dev, but without it the first concurrent requests across multiple
+Fargate tasks (§4.1) would each enqueue a sample. The waste is smaller than under the old 12–24 call
+design, but the 60/60s burst budget still says one election, not N.
 
 **"Today" is the `APP_TIMEZONE` day, not the UTC day.** Under UTC, a Vancouver afternoon is already
 tomorrow, so the most-visited surface in the product would show a near-empty cloud every day after
@@ -864,10 +893,12 @@ yesterday can still arrive — a slow feed, a deferred backfill — and they are
 appear in timelines, but they do not retroactively rewrite a closed day's cloud. A baseline built on
 shifting history cannot be reasoned about, and nobody looks at Tuesday's cloud on Thursday.
 
-One measured caveat: a day-bounded keywordless call returns the *newest* 20 in that window, not a
-sample spread across it. Covering the whole day means paging (capped at 100) or slicing, so the sample
-is a **breadth-first snapshot of recent news per category**, not a census of the day. Worth saying
-plainly, because "top topics of the day" implies more completeness than the source can give.
+One caveat carried over from the probe, sharper now: `/latest-news` is a snapshot of *this moment's*
+news, with no way to ask about earlier in the day at all. The day's corpus is therefore an
+**accumulation of hourly snapshots plus whatever user searches stored** — a rolling record of what
+was prominent while people were looking, not a census of the day. Hours with no visitors are simply
+absent. Worth saying plainly, because "top topics of the day" implies more completeness than the
+source can give.
 
 ### 10.2 Term extraction
 
@@ -1057,7 +1088,11 @@ payload (100 sightings, 42 unique URLs, one repeated 50×) is a ready-made regre
 ## 14. Open questions
 
 Resolved by the probe (2026-08-04): paging params exist and are usable; plan limits are 1000/day and
-60/60s; keyword terms narrow rather than OR. Details in [PROBE-FINDINGS.md](./PROBE-FINDINGS.md).
+60/60s; keyword terms narrow rather than OR. Resolved by a follow-up probe (2026-08-10, 8 calls):
+`/v2/latest-news` takes a comma-separated multi-category filter over a new fixed 16-value taxonomy,
+shares its ~20-item page across categories, filters without balancing (19:1 skew measured), and
+serves the same feed as v1 relabeled — recorded in `fixtures/latest-news-v2-sample.json`. Details in
+[PROBE-FINDINGS.md](./PROBE-FINDINGS.md).
 
 Resolved by design review, each with an ADR: the archive boundary and report-only retention
 ([0001](adr/0001-postgres-is-the-archive-beyond-the-upstream-lookback.md)); sightings versus articles,
@@ -1094,3 +1129,7 @@ Still open:
 4. **Summary scope** — per-topic rollup, or per-article abstractive summary? Only affects Phase 6.
 5. **`type` parameter** — the one probe result that changed output without an obvious meaning
    (17/20 overlap with the control). Unexplored; not needed for v1.
+6. **`/v2/latest-news` feed turnover** — the one §10.1 input the 2026-08-10 probe could not settle
+   in a single sitting: how much of the ~20-item feed is new after an hour. Cheap to measure once
+   the sampler runs (compare consecutive samples' ids in the logs); `SAMPLE_REFRESH_MINUTES` is the
+   knob it informs.

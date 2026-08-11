@@ -1,7 +1,11 @@
 import type { Kysely } from "kysely";
 import type { Redis } from "ioredis";
 import { decodeCursor, encodeCursor, type Article } from "@zammy/shared";
-import { CurrentsQuotaError, type CurrentsClient } from "@zammy/currents-client";
+import {
+  CurrentsQuotaError,
+  type CallPriority,
+  type CurrentsClient,
+} from "@zammy/currents-client";
 import {
   ingestSightings,
   readCoverage,
@@ -14,12 +18,15 @@ import {
 import type { CanonicalQuery } from "./canonical.js";
 import { subtractCoverage, type Span } from "./coverage-gaps.js";
 import {
+  freshnessTier,
   freshnessTtlMs,
   pageCacheKey,
   readCachedPage,
   writeCachedPage,
 } from "./page-cache.js";
+import type { Metrics } from "./metrics.js";
 import { refreshLockKey, release, tryAcquire } from "./single-flight.js";
+import { reserveTopicCall } from "./topic-budget.js";
 import type { IngestQueue, SegmentJob } from "./ingest-queue.js";
 
 /**
@@ -46,8 +53,11 @@ export interface TimelineDeps {
     lookbackDays: number;
     /** Subdivision floor (§6.3): below this, truncation is accepted, not recursed. */
     minSegmentMs: number;
+    /** §9.4: upstream calls one topic may spend per UTC day, both paths combined. */
+    perTopicDailyCallCap: number;
   };
   now: () => Date;
+  metrics?: Metrics;
   log?: {
     warn: (obj: object, msg: string) => void;
     info?: (obj: object, msg: string) => void;
@@ -81,6 +91,17 @@ export async function readTimeline(
   query: CanonicalQuery,
   page: { limit: number; cursorString?: string },
 ): Promise<TimelineReadResult> {
+  const startedAt = Date.now();
+  const result = await planAndRead(deps, query, page);
+  deps.metrics?.timelineRead(result.meta.servedFrom, (Date.now() - startedAt) / 1000);
+  return result;
+}
+
+async function planAndRead(
+  deps: TimelineDeps,
+  query: CanonicalQuery,
+  page: { limit: number; cursorString?: string },
+): Promise<TimelineReadResult> {
   const now = deps.now();
 
   const cursor = page.cursorString ? decodeCursor(page.cursorString) : null;
@@ -96,6 +117,7 @@ export async function readTimeline(
     page.limit,
   );
   const cached = await readCachedPage<TimelineReadResult>(deps.redis, cacheKey);
+  deps.metrics?.pageCacheRead(freshnessTier(query.window.to, now), cached ? "hit" : "miss");
   if (cached) {
     return { ...cached, meta: { ...cached.meta, servedFrom: "cache" } };
   }
@@ -120,8 +142,25 @@ export async function readTimeline(
   let servedFrom: TimelineReadResult["meta"]["servedFrom"] = "store";
   let degraded: TimelineReadResult["meta"]["degraded"] = null;
   let lockLostToPeer = false;
+  let stale = false;
+  let capped = false;
 
-  if (gaps.length > 0) {
+  // §6.4 refresh-on-read: a window reaching the present is never "fully
+  // covered" — time itself keeps opening a sliver past max(coverage.upper).
+  // Inside the staleness tier that sliver IS fresh enough; beyond it, the
+  // reader is served instantly and the repair happens behind them. Only real
+  // gaps — a cold topic, missing interior history — reach the sync fill.
+  const sliver = trailingSliver(query.window, gaps, covered, now);
+  if (sliver) {
+    const age = now.getTime() - sliver.from.getTime();
+    if (age > freshnessTtlMs(query.window.to, now)) {
+      stale = true;
+      await deps.queue.enqueueSegment({
+        ...segmentJob(query.fingerprint, sliver, 1),
+        kind: "topup",
+      });
+    }
+  } else if (gaps.length > 0) {
     // §6.3 steps 4–5 — fill what fits the wall-clock deadline, newest gap
     // first (that is where the reader is looking), defer the rest.
     const budget: FillBudget = {
@@ -147,12 +186,14 @@ export async function readTimeline(
       }
 
       try {
-        const outcome = await fillSegment(deps, query, gap, budget, 1);
+        const outcome = await fillSegment(deps, query, gap, budget, 1, "interactive");
         if (outcome.callsMade > 0) servedFrom = "upstream";
         if (outcome.kind === "deferred") {
           deferred.push(segmentJob(query.fingerprint, gap, outcome.resumePage));
         } else if (outcome.kind === "truncated") {
           deferred.push(...(await onTruncated(deps, query.fingerprint, gap)));
+        } else if (outcome.kind === "capped") {
+          capped = true;
         }
       } catch (error) {
         degraded = error instanceof CurrentsQuotaError ? "quota" : "upstream";
@@ -164,9 +205,13 @@ export async function readTimeline(
       } finally {
         await release(deps.redis, lockKey, token);
       }
+
+      if (capped) break;
     }
 
-    if (!degraded) {
+    // A capped topic enqueues nothing: queued IOUs would only no-op against
+    // the same cap, and tomorrow's reader re-plans the gaps anyway (§9.4).
+    if (!degraded && !capped) {
       for (const job of deferred) await deps.queue.enqueueSegment(job);
     }
   }
@@ -206,7 +251,7 @@ export async function readTimeline(
     meta: {
       servedFrom,
       asOf: now.toISOString(),
-      stale: false,
+      stale,
       degraded,
       ingest: { state, pendingJobs },
     },
@@ -214,8 +259,11 @@ export async function readTimeline(
 
   // Cache only settled pages. A cached in_progress response would freeze the
   // progressive fill for its whole TTL — the front end polls expecting growth
-  // (§6.5 point 4) — and a degraded one would outlive the outage.
-  if (state === "complete" && degraded === null) {
+  // (§6.5 point 4) — a degraded one would outlive the outage, and a capped one
+  // has unfilled, unqueued gaps that tomorrow's budget is meant to repair.
+  // Stale is checked on its own because the in-process consumer can finish
+  // the top-up before pendingCount runs, making a stale read look settled.
+  if (state === "complete" && degraded === null && !capped && !stale) {
     await writeCachedPage(
       deps.redis,
       cacheKey,
@@ -260,6 +308,9 @@ export async function processSegmentJob(deps: TimelineDeps, job: SegmentJob): Pr
       segment,
       { deadline: Number.POSITIVE_INFINITY, maxCalls: Number.POSITIVE_INFINITY, callsUsed: 0 },
       job.startPage,
+      // No reader is waiting: draw only what the interactive reserve spares
+      // (§9.4). A refusal fails the job; BullMQ's backoff is the retry pacing.
+      "background",
     );
     if (outcome.kind === "truncated") {
       for (const half of await onTruncated(deps, job.fingerprint, segment)) {
@@ -280,7 +331,9 @@ interface FillBudget {
 type FillOutcome =
   | { kind: "completed"; callsMade: number }
   | { kind: "deferred"; resumePage: number; callsMade: number }
-  | { kind: "truncated"; callsMade: number };
+  | { kind: "truncated"; callsMade: number }
+  /** §9.4: the topic's daily cap is spent. Stop deepening; resume tomorrow. */
+  | { kind: "capped"; callsMade: number };
 
 /**
  * Page through one gap segment (§6.3 step 4). A short page is the clean
@@ -294,6 +347,7 @@ async function fillSegment(
   segment: Span,
   budget: FillBudget,
   startPage: number,
+  priority: CallPriority,
 ): Promise<FillOutcome> {
   const { maxPageSize, maxRetrievableResults } = deps.currents.limits;
   const maxPages = Math.floor(maxRetrievableResults / maxPageSize);
@@ -310,23 +364,47 @@ async function fillSegment(
       return { kind: "deferred", resumePage: pageNumber, callsMade };
     }
 
-    const result = await deps.currents.search({
-      ...(query.keywords.length > 0 ? { keywords: query.keywords } : {}),
-      ...(query.language ? { language: query.language } : {}),
-      ...(query.country ? { country: query.country } : {}),
-      ...(query.category ? { category: query.category } : {}),
-      startDate: segment.from,
-      endDate: segment.to,
-      pageNumber,
-      pageSize: maxPageSize,
-    });
+    // The cap binds before every call, INCLUDING the floor-of-one: a capped
+    // topic spends nothing today, on either path (§9.4).
+    const withinCap = await reserveTopicCall(
+      deps.redis,
+      query.fingerprint,
+      deps.config.perTopicDailyCallCap,
+      deps.now(),
+    );
+    if (!withinCap) {
+      deps.log?.warn(
+        { fingerprint: query.fingerprint, cap: deps.config.perTopicDailyCallCap },
+        "per-topic daily call cap reached; topic stops deepening until tomorrow",
+      );
+      return { kind: "capped", callsMade };
+    }
+
+    const result = await deps.currents.search(
+      {
+        ...(query.keywords.length > 0 ? { keywords: query.keywords } : {}),
+        ...(query.language ? { language: query.language } : {}),
+        ...(query.country ? { country: query.country } : {}),
+        ...(query.category ? { category: query.category } : {}),
+        startDate: segment.from,
+        endDate: segment.to,
+        pageNumber,
+        pageSize: maxPageSize,
+      },
+      { priority },
+    );
     budget.callsUsed += 1;
     callsMade += 1;
+    deps.metrics?.upstreamCall({
+      received: result.normalization.received,
+      dropped: result.normalization.received - result.normalization.kept,
+    });
 
-    await ingestSightings(deps.db, {
+    const ingested = await ingestSightings(deps.db, {
       fingerprint: query.fingerprint,
       sightings: result.sightings,
     });
+    deps.metrics?.articlesIngested(ingested.articlesCreated);
 
     if (result.isLastPage) {
       await recordCoverage(deps.db, query.fingerprint, segment);
@@ -348,6 +426,7 @@ async function onTruncated(
   fingerprint: string,
   segment: Span,
 ): Promise<SegmentJob[]> {
+  deps.metrics?.truncatedSegment();
   const length = segment.to.getTime() - segment.from.getTime();
   if (length <= deps.config.minSegmentMs) {
     await recordCoverage(deps.db, fingerprint, segment);
@@ -363,6 +442,26 @@ async function onTruncated(
     segmentJob(fingerprint, { from: segment.from, to: mid }, 1),
     segmentJob(fingerprint, { from: mid, to: segment.to }, 1),
   ];
+}
+
+/**
+ * The §6.4 staleness sliver: the requested window reaches the present and all
+ * of it is covered except the stretch time itself opened since the last fetch.
+ * Identified by shape — a single gap starting exactly at max(coverage.upper) —
+ * so a cold topic (no coverage at all) and missing interior history are NOT
+ * slivers and still take the synchronous fill the reader is waiting on.
+ */
+function trailingSliver(
+  window: Span,
+  gaps: readonly Span[],
+  covered: readonly Span[],
+  now: Date,
+): Span | null {
+  if (gaps.length !== 1 || window.to.getTime() < now.getTime()) return null;
+  const gap = gaps[0]!;
+  const coverageUpper = covered.at(-1)?.to;
+  if (!coverageUpper || gap.from.getTime() !== coverageUpper.getTime()) return null;
+  return gap;
 }
 
 function segmentJob(fingerprint: string, segment: Span, startPage: number): SegmentJob {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { TimelinePage } from "@zammy/shared";
+import { TimelinePage, TrendingResponse } from "@zammy/shared";
 
 /**
  * The browser's half of the wire contract (ARCHITECTURE 6.1). Responses are
@@ -69,6 +69,12 @@ export async function fetchTimeline(
   const response = await fetch(`/api/v1/timeline?${params}`, { signal });
   if (!response.ok) await throwApiError(response);
   return TimelinePage.parse(await response.json());
+}
+
+export async function fetchTrending(signal: AbortSignal): Promise<TrendingResponse> {
+  const response = await fetch("/api/v1/trending", { signal });
+  if (!response.ok) await throwApiError(response);
+  return TrendingResponse.parse(await response.json());
 }
 
 export async function fetchReference(signal: AbortSignal): Promise<Reference> {

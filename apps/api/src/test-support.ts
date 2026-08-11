@@ -11,6 +11,7 @@ import {
 } from "@zammy/currents-client";
 import { createDb, migrateToLatest } from "@zammy/storage";
 import { IngestQueue } from "./ingest-queue.js";
+import { Metrics } from "./metrics.js";
 import type { TimelineDeps } from "./timeline-service.js";
 
 /**
@@ -31,6 +32,7 @@ export interface TestHarness {
   counting: CountingClient;
   redis: Redis;
   queue: IngestQueue;
+  metrics: Metrics;
   teardown: () => Promise<void>;
 }
 
@@ -65,16 +67,21 @@ export async function createTestHarness(
     queueName: `test-planner-${randomUUID()}`,
   });
 
+  const metrics = new Metrics({ quota: () => counting.quota() });
   const deps: TimelineDeps = {
     db,
     redis,
     currents: counting,
     queue,
+    metrics,
     config: {
       syncFillDeadlineMs: 1200,
       maxSyncUpstreamCalls: 5,
       lookbackDays: 30,
       minSegmentMs: 60 * 60 * 1000,
+      // Non-binding by default: the recorded fixture is denser than a real
+      // topic, and only the §9.4 tests are ABOUT the cap.
+      perTopicDailyCallCap: 10_000,
       ...configOverrides,
     },
     now: now ? () => now : () => new Date(),
@@ -85,6 +92,7 @@ export async function createTestHarness(
     counting,
     redis,
     queue,
+    metrics,
     teardown: async () => {
       await queue.obliterate();
       await queue.close();
@@ -128,6 +136,8 @@ export async function purgeTopicKeys(redis: Redis, fingerprint: string): Promise
  */
 export class CountingClient implements CurrentsClient {
   searchCalls = 0;
+  /** Quota priority of each search call, in order (§9.4). */
+  priorities: Array<CallOpts["priority"]> = [];
   /** Artificial per-call latency, for exercising the wall-clock deadline. */
   delayMs = 0;
 
@@ -139,6 +149,7 @@ export class CountingClient implements CurrentsClient {
 
   async search(params: SearchParams, opts?: CallOpts): Promise<SearchResult> {
     this.searchCalls += 1;
+    this.priorities.push(opts?.priority);
     if (this.delayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.delayMs));
     }

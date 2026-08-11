@@ -45,6 +45,8 @@ const EnvSchema = z
     INTERACTIVE_RESERVE: z.coerce.number().int().min(0).default(250),
     PER_TOPIC_DAILY_CALL_CAP: z.coerce.number().int().min(1).default(20),
     INGEST_POLL_MAX: z.coerce.number().int().min(1).max(60).default(8),
+    /** §9.4: per-IP ceiling on /api/v1/*, so novel-fingerprint spam can't mint topics. */
+    RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).default(60),
 
     RETENTION_DAYS: z.coerce.number().int().min(1).default(90),
 
@@ -53,6 +55,24 @@ const EnvSchema = z
      * language mixed together, so "all" must be an explicit choice (§6.1).
      */
     DEFAULT_LANGUAGE: z.string().trim().min(2).max(8).default("en"),
+
+    /**
+     * The wordcloud's calendar day (ARCHITECTURE 10.1). Under UTC a Vancouver
+     * afternoon is already tomorrow, and the landing page would go near-empty
+     * every day after ~5pm local. IANA name, validated against Intl.
+     */
+    APP_TIMEZONE: z
+      .string()
+      .trim()
+      .default("UTC")
+      .refine((zone) => {
+        try {
+          new Intl.DateTimeFormat("en-US", { timeZone: zone });
+          return true;
+        } catch {
+          return false;
+        }
+      }, "must be an IANA timezone name Intl recognises (e.g. America/Vancouver)"),
 
     CORS_ORIGIN: NonEmpty.default("http://localhost:5173"),
     FIXTURES_DIR: z.string().trim().default("./fixtures"),

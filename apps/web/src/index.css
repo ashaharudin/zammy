@@ -78,3 +78,26 @@ select {
   background: var(--chip-bg);
   border-radius: 8px;
 }
+
+/* Visually hidden but present for assistive tech (ARCHITECTURE 10.5). Reveals
+   itself when a keyboard user tabs into it, so focus is never invisible. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.sr-only:focus-within {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+}
