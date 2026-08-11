@@ -50,13 +50,14 @@ const EnvSchema = z
     MAX_SYNC_UPSTREAM_CALLS: z.coerce.number().int().min(1).max(5).default(5),
     INTERACTIVE_RESERVE: z.coerce.number().int().min(0).default(250),
     /**
-     * §9.4's per-topic budget. Raised 20 → 50 once the 7-day range ceiling
-     * (PROBE-FINDINGS 6d) made dense backfills slice-and-subdivide: 20 was
-     * gone before a single tokyo-class slice completed, recording no
-     * coverage at all. 50 (5% of the pool per topic) completes moderate
-     * keywords in a day; pathological ones still deepen across days.
+     * §9.4's per-topic budget. 2% of the pool: moderate keywords complete a
+     * 30-day backfill inside it, and since truncation records a coverage
+     * frontier (§6.3), a capped dense topic still banks ~400 articles of
+     * durable history per day and resumes exactly where it stopped. (Briefly
+     * 50 while halve-and-refetch truncation wasted the budget — the frontier
+     * removed the waste, so the tighter cap costs nothing.)
      */
-    PER_TOPIC_DAILY_CALL_CAP: z.coerce.number().int().min(1).default(50),
+    PER_TOPIC_DAILY_CALL_CAP: z.coerce.number().int().min(1).default(20),
     INGEST_POLL_MAX: z.coerce.number().int().min(1).max(60).default(8),
     /** §9.4: per-IP ceiling on /api/v1/*, so novel-fingerprint spam can't mint topics. */
     RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).default(60),

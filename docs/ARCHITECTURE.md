@@ -829,12 +829,13 @@ Three real trade-offs, each with a mitigation:
 Making spend user-triggered means users can drive spend, so the budget needs explicit protection —
 this is the main thing the model adds rather than removes:
 
-- **Per-topic daily cap** (default 50 calls — 5% of the pool). One curious user deep-backfilling an
+- **Per-topic daily cap** (default 20 calls — 2% of the pool). One curious user deep-backfilling an
   obscure keyword cannot drain the pool; the topic simply stops deepening that day and resumes
-  tomorrow. Originally 20, raised when the 7-day range ceiling (§2 drift) turned dense backfills
-  into slice-and-subdivide plans: 20 was spent before a single tokyo-class slice completed,
-  recording no coverage at all. At 50, a moderate keyword's 30-day backfill finishes in a day;
-  §9.4's ~150-call pathological case still deliberately spreads across three.
+  tomorrow. The cap is safe to keep this tight because truncation records a coverage frontier
+  (§6.3): every capped call is durable progress, so a dense keyword banks ~400 articles of history
+  per day and resumes exactly where it stopped. (It was briefly 50 while halve-and-refetch
+  truncation wasted the budget re-buying the same pages — with the frontier there is no waste left
+  for a bigger cap to pay for.)
 - **Per-IP rate limit** on `/api/v1/*` (§11), so novel-fingerprint spam can't mint unbounded topics.
 - **Interactive reserve** (§5.4): queued background jobs only run while `remaining >
   INTERACTIVE_RESERVE`, so backfill can never starve a live search.
