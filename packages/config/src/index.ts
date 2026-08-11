@@ -57,6 +57,13 @@ const EnvSchema = z
     DEFAULT_LANGUAGE: z.string().trim().min(2).max(8).default("en"),
 
     /**
+     * How long a /v2/latest-news snapshot stays fresh (ARCHITECTURE 10.1).
+     * The first visitor after it stales triggers the next one-call sample,
+     * so a fully-visited day costs ceil(24h / this) calls per language.
+     */
+    SAMPLE_REFRESH_MINUTES: z.coerce.number().int().min(1).default(60),
+
+    /**
      * The wordcloud's calendar day (ARCHITECTURE 10.1). Under UTC a Vancouver
      * afternoon is already tomorrow, and the landing page would go near-empty
      * every day after ~5pm local. IANA name, validated against Intl.

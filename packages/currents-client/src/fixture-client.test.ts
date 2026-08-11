@@ -158,3 +158,33 @@ describe("paging over fixture mode reproduces the cap", () => {
     expect(result.uniqueArticles).toBeLessThan(result.rawCount);
   });
 });
+
+describe("latestNews offline — the recorded /v2 feed (PROBE-FINDINGS 6c)", () => {
+  it("filters by v2 categories and pages, newest first", async () => {
+    const result = await client.latestNews({
+      language: "en",
+      categories: ["science_technology", "politics_government"],
+    });
+
+    expect(result.sightings.length).toBeGreaterThan(0);
+    expect(result.sightings.length).toBeLessThanOrEqual(20);
+    for (const sighting of result.sightings) {
+      expect(
+        sighting.categories.some((c) =>
+          ["science_technology", "politics_government"].includes(c),
+        ),
+        `${sighting.url} leaked past the category filter`,
+      ).toBe(true);
+    }
+
+    // Newest first, like the real feed.
+    const times = result.sightings.map((s) => Date.parse(s.published));
+    expect(times).toEqual([...times].sort((a, b) => b - a));
+  });
+
+  it("returns the newest ~20 across all categories when unfiltered", async () => {
+    const result = await client.latestNews({ language: "en" });
+    expect(result.sightings.length).toBeGreaterThan(0);
+    expect(result.rawCount).toBeLessThanOrEqual(20);
+  });
+});

@@ -566,7 +566,7 @@ describe("latestNews", () => {
     const { fetch, calls } = stubFetch([{ body: okBody(3), headers: quotaHeaders() }]);
     const client = makeClient({ fetch });
 
-    const result = await client.latestNews("en");
+    const result = await client.latestNews({ language: "en" });
 
     expect(calls[0]!.url).toContain("/latest-news?language=en");
     expect(result.sightings).toHaveLength(3);
@@ -594,5 +594,53 @@ describe("baseUrl handling", () => {
     expect(calls[0]!.url).toMatch(
       /^https:\/\/api\.currentsapi\.services\/v1\/search\?/,
     );
+  });
+});
+
+describe("latestNews — the /v2 breadth-sample endpoint (PROBE-FINDINGS 6c)", () => {
+  it("targets /v2 with comma-joined categories, language, and page_number", async () => {
+    const { fetch, calls } = stubFetch([{ body: okBody(20), headers: quotaHeaders() }]);
+    const client = makeClient({ fetch });
+
+    await client.latestNews({
+      language: "en",
+      categories: ["science_technology", "politics_government"],
+      pageNumber: 2,
+    });
+
+    const url = new URL(calls[0]!.url);
+    // The base URL pins /v1 for search; latest-news swaps the version segment.
+    expect(url.pathname).toBe("/v2/latest-news");
+    expect(url.searchParams.get("language")).toBe("en");
+    // Comma-separated is THE wire format — repeated params read first-only.
+    expect(url.searchParams.get("category")).toBe("science_technology,politics_government");
+    expect(url.searchParams.getAll("category")).toHaveLength(1);
+    expect(url.searchParams.get("page_number")).toBe("2");
+  });
+
+  it("omits the category param entirely when no categories are given", async () => {
+    const { fetch, calls } = stubFetch([{ body: okBody(20), headers: quotaHeaders() }]);
+    const client = makeClient({ fetch });
+
+    await client.latestNews({ language: "en" });
+
+    const url = new URL(calls[0]!.url);
+    expect(url.pathname).toBe("/v2/latest-news");
+    expect(url.searchParams.has("category")).toBe(false);
+  });
+
+  it("refuses v1-taxonomy names locally, spending no call", async () => {
+    const { fetch, calls } = stubFetch([{ body: okBody(20), headers: quotaHeaders() }]);
+    const client = makeClient({ fetch });
+
+    // "technology" is a valid v1 category and a verified v2 400 — the class
+    // of mistake pre-flight validation exists for (§11).
+    await expect(
+      client.latestNews({ categories: ["technology"] }),
+    ).rejects.toMatchObject({
+      name: "CurrentsInvalidQueryError",
+      fieldErrors: { category: expect.stringContaining("technology") },
+    });
+    expect(calls).toHaveLength(0);
   });
 });

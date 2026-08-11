@@ -24,27 +24,29 @@ import { processSampleJob, type TrendingDeps } from "./trending-service.js";
 const MIN_SEGMENT_MS = 60 * 60 * 1000;
 
 /**
- * The §10.1 breadth-sample slices: ~12 curated categories × 1–2 pages =
- * 12–24 calls, 1–2% of the daily quota. Curated rather than everything
- * /available/categories returns — that list includes junk values and dozens
- * of slices whose marginal breadth is not worth their quota (PROBE-FINDINGS 6).
+ * The §10.1 breadth-sample scope: curated values from the /v2/latest-news
+ * taxonomy (PROBE-FINDINGS 6c), comma-joined into ONE call per sample. The
+ * four omissions (human_interest, labour, automotive, real_estate) trim the
+ * feed toward topics a news cloud should surface; remember the filter
+ * excludes but does not balance — a busy category can still crowd a sample.
  */
 const SAMPLE_CATEGORIES = [
-  "business",
-  "entertainment",
-  "finance",
-  "food",
+  "general",
+  "society",
+  "science_technology",
+  "politics_government",
+  "economy_business_finance",
+  "arts_culture_entertainment",
+  "lifestyle_leisure",
+  "sport",
+  "crime_law_justice",
+  "education",
+  "environment",
   "health",
-  "lifestyle",
-  "national",
-  "politics",
-  "science",
-  "sports",
-  "technology",
-  "world",
 ] as const;
 
-const SAMPLE_PAGES_PER_CATEGORY = 2;
+/** One page per sample; §10.1's paging lever if ~20 items proves thin. */
+const SAMPLE_PAGES = 1;
 
 /** §10.3: the trailing mean's window. A week of history makes the cloud good. */
 const BASELINE_WINDOW_DAYS = 7;
@@ -140,7 +142,8 @@ export async function buildApp(config: Config): Promise<App> {
     trending: {
       appTimezone: config.APP_TIMEZONE,
       sampleCategories: SAMPLE_CATEGORIES,
-      samplePagesPerCategory: SAMPLE_PAGES_PER_CATEGORY,
+      samplePages: SAMPLE_PAGES,
+      sampleRefreshMinutes: config.SAMPLE_REFRESH_MINUTES,
       baselineWindowDays: BASELINE_WINDOW_DAYS,
     },
   };

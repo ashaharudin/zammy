@@ -28,10 +28,12 @@ import type { TimelineDeps } from "./timeline-service.js";
 
 export interface TrendingConfig {
   appTimezone: string;
-  /** Curated category slices; disjoint by probe measurement (§10.1). */
+  /** Curated v2-taxonomy categories, comma-joined into ONE call (§10.1). */
   sampleCategories: readonly string[];
-  /** 1–2 (§10.1). The sample is a breadth-first snapshot, not a census. */
-  samplePagesPerCategory: number;
+  /** Pages per sample. 1 by default; the lever if ~20 proves thin (§10.1). */
+  samplePages: number;
+  /** How long a snapshot stays fresh; the cadence knob (§10.1, default 60). */
+  sampleRefreshMinutes: number;
   baselineWindowDays: number;
 }
 
@@ -56,17 +58,20 @@ export async function readTrending(
     return { ...cached, meta: { ...cached.meta, servedFrom: "cache" } };
   }
 
-  // First visitor of the day elects the sample (§10.1). The lock is what
-  // keeps N Fargate tasks' simultaneous first visitors from each enqueueing
-  // a 12–24 call sample; the jobId dedup backstops it. Closed days never
-  // sample — they are frozen (§10.1).
+  // The first visitor after the last snapshot staled elects the next sample
+  // (§10.1): the lock's TTL IS the freshness window, so cost scales with the
+  // clock (≤24 calls/day per language), never with readers. It also keeps N
+  // Fargate tasks' simultaneous visitors to one election; the jobId dedup
+  // backstops it. Closed days never sample — they are frozen (§10.1).
   if (day === today) {
     try {
+      // Day-keyed so the window resets at rollover: the new day's first
+      // visitor samples immediately instead of waiting out last night's TTL.
       const elected = await deps.redis.set(
-        `lock:daily-sample:${day}:${query.language}`,
+        `lock:sample:${day}:${query.language}`,
         "1",
         "PX",
-        24 * 60 * 60 * 1000,
+        Math.max(1, Math.round(deps.trending.sampleRefreshMinutes * 60_000)),
         "NX",
       );
       if (elected === "OK") {
@@ -134,55 +139,52 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
     windowDays: deps.trending.baselineWindowDays,
   });
 
-  // Corpus source 2: the breadth sample. Keyword-less per-category fetches
-  // are ordinary topics — same fingerprint scheme, same collapse. Coverage is
-  // NOT recorded: 1–2 pages is a snapshot of the day, not coverage of it,
-  // and claiming otherwise would silently thin those topics' timelines.
-  for (const category of deps.trending.sampleCategories) {
-    const identity = {
-      keywords: [] as string[],
-      language: job.language,
-      country: null,
-      category,
-    };
-    const fingerprint = fingerprintOf(identity);
-    await upsertTopic(deps.db, { fingerprint, ...identity });
+  // Corpus source 2: ONE /v2/latest-news call carrying the whole curated
+  // category list (PROBE-FINDINGS 6c) — comma-joined, page shared across
+  // categories. Sampled sightings ingest under the keyword-less all-category
+  // topic: same fingerprint scheme, same collapse; unreachable by users, who
+  // cannot canonicalize an empty search. Coverage is NOT recorded — a
+  // snapshot of the moment is not coverage of anything.
+  const identity = {
+    keywords: [] as string[],
+    language: job.language,
+    country: null,
+    category: null,
+  };
+  const fingerprint = fingerprintOf(identity);
+  await upsertTopic(deps.db, { fingerprint, ...identity });
 
-    for (let pageNumber = 1; pageNumber <= deps.trending.samplePagesPerCategory; pageNumber += 1) {
-      let result;
-      try {
-        result = await deps.currents.search(
-          {
-            language: job.language,
-            category,
-            startDate: bounds.from,
-            endDate: to,
-            pageNumber,
-            pageSize: deps.currents.limits.maxPageSize,
-          },
-          { priority: "background" },
-        );
-      } catch (error) {
-        // Quota or upstream trouble: keep what we have and still recompute —
-        // a partial sample plus the day's stored articles beats a blank cloud,
-        // and the next day's first visitor tries again (§11).
-        deps.log?.warn(
-          { err: error, category, day: job.day },
-          "breadth sample fetch failed; scoring with partial corpus",
-        );
-        break;
-      }
-      deps.metrics?.upstreamCall({
-        received: result.normalization.received,
-        dropped: result.normalization.received - result.normalization.kept,
-      });
-      const ingested = await ingestSightings(deps.db, {
-        fingerprint,
-        sightings: result.sightings,
-      });
-      deps.metrics?.articlesIngested(ingested.articlesCreated);
-      if (result.isLastPage) break;
+  for (let pageNumber = 1; pageNumber <= deps.trending.samplePages; pageNumber += 1) {
+    let result;
+    try {
+      result = await deps.currents.latestNews(
+        {
+          language: job.language,
+          categories: deps.trending.sampleCategories,
+          pageNumber,
+        },
+        { priority: "background" },
+      );
+    } catch (error) {
+      // Quota or upstream trouble: keep what we have and still recompute —
+      // the day's stored articles beat a blank cloud, and the next visitor
+      // past the freshness window tries again (§11).
+      deps.log?.warn(
+        { err: error, day: job.day },
+        "latest-news sample failed; scoring with the stored corpus only",
+      );
+      break;
     }
+    deps.metrics?.upstreamCall({
+      received: result.normalization.received,
+      dropped: result.normalization.received - result.normalization.kept,
+    });
+    const ingested = await ingestSightings(deps.db, {
+      fingerprint,
+      sightings: result.sightings,
+    });
+    deps.metrics?.articlesIngested(ingested.articlesCreated);
+    if (result.isLastPage) break;
   }
 
   // Recompute the day's aggregate over BOTH corpus sources — the sample and
