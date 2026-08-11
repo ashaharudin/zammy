@@ -148,10 +148,45 @@ Conclusion: domain-breadth gating, a rolling baseline, and careful tokenization 
 the first cut**, not later polish. Specifying the naive version would have shipped a cloud that reads
 as broken.
 
+## 6c. `/v2/latest-news` — the multi-category sample endpoint (probed 2026-08-10)
+
+Probed to resolve ARCHITECTURE §14 open question 6 before moving the §10.1 breadth sample off
+keywordless `/search`. 8 calls; recorded in `fixtures/latest-news-v2-sample.json`.
+
+- **Multi-category is comma-separated**: `category=science_technology,politics_government` → 200,
+  and every returned item's `category` intersected the requested set (0 leaks). A **repeated
+  parameter does not merge** — only the first occurrence is read — so commas are the wire format.
+- **v2 uses a new, fixed 16-value category taxonomy.** v1 names are rejected:
+  `category=technology` → 400 with `details.errors.category` listing the allowed values verbatim
+  (`general, society, science_technology, politics_government, economy_business_finance,
+  arts_culture_entertainment, lifestyle_leisure, human_interest, sport, crime_law_justice,
+  education, environment, labour, health, automotive, real_estate`). The `/v1/available/categories`
+  list does **not** apply to v2 — a curated sample list must use these names, and validating v2
+  categories against the v1 reference data would reject every valid value.
+- **The ~20-item page is shared across categories, not multiplied.** A two-category call returned
+  20 items, same as unfiltered.
+- **The filter filters; it does not balance.** The two-category call came back 19× science_technology
+  and 1× politics_government — newest-matching-any wins, so one busy category can crowd a
+  multi-category sample. Category *steering* is exclusion, not allocation.
+- **v1 and v2 serve the same feed, relabeled.** Unfiltered v1 vs v2: 20/20 id overlap; the same
+  articles carry old-taxonomy labels on v1 (`mining`, `regional`, `world`…) and new-taxonomy labels
+  on v2. Ingesting from both would mix taxonomies in `articles.categories`.
+- **`page_number` works on v2** (response carries a top-level `page`; page 2 was disjoint from
+  page 1), so a sample can page deeper if 20 proves thin. No date parameters, as on v1.
+- This sample had 20/20 unique URLs — consistent with §6b's finding that heavy duplication is
+  keyword/source-specific, not universal.
+- Response item shape is identical to v1 (`id, title, description, url, author, image, language,
+  category, source_category, published`); the normalizer needs no changes.
+
+Unmeasured: feed turnover between hourly samples — needs observations an hour apart, and the §10.1
+cadence knob exists precisely to absorb whatever it turns out to be.
+
 ## 7. Quota cost of this exercise
 
 41 calls total; `x-ratelimit-remaining` went 999 → 977 over the measured span, day resetting at
 `2026-08-05T00:00:00+00:00`. Well within budget.
+
+The §6c follow-up (2026-08-10) spent 8 further calls; `x-ratelimit-remaining` ended at 992.
 
 ---
 

@@ -844,12 +844,12 @@ anyone searches. So the corpus is a union of two sources:
 
 1. **Everything already stored for today** — articles with `published` inside the current local day,
    accumulated from user searches. Free, zero upstream calls, and it broadens through the day.
-2. **A breadth sample from `/latest-news`** — the upstream's own editorially-mixed feed of the
-   newest ~20 articles, **one call per language**. Two versions exist: v1 takes only `language`,
-   while the vendor docs state the **v2 endpoint also accepts a category filter with multiple
-   categories** ([docs](https://currentsapi.services/en/docs/latest_news)) — so one v2 call can
-   carry the whole curated category list that the old design spent 12 `/search` calls on. The
-   sample targets v2 for exactly that reason: breadth *steering* at single-call cost.
+2. **A breadth sample from `/v2/latest-news`** — the upstream's own editorially-mixed feed of the
+   newest ~20 articles, **one call per language**. Probed (PROBE-FINDINGS 6c): v2 accepts a
+   **comma-separated multi-category filter** — one call can carry the whole curated category list
+   that the old design spent 12 `/search` calls on — against a **new fixed 16-value taxonomy**
+   (`science_technology`, `politics_government`, …; the v1 names 400). The 20-item page is shared
+   across categories, not multiplied, and `page_number` works if 20 proves thin.
 
 One call buys ~20 articles where the old category-sliced `/search` sample bought a few hundred for
 12–24 calls, so a single daily sample would starve the corpus. The budget freed by the cheaper call
@@ -863,18 +863,20 @@ costs nothing, so this stays consistent with §9 rather than smuggling a schedul
 stored cloud is served instantly while a refresh runs behind it, reusing the same
 stale-while-revalidate and `meta.ingest` machinery as §6.5.
 
-Two things this trades away, named rather than hidden. **Category control is coarser** — v2's
-multi-category filter scopes the feed to the curated list, but *within* that scope upstream curates
-the mix; a slow news day in one domain cannot be compensated by deliberately over-sampling another
-the way per-category `/search` calls could. The `df_domains >= 2` gate (§10.3) is what keeps a
-lopsided feed from minting a lopsided cloud. And **the endpoint is less probed than `/search`** —
-the `/v2/latest-news` route's existence is verified (an unauthenticated status probe, 2026-08-10:
-401 where a nonexistent route 404s), but the multi-category parameter is known from the vendor docs
-only: its wire format, whether the ~20-item page is shared across or multiplied by categories, and
-the feed's turnover rate between samples all need **one keyed probe call before implementation leans
-on them**, in keeping with how every other upstream behaviour in this document was established. Note
-also that the client pins the API version in `CURRENTS_BASE_URL` (default `…/v1`), so adopting v2
-here is a client change, not just a parameter.
+Two things this trades away, named rather than hidden — both now measured (PROBE-FINDINGS 6c).
+**The filter filters; it does not balance.** A probed two-category call came back 19:1 — newest-
+matching-any wins, so one busy category can crowd a multi-category sample. Category steering is
+*exclusion*, not *allocation*: a slow news day in one domain cannot be compensated by deliberately
+over-sampling another the way per-category `/search` calls could. The `df_domains >= 2` gate
+(§10.3) is what keeps a lopsided feed from minting a lopsided cloud, and paging deeper or splitting
+the curated list across 2–3 grouped calls are the levers if the skew shows up in practice. And
+**v2 is a second taxonomy living alongside v1**: its 16 category values are disjoint from
+`/v1/available/categories` (which must not be used to validate them), and since v1 and v2 serve
+the same articles under different labels (20/20 id overlap, relabeled), ingesting from both mixes
+taxonomies in `articles.categories` — harmless for the cloud, worth remembering for any future
+category-based feature. The client pins the API version in `CURRENTS_BASE_URL` (default `…/v1`),
+so adopting v2 is a client change, not just a parameter. Feed turnover between hourly samples
+remains the one unmeasured input; the cadence knob absorbs it either way.
 
 "First visitor" still needs a **Redis lock** (`lock:sample:<language>`, TTL = the freshness window) —
 a no-op in single-replica local dev, but without it the first concurrent requests across multiple
@@ -1086,7 +1088,11 @@ payload (100 sightings, 42 unique URLs, one repeated 50×) is a ready-made regre
 ## 14. Open questions
 
 Resolved by the probe (2026-08-04): paging params exist and are usable; plan limits are 1000/day and
-60/60s; keyword terms narrow rather than OR. Details in [PROBE-FINDINGS.md](./PROBE-FINDINGS.md).
+60/60s; keyword terms narrow rather than OR. Resolved by a follow-up probe (2026-08-10, 8 calls):
+`/v2/latest-news` takes a comma-separated multi-category filter over a new fixed 16-value taxonomy,
+shares its ~20-item page across categories, filters without balancing (19:1 skew measured), and
+serves the same feed as v1 relabeled — recorded in `fixtures/latest-news-v2-sample.json`. Details in
+[PROBE-FINDINGS.md](./PROBE-FINDINGS.md).
 
 Resolved by design review, each with an ADR: the archive boundary and report-only retention
 ([0001](adr/0001-postgres-is-the-archive-beyond-the-upstream-lookback.md)); sightings versus articles,
@@ -1123,8 +1129,7 @@ Still open:
 4. **Summary scope** — per-topic rollup, or per-article abstractive summary? Only affects Phase 6.
 5. **`type` parameter** — the one probe result that changed output without an obvious meaning
    (17/20 overlap with the control). Unexplored; not needed for v1.
-6. **`/v2/latest-news` multi-category filter (§10.1)** — the route exists (status-probe verified,
-   2026-08-10) and the vendor docs say it accepts multiple categories, but the parameter's wire
-   format, whether the ~20-item page is shared across or multiplied by categories, and the feed's
-   turnover between hourly samples are docs-only claims. One keyed probe call settles all three;
-   do it before the sample implementation moves off keywordless `/search`.
+6. **`/v2/latest-news` feed turnover** — the one §10.1 input the 2026-08-10 probe could not settle
+   in a single sitting: how much of the ~20-item feed is new after an hour. Cheap to measure once
+   the sampler runs (compare consecutive samples' ids in the logs); `SAMPLE_REFRESH_MINUTES` is the
+   knob it informs.
