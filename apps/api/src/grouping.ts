@@ -1,4 +1,4 @@
-import type { GroupSeed } from "@zammy/storage";
+import type { GroupCandidate } from "@zammy/storage";
 import { contentTokens } from "./term-scoring.js";
 
 /**
@@ -7,10 +7,11 @@ import { contentTokens } from "./term-scoring.js";
  *
  * The unit is **a day's coverage of a story, not an event** (§14.3). What
  * follows is the similarity half; the time bucket that bounds it lives in SQL
- * (same APP_TIMEZONE calendar day, same language) and in the rule that a new
- * article is compared against a group's SEED only — never against members
- * transitively, which is what would let A–B–C chain into one group whose ends
- * were never compared.
+ * (same APP_TIMEZONE calendar day, same language) — and that bucket is now the
+ * whole of the bound, since a newcomer is matched against ANY member of a
+ * group rather than its seed alone (ADR-0005). Seed-only comparison was the
+ * original rule and measurably lost real syndication: it judged a wire story
+ * against whichever article happened to arrive first, not the one it resembles.
  *
  * **Similarity is lexical: Jaccard over headline tokens** (ADR-0005). Not
  * embeddings — §14.3 called grouping the strongest case in this product for
@@ -19,10 +20,10 @@ import { contentTokens } from "./term-scoring.js";
  * would replace, and nothing above it knows how the decision is made.
  */
 
-// The candidate shape is storage's — it is what the seed query returns, and a
-// local copy of the same four fields would be two definitions of one thing.
+// The candidate shape is storage's — it is what the candidate query returns,
+// and a local copy of the same fields would be two definitions of one thing.
 // Type-only, so this module stays pure and testable without a database.
-export type { GroupSeed };
+export type { GroupCandidate };
 
 export interface GroupingRules {
   /**
@@ -51,6 +52,38 @@ const MIN_SHARED_TOKENS = 2;
 /** The distinct content-bearing tokens of a headline (§10.2's tokenizer). */
 export function headlineTokens(title: string): string[] {
   return [...new Set(contentTokens(title))];
+}
+
+/**
+ * The figures a headline quotes, with thousands separators removed so `36,800`
+ * and `36800` are one figure.
+ *
+ * The tokenizer drops anything containing a digit — §10.2's fix for `cve-`
+ * fragments ranking first in the cloud — which is right for terms and wrong
+ * here: templated headlines differ ONLY in their numbers. "Athabasca Oil
+ * Corporation Buys 36,800 Shares" and "…Buys 43,500 Shares" tokenize
+ * identically, and ten distinct insider filings merged into one slot on live
+ * data because of it.
+ */
+export function headlineFigures(title: string): Set<string> {
+  const found = title.match(/\d[\d.,]*/g) ?? [];
+  return new Set(
+    found.map((figure) => figure.replaceAll(",", "").replace(/[.,]+$/, "")).filter(Boolean),
+  );
+}
+
+/**
+ * Two headlines that both quote figures, sharing none of them, are not the
+ * same story — the numbers ARE the story in that shape of headline.
+ *
+ * One-sided figures prove nothing: an outlet that puts "2,000 acres" in its
+ * headline and one that does not are still covering the same fire, so the rule
+ * only fires when both sides quote something and nothing agrees.
+ */
+function figuresContradict(a: Set<string>, b: Set<string>): boolean {
+  if (a.size === 0 || b.size === 0) return false;
+  for (const figure of a) if (b.has(figure)) return false;
+  return true;
 }
 
 /**
@@ -84,32 +117,38 @@ function overlap(
  * nearest headline is the one a reader would call the same story. Ties break
  * by earliest published then lowest id, so a replayed batch — retries make
  * that routine (§7.4) — reaches the same grouping.
+ *
+ * Candidates include a group's MEMBERS, not only its seed, so an article joins
+ * through whichever member it most resembles. On live data that is what
+ * rescued a mirror.co.uk piece that duplicated a BBC article almost word for
+ * word while scoring 0.375 against the group's arbitrary first arrival.
  */
 export function chooseGroup(
-  tokens: readonly string[],
-  candidates: readonly GroupSeed[],
+  headline: { tokens: readonly string[]; figures: Set<string> },
+  candidates: readonly GroupCandidate[],
   rules: GroupingRules,
-): GroupSeed | null {
-  let best: { seed: GroupSeed; similarity: number } | null = null;
+): GroupCandidate | null {
+  let best: { candidate: GroupCandidate; similarity: number } | null = null;
 
-  for (const seed of candidates) {
-    const { shared, similarity } = overlap(tokens, seed.titleTokens);
+  for (const candidate of candidates) {
+    const { shared, similarity } = overlap(headline.tokens, candidate.titleTokens);
     if (shared < MIN_SHARED_TOKENS || similarity < rules.threshold) continue;
-    if (best === null || beats(similarity, seed, best)) {
-      best = { seed, similarity };
+    if (figuresContradict(headline.figures, headlineFigures(candidate.title))) continue;
+    if (best === null || beats(similarity, candidate, best)) {
+      best = { candidate, similarity };
     }
   }
 
-  return best?.seed ?? null;
+  return best?.candidate ?? null;
 }
 
 function beats(
   similarity: number,
-  seed: GroupSeed,
-  best: { seed: GroupSeed; similarity: number },
+  candidate: GroupCandidate,
+  best: { candidate: GroupCandidate; similarity: number },
 ): boolean {
   if (similarity !== best.similarity) return similarity > best.similarity;
-  const byTime = seed.published.getTime() - best.seed.published.getTime();
+  const byTime = candidate.published.getTime() - best.candidate.published.getTime();
   if (byTime !== 0) return byTime < 0;
-  return BigInt(seed.id) < BigInt(best.seed.id);
+  return BigInt(candidate.id) < BigInt(best.candidate.id);
 }

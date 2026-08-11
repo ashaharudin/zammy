@@ -1,12 +1,12 @@
 import type { Kysely } from "kysely";
 import {
-  readGroupSeeds,
+  readGroupCandidates,
   recordGrouping,
   type CreatedArticle,
   type Database,
 } from "@zammy/storage";
 import { zonedDayBounds, zonedDayKey } from "./app-day.js";
-import { chooseGroup, headlineTokens } from "./grouping.js";
+import { chooseGroup, headlineFigures, headlineTokens } from "./grouping.js";
 import type { Metrics } from "./metrics.js";
 
 /**
@@ -62,6 +62,9 @@ export function groupingDepsFor(deps: {
  * unbounded scan. Taking the most recent N yields a worse grouping, never a
  * wrong row — grouping fails soft, which is the whole reason §14.3 judged this
  * a materially better risk profile than merging.
+ *
+ * It binds harder since members became candidates (ADR-0005): a 9-article wire
+ * cluster now occupies nine slots rather than one.
  */
 const CANDIDATE_LIMIT = 200;
 
@@ -118,7 +121,7 @@ async function groupOne(deps: GroupingDeps, article: CreatedArticle): Promise<bo
     deps.config.timeZone,
   );
 
-  const seeds = await readGroupSeeds(deps.db, {
+  const candidates = await readGroupCandidates(deps.db, {
     from: day.from,
     to: day.to,
     language: article.language,
@@ -127,7 +130,11 @@ async function groupOne(deps: GroupingDeps, article: CreatedArticle): Promise<bo
     limit: CANDIDATE_LIMIT,
   });
 
-  const chosen = chooseGroup(tokens, seeds, { threshold: deps.config.threshold });
+  const chosen = chooseGroup(
+    { tokens, figures: headlineFigures(article.title) },
+    candidates,
+    { threshold: deps.config.threshold },
+  );
   await recordGrouping(deps.db, {
     articleId: article.id,
     titleTokens: tokens,

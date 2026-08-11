@@ -1254,12 +1254,31 @@ Still open:
      unbounded drift the greedy rule in item 7 avoids. The cost is a midnight cliff: 23:50 and 00:10
      never group. Accepted as bounded and explicable, where chaining is neither.
 
-     That fixed member is the group's **seed** — the article that started it, which `group_id` names
-     — and not the representative, as this entry originally said. The two came apart in the building:
-     the representative is chosen per topic and per read (bullet above), so it is not a stable thing
-     to compare against and does not exist at write time at all. The seed never moves, which is
-     precisely what bounds the drift; the group's *position* still follows its earliest member, so
-     the seed and the position are frequently different articles.
+     **Amended after measurement (2026-08-11): candidates are ANY member of a group, not one fixed
+     article.** The fixed member was the group's *seed* — the article that started it, which
+     `group_id` names — and it cost real recall. Live example: the Mirror's "Dozens of police chiefs
+     urge PM to prevent PC Harper killers' prison release" scored 0.375 against its group's first
+     arrival and missed, while duplicating a BBC article *inside that same group* almost word for
+     word. Seed-only comparison judged the wrong article. Replayed over 2,713 live articles,
+     any-member grouping raised grouped articles 336 → 348 and added no new single-outlet merges;
+     lowering the threshold instead reached the same story only by also fusing distinct developments
+     (at 0.40 the police-chiefs letter and the separate Burnham U-turn collapsed into one 15-article
+     slot). Details in [ADR-0005](adr/0005-headline-tokens-not-embeddings-decide-article-grouping.md).
+
+     What this costs: the **calendar day is now the whole of the drift bound**. Chaining within a day
+     is possible in principle — A joins via B, C joins via A — and is accepted, because a day is a
+     hard ceiling and the alternative was losing the syndication this feature exists to catch. The
+     seed keeps its other job as the group's identity; the group's *position* still follows its
+     earliest member, so the seed, the position and the headline are frequently three different
+     articles.
+
+   - **Headlines that quote contradictory figures are not the same story.** The tokenizer drops
+     anything containing a digit (§10.2's fix for `cve-` fragments), which is right for the cloud and
+     wrong here: templated headlines differ ONLY in their numbers. Ten distinct marketbeat.com
+     insider filings — "Buys 36,800 Shares", "Buys 43,500 Shares" — are token-identical and merged
+     into one slot on live data. When both headlines quote figures and none of them agree, grouping
+     refuses. One-sided figures prove nothing and do not block: an outlet that puts "2,000 acres" in
+     its headline and one that does not are still covering the same fire.
 
    Unlike variant merging (item 7), the failure mode here is *soft*: a wrong grouping demotes an
    article behind a toggle rather than deleting it, which is a materially better risk profile and the

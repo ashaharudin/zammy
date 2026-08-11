@@ -9,62 +9,68 @@ import type { Database } from "./database.js";
  * here, because the bounds are what keep the feature safe:
  *
  *  - candidates come from ONE `APP_TIMEZONE` calendar day, passed in as
- *    `[from, to)` (§10.1's rule, computed by the caller as everywhere else);
- *  - candidates are group SEEDS only, so a new article is compared against a
- *    fixed article and groups cannot chain A–B–C through their members;
+ *    `[from, to)` (§10.1's rule, computed by the caller as everywhere else),
+ *    and that window is what bounds how far a group can drift;
  *  - a group's position is MIN(published) over its members, maintained on
  *    every write so §7.3's keyset stays an index scan.
+ *
+ * Candidates are ANY member of a same-day group, not the seed alone. Seed-only
+ * comparison was the original rule and it measurably lost real syndication: a
+ * wire story reaches a group through whichever member it most resembles, and
+ * that is rarely the arbitrary article that happened to arrive first (§14.3,
+ * ADR-0005).
  */
 
-/** A group's seed: the fixed article a candidate is compared against. */
-export interface GroupSeed {
+/** An article a newcomer may be compared against, and the group it belongs to. */
+export interface GroupCandidate {
   id: string;
-  /** Equals `id` — a seed is by definition its group's identity. */
+  /** The group this candidate is in. Equals `id` only for a group of one. */
   groupId: string;
   titleTokens: string[];
+  /** Needed for the figure rule, which reads numerals the tokenizer drops. */
+  title: string;
   published: Date;
 }
 
-export interface GroupSeedQuery {
+export interface GroupCandidateQuery {
   /** The article's `APP_TIMEZONE` day, as UTC instants (§10.1). */
   from: Date;
   to: Date;
   /** Matched with IS NOT DISTINCT FROM, so unknown language groups with unknown. */
   language: string | null;
   titleTokens: readonly string[];
-  /** The article being grouped, which is a seed of its own until it moves. */
+  /** The article being grouped, which is a group of one until it moves. */
   excludeArticleId: string;
   /**
    * Safety valve for a pathological day, not a tuning knob. A day where one
    * token appears in thousands of headlines would otherwise make grouping one
    * article an unbounded scan; taking the most recent N is a worse grouping,
-   * never a wrong row, because grouping fails soft (§14.3).
+   * never a wrong row, because grouping fails soft (§14.3). It binds harder
+   * now that members are candidates too — a large group spends several slots.
    */
   limit: number;
 }
 
 /**
- * Same-day seeds in the same language sharing at least one headline token.
+ * Same-day articles in the same language sharing at least one headline token.
  *
  * The token overlap is a NARROWING device, not the decision — the GIN index
  * turns "compare against the day" into "compare against a handful", and the
  * similarity rule then throws most of those away.
  */
-export async function readGroupSeeds(
+export async function readGroupCandidates(
   db: Kysely<Database>,
-  query: GroupSeedQuery,
-): Promise<GroupSeed[]> {
+  query: GroupCandidateQuery,
+): Promise<GroupCandidate[]> {
   if (query.titleTokens.length === 0) return [];
 
   const rows = await db
     .selectFrom("articles as a")
-    .select(["a.id", "a.group_id", "a.title_tokens", "a.published"])
+    .select(["a.id", "a.group_id", "a.title_tokens", "a.title", "a.published"])
     .where("a.published", ">=", query.from)
     .where("a.published", "<", query.to)
     .where(sql<boolean>`a.language is not distinct from ${query.language}`)
     .where(sql<boolean>`a.title_tokens && ${[...query.titleTokens]}::text[]`)
-    // Seeds only. A member that has joined a group is never offered again.
-    .where(sql<boolean>`a.id = a.group_id`)
     .where("a.id", "!=", query.excludeArticleId)
     .orderBy("a.published", "desc")
     .orderBy("a.id", "desc")
@@ -75,6 +81,7 @@ export async function readGroupSeeds(
     id: row.id,
     groupId: row.group_id,
     titleTokens: row.title_tokens,
+    title: row.title,
     published: row.published,
   }));
 }

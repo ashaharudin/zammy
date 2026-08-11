@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { deriveDedupKey, type Sighting } from "@zammy/currents-client";
 import { ingestSightings, upsertTopic } from "./ingest.js";
 import { migrateToLatest } from "./migrator.js";
-import { readGroupSeeds, recordGrouping } from "./grouping.js";
+import { readGroupCandidates, recordGrouping } from "./grouping.js";
 import {
   createTestDatabase,
   testFingerprint,
@@ -109,7 +109,7 @@ describe("article groups in storage", () => {
       groupId: null,
     });
 
-    const seeds = await readGroupSeeds(harness.db, {
+    const seeds = await readGroupCandidates(harness.db, {
       from: DAY_FROM,
       to: DAY_TO,
       language: "en",
@@ -125,7 +125,7 @@ describe("article groups in storage", () => {
   });
 
   it("offers nothing to an article with no tokens in common", async () => {
-    const seeds = await readGroupSeeds(harness.db, {
+    const seeds = await readGroupCandidates(harness.db, {
       from: DAY_FROM,
       to: DAY_TO,
       language: "en",
@@ -170,7 +170,7 @@ describe("article groups in storage", () => {
       });
     }
 
-    const seeds = await readGroupSeeds(harness.db, {
+    const seeds = await readGroupCandidates(harness.db, {
       from: DAY_FROM,
       to: DAY_TO,
       language: "en",
@@ -186,11 +186,12 @@ describe("article groups in storage", () => {
     expect(ids).not.toContain(french.createdArticles[0]!.id);
   });
 
-  it("offers seeds only, so groups cannot chain through their members", async () => {
-    // A–B twenty hours apart and B–C twenty hours apart must not put A and C
-    // in one group forty hours apart, having never been compared. Comparing
-    // against the SEED only is what bounds that drift (§14.3), so a member
-    // that has joined a group must never be offered as a candidate again.
+  it("offers a group's MEMBERS too, each carrying its group", async () => {
+    // Seed-only candidates were the original rule and measurably lost real
+    // syndication (ADR-0005): a newcomer was judged against whichever article
+    // arrived first rather than the one it resembles. Members are offered now,
+    // and each reports the group a newcomer would be joining — the day window
+    // is what bounds the drift that the seed rule used to bound.
     const tokens = ["storm", "floods", "coastal", "towns"];
     const seed = await ingest(
       story({
@@ -216,7 +217,7 @@ describe("article groups in storage", () => {
       groupId: seedId,
     });
 
-    const seeds = await readGroupSeeds(harness.db, {
+    const candidates = await readGroupCandidates(harness.db, {
       from: DAY_FROM,
       to: DAY_TO,
       language: "en",
@@ -225,9 +226,12 @@ describe("article groups in storage", () => {
       limit: 50,
     });
 
-    const ids = seeds.map((candidate) => candidate.id);
-    expect(ids).toContain(seedId);
-    expect(ids).not.toContain(joinerId);
+    const member = candidates.find((c) => c.id === joinerId);
+    expect(candidates.map((c) => c.id)).toContain(seedId);
+    expect(member?.groupId).toBe(seedId);
+    // The title comes back too: the figure rule reads numerals that the
+    // tokenizer drops, so it needs the headline itself.
+    expect(member?.title).toBe("Storm floods coastal towns overnight");
   });
 
   it("positions a group at its earliest member, whenever that changes", async () => {
