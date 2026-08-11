@@ -22,15 +22,24 @@ afterEach(async () => {
   await harness.teardown();
 });
 
+/**
+ * Fictional, fixture-era clock. A real-clock harness would share its
+ * trending day — and therefore the sample lock — with whatever the trending
+ * suite or a local dev server is doing on the actual calendar day, and those
+ * collide through the one Redis everything here deliberately shares.
+ */
+const ROUTES_NOW = new Date("2026-08-06T12:00:00.000Z");
+
 async function setup(): Promise<void> {
-  harness = await createTestHarness();
+  harness = await createTestHarness({}, ROUTES_NOW);
   app = Fastify({ logger: false });
   const trendingDeps: TrendingDeps = {
     ...harness.deps,
     trending: {
       appTimezone: "UTC",
-      sampleCategories: ["technology", "politics"],
-      samplePagesPerCategory: 2,
+      sampleCategories: ["science_technology", "politics_government"],
+      samplePages: 1,
+      sampleRefreshMinutes: 60,
       baselineWindowDays: 7,
     },
   };
@@ -40,13 +49,9 @@ async function setup(): Promise<void> {
   await app.ready();
 
   // Day-keyed Redis state (sample lock, trending cache) outlives ephemeral
-  // test databases; clear today's so reruns see a fresh day.
-  const today = new Date().toISOString().slice(0, 10);
-  await harness.redis.del(
-    `lock:daily-sample:${today}:en`,
-    `trending:${today}:en`,
-    `ingest:pending:sample_${today}_en`,
-  );
+  // test databases; clear this suite's fictional day so reruns start fresh.
+  const today = ROUTES_NOW.toISOString().slice(0, 10);
+  await harness.redis.del(`lock:sample:${today}:en`, `trending:${today}:en`);
 
   // Deterministic fingerprints collide with previous runs via shared Redis.
   const canonical = canonicalize(
@@ -184,7 +189,8 @@ describe("GET /metrics", () => {
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("text/plain");
     expect(response.body).toContain("zammy_upstream_calls_total 1");
-    expect(response.body).toContain('zammy_page_cache_reads_total{tier="historical",result="miss"}');
+    // ROUTES_NOW is 12h after the window's end: the "recent" tier (§6.4).
+    expect(response.body).toContain('zammy_page_cache_reads_total{tier="recent",result="miss"}');
     expect(response.body).toContain("zammy_quota_daily_remaining");
   });
 });

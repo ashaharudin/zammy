@@ -222,3 +222,24 @@ describe("reference bodies — name→code maps, values used verbatim", () => {
     expect(await client.availableCategories()).toContain("politics");
   });
 });
+
+describe("v2 latest-news 400 — the recorded invalid-category body (PROBE-FINDINGS 6c)", () => {
+  it("maps to CurrentsInvalidQueryError with the taxonomy list preserved", () => {
+    const recorded = JSON.parse(
+      readFileSync(join(FIXTURES_DIR, "latest-news-v2-sample.json"), "utf8"),
+    ) as { error_bodies: { v2_invalid_category_400: unknown } };
+
+    const error = mapErrorResponse({
+      status: 400,
+      bodyText: asBody(recorded.error_bodies.v2_invalid_category_400),
+    });
+
+    expect(error).toBeInstanceOf(CurrentsInvalidQueryError);
+    expect(error.retryable).toBe(false);
+    const fieldErrors = (error as CurrentsInvalidQueryError).fieldErrors;
+    // The allowed-values list IS the taxonomy documentation — losing it turns
+    // a one-line diagnosis into a hunt (ARCHITECTURE 5.3).
+    expect(fieldErrors.category).toMatch(/science_technology/);
+    expect(fieldErrors.category).toMatch(/Invalid category value\(s\): technology/);
+  });
+});

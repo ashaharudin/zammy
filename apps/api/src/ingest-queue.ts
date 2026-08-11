@@ -150,6 +150,8 @@ export class IngestQueue {
     await this.worker?.close();
     this.worker = null;
     await this.queue.obliterate({ force: true });
+    const pending = await this.redis.keys(`ingest:pending:${this.queueName}:*`);
+    if (pending.length > 0) await this.redis.del(...pending);
   }
 
   async close(): Promise<void> {
@@ -159,7 +161,10 @@ export class IngestQueue {
   }
 
   private pendingKey(fingerprint: string): string {
-    return `ingest:pending:${fingerprint}`;
+    // Scoped to the queue: replicas share the "ingest" queue and therefore
+    // the registry, while a differently-named queue (tests) cannot leak
+    // pending state into this one's counts.
+    return `ingest:pending:${this.queueName}:${fingerprint}`;
   }
 }
 

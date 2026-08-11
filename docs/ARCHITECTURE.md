@@ -756,7 +756,7 @@ Three trigger types, all originating from a user request:
 | --- | --- | --- |
 | **Fill visible page** — coverage gap for the requested window | synchronous, in-request | deadline-bounded, ~1 call (§6.3) |
 | **Complete the plan** — pages 2..5 the deadline cut off | queued, background | ≤ 4 calls |
-| **Breadth sample** — first landing-page visit after the last `/latest-news` snapshot staled (§10.1) | queued, background | 1 call/sample, ≤24/day per language |
+| **Breadth sample** — first landing-page visit after the last `/latest-news` snapshot staled (§10.1) | queued, background | `SAMPLE_PAGES` calls/sample (default 2), ≤48/day per language |
 | **Deferred backfill** — gap segments and subdivisions §6.3 didn't have budget for | queued, background | metered |
 | **Refresh-on-read** — stale coverage noticed while serving (§6.4) | queued, background | ~1 call |
 
@@ -845,18 +845,23 @@ anyone searches. So the corpus is a union of two sources:
 1. **Everything already stored for today** — articles with `published` inside the current local day,
    accumulated from user searches. Free, zero upstream calls, and it broadens through the day.
 2. **A breadth sample from `/v2/latest-news`** — the upstream's own editorially-mixed feed of the
-   newest ~20 articles, **one call per language**. Probed (PROBE-FINDINGS 6c): v2 accepts a
-   **comma-separated multi-category filter** — one call can carry the whole curated category list
-   that the old design spent 12 `/search` calls on — against a **new fixed 16-value taxonomy**
-   (`science_technology`, `politics_government`, …; the v1 names 400). The 20-item page is shared
-   across categories, not multiplied, and `page_number` works if 20 proves thin.
+   newest ~20 articles per page, `SAMPLE_PAGES` pages per sample (default 2, ~40 articles).
+   Probed (PROBE-FINDINGS 6c): v2 accepts a **comma-separated multi-category filter** — one call
+   can carry the whole curated category list that the old design spent 12 `/search` calls on —
+   against a **new fixed 16-value taxonomy** (`science_technology`, `politics_government`, …; the
+   v1 names 400). The 20-item page is shared across categories, not multiplied. There is no page
+   *size* parameter, so a bigger sample always means paging — and paging past 5 is unverified
+   territory that may share `/search`'s 100-result cap, which is why the knob refuses values
+   above it. Depth is deliberately modest: consecutive snapshots overlap, so this hour's page 5
+   is roughly next hour's page 3, and deep pages mostly re-buy what cadence returns for free.
 
-One call buys ~20 articles where the old category-sliced `/search` sample bought a few hundred for
-12–24 calls, so a single daily sample would starve the corpus. The budget freed by the cheaper call
-goes back into **cadence** instead of breadth: a sample is considered fresh for
+A single snapshot buys ~40 articles where the old category-sliced `/search` sample bought a few
+hundred for 12–24 calls, so a single daily sample would starve the corpus. The budget freed by the
+cheaper call goes into **cadence** instead of depth: a sample is considered fresh for
 `SAMPLE_REFRESH_MINUTES` (default 60), and the first visitor after it goes stale triggers the next
-one. A fully-visited day costs **≤24 calls per language** — the same 1–2% of quota as before — but
-spread across the day, which repairs the old design's weakness of sampling only the morning's news.
+one. A fully-visited day costs **≤ `SAMPLE_PAGES` × 24 calls per language** — ≤48 (~5% of quota)
+at the defaults — spread across the day, which repairs the old design's weakness of sampling only
+the morning's news; the corpus accumulates across snapshots to the same few hundred articles.
 Successive samples overlap; overlap is free, because re-ingested articles collapse into their
 existing rows (§7.4) and only the genuinely new ones extend the corpus. A day with no visitors still
 costs nothing, so this stays consistent with §9 rather than smuggling a scheduler back in — the

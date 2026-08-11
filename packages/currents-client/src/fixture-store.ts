@@ -55,6 +55,17 @@ export class FixtureStore {
       collected.push(...this.parseAll(call.news));
     }
 
+    // The recorded /v2/latest-news probe (PROBE-FINDINGS 6c). Its items carry
+    // the v2 category taxonomy, which is what makes the fixture-mode breadth
+    // sample (§10.1) return anything for a curated v2 category list.
+    const latest = await this.readJson<SampleFixture>("latest-news-v2-sample.json");
+    for (const call of latest?.calls ?? []) {
+      // The v1 control call duplicates v2_plain's articles under v1 labels;
+      // including both would double-ingest the same stories with conflicting
+      // taxonomies. Replay only the v2 recordings.
+      if (call.label.startsWith("v2_")) collected.push(...this.parseAll(call.news));
+    }
+
     if (collected.length === 0) {
       throw new Error(
         `No fixtures loaded from ${this.fixturesDir}. ` +
@@ -149,6 +160,35 @@ export class FixtureStore {
     const offset = (pageNumber - 1) * pageSize;
 
     return results.slice(offset, offset + pageSize);
+  }
+
+  /**
+   * Approximate `/v2/latest-news` (PROBE-FINDINGS 6c): newest-first, filtered
+   * by language and — like the real thing — by intersection with the given v2
+   * categories, page shared across them, no date parameters at all.
+   */
+  latestNews(
+    params: { language?: string; categories?: readonly string[]; pageNumber?: number },
+    limits: { maxPageSize: number },
+  ): RawSighting[] {
+    if (!this.loaded) {
+      throw new Error("FixtureStore.load() must be awaited before latestNews()");
+    }
+
+    let results = this.sightings;
+    if (params.language) {
+      results = results.filter((sighting) => sighting.language === params.language);
+    }
+    if (params.categories?.length) {
+      const wanted = new Set(params.categories.map((c) => c.toLowerCase()));
+      results = results.filter((sighting) =>
+        (sighting.category ?? []).some((c) => wanted.has(c.toLowerCase())),
+      );
+    }
+
+    const pageNumber = Math.max(1, params.pageNumber ?? 1);
+    const offset = (pageNumber - 1) * limits.maxPageSize;
+    return results.slice(offset, offset + limits.maxPageSize);
   }
 
   private async readJson<T>(filename: string): Promise<T | null> {

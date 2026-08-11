@@ -2,7 +2,13 @@ import type { FixtureStore } from "./fixture-store.js";
 import { normalizeSightings } from "./normalize.js";
 import { clampSearchParams, type SearchParams } from "./raw.js";
 import { UnmeteredQuotaGovernor, type QuotaView } from "./quota.js";
-import type { CallOpts, ClientLimits, CurrentsClient, SearchResult } from "./client.js";
+import type {
+  CallOpts,
+  ClientLimits,
+  CurrentsClient,
+  LatestNewsParams,
+  SearchResult,
+} from "./client.js";
 
 /**
  * Fixture-backed client (`CURRENTS_MODE=fixture`).
@@ -50,8 +56,20 @@ export class FixtureCurrentsClient implements CurrentsClient {
     };
   }
 
-  async latestNews(language?: string, opts: CallOpts = {}): Promise<SearchResult> {
-    return this.search(language ? { language } : {}, opts);
+  async latestNews(params: LatestNewsParams = {}, _opts: CallOpts = {}): Promise<SearchResult> {
+    const pageSize = this.limits.maxPageSize;
+    const raw = this.store.latestNews(params, { maxPageSize: pageSize });
+    const { sightings, stats } = normalizeSightings(raw);
+    return {
+      sightings,
+      requestedAt: new Date(),
+      rawCount: raw.length,
+      isLastPage: raw.length < pageSize,
+      pageSize,
+      normalization: stats,
+      quota: null,
+      adjustments: [],
+    };
   }
 
   async availableLanguages(): Promise<Record<string, string>> {

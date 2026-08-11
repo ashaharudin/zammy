@@ -6,6 +6,7 @@ import {
   FixtureStore,
   type CallOpts,
   type CurrentsClient,
+  type LatestNewsParams,
   type SearchParams,
   type SearchResult,
 } from "@zammy/currents-client";
@@ -115,10 +116,11 @@ export async function createTestHarness(
  * cleans up first.
  */
 export async function purgeTopicKeys(redis: Redis, fingerprint: string): Promise<void> {
+  // Pending-job registries are queue-scoped and test queues are uniquely
+  // named, so they never collide across runs and need no purging here.
   const patterns = [
     `page:${fingerprint}:*`,
     `lock:refresh:${fingerprint}:*`,
-    `ingest:pending:${fingerprint}`,
     "ref:languages",
     "ref:regions",
     "ref:categories",
@@ -156,8 +158,11 @@ export class CountingClient implements CurrentsClient {
     return this.inner.search(params, opts);
   }
 
-  latestNews(language?: string, opts?: CallOpts) {
-    return this.inner.latestNews(language, opts);
+  /** Counted with search: both spend the same upstream quota. */
+  async latestNews(params?: LatestNewsParams, opts?: CallOpts): Promise<SearchResult> {
+    this.searchCalls += 1;
+    this.priorities.push(opts?.priority);
+    return this.inner.latestNews(params, opts);
   }
   availableLanguages(opts?: CallOpts) {
     return this.inner.availableLanguages(opts);

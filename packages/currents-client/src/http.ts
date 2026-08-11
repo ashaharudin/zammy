@@ -1,5 +1,6 @@
 import {
   CurrentsCallerAbortedError,
+  CurrentsInvalidQueryError,
   CurrentsSchemaError,
   CurrentsTimeoutError,
   CurrentsUpstreamError,
@@ -17,7 +18,14 @@ import {
 } from "./raw.js";
 import { parseQuotaHeaders, type QuotaGovernor, type QuotaSnapshot, type QuotaView } from "./quota.js";
 import { CircuitBreaker, type CircuitBreakerOptions } from "./breaker.js";
-import type { CallOpts, ClientLimits, CurrentsClient, SearchResult } from "./client.js";
+import {
+  V2_CATEGORIES,
+  type CallOpts,
+  type ClientLimits,
+  type CurrentsClient,
+  type LatestNewsParams,
+  type SearchResult,
+} from "./client.js";
 
 /**
  * The live HTTP client (ARCHITECTURE 5.3).
@@ -37,6 +45,8 @@ import type { CallOpts, ClientLimits, CurrentsClient, SearchResult } from "./cli
  */
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
+
+const V2_CATEGORY_SET: ReadonlySet<string> = new Set(V2_CATEGORIES);
 
 export interface ClientLogger {
   warn(fields: Record<string, unknown>, message: string): void;
@@ -148,10 +158,30 @@ export class HttpCurrentsClient implements CurrentsClient {
     );
   }
 
-  async latestNews(language?: string, opts: CallOpts = {}): Promise<SearchResult> {
+  async latestNews(params: LatestNewsParams = {}, opts: CallOpts = {}): Promise<SearchResult> {
     const query = new URLSearchParams();
-    if (language) query.set("language", language);
-    const response = await this.request("/latest-news", query, opts);
+    if (params.language) query.set("language", params.language);
+    if (params.categories?.length) {
+      // Pre-flight against the recorded v2 taxonomy (PROBE-FINDINGS 6c): the
+      // most likely mistake is a v1 name like "technology", which is a
+      // verified 400 — refuse locally rather than spend a call to learn it.
+      const invalid = params.categories.filter(
+        (category) => !V2_CATEGORY_SET.has(category),
+      );
+      if (invalid.length) {
+        throw new CurrentsInvalidQueryError(
+          `invalid /v2/latest-news categories: ${invalid.join(", ")} ` +
+            "(v2 uses its own taxonomy; v1 names and /available/categories values do not apply)",
+          { category: `invalid v2 category value(s): ${invalid.join(", ")}` },
+        );
+      }
+      // Comma-separated is THE wire format; repeated params read first-only.
+      query.set("category", params.categories.join(","));
+    }
+    if (params.pageNumber !== undefined) {
+      query.set("page_number", String(params.pageNumber));
+    }
+    const response = await this.request("/latest-news", query, opts, "v2");
     // This endpoint takes no page size; upstream's default is 20, which is also
     // the tier maximum, so that is the right divisor for the end-of-page signal.
     return this.toSearchResult(response, this.limits.maxPageSize, []);
@@ -225,15 +255,27 @@ export class HttpCurrentsClient implements CurrentsClient {
     };
   }
 
+  /**
+   * The configured base URL pins an API version (default `…/v1`); endpoints
+   * living under another version swap the segment rather than carrying a
+   * second base URL through config.
+   */
+  private versionedBase(version: "v1" | "v2"): string {
+    const match = this.baseUrl.match(/^(.*)\/v\d+$/);
+    return match ? `${match[1]}/${version}` : `${this.baseUrl}/${version}`;
+  }
+
   private async request(
     path: string,
     query: URLSearchParams,
     opts: CallOpts,
+    version?: "v2",
   ): Promise<RawResponse> {
     this.breaker.assertClosed();
 
     const priority = opts.priority ?? "interactive";
-    const url = query.size ? `${this.baseUrl}${path}?${query}` : `${this.baseUrl}${path}`;
+    const base = version ? this.versionedBase(version) : this.baseUrl;
+    const url = query.size ? `${base}${path}?${query}` : `${base}${path}`;
     const timeoutMs = opts.timeoutMs ?? this.timeoutMs;
 
     let attempt = 0;
