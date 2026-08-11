@@ -32,9 +32,10 @@ matched that search, by source authority — never by how often upstream re-emit
 _Avoid_: primary, canonical, best, winner
 
 **Seed**:
-The article a group started from, and its identity. Fixed for the group's life: later candidates are
-compared against the seed, which is what stops a group drifting through its own members. The seed is
-not the representative and need not be the group's earliest article.
+The article a group started from, and its identity — what `group_id` names. Fixed for the group's
+life, but not privileged when matching: a newcomer is compared against any member, and what bounds a
+group's drift is the calendar day. The seed is neither the representative nor necessarily the group's
+earliest article.
 _Avoid_: parent, root, head
 
 **Source**:
