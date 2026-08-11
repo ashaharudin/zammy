@@ -6,7 +6,7 @@ import {
   type Database,
 } from "@zammy/storage";
 import { zonedDayBounds, zonedDayKey } from "./app-day.js";
-import { chooseGroup, headlineFigures, headlineTokens } from "./grouping.js";
+import { headlineFigures, headlineTokens, rankedMatches } from "./grouping.js";
 import type { Metrics } from "./metrics.js";
 
 /**
@@ -67,6 +67,17 @@ export function groupingDepsFor(deps: {
  * cluster now occupies nine slots rather than one.
  */
 const CANDIDATE_LIMIT = 200;
+
+/**
+ * How many groups of one a single arrival may adopt.
+ *
+ * Adoption happens inside the request that triggered the ingest, so this
+ * bounds write amplification rather than correctness: ten is far above what
+ * real coverage produces (the largest live case adopted two), and a day
+ * pathological enough to exceed it gets a slightly worse grouping, never a
+ * wrong row.
+ */
+const ADOPT_LIMIT = 10;
 
 /**
  * Group each newly-created article, and return how many joined an existing
@@ -130,16 +141,52 @@ async function groupOne(deps: GroupingDeps, article: CreatedArticle): Promise<bo
     limit: CANDIDATE_LIMIT,
   });
 
-  const chosen = chooseGroup(
-    { tokens, figures: headlineFigures(article.title) },
-    candidates,
-    { threshold: deps.config.threshold },
-  );
+  const headline = { tokens, figures: headlineFigures(article.title) };
+  const matches = rankedMatches(headline, candidates, { threshold: deps.config.threshold });
+  const chosen = matches[0] ?? null;
+
   await recordGrouping(deps.db, {
     articleId: article.id,
     titleTokens: tokens,
     groupId: chosen?.groupId ?? null,
   });
 
+  if (chosen) await adoptStragglers(deps, chosen.groupId, matches);
+
   return chosen !== null;
+}
+
+/**
+ * Pull every OTHER group of one this article matched into the group it joined.
+ *
+ * Grouping evaluates an article once, at creation, so an article that arrives
+ * before its story's coverage exists never gets another chance — and
+ * best-match-wins meant a later arrival could match it, join somewhere better,
+ * and leave it stranded. This is the moment both articles are known to be the
+ * same story, so it is the moment to act.
+ *
+ * Only groups of ONE are adopted. Merging two real groups is transitive
+ * merging, which is the chaining the day window exists to bound; adopting a
+ * singleton keeps every member within one hop of the article that pulled it in.
+ * `recordGrouping` enforces the singleton rule in SQL, so a candidate that
+ * gained members since the query is refused rather than stranding them.
+ */
+async function adoptStragglers(
+  deps: GroupingDeps,
+  groupId: string,
+  matches: readonly { id: string; groupId: string; titleTokens: string[] }[],
+): Promise<void> {
+  let adopted = 0;
+  for (const match of matches) {
+    if (adopted >= ADOPT_LIMIT) break;
+    // Already in the group, or plainly not a group of one.
+    if (match.groupId === groupId || match.id !== match.groupId) continue;
+
+    await recordGrouping(deps.db, {
+      articleId: match.id,
+      titleTokens: match.titleTokens,
+      groupId,
+    });
+    adopted += 1;
+  }
 }

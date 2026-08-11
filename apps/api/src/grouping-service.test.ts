@@ -189,3 +189,80 @@ describe("grouping, end to end", () => {
     expect(result.items.every((item) => item.related.length === 0)).toBe(true);
   });
 });
+
+describe("an article that arrived before its story's coverage", () => {
+  /**
+   * The live case (2026-08-11) this exists for. Ingest order matters and is
+   * the whole point, so the articles arrive in the order they really did:
+   *
+   *   1. the Daily Mail piece, when nothing related exists yet
+   *   2. two Independent pieces, which group with each other
+   *   3. the BBC piece, which matches BOTH — the Independent group at 0.750
+   *      and the Daily Mail at 0.538
+   *
+   * Best-match sends the BBC article to the Independent group. Before
+   * adoption, the Daily Mail piece stayed a separate slot forever.
+   */
+  const harper = (domain: string, title: string, published: string) =>
+    sighting({ domain, title, published, path: `/${domain}-${published.slice(11, 16)}` });
+
+  async function ingestHarperCluster() {
+    harness = await createTestHarness({}, NOW);
+    const fingerprint = randomBytes(32).toString("hex");
+    await upsertTopic(harness.deps.db, { fingerprint, keywords: ["harper"], language: "en" });
+
+    const arrivals = [
+      harper("dailymail.com", "Every police chief is urging PM to stop release of PC Harper's killers", "2026-08-11T20:06:00.000Z"),
+      harper("independent.co.uk", "Police leaders call on Burnham to prevent early release of Pc Harper's killers", "2026-08-11T20:36:00.000Z"),
+      harper("independent.co.uk", "Fifty police chiefs call on Burnham to prevent early release of Pc Harper's killers", "2026-08-11T21:27:00.000Z"),
+      harper("bbc.co.uk", "Police chiefs call for PM to prevent early release of PC Harper's killers", "2026-08-11T21:21:00.000Z"),
+    ];
+
+    // One at a time: a single batch would hand them all to grouping together,
+    // and the bug only exists across separate arrivals.
+    for (const arrival of arrivals) {
+      const ingested = await ingestSightings(harness.deps.db, {
+        fingerprint,
+        sightings: [arrival],
+      });
+      await groupCreatedArticles(
+        { db: harness.deps.db, config: harness.deps.config.grouping },
+        ingested.createdArticles,
+      );
+    }
+
+    await recordCoverage(harness.deps.db, fingerprint, WINDOW);
+    return {
+      fingerprint,
+      keywords: ["harper"],
+      language: "en",
+      country: null,
+      category: null,
+      window: { ...WINDOW },
+    } satisfies CanonicalQuery;
+  }
+
+  it("is adopted into the group once a later article matches both", async () => {
+    const query = await ingestHarperCluster();
+
+    const result = await readTimeline(harness.deps, query, { limit: 25 });
+
+    expect(result.items).toHaveLength(1);
+    const slot = result.items[0]!;
+    expect(slot.related).toHaveLength(3);
+    expect(
+      [slot.article.sourceDomain, ...slot.related.map((r) => r.sourceDomain)].sort(),
+    ).toEqual(["bbc.co.uk", "dailymail.com", "independent.co.uk", "independent.co.uk"]);
+  });
+
+  it("keeps the group where the earliest member put it, headlined by tier 1", async () => {
+    const query = await ingestHarperCluster();
+
+    const slot = (await readTimeline(harness.deps, query, { limit: 25 })).items[0]!;
+
+    // Adoption pulls in an article published EARLIER than the group's other
+    // members, so the group's position must follow it down (§7.3 keyset).
+    expect(slot.published).toBe("2026-08-11T20:06:00.000Z");
+    expect(slot.article.sourceDomain).toBe("bbc.co.uk");
+  });
+});

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { contentTokens } from "./term-scoring.js";
 import {
   chooseGroup,
+  rankedMatches,
   headlineFigures,
   headlineTokens,
   titleSimilarity,
@@ -310,5 +311,51 @@ describe("headlineFigures", () => {
       new Set(["419625.00", "90"]),
     );
     expect(headlineFigures("Police chiefs urge PM to act")).toEqual(new Set());
+  });
+});
+
+describe("rankedMatches", () => {
+  it("returns every match, closest first — not just the winner", () => {
+    // The runners-up are what fixes the one-shot limitation: an article that
+    // matched two groups joins the better one, and the caller adopts the rest
+    // rather than stranding them (§14.3).
+    const closer = candidate({ id: "80", groupId: "80", title: "Harbour bridge closed after crash" });
+    const looser = candidate({
+      id: "81",
+      groupId: "81",
+      title: "Harbour bridge closed for the evening after a crash downtown",
+    });
+
+    const matches = rankedMatches(
+      headline("Harbour bridge closed after crash"),
+      [looser, closer],
+      RULES,
+    );
+
+    expect(matches.map((m) => m.id)).toEqual(["80", "81"]);
+  });
+
+  it("is empty when nothing clears the bar, so callers cannot adopt noise", () => {
+    const unrelated = candidate({ id: "82", title: "Kelp harvest begins in Nova Scotia" });
+    expect(rankedMatches(headline("Ferry service suspended by storm"), [unrelated], RULES)).toEqual(
+      [],
+    );
+  });
+
+  it("orders ties the same way the single-winner rule did", () => {
+    const later = candidate({
+      id: "83",
+      title: "Ferry service suspended by storm",
+      published: new Date("2026-08-11T12:00:00.000Z"),
+    });
+    const earlier = candidate({
+      id: "84",
+      title: "Ferry service suspended by storm",
+      published: new Date("2026-08-11T08:00:00.000Z"),
+    });
+
+    const matches = rankedMatches(headline("Ferry service suspended by storm"), [later, earlier], RULES);
+    expect(matches[0]?.id).toBe("84");
+    expect(chooseGroup(headline("Ferry service suspended by storm"), [later, earlier], RULES)?.id).toBe("84");
   });
 });

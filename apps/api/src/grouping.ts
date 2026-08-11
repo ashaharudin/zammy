@@ -165,18 +165,40 @@ export function chooseGroup(
   candidates: readonly GroupCandidate[],
   rules: GroupingRules,
 ): GroupCandidate | null {
-  let best: { candidate: GroupCandidate; similarity: number } | null = null;
+  return rankedMatches(headline, candidates, rules)[0] ?? null;
+}
+
+/**
+ * EVERY candidate this headline is the same story as, closest first.
+ *
+ * `chooseGroup` answers "which group does this article join?" and throws the
+ * rest away. That discard was a bug in disguise: an article matching two
+ * groups joins the better one, and the other match — often a lone article
+ * waiting for exactly this story — is never reconsidered, because grouping
+ * evaluates an article once, at creation. A live Daily Mail piece sat beside
+ * a 6-article group it scored 0.538 against for precisely that reason.
+ *
+ * The caller uses the runners-up to adopt groups of one into the winner, so
+ * best-match still decides WHICH group, but no longer decides who is left out.
+ */
+export function rankedMatches(
+  headline: { tokens: readonly string[]; figures: Set<string> },
+  candidates: readonly GroupCandidate[],
+  rules: GroupingRules,
+): GroupCandidate[] {
+  const matches: Array<{ candidate: GroupCandidate; similarity: number }> = [];
 
   for (const candidate of candidates) {
     const { shared, similarity } = overlap(headline.tokens, candidate.titleTokens);
     if (shared < MIN_SHARED_TOKENS || similarity < rules.threshold) continue;
     if (figuresContradict(headline.figures, headlineFigures(candidate.title))) continue;
-    if (best === null || beats(similarity, candidate, best)) {
-      best = { candidate, similarity };
-    }
+    matches.push({ candidate, similarity });
   }
 
-  return best?.candidate ?? null;
+  // Same order the single-winner rule used: similarity, then earliest
+  // published, then lowest id — so a replayed batch reaches the same grouping.
+  matches.sort((a, b) => (beats(a.similarity, a.candidate, b) ? -1 : 1));
+  return matches.map((match) => match.candidate);
 }
 
 function beats(

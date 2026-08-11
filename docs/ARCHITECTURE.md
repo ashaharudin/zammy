@@ -1310,14 +1310,23 @@ Still open:
    - **Grouping is forward-looking.** Articles stored before the migration have no tokens, so they
      are never candidates and never join a group. Regrouping the archive would move rows under live
      cursors for no reader's benefit.
-   - **Grouping is one-shot, and an article joins its single best match.** An article ingested before
-     its story's cluster forms stays a singleton however similar later coverage turns out to be: it
-     is evaluated once, at creation, and nothing revisits it. Measured live — a Daily Mail piece sat
-     beside a 6-article group it scored 0.538 against, because when it arrived the group did not
-     exist, and when the group's BBC article arrived it had a 0.750 match elsewhere. The fixes are
-     re-evaluating singletons, or merging two groups when a newcomer bridges them; the second is the
-     transitive chaining the day window exists to bound. Recorded, not answered
-     ([ADR-0005](adr/0005-headline-tokens-not-embeddings-decide-article-grouping.md)).
+   - **An arrival adopts the groups of one it also matched.** Grouping still evaluates an article
+     once, at creation, but best-match no longer decides who is left out: it decides which group the
+     newcomer joins, and every *other* match that is still a group of one joins that group too. This
+     is the fix for the one-shot gap — a Daily Mail piece sat beside a 6-article group it scored
+     0.538 against, because when it arrived the group did not exist and when the group's BBC article
+     arrived it had a 0.750 match elsewhere. Measured over 8,240 live articles: +31 grouped, no new
+     single-outlet merges.
+
+     Only groups of **one** are adopted. Merging two established groups is transitive merging — the
+     chaining the day window exists to bound — whereas adopting a singleton keeps every member within
+     one hop of the article that pulled it in. The SQL enforces it, so a candidate that gained
+     members between the query and the write is refused rather than stranding them.
+
+     The cost is that a slot a reader has already seen can now fold into another slot, and a group
+     adopting an earlier article moves down the timeline. Both were already possible — a new article
+     joining a group has always been able to drag `group_published` earlier (§7.3) — and adoption
+     makes them slightly more frequent, not new in kind.
 4. **Summary scope** — per-topic rollup, or per-article abstractive summary? Only affects Phase 6.
 5. **`type` parameter** — the one probe result that changed output without an obvious meaning
    (17/20 overlap with the control). Unexplored; not needed for v1.

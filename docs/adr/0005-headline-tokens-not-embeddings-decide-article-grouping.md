@@ -105,22 +105,41 @@ Consistency beats linguistic correctness here: both sides map alike.
 Grouping asks whether two headlines describe one story, where `chiefs` and
 `chief` are the same word. `contentTokens` keeps returning surface forms.
 
-## Known limitation: grouping is one-shot, and best-match-wins
+## Resolved: the one-shot gap, by adopting groups of one
 
-Stemming did NOT fix the third card in the report that prompted it, and the
-measurement says why. The Daily Mail's "Every police chief is urging PM to stop
+Stemming did not fix the third card in the report that prompted it, and the
+measurement said why. The Daily Mail's "Every police chief is urging PM to stop
 release of PC Harper's killers" was ingested **before** any of the cluster
 existed, so at its one evaluation there was nothing to join. When the BBC
 article arrived later, the Daily Mail piece *was* a valid candidate — 0.538
 singularized, above the bar — but the Independent scored 0.750, and a newcomer
-joins its single best match. The two groups never meet.
+joined its single best match. The two never met.
 
-So an article that arrives before its story's cluster forms stays a singleton
-however similar later coverage turns out to be. Fixing it means either
-re-evaluating singletons when a group forms, or merging two groups when a
-newcomer bridges them — and the second is transitive merging, which is the
-chaining the day-window exists to bound. Neither is attempted here; the
-question is recorded rather than answered.
+The fix is not to re-evaluate articles on a schedule, and not to merge groups.
+It is that **best-match should decide which group a newcomer joins, not who is
+left out**: every other match that is still a group of one joins the same
+group. The information was already computed and thrown away — the ranking
+existed, only its first element was used.
+
+Measured over 8,240 live articles: **+31 grouped (1,412 → 1,443), single-outlet
+merges unchanged at 114**, and the reported Daily Mail piece lands in a slot of
+seven. Every changed group inspected was genuine syndication (one story on 4
+outlets, another on 8).
+
+Only groups of **one** are adopted, and that boundary is the whole safety
+argument. Merging two established groups is transitive merging — A's group and
+B's group fusing because C resembles both — which is the chaining the day
+window exists to bound. Adopting a singleton keeps every member within one hop
+of the article that pulled it in, the same star topology any-member matching
+already produces. `recordGrouping` enforces the singleton rule in SQL, so a
+candidate that gained members between the read and the write is refused rather
+than having its members stranded.
+
+**What it costs, stated:** a slot a reader has already seen can fold into
+another slot, and a group that adopts an earlier article moves down the
+timeline. Neither is new in kind — a new article joining a group has always
+been able to drag `group_published` earlier, and ADR-0002 accepted the same for
+an article's own `published` — but adoption makes both more frequent.
 
 ## Consequences
 
