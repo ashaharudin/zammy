@@ -45,8 +45,6 @@ const SAMPLE_CATEGORIES = [
   "health",
 ] as const;
 
-/** One page per sample; §10.1's paging lever if ~20 items proves thin. */
-const SAMPLE_PAGES = 1;
 
 /** §10.3: the trailing mean's window. A week of history makes the cloud good. */
 const BASELINE_WINDOW_DAYS = 7;
@@ -142,7 +140,7 @@ export async function buildApp(config: Config): Promise<App> {
     trending: {
       appTimezone: config.APP_TIMEZONE,
       sampleCategories: SAMPLE_CATEGORIES,
-      samplePages: SAMPLE_PAGES,
+      samplePages: config.SAMPLE_PAGES,
       sampleRefreshMinutes: config.SAMPLE_REFRESH_MINUTES,
       baselineWindowDays: BASELINE_WINDOW_DAYS,
     },

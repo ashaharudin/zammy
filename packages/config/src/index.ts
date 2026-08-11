@@ -64,6 +64,16 @@ const EnvSchema = z
     SAMPLE_REFRESH_MINUTES: z.coerce.number().int().min(1).default(60),
 
     /**
+     * Pages per /v2/latest-news sample, ~20 articles each. Daily worst case is
+     * this x ceil(24h / SAMPLE_REFRESH_MINUTES) calls per language; the default
+     * (2 x 24 = 48, ~5% of quota) thickens the early-day cloud without
+     * re-buying what the next hour's snapshot returns anyway. Capped at 5:
+     * /search stops at 100 retrievable results and latest-news paging beyond
+     * that is unverified (PROBE-FINDINGS 6c).
+     */
+    SAMPLE_PAGES: z.coerce.number().int().min(1).max(5).default(2),
+
+    /**
      * The wordcloud's calendar day (ARCHITECTURE 10.1). Under UTC a Vancouver
      * afternoon is already tomorrow, and the landing page would go near-empty
      * every day after ~5pm local. IANA name, validated against Intl.
