@@ -49,9 +49,46 @@ export interface GroupingRules {
  */
 const MIN_SHARED_TOKENS = 2;
 
-/** The distinct content-bearing tokens of a headline (§10.2's tokenizer). */
+/**
+ * The distinct content-bearing tokens of a headline (§10.2's tokenizer),
+ * singularized.
+ *
+ * **Grouping stems; the cloud does not.** A term in the cloud is a surface
+ * form, not a concept (CONTEXT.md) — "China" and "Chinese" are two terms and
+ * both may appear. Grouping asks a different question: whether two headlines
+ * describe one story, and there `chiefs` and `chief` are the same word. So the
+ * stemmer lives here, over the shared tokenizer, and `contentTokens` keeps
+ * returning surface forms to §10.3.
+ */
 export function headlineTokens(title: string): string[] {
-  return [...new Set(contentTokens(title))];
+  return [...new Set(contentTokens(title).map(singular))];
+}
+
+/**
+ * Plurals only — deliberately not a full stemmer.
+ *
+ * §14.7's warning about orthographic tricks applies here, if more weakly than
+ * it did to merging single cloud terms: a wrong stem lowers or raises one
+ * similarity score among many, rather than deleting a term outright. Measured
+ * on 2,713 live articles, plural-only added 40 grouped articles and removed a
+ * single-outlet merge; extending it to strip `-ing`/`-ed` added 22 more with
+ * no such improvement, and did not even unify `urge`/`urging` — that needs
+ * Porter's consonant-vowel restoration, which is a different order of
+ * complexity for a gain nobody has measured (ADR-0005).
+ *
+ * Consistency matters more than linguistic correctness: `series` → `serie`
+ * is wrong as English and harmless here, because both sides map alike.
+ */
+function singular(token: string): string {
+  if (token.endsWith("ss")) return token; // press, boss, glass
+  if (token.endsWith("ies") && token.length >= 5) return `${token.slice(0, -3)}y`;
+  // Drop the final `s` and nothing more, as Porter's first step does. The
+  // tempting extra rule — strip `es` after s/x/z/ch/sh, to reach `box` from
+  // `boxes` — turns `releases` into `releas`, and mangling a word that appears
+  // in half the day's political headlines costs more than `boxe` does. `boxe`
+  // is ugly and harmless; both sides map to it alike.
+  if (token.endsWith("s") && token.length >= 4) return token.slice(0, -1);
+  return token;
 }
 
 /**
