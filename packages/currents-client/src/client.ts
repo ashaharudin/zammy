@@ -21,6 +21,8 @@ export interface ClientLimits {
   maxPageSize: number;
   maxRetrievableResults: number;
   maxLookbackDays: number;
+  /** Per-call date-range ceiling on /search (7 days, observed 2026-08-11). */
+  maxRangeDays: number;
 }
 
 export interface CallOpts {

@@ -37,8 +37,9 @@ A word a user types in. Keywords are input to a topic.
 _Avoid_: term, tag, phrase
 
 **Term**:
-A word or two-word phrase extracted from article headlines and ranked for the landing-page
-cloud. Terms are output, keywords are input; clicking a term opens a topic.
+A proper noun or two-word phrase extracted from article headlines and ranked for the
+landing-page cloud. Generic single words never qualify, however frequent. Terms are output,
+keywords are input; clicking a term opens a topic.
 _Avoid_: topic, keyword, trend, tag
 
 **Fingerprint**:

@@ -58,7 +58,7 @@ export async function createTestHarness(
   await store.load();
   const fixtureClient = new FixtureCurrentsClient(
     store,
-    { maxPageSize: 20, maxRetrievableResults: 100, maxLookbackDays: 30 },
+    { maxPageSize: 20, maxRetrievableResults: 100, maxLookbackDays: 30, maxRangeDays: 7 },
     { dailyLimit: 1000, burstLimit: 60 },
   );
   const counting = new CountingClient(fixtureClient);
@@ -140,6 +140,8 @@ export class CountingClient implements CurrentsClient {
   searchCalls = 0;
   /** Quota priority of each search call, in order (§9.4). */
   priorities: Array<CallOpts["priority"]> = [];
+  /** Date span of each search call, ms — the per-call range ceiling's witness. */
+  ranges: number[] = [];
   /** Artificial per-call latency, for exercising the wall-clock deadline. */
   delayMs = 0;
 
@@ -152,6 +154,9 @@ export class CountingClient implements CurrentsClient {
   async search(params: SearchParams, opts?: CallOpts): Promise<SearchResult> {
     this.searchCalls += 1;
     this.priorities.push(opts?.priority);
+    if (params.startDate && params.endDate) {
+      this.ranges.push(params.endDate.getTime() - params.startDate.getTime());
+    }
     if (this.delayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.delayMs));
     }

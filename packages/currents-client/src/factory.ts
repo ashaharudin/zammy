@@ -21,6 +21,7 @@ export interface CurrentsClientConfig {
   CURRENTS_MAX_PAGE_SIZE: number;
   CURRENTS_MAX_RETRIEVABLE_RESULTS: number;
   CURRENTS_MAX_LOOKBACK_DAYS: number;
+  CURRENTS_MAX_RANGE_DAYS: number;
   CURRENTS_DAILY_CALL_LIMIT: number;
   CURRENTS_BURST_CALL_LIMIT: number;
   INTERACTIVE_RESERVE: number;
@@ -43,6 +44,7 @@ export function clientLimits(config: CurrentsClientConfig): ClientLimits {
     maxPageSize: config.CURRENTS_MAX_PAGE_SIZE,
     maxRetrievableResults: config.CURRENTS_MAX_RETRIEVABLE_RESULTS,
     maxLookbackDays: config.CURRENTS_MAX_LOOKBACK_DAYS,
+    maxRangeDays: config.CURRENTS_MAX_RANGE_DAYS,
   };
 }
 

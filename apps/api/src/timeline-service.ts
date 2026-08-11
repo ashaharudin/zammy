@@ -16,7 +16,7 @@ import {
   type Database,
 } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
-import { subtractCoverage, type Span } from "./coverage-gaps.js";
+import { sliceSpan, subtractCoverage, type Span } from "./coverage-gaps.js";
 import {
   freshnessTier,
   freshnessTtlMs,
@@ -133,10 +133,17 @@ async function planAndRead(
   });
 
   // §6.3 steps 2–3 — is the window covered? If not, where exactly isn't it?
+  // Gaps are pre-sliced to the per-call range ceiling (7 days, observed
+  // 2026-08-11), so every planned segment is individually fetchable. This
+  // also scopes refresh-on-read naturally: a trailing gap wider than the
+  // ceiling arrives as several slices, fails the single-gap sliver test
+  // below, and takes the sync fill — 16 idle days is missing history, not
+  // staleness.
   const covered = await readCoverage(deps.db, query.fingerprint);
   const gaps = subtractCoverage(query.window, covered, {
     now,
     lookbackDays: deps.config.lookbackDays,
+    maxSpanMs: deps.currents.limits.maxRangeDays * 86_400_000,
   });
 
   let servedFrom: TimelineReadResult["meta"]["servedFrom"] = "store";
@@ -302,19 +309,29 @@ export async function processSegmentJob(deps: TimelineDeps, job: SegmentJob): Pr
       category: topic.category,
       window: segment,
     };
-    const outcome = await fillSegment(
-      deps,
-      query,
-      segment,
-      { deadline: Number.POSITIVE_INFINITY, maxCalls: Number.POSITIVE_INFINITY, callsUsed: 0 },
-      job.startPage,
-      // No reader is waiting: draw only what the interactive reserve spares
-      // (§9.4). A refusal fails the job; BullMQ's backoff is the retry pacing.
-      "background",
-    );
-    if (outcome.kind === "truncated") {
-      for (const half of await onTruncated(deps, job.fingerprint, segment)) {
-        await deps.queue.enqueueSegment(half);
+    // Sliced to the per-call range ceiling. New jobs arrive pre-sliced, but
+    // top-ups and jobs enqueued before the ceiling existed can be wider —
+    // at-least-once delivery means a deploy must never strand queued work
+    // behind a 400 it can no longer avoid.
+    const slices = sliceSpan(segment, deps.currents.limits.maxRangeDays * 86_400_000);
+    for (const [index, slice] of slices.entries()) {
+      const outcome = await fillSegment(
+        deps,
+        query,
+        slice,
+        { deadline: Number.POSITIVE_INFINITY, maxCalls: Number.POSITIVE_INFINITY, callsUsed: 0 },
+        // The resume page belongs to the slice the deadline actually cut.
+        index === 0 ? job.startPage : 1,
+        // No reader is waiting: draw only what the interactive reserve spares
+        // (§9.4). A refusal fails the job; BullMQ's backoff is the retry pacing.
+        "background",
+      );
+      if (outcome.kind === "truncated") {
+        for (const half of await onTruncated(deps, job.fingerprint, slice)) {
+          await deps.queue.enqueueSegment(half);
+        }
+      } else if (outcome.kind === "capped") {
+        break; // the topic is done spending today; the gap stays visible (§9.4)
       }
     }
   } finally {

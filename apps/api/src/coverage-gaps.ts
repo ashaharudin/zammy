@@ -13,7 +13,18 @@ export interface Span {
 export function subtractCoverage(
   window: Span,
   covered: readonly Span[],
-  bounds: { now: Date; lookbackDays: number },
+  bounds: {
+    now: Date;
+    lookbackDays: number;
+    /**
+     * Upstream's per-call date-range ceiling (7 days, observed live
+     * 2026-08-11 — the probe-era single 30-day call now 400s). Gaps wider
+     * than this are sliced so every planned segment is individually
+     * fetchable; slicing here rather than clamping in the client keeps
+     * coverage honest — a clamped fetch would record spans nobody asked for.
+     */
+    maxSpanMs?: number;
+  },
 ): Span[] {
   // Clamp before diffing. Below the lookback horizon upstream 400s — never
   // spend a call to learn that — and above `now` a fetch would return nothing
@@ -49,5 +60,25 @@ export function subtractCoverage(
 
   // Newest first: the reader starts at the top of the timeline, so the
   // synchronous fill should spend its deadline there (§6.5).
-  return gaps.reverse();
+  const newestFirst = gaps.reverse();
+  return bounds.maxSpanMs === undefined
+    ? newestFirst
+    : newestFirst.flatMap((gap) => sliceSpan(gap, bounds.maxSpanMs!));
+}
+
+/**
+ * Split a span into ceiling-sized slices, NEWEST FIRST — the reader is at the
+ * top of the timeline, so full-size slices hug the recent end and any
+ * remainder lands at the oldest edge.
+ */
+export function sliceSpan(span: Span, maxMs: number): Span[] {
+  const slices: Span[] = [];
+  let to = span.to.getTime();
+  const floor = span.from.getTime();
+  while (to > floor) {
+    const from = Math.max(floor, to - maxMs);
+    slices.push({ from: new Date(from), to: new Date(to) });
+    to = from;
+  }
+  return slices;
 }

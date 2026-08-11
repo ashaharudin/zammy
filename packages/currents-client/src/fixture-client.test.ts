@@ -21,6 +21,7 @@ const config = {
   CURRENTS_MAX_PAGE_SIZE: 20,
   CURRENTS_MAX_RETRIEVABLE_RESULTS: 100,
   CURRENTS_MAX_LOOKBACK_DAYS: 30,
+  CURRENTS_MAX_RANGE_DAYS: 7,
   CURRENTS_DAILY_CALL_LIMIT: 1000,
   CURRENTS_BURST_CALL_LIMIT: 60,
   INTERACTIVE_RESERVE: 250,
@@ -186,5 +187,17 @@ describe("latestNews offline — the recorded /v2 feed (PROBE-FINDINGS 6c)", () 
     const result = await client.latestNews({ language: "en" });
     expect(result.sightings.length).toBeGreaterThan(0);
     expect(result.rawCount).toBeLessThanOrEqual(20);
+  });
+});
+
+describe("per-call date range ceiling — fixture mode reproduces the wall", () => {
+  it("throws the same local error as live mode for an over-range search", async () => {
+    await expect(
+      client.search({
+        keywords: ["climate"],
+        startDate: new Date("2026-07-01T00:00:00Z"),
+        endDate: new Date("2026-08-06T00:00:00Z"),
+      }),
+    ).rejects.toMatchObject({ name: "CurrentsInvalidQueryError" });
   });
 });

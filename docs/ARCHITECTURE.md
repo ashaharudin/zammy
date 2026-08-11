@@ -56,6 +56,7 @@ spec, which is incomplete and in places wrong.
 | `page_number` | supported, **1-indexed**; past-end → `200` + empty array |
 | **Max retrievable results** | **100 per query** (5 pages) |
 | **Max lookback** | **30 days** |
+| **Max date range per call** | **7 days** (drift: observed live 2026-08-11; the 2026-08-04 probe's single 30-day call now 400s — `date_range: Max range is 7 days`) |
 | Default sort | `published` DESC (undocumented, but consistent and page-stable) |
 | `domain` | supported |
 | `offset`, `sort_by` | silently ignored — no sort control exists |
@@ -417,7 +418,12 @@ that ceiling.
 2. Postgres: is the requested window fully inside this topic's recorded coverage (§7.3)
    and recent enough per §6.4?                                       → serve from store, done.
 3. Otherwise compute the coverage GAP = requested window − covered ranges,
-   clamped to the last 30 days (beyond that upstream 400s — never spend a call to learn this).
+   clamped to the last 30 days (beyond that upstream 400s — never spend a call to learn this),
+   and SLICED to CURRENTS_MAX_RANGE_DAYS (7) per segment, newest first — upstream now rejects
+   wider single calls (§2 drift, 2026-08-11), so every planned segment must be individually
+   fetchable. The client refuses over-range requests locally as a backstop; it never clamps
+   them, because coverage is recorded for the span that was ASKED, and a silently narrowed
+   fetch would become coverage over days nobody fetched.
 4. Plan a bounded set of upstream calls per gap segment:
      - page through the segment (page_number 1..5, page_size 20) until a page returns
        fewer than page_size rows, which is the clean end-of-results signal;
@@ -461,6 +467,10 @@ A recent-news window needs re-checking far more often than a window from last mo
 
 Serve-stale-while-revalidate throughout: a stale hit returns immediately with `meta.stale = true` and
 **enqueues an incremental top-up** — a single call for the window since `max(coverage.upper)`.
+
+Refresh-on-read applies to slivers up to the per-call range ceiling (§2 drift). A trailing gap wider
+than that is missing *history*, not staleness — the reader takes the synchronous fill of the newest
+slice rather than a stale flag over week-old content, and the remaining slices queue as usual.
 
 This is the mechanism that replaces scheduled polling (§9). Freshness is repaired **by the next
 reader**, not by a clock. A reader arriving six hours after the last fetch gets the stored timeline
@@ -934,7 +944,7 @@ Three distinct failures, all of which the design has to answer:
    are frequent in *all* news, so raw frequency can never distinguish them from real topics.
 3. **A tokenization artifact ranked first** (`cve-`).
 
-So three mechanisms are **required for the first cut**, not deferred as polish:
+So four mechanisms are **required for the first cut**, not deferred as polish:
 
 - **Distinct source domains, not just article count.** A term in 8 articles from one outlet is not a
   topic of the day; a term in 8 articles across 6 outlets is. Terms need `df_domains >= 2` to appear
@@ -946,6 +956,17 @@ So three mechanisms are **required for the first cut**, not deferred as polish:
   perennial news vocabulary is suppressed and genuinely unusual terms rise. This is what makes the
   cloud show *today* rather than *news in general*.
 - **A real stopword list** (plus min length, numeral and identifier filtering), not a hand-rolled set.
+- **Unigrams must be proper nouns; phrases are exempt.** The first live cloud confirmed what the
+  baseline can only fix a week in: generic vocabulary ("community", "finally", "rise") topped day
+  one. With only headline text to work from, propriety comes from case evidence in running text — a
+  term qualifies when it is capitalized mid-sentence at least once and NEVER seen lowercase, so
+  Title Case headlines prove nothing and prose betrays every common noun. Bigrams stay eligible as
+  they are: "climate policy" is a topic even though both words alone are noise. Weekdays and months
+  — grammatically proper, journalistically generic — are stopworded instead, since no case evidence
+  can catch them.
+- **A unigram subsumed by a surviving bigram is suppressed.** The live cloud showed "ben" beside
+  "ben carroll" — the same story twice. When a bigram survives every gate, any unigram that is one
+  of its words is dropped; the phrase is the more specific name for the topic.
 
 Starting formula, explicitly expected to need tuning against real data:
 
@@ -962,10 +983,10 @@ cloud at ~40–50 terms, beyond which it becomes visual mush.
 
 **The baseline needs a week to exist**, which matters for launch: on day one `baseline_7d` is empty and
 scoring collapses to the raw frequency I just showed produces garbage. So the day-one cloud must lean on
-the mechanisms that work immediately — the `df_domains >= 2` gate, the per-domain cap, and a shipped
-stopword list seeded with generic news vocabulary ("report", "says", "after", "found", "earlier"…) —
-with the baseline improving it over the first week. Expect the cloud to look mediocre on day one and
-good by day seven; without knowing that, the first week reads as a bug.
+the mechanisms that work immediately — the `df_domains >= 2` gate, the per-domain cap, the proper-noun
+gate on unigrams, and a shipped stopword list seeded with generic news vocabulary ("report", "says",
+"after", "found", "earlier"…) — with the baseline improving it over the first week. The propriety gate
+does most of what makes day one presentable: names and phrases carry a cloud on their own.
 
 ### 10.4 Storage and API
 
@@ -1056,7 +1077,7 @@ it already has. Redis-cached under `trending:<day>:<language>` for ~15 minutes.
   | Fixture | Guards | Assertions |
   | --- | --- | --- |
   | `search-climate-duplicates.json`<br/>100 sightings, 42 unique URLs, one URL ×50 | The collapse (§7.4) | 100 rows in `sightings` → **42** rows in `articles`; the ×50 article has `sighting_count = 50`; re-ingesting the same payload leaves both counts unchanged; a `limit=25` timeline page returns ≤25 **articles**, never 25 sightings; `dedup_key` normalization neither over- nor under-collapses (42 → 42) |
-  | `search-keywordless-category-sample.json`<br/>80 articles incl. a single-source Jenkins CVE burst | Term scoring (§10.3) | `cve-`-style identifier fragments never appear as terms; no term whose `df_domains < 2` is emitted, so the Jenkins burst is absent from the top 50; generic vocabulary (`earlier`, `found`, `read`, `how`) is absent via the stopword list; **with `term_baseline` empty** the top 50 is still free of all three failure classes — the day-one case (§10.3) |
+  | `search-keywordless-category-sample.json`<br/>80 articles incl. a single-source Jenkins CVE burst | Term scoring (§10.3) | `cve-`-style identifier fragments never appear as terms; no term whose `df_domains < 2` is emitted, so the Jenkins burst is absent from the top 50; generic vocabulary (`earlier`, `found`, `read`, `how`) is absent via the stopword list; generic non-proper unigrams (`set`, `use`, `learn`, `development`) are absent via the propriety gate while named entities (`ai`) and phrases (`donald trump`, subsuming the bare `trump`) survive; **with `term_baseline` empty** the top 50 is still free of all four failure classes — the day-one case (§10.3) |
   | `error-and-reference-bodies.json` | Client error taxonomy (§5.3) | each `400` maps to `CurrentsInvalidQueryError` with `details.errors` preserved; `401` → `CurrentsAuthError`; a non-JSON `403` → `CurrentsBlockedError`, **not** an auth error; `{"status":"ok","news":[]}` → `isLastPage: true`, not an error; reference maps parse as name→code with values used verbatim |
 
   The scorer test asserts against *failure classes*, not an expected term list — the day's news is not
