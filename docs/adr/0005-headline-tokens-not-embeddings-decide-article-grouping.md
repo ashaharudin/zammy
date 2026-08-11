@@ -141,6 +141,41 @@ timeline. Neither is new in kind — a new article joining a group has always
 been able to drag `group_published` earlier, and ADR-0002 accepted the same for
 an article's own `published` — but adoption makes both more frequent.
 
+## Amended again: stored tokens are a derivation, and they go stale
+
+Running the live stack after plural folding shipped showed the rule working on
+new articles and doing nothing for the ones already stored — including the
+exact card that prompted the change. `title_tokens` had been materialized
+before the tokenizer changed, so the BBC row still stored `chiefs` while the
+rule now says `chief`:
+
+| pair | stored tokens | re-derived today | bar |
+| --- | --- | --- | --- |
+| dailymail vs bbc | 0.429 | 0.538 | 0.50 |
+
+The comparison straddles the bar, and nothing in the system noticed. This is
+the hazard ADR-0002 named for URL canonicalization — "a rule we keep widening"
+— arriving in a different column.
+
+Three things follow, all of them now built:
+
+1. **`articles.tokens_version`** stamps the tokenizer that produced a row's
+   tokens, with a partial index over the stale ones. The healthy state is an
+   empty index; the unhealthy one is countable.
+2. **`TOKENIZER_VERSION`** in `grouping.ts`, bumped whenever `headlineTokens`
+   changes what it emits. Forgetting to bump it is the one way this goes quiet
+   again, which is why the constant sits directly above the function.
+3. **`pnpm regroup [--days=N] [--tokens-only]`** re-derives tokens, then re-runs
+   the grouping decision for articles that are still a group of one — reusing
+   `groupArticle`, so the maintenance path cannot drift from the ingest path.
+
+It is an operator command rather than a chore, and the reason is the one §14.3
+gave for refusing retroactive regrouping in the first place: pass 2 moves rows
+under live cursors, because an article folding into a group takes that group's
+position. That cost has not gone away; it has been made deliberate, bounded by
+`--days`, and avoidable entirely with `--tokens-only`. Pass 2 only ever moves
+groups of one, so it can add members to a group and can never take one apart.
+
 ## Consequences
 
 - **The threshold is unmeasured**, set against constructed examples rather than

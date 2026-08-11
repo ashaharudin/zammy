@@ -221,7 +221,7 @@ describe("a grouped story is one slot in the timeline", () => {
     for (const id of members) {
       await recordGrouping(harness.db, {
         articleId: id,
-        titleTokens: tokens,
+        titleTokens: tokens, tokensVersion: 2,
         groupId: id === groupId ? null : groupId,
       });
     }

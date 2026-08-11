@@ -84,6 +84,12 @@ pnpm typecheck      # type-check without emitting
 pnpm infra:up       # start postgres + redis
 pnpm infra:down     # stop them
 pnpm infra:reset    # stop and delete the postgres volume
+pnpm db:migrate     # apply migrations (a deploy step, never on boot)
+
+# Grouping maintenance (ARCHITECTURE 14.3, ADR-0005). Run after a change to
+# the headline tokenizer, which leaves already-stored tokens behind:
+pnpm regroup --tokens-only    # re-derive stored tokens; changes no groupings
+pnpm regroup --days=7         # …and re-run the grouping decision for groups of one
 
 docker compose --profile app up --build   # everything in containers, api included
 ```

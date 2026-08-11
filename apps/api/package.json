@@ -8,7 +8,8 @@
     "dev": "tsc -b && { tsc -b --watch --preserveWatchOutput & node --watch --env-file-if-exists=../../.env dist/index.js; }",
     "start": "node --env-file-if-exists=../../.env dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "regroup": "tsc -b && node --env-file-if-exists=../../.env dist/regroup-cli.js"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

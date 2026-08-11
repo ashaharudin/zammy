@@ -73,6 +73,12 @@ export interface ArticlesTable {
   group_published: DefaultedTimestamp;
   /** Headline tokens; what same-day grouping candidates are matched on. */
   title_tokens: Generated<string[]>;
+  /**
+   * Which tokenizer produced `title_tokens`. Rows below the current version
+   * compare against stale vocabulary until the regroup command re-derives
+   * them (ADR-0005); 0 means "older than the version column".
+   */
+  tokens_version: Generated<number>;
 }
 
 export interface TopicsTable {
