@@ -1,13 +1,13 @@
 # Zammy — Architectural Proposal
 
-**Status:** Phases 0–5b built · **Scope:** the design; decisions live in ADRs
+**Status:** Phases 0–5c built · **Scope:** the design; decisions live in ADRs
 
 A news aggregator that takes keywords from a user and returns a time-ordered timeline of
 headlines and topic summaries, backed by [Currents API](https://currentsapi.services/en/docs/).
 
 Read alongside:
-[CONTEXT.md](../CONTEXT.md) for the domain vocabulary — **sighting** and **article** are distinct
-things here, and the difference is load-bearing — [PROBE-FINDINGS.md](./PROBE-FINDINGS.md) for what
+[CONTEXT.md](../CONTEXT.md) for the domain vocabulary — **sighting**, **article** and **group** are
+distinct things here, and the differences are load-bearing — [PROBE-FINDINGS.md](./PROBE-FINDINGS.md) for what
 the upstream actually does, and [docs/adr/](./adr/) for decisions and the alternatives they beat.
 
 ---
@@ -572,12 +572,21 @@ CREATE TABLE articles (
   categories      text[] NOT NULL DEFAULT '{}',
   source_category text[] NOT NULL DEFAULT '{}',-- undocumented upstream field, kept verbatim
   source_domain   text,
-  published       timestamptz NOT NULL,        -- EARLIEST sighting; the timeline axis
+  published       timestamptz NOT NULL,        -- EARLIEST sighting; this article's place in time
   latest_seen     timestamptz NOT NULL,        -- most recent sighting
-  sighting_count  int NOT NULL DEFAULT 1
+  sighting_count  int NOT NULL DEFAULT 1,
+  -- Grouping (§14.3). group_id is the SEED article's id — self for a group of
+  -- one, supplied by a BEFORE INSERT trigger so no writer can omit it. No FK:
+  -- a dangling seed must degrade a group to loose members, never block a delete.
+  group_id        bigint NOT NULL,
+  group_published timestamptz NOT NULL,        -- MIN(published) over the group; the timeline axis
+  title_tokens    text[] NOT NULL DEFAULT '{}' -- headline tokens; what candidates match on
 );
-CREATE UNIQUE INDEX articles_dedup_key_idx  ON articles (dedup_key);
-CREATE INDEX        articles_timeline_idx   ON articles (published DESC, id DESC);
+CREATE UNIQUE INDEX articles_dedup_key_idx     ON articles (dedup_key);
+CREATE INDEX        articles_timeline_idx      ON articles (published DESC, id DESC);
+CREATE INDEX        articles_group_timeline_idx ON articles (group_published DESC, group_id DESC);
+CREATE INDEX        articles_group_idx         ON articles (group_id);
+CREATE INDEX        articles_title_tokens_idx  ON articles USING gin (title_tokens);
 
 CREATE TABLE topics (
   fingerprint   bytea PRIMARY KEY,
@@ -619,28 +628,42 @@ spans are merged on write so the table stays small. Without it, we could not dis
 articles exist in this window" from "we never asked about this window" — and would either re-fetch
 constantly or show false gaps in the timeline.
 
-### 7.3 Timeline reads — keyset pagination over articles
+### 7.3 Timeline reads — keyset pagination over article groups
 
 ```sql
-SELECT a.*
+-- Step 1: the page of GROUPS. Both columns are functions of the group, so
+-- DISTINCT folds a group's members into the one row that represents it here.
+SELECT DISTINCT a.group_id, a.group_published
 FROM topic_articles ta
 JOIN articles a ON a.id = ta.article_id
 WHERE ta.fingerprint = $1
-  AND a.published >= $2 AND a.published < $3
-  AND (a.published, a.id) < ($4, $5)          -- cursor; omitted on first page
-ORDER BY a.published DESC, a.id DESC
+  AND a.group_published >= $2 AND a.group_published < $3
+  AND (a.group_published, a.group_id) < ($4, $5)   -- cursor; omitted on first page
+ORDER BY a.group_published DESC, a.group_id DESC
 LIMIT $6;
+
+-- Step 2: their members, for THIS topic only — groups are global, membership
+-- is not, and the representative is chosen from what actually matched (§14.3).
+SELECT a.*
+FROM topic_articles ta
+JOIN articles a ON a.id = ta.article_id
+WHERE ta.fingerprint = $1 AND a.group_id = ANY($7)
+ORDER BY a.published DESC, a.id DESC;
 ```
 
 Deduplication is a *property of the table*, not a filter applied afterwards — which is the whole
 reason `articles` and `sightings` are separate. Post-filtering would be wrong here: with one URL
 occupying 50 of 100 upstream slots, a page of 25 could collapse to 3 rows, so page size would become
-unpredictable and `hasMore` unreliable.
+unpredictable and `hasMore` unreliable. Grouping (§14.3) keeps that property rather than trading it
+away: the group is materialized at write time, so `LIMIT` still counts what the reader sees. An
+ungrouped article is a group of one whose position and identity are its own, so a store with no
+grouping pages exactly as it did before the columns existed — including the cursor, which is
+unchanged in shape.
 
 Keyset, not `OFFSET`: cost is constant regardless of depth, and — critically for a feed where new
 articles arrive constantly — rows cannot shift between pages and cause duplicates or skips. The
-cursor is a base64 `(published, id)` tuple; `id` breaks ties among the many articles sharing a
-timestamp, giving a total order that upstream does not provide.
+cursor is a base64 `(published, id)` tuple — the *group's* position and identity — and `id` breaks
+ties among the many groups sharing a timestamp, giving a total order that upstream does not provide.
 
 The id half is the surrogate key, deliberately not the URL hash. Canonicalization is a rule we keep
 widening, and a natural key would re-key live cursors every time it changed
@@ -664,6 +687,12 @@ Per fetched sighting, in one transaction:
 
 Every fetch is safely repeatable, which is what lets the worker and a user request race harmlessly.
 
+Immediately after, and outside the transaction, each article the call *created* is offered a group
+(§14.3). The two halves are one write path: this one deduplicates by URL, that one groups what URLs
+alone cannot. Only new articles are grouped — regrouping on every re-sighting would let a group drift
+with no bound — and the pass never throws, because a grouping failure must not fail the read that
+triggered the ingest.
+
 **`dedup_key` derivation** — `sha256` of the URL after lowercasing scheme/host, stripping the
 fragment, removing tracking params (`utm_*`, `fbclid`, `gclid`), and trimming the trailing slash.
 Verified on probe data: normalization neither over- nor under-collapsed (42 unique raw URLs → 42
@@ -673,7 +702,8 @@ live rows would violate it.
 A `(title, source_domain)` secondary key stays disabled: probe data showed 41 unique title+domain
 pairs against 42 unique URLs, so it would merge exactly one pair — no evidence, and a false merge is
 worse than a visible duplicate. Syndicated stories across different outlets do not collapse either,
-on purpose; the wordcloud's breadth gate counts distinct sources and needs those rows (§10.3).
+on purpose; the wordcloud's breadth gate counts distinct sources and needs those rows (§10.3). They
+are **grouped** instead (§14.3), which keeps every row and every `source_domain` intact.
 
 **Ordering across sliced calls.** Upstream sorts each response by `published` DESC, but our sliced
 window queries return several independently-sorted batches. Nothing downstream may assume the fetch
@@ -720,10 +750,14 @@ modern; keywords in, timeline out.
 - **Timeline** — a single reverse-chronological column with sticky day dividers ("Today",
   "Yesterday", then dates). Each card: headline, source chip + relative time, description snippet,
   thumbnail when `image_url` is non-null. Whole card links out, `target="_blank" rel="noopener"`.
-  One card = one **article**, timestamped by its earliest sighting. Where `sighting_count > 1` — a
-  continuously-updated post like a daily link roundup — the card shows a quiet "updated <relative
-  time>" line from `latest_seen` rather than repeating the story. This is the user-visible half of
-  §7.4; without it, over half of a typical timeline is one post repeated.
+  One card = one **group** — usually one article, and where several outlets ran the same story, the
+  group's headline article with the others behind a "N related" disclosure (§14.3). The card is
+  timestamped by the **group's** earliest published, not the headline article's, with an "updated
+  <relative time>" stamp when later members exist: showing a 3-hours-ago headline in a slot sitting
+  below rows from five hours ago reads as a bug. Where `sighting_count > 1` — a continuously-updated
+  post like a daily link roundup — the card shows the same quiet treatment from `latest_seen` rather
+  than repeating the story. This is the user-visible half of §7.4; without it, over half of a typical
+  timeline is one post repeated.
 - **Freshness banner** — renders `meta.asOf` / `meta.stale` / `meta.degraded` honestly.
 - **States** — skeleton cards on first load, distinct empty state ("no articles yet for X" vs. "no
   more history"), and an error state with retry.
@@ -1067,7 +1101,10 @@ it already has. Redis-cached under `trending:<day>:<language>` for ~15 minutes.
   upstream calls per user request (the key efficiency number), quota headroom against the observed
   `x-ratelimit-remaining`, p95 latency by `servedFrom`, and normalization drop rate. Two metrics exist
   specifically because of probe findings: **unique-articles-per-upstream-call** (baseline ~8 of 20 —
-  a fall means duplication is worsening) and **truncated-segment rate** (§11).
+  a fall means duplication is worsening) and **truncated-segment rate** (§11). A third,
+  **articles-grouped rate** (grouped / created), exists because §14.3's similarity threshold ships
+  unmeasured: near zero means grouping is doing nothing, a sharp rise means it is merging stories
+  that are merely similar ([ADR-0005](adr/0005-headline-tokens-not-embeddings-decide-article-grouping.md)).
 - **Security:** API key server-side only; CORS pinned to the web origin; per-IP rate limit on
   `/api/v1/*`; parameterized SQL only; article text is escaped by React and never rendered as HTML,
   since it is third-party content.
@@ -1085,7 +1122,7 @@ it already has. Redis-cached under `trending:<day>:<language>` for ~15 minutes.
 
   | Fixture | Guards | Assertions |
   | --- | --- | --- |
-  | `search-climate-duplicates.json`<br/>100 sightings, 42 unique URLs, one URL ×50 | The collapse (§7.4) | 100 rows in `sightings` → **42** rows in `articles`; the ×50 article has `sighting_count = 50`; re-ingesting the same payload leaves both counts unchanged; a `limit=25` timeline page returns ≤25 **articles**, never 25 sightings; `dedup_key` normalization neither over- nor under-collapses (42 → 42) |
+  | `search-climate-duplicates.json`<br/>100 sightings, 42 unique URLs, one URL ×50 | The collapse (§7.4) | 100 rows in `sightings` → **42** rows in `articles`; the ×50 article has `sighting_count = 50`; re-ingesting the same payload leaves both counts unchanged; a `limit=25` timeline page returns ≤25 **slots**, never 25 sightings — 25 articles before grouping, and 25 groups after (§14.3), which is the same guarantee about page size; `dedup_key` normalization neither over- nor under-collapses (42 → 42) |
   | `search-keywordless-category-sample.json`<br/>80 articles incl. a single-source Jenkins CVE burst | Term scoring (§10.3) | `cve-`-style identifier fragments never appear as terms; no term whose `df_domains < 2` is emitted, so the Jenkins burst is absent from the top 50; generic vocabulary (`earlier`, `found`, `read`, `how`) is absent via the stopword list; generic non-proper unigrams (`set`, `use`, `learn`, `development`) are absent via the propriety gate while named entities (`ai`) and phrases (`donald trump`, subsuming the bare `trump`) survive; **with `term_baseline` empty** the top 50 is still free of all four failure classes — the day-one case (§10.3) |
   | `error-and-reference-bodies.json` | Client error taxonomy (§5.3) | each `400` maps to `CurrentsInvalidQueryError` with `details.errors` preserved; `401` → `CurrentsAuthError`; a non-JSON `403` → `CurrentsBlockedError`, **not** an auth error; `{"status":"ok","news":[]}` → `isLastPage: true`, not an error; reference maps parse as name→code with values used verbatim |
 
@@ -1107,6 +1144,7 @@ it already has. Redis-cached under `trending:<day>:<language>` for ~15 minutes.
 | 4 | Front end: search → timeline → infinite scroll → freshness states → progressive fill (§6.5). |
 | 5 | Refresh-on-read, adaptive subdivision backfill, budget guards (§9.4), retention, metrics. |
 | 5b | **Wordcloud (§10):** breadth sample, term aggregation with domain-breadth gating and rolling baseline, `/api/v1/trending`, d3-cloud landing page with accessible list equivalent. Scorer tested against `fixtures/search-keywordless-category-sample.json` including the empty-baseline day-one case. |
+| 5c | **Article grouping (§14.3):** `group_id` / `group_published` / `title_tokens` on `articles`, write-time grouping after the collapse, the keyset moved onto the group axis, per-topic representative from the source-authority list, and the "related" disclosure in the timeline. |
 | 6 *(later)* | **AWS deploy:** Terraform/CDK, Fargate task definitions, RDS + ElastiCache, secret wiring, migration-on-deploy (§4.1). |
 | 7 *(later)* | Topic summaries into `topics.summary`; second provider behind the client interface. |
 
@@ -1159,15 +1197,16 @@ Still open:
    derive one topic's result set from another's. Worth revisiting only if fingerprint proliferation
    shows up in the metrics.
 3. **Duplicate policy for syndicated stories** — the same story republished at *different* URLs across
-   outlets will not collapse under URL-based dedup. Whether that is desirable (multiple sources are
-   informative) or noise is a product call; §7.4's secondary key is the lever if we want it.
+   outlets does not collapse under URL-based dedup. Whether that is desirable (multiple sources are
+   informative) or noise was a product call, and §7.4's secondary key was the lever on offer. Neither
+   answer won.
 
-   There is a **third option this list previously omitted: grouping rather than collapsing.** Keep
-   every article row and add a group, showing one member as the timeline entry with the rest reachable
-   as "related". ADR-0002 does not forbid this — its refusal of syndicate collapse is grounded in the
-   `df_domains` breadth signal (§10.3), and grouping leaves every row and every `source_domain`
-   intact, so the cloud reads exactly as it does today. **Not built; the shape below is decided, and
-   what stays open is whether to build it at all.**
+   The answer was a **third option this list originally omitted: grouping rather than collapsing** —
+   keep every article row and add a group, showing one member as the timeline entry with the rest
+   reachable as "related". ADR-0002 does not forbid this: its refusal of syndicate collapse is
+   grounded in the `df_domains` breadth signal (§10.3), and grouping leaves every row and every
+   `source_domain` intact, so the cloud reads exactly as it did. **Built in Phase 5c**, behind
+   `GROUPING_ENABLED`; the entry below is the design as shipped, and what remains open is at the end.
 
    - **Grouping is a day's coverage of a story, not an event.** The looser unit is what a reader
      scanning a timeline wants, and it lets the time bucket do the constraining that a tight
@@ -1202,18 +1241,43 @@ Still open:
    - **`df_articles` does not become `df_groups`.** It is the size input *and* the displayed number
      (§10.3); the cloud/timeline count mismatch is a labelling problem, fixable in the timeline header.
    - **Time buckets the similarity, and bounds the drift.** Candidates come from the same
-     `APP_TIMEZONE` calendar day (§10.1's rule, not UTC), and a new article is compared against its
-     group's representative only. A rolling window would chain — A–B twenty hours apart, B–C twenty
+     `APP_TIMEZONE` calendar day (§10.1's rule, not UTC), and a new article is compared against one
+     fixed member of each group. A rolling window would chain — A–B twenty hours apart, B–C twenty
      hours apart, A and C in one group forty hours apart having never been compared — the same
      unbounded drift the greedy rule in item 7 avoids. The cost is a midnight cliff: 23:50 and 00:10
      never group. Accepted as bounded and explicable, where chaining is neither.
 
+     That fixed member is the group's **seed** — the article that started it, which `group_id` names
+     — and not the representative, as this entry originally said. The two came apart in the building:
+     the representative is chosen per topic and per read (bullet above), so it is not a stable thing
+     to compare against and does not exist at write time at all. The seed never moves, which is
+     precisely what bounds the drift; the group's *position* still follows its earliest member, so
+     the seed and the position are frequently different articles.
+
    Unlike variant merging (item 7), the failure mode here is *soft*: a wrong grouping demotes an
    article behind a toggle rather than deleting it, which is a materially better risk profile and the
-   strongest case in this product for vectors at all. If they are ever wanted, `group_id` is durable
-   state on `articles` and belongs in **Postgres** (RDS ships pgvector) — Redis could not filter the
-   candidate window without copying `published` and `language` out of Postgres and keeping a second
-   copy in sync.
+   strongest case in this product for vectors at all. They are not what shipped
+   ([ADR-0005](adr/0005-headline-tokens-not-embeddings-decide-article-grouping.md)): similarity is
+   **Jaccard over headline tokens**, at least two shared, judged against the group's seed inside the
+   day — the wordcloud's tokenizer, so grouping and the cloud agree about what a word is. If vectors
+   are ever wanted, `group_id` is durable state on `articles` and belongs in **Postgres** (RDS ships
+   pgvector) — Redis could not filter the candidate window without copying `published` and `language`
+   out of Postgres and keeping a second copy in sync.
+
+   Three things stay open, and none of them blocks the feature:
+
+   - **The threshold is unmeasured.** 0.5, set against constructed examples rather than labelled
+     pairs — exactly the gap that ended item 7. `GROUPING_SIMILARITY_THRESHOLD` is the knob and the
+     articles-grouped rate (§12) is the instrument; err high, since ADR-0002 holds that a false merge
+     is worse than a visible duplicate.
+   - **What shipped is tighter than the unit above describes.** Lexical overlap catches syndication —
+     one wire story, several outlets, near-identical headlines — but not a day's *loose* coverage of
+     one story, where two outlets share a subject and almost no vocabulary. That gap is the honest
+     case for vectors; it is not a case for lowering the threshold, which would merely merge
+     different stories that share words.
+   - **Grouping is forward-looking.** Articles stored before the migration have no tokens, so they
+     are never candidates and never join a group. Regrouping the archive would move rows under live
+     cursors for no reader's benefit.
 4. **Summary scope** — per-topic rollup, or per-article abstractive summary? Only affects Phase 6.
 5. **`type` parameter** — the one probe result that changed output without an obvious meaning
    (17/20 overlap with the control). Unexplored; not needed for v1.
@@ -1248,7 +1312,7 @@ Still open:
    use the `(title, source_domain)` key in §7.4 rather than vectors, and item 3 above plus ADR-0002
    refuse the syndication case outright, since collapsing syndicates would destroy the `df_domains`
    breadth signal §10.3 depends on. (Article *grouping* — item 3 — is a different proposition and is
-   not refused; it would plausibly want vectors. It does not change this conclusion, for the reason
-   below.) Were article vectors ever wanted, they belong in Postgres beside
+   not refused; it shipped on headline tokens rather than vectors, for the reasons in ADR-0005, so it
+   does not change this conclusion either.) Were article vectors ever wanted, they belong in Postgres beside
    the rows they describe (RDS ships pgvector; ElastiCache has no search engine at any version, so
    the Redis path means migrating to MemoryDB or Valkey).

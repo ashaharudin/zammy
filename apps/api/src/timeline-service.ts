@@ -1,6 +1,6 @@
 import type { Kysely } from "kysely";
 import type { Redis } from "ioredis";
-import { decodeCursor, encodeCursor, type Article } from "@zammy/shared";
+import { decodeCursor, encodeCursor, type TimelineEntry } from "@zammy/shared";
 import {
   CurrentsQuotaError,
   type CallPriority,
@@ -14,6 +14,7 @@ import {
   recordCoverage,
   upsertTopic,
   type Database,
+  type TimelineGroup,
 } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
 import { sliceSpan, subtractCoverage, type Span } from "./coverage-gaps.js";
@@ -28,6 +29,8 @@ import type { Metrics } from "./metrics.js";
 import { refreshLockKey, release, tryAcquire } from "./single-flight.js";
 import { reserveTopicCall } from "./topic-budget.js";
 import type { IngestQueue, SegmentJob } from "./ingest-queue.js";
+import { groupCreatedArticles } from "./grouping-service.js";
+import { chooseRepresentative } from "./source-authority.js";
 
 /**
  * The query planner (ARCHITECTURE 6.3) — how a page gets filled, or ideally
@@ -55,6 +58,8 @@ export interface TimelineDeps {
     minSegmentMs: number;
     /** §9.4: upstream calls one topic may spend per UTC day, both paths combined. */
     perTopicDailyCallCap: number;
+    /** §14.3: write-time article grouping, and the day it draws candidates from. */
+    grouping: { enabled: boolean; threshold: number; timeZone: string };
   };
   now: () => Date;
   metrics?: Metrics;
@@ -70,7 +75,7 @@ export interface TimelineReadResult {
     keywords: string[];
     coverage: { from: string; to: string } | null;
   };
-  items: Article[];
+  items: TimelineEntry[];
   page: { nextCursor: string | null; hasMore: boolean };
   meta: {
     servedFrom: "cache" | "store" | "upstream";
@@ -250,7 +255,7 @@ async function planAndRead(
           ? { from: first.from.toISOString(), to: last.to.toISOString() }
           : null,
     },
-    items: stored.items,
+    items: stored.items.map(toEntry),
     page: {
       nextCursor: stored.nextCursor ? encodeCursor(stored.nextCursor) : null,
       hasMore: stored.hasMore,
@@ -280,6 +285,30 @@ async function planAndRead(
   }
 
   return result;
+}
+
+/**
+ * A stored group → the slot the browser renders (§14.3).
+ *
+ * The headline is chosen HERE, per topic and per read, from the members that
+ * matched this search — a group-wide choice could surface an article that
+ * never matched the user's keywords and hide the matching one under "related".
+ * The group's position is not chosen here and never changes with the headline:
+ * `published` is the group's, so a later tier-1 article takes the headline in
+ * place without moving the slot up the timeline (§7.3).
+ */
+function toEntry(group: TimelineGroup): TimelineEntry {
+  const article = chooseRepresentative(group.members);
+  return {
+    groupId: group.id,
+    published: group.published,
+    // Members are newest first, so the head is the group's latest coverage.
+    // This is what the UI shows as "updated", the same treatment ADR-0002
+    // gives an article whose later sightings do not move it.
+    updatedAt: group.members[0]?.published ?? group.published,
+    article,
+    related: group.members.filter((member) => member.id !== article.id),
+  };
 }
 
 /**
@@ -425,6 +454,20 @@ async function fillSegment(
       sightings: result.sightings,
     });
     deps.metrics?.articlesIngested(ingested.articlesCreated);
+
+    // §14.3, immediately after the collapse and only over what this call
+    // created: the two are one write path — one deduplicates by URL, the other
+    // groups what URLs alone cannot. Grouping never throws (see the service),
+    // so a reader waiting on this fill cannot be failed by it.
+    await groupCreatedArticles(
+      {
+        db: deps.db,
+        config: deps.config.grouping,
+        ...(deps.metrics ? { metrics: deps.metrics } : {}),
+        ...(deps.log ? { log: deps.log } : {}),
+      },
+      ingested.createdArticles,
+    );
 
     for (const sighting of result.sightings) {
       const published = new Date(sighting.published);

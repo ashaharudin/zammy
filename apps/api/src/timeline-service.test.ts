@@ -78,7 +78,8 @@ describe("cold search — the synchronous fill", () => {
     expect(result.meta.servedFrom).toBe("upstream");
     expect(result.items.length).toBeGreaterThan(0);
     expect(result.items.length).toBeLessThanOrEqual(16);
-    expect(new Set(result.items.map((i) => i.url)).size).toBe(result.items.length);
+    // One slot per story, each headlining a distinct URL (§14.3).
+    expect(new Set(result.items.map((i) => i.article.url)).size).toBe(result.items.length);
 
     // Everything arrived synchronously, so the topic is complete and quiet.
     expect(result.meta.ingest).toEqual({ state: "complete", pendingJobs: 0 });
@@ -595,8 +596,8 @@ describe("cursor plumbing through the service", () => {
       cursorString: first.page.nextCursor!,
     });
 
-    const firstIds = new Set(first.items.map((i) => i.id));
+    const firstIds = new Set(first.items.map((i) => i.groupId));
     expect(second.items.length).toBeGreaterThan(0);
-    expect(second.items.every((i) => !firstIds.has(i.id))).toBe(true);
+    expect(second.items.every((i) => !firstIds.has(i.groupId))).toBe(true);
   });
 });

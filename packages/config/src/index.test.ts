@@ -32,6 +32,18 @@ describe("loadConfig", () => {
     ).not.toThrow();
   });
 
+  it("groups by default, and refuses a misspelt switch rather than guessing", () => {
+    // A truthiness test would read `flase` as "on" and quietly ship the
+    // feature to an operator who turned it off (§12: refuse to start).
+    expect(loadConfig({ ...base } as NodeJS.ProcessEnv).GROUPING_ENABLED).toBe(true);
+    expect(
+      loadConfig({ ...base, GROUPING_ENABLED: "false" } as NodeJS.ProcessEnv).GROUPING_ENABLED,
+    ).toBe(false);
+    expect(() =>
+      loadConfig({ ...base, GROUPING_ENABLED: "flase" } as NodeJS.ProcessEnv),
+    ).toThrow(ConfigError);
+  });
+
   it("rejects a reserve that would starve background ingestion entirely", () => {
     expect(() =>
       loadConfig({

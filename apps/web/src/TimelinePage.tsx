@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Article } from "@zammy/shared";
+import type { Article, TimelineEntry } from "@zammy/shared";
 import { isTerminalPage } from "@zammy/shared";
 import { ApiError, type TopicQuery } from "./api.js";
 import { isCollapsed, noDaysCollapsed, toggleDay } from "./dayCollapse.js";
@@ -83,7 +83,7 @@ export function TimelinePage({
  * this topic. Progressive fill is unaffected — it appends OLDER items, which
  * pass straight through (§6.5 point 3).
  */
-function useHeldNewItems(items: Article[], topicKey: string) {
+function useHeldNewItems(items: TimelineEntry[], topicKey: string) {
   const [anchor, setAnchor] = useState<string | null>(null);
   const keyRef = useRef(topicKey);
   if (keyRef.current !== topicKey) {
@@ -96,9 +96,12 @@ function useHeldNewItems(items: Article[], topicKey: string) {
   const effective = anchor ?? newest;
   const visible =
     effective === null ? items : items.filter((item) => item.published <= effective);
+  const held = items.slice(0, items.length - visible.length);
   return {
     visible,
-    newCount: items.length - visible.length,
+    // Articles, not slots: the pill promises "N new articles" and a held slot
+    // can carry several (§14.3). Counting slots would under-promise.
+    newCount: held.reduce((total, entry) => total + 1 + entry.related.length, 0),
     reveal: () => setAnchor(newest),
   };
 }
@@ -132,7 +135,7 @@ function Rail({
   isFetchingNextPage,
   onLoadOlder,
 }: {
-  items: Article[];
+  items: TimelineEntry[];
   newCount: number;
   onReveal: () => void;
   ingesting: boolean;
@@ -192,10 +195,10 @@ function Rail({
           </em>
         </RailEntry>
       )}
-      {groupByDay(items).map((group) => {
-        const dayCollapsed = isCollapsed(collapsed, group.day);
+      {groupByDay(items).map((day) => {
+        const dayCollapsed = isCollapsed(collapsed, day.day);
         return (
-          <section key={group.day} aria-label={group.day}>
+          <section key={day.day} aria-label={day.day}>
             <RailEntry
               // ▶ not the smaller ▸: at the rail's font size ▶ carries roughly
               // the dot's ink, and its optical centre matches ●'s to the pixel,
@@ -204,8 +207,8 @@ function Rail({
               big
               toggle={{
                 expanded: !dayCollapsed,
-                label: `${dayCollapsed ? "Expand" : "Collapse"} ${group.day}`,
-                onToggle: () => setCollapsed((days) => toggleDay(days, group.day)),
+                label: `${dayCollapsed ? "Expand" : "Collapse"} ${day.day}`,
+                onToggle: () => setCollapsed((days) => toggleDay(days, day.day)),
               }}
             >
               <h2
@@ -216,13 +219,13 @@ function Rail({
                   margin: 0,
                 }}
               >
-                {group.day}
+                {day.day}
               </h2>
             </RailEntry>
             {!dayCollapsed &&
-              group.items.map((article) => (
-                <RailEntry key={article.id} marker="○">
-                  <ArticleCard article={article} />
+              day.items.map((entry) => (
+                <RailEntry key={entry.groupId} marker="○">
+                  <GroupCard entry={entry} />
                 </RailEntry>
               ))}
           </section>
@@ -285,7 +288,96 @@ function LoadOlder({ loading, onLoadOlder }: { loading: boolean; onLoadOlder: ()
   );
 }
 
-function ArticleCard({ article }: { article: Article }) {
+/**
+ * One timeline slot (§14.3): the group's headline article, with the other
+ * outlets that ran the same story reachable behind a "related" disclosure.
+ *
+ * The time shown is the GROUP's, not the headline article's — the slot sits at
+ * the group's earliest published, and a card showing "3 hours ago" beneath
+ * rows from five hours ago reads as a bug. Later coverage surfaces as an
+ * "updated" stamp instead, the same treatment §8.1 gives a re-emitted article.
+ */
+function GroupCard({ entry }: { entry: TimelineEntry }) {
+  const [showRelated, setShowRelated] = useState(false);
+  const updated = entry.updatedAt !== entry.published;
+
+  return (
+    <div style={{ maxWidth: "640px" }}>
+      <ArticleCard
+        article={entry.article}
+        published={entry.published}
+        updatedAt={updated ? entry.updatedAt : null}
+      />
+      {entry.related.length > 0 && (
+        <>
+          <button
+            onClick={() => setShowRelated(!showRelated)}
+            aria-expanded={showRelated}
+            style={{
+              border: "none",
+              background: "none",
+              color: "var(--fg-faint)",
+              cursor: "pointer",
+              fontSize: "0.7rem",
+              padding: "0.3rem 0.2rem 0",
+            }}
+          >
+            {showRelated ? "▲" : "▼"} {entry.related.length} related
+          </button>
+          {showRelated && (
+            <ul
+              style={{
+                listStyle: "none",
+                margin: "0.25rem 0 0",
+                padding: "0 0 0 0.9rem",
+                borderLeft: "1px solid var(--border)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.4rem",
+              }}
+            >
+              {entry.related.map((article) => (
+                <li key={article.id}>
+                  <a
+                    href={article.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ fontSize: "0.85rem", lineHeight: 1.3, textDecoration: "none" }}
+                  >
+                    {article.title}
+                  </a>
+                  <div
+                    style={{
+                      fontSize: "0.7rem",
+                      color: "var(--fg-faint)",
+                      display: "flex",
+                      gap: "0.5rem",
+                    }}
+                  >
+                    <time dateTime={article.published}>{timeLabel(article.published)}</time>
+                    {article.sourceDomain && <span>{article.sourceDomain}</span>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function ArticleCard({
+  article,
+  published,
+  updatedAt,
+}: {
+  article: Article;
+  /** The slot's time — the group's, which may predate this article's own. */
+  published: string;
+  /** Newest coverage in the group, when later than the slot's time. */
+  updatedAt: string | null;
+}) {
   const [open, setOpen] = useState(false);
   const expandable = article.description !== null;
 
@@ -296,7 +388,6 @@ function ArticleCard({ article }: { article: Article }) {
         borderRadius: "8px",
         border: "1px solid var(--border)",
         padding: "0.6rem 0.9rem",
-        maxWidth: "640px",
         display: "flex",
         gap: "0.75rem",
       }}
@@ -338,8 +429,13 @@ function ArticleCard({ article }: { article: Article }) {
       </a>
       <div style={{ marginTop: "0.25rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
         <small style={{ fontSize: "0.7rem", color: "var(--fg-faint)", fontVariantNumeric: "tabular-nums" }}>
-          <time dateTime={article.published}>{timeLabel(article.published)}</time>
+          <time dateTime={published}>{timeLabel(published)}</time>
         </small>
+        {updatedAt && (
+          <span style={{ fontSize: "0.7rem", color: "var(--fg-faint)" }}>
+            updated {relativeTime(updatedAt)}
+          </span>
+        )}
         {article.sourceDomain && (
           <span
             style={{

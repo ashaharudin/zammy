@@ -59,6 +59,12 @@ export class Metrics {
     registers: [this.registry],
   });
 
+  private readonly groupedArticles = new Counter({
+    name: "zammy_articles_grouped_total",
+    help: "New articles that joined an existing group (§14.3) — divide by articles created",
+    registers: [this.registry],
+  });
+
   private readonly truncatedSegments = new Counter({
     name: "zammy_truncated_segments_total",
     help: "Segments that returned the full retrievable cap and had to subdivide",
@@ -97,6 +103,15 @@ export class Metrics {
 
   articlesIngested(created: number): void {
     this.articlesCreated.inc(created);
+  }
+
+  /**
+   * The rate to watch while the threshold is unmeasured (ADR-0005): near zero
+   * means grouping is doing nothing, and a sharp rise means it is merging
+   * stories that are merely similar.
+   */
+  articlesGrouped(count: number): void {
+    this.groupedArticles.inc(count);
   }
 
   truncatedSegment(): void {

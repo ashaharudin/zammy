@@ -1,6 +1,7 @@
 import { sql, type Kysely } from "kysely";
 import type { Sighting } from "@zammy/currents-client";
 import { hexToBytea, type Database } from "./database.js";
+import { lowerGroupPosition } from "./grouping.js";
 
 /**
  * The sighting→article collapse (ARCHITECTURE 7.4, ADR-0002).
@@ -54,6 +55,24 @@ export interface IngestResult {
    * a fall means upstream duplication is worsening.
    */
   articlesCreated: number;
+  /**
+   * The articles this call brought into existence, as they stand after the
+   * fold — the input to grouping (§14.3), which runs afterwards and outside
+   * this transaction because the decision is the API layer's, not storage's.
+   *
+   * Only NEW articles: an article that already existed has already been
+   * offered a group, and regrouping it on every re-sighting would let a group
+   * drift with no bound.
+   */
+  createdArticles: CreatedArticle[];
+}
+
+/** What grouping needs to know about a newly-created article. */
+export interface CreatedArticle {
+  id: string;
+  title: string;
+  language: string | null;
+  published: Date;
 }
 
 /**
@@ -82,8 +101,11 @@ export async function ingestSightings(
     sightingsReceived: input.sightings.length,
     sightingsInserted: 0,
     articlesCreated: 0,
+    createdArticles: [],
   };
   if (input.sightings.length === 0) return result;
+
+  const createdIds: string[] = [];
 
   await db.transaction().execute(async (trx) => {
     for (const sighting of input.sightings) {
@@ -156,6 +178,10 @@ export async function ingestSightings(
           })
           .where("id", "=", article.id)
           .execute();
+
+        // The fold may have dragged this article — and therefore its group's
+        // position on the §7.3 keyset axis — earlier in time (§14.3).
+        await lowerGroupPosition(trx, { articleId: article.id, published });
       }
 
       // Per ARTICLE and unconditional: a sighting already seen under another
@@ -166,7 +192,10 @@ export async function ingestSightings(
         .onConflict((oc) => oc.columns(["fingerprint", "article_id"]).doNothing())
         .execute();
 
-      if (article.was_created) result.articlesCreated += 1;
+      if (article.was_created) {
+        result.articlesCreated += 1;
+        createdIds.push(article.id);
+      }
     }
 
     // A duplicate upstream UUID arriving under a never-seen dedup_key would
@@ -179,6 +208,25 @@ export async function ingestSightings(
       .where("sighting_count", "=", 0)
       .executeTakeFirst();
     result.articlesCreated -= Number(orphans.numDeletedRows);
+
+    // Read back rather than remember: one batch can carry the same URL twice,
+    // and the later sighting may have rewritten the title and published of a
+    // row created earlier in this very loop. Grouping must see the article as
+    // it ended up, and this runs after the orphan sweep so a deleted row is
+    // never handed on.
+    if (createdIds.length > 0) {
+      const rows = await trx
+        .selectFrom("articles")
+        .select(["id", "title", "language", "published"])
+        .where("id", "in", createdIds)
+        .execute();
+      result.createdArticles = rows.map((row) => ({
+        id: row.id,
+        title: row.title,
+        language: row.language,
+        published: row.published,
+      }));
+    }
   });
 
   return result;

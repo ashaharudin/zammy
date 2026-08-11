@@ -64,6 +64,30 @@ const EnvSchema = z
 
     RETENTION_DAYS: z.coerce.number().int().min(1).default(90),
 
+    // --- article grouping (ARCHITECTURE 14.3, ADR-0005) ---
+    /**
+     * Whether the same story from several outlets is shown as one timeline
+     * slot with the rest as "related". Off restores one card per article;
+     * groups already recorded stay recorded and simply page as groups of one,
+     * so this is reversible without a migration.
+     */
+    // An enum, not a truthiness test: `GROUPING_ENABLED=flase` must refuse to
+    // boot, not silently mean "true" (§12 — the process refuses to start on
+    // bad config rather than failing mysteriously later).
+    GROUPING_ENABLED: z
+      .enum(["true", "false"])
+      .default("true")
+      .transform((value) => value === "true"),
+    /**
+     * Jaccard floor on headline tokens for two articles to be one story.
+     *
+     * **Unmeasured** — the same gap that ended term-variant merging (§14.7),
+     * named here rather than buried. Raise it if related-but-distinct stories
+     * start collapsing; a false merge hides an article behind a toggle, and
+     * ADR-0002's principle says that is worse than a visible duplicate.
+     */
+    GROUPING_SIMILARITY_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
+
     /**
      * Applied when a search omits language. Omitting it upstream returns every
      * language mixed together, so "all" must be an explicit choice (§6.1).
