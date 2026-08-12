@@ -55,10 +55,10 @@ A word a user types in. Keywords are input to a topic.
 _Avoid_: term, tag, phrase
 
 **Term**:
-A proper noun or two-word phrase extracted from article headlines and ranked for the
-landing-page cloud. Generic single words never qualify, however frequent. Terms are output,
-keywords are input; clicking a term opens a topic. A term is a surface form, not a concept:
-"China" and "Chinese" are two terms and both may appear.
+A proper noun, or a two-word phrase containing one, extracted from article headlines and ranked
+for the landing-page cloud. Generic words never qualify, however frequent — alone or paired.
+Terms are output, keywords are input; clicking a term opens a topic. A term is a surface form,
+not a concept: "China" and "Chinese" are two terms and both may appear.
 _Avoid_: topic, keyword, trend, tag
 
 **Fingerprint**:
