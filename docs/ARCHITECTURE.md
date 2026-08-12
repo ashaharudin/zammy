@@ -1207,7 +1207,15 @@ deleting it is not the irreversible act ADR-0001 guards against.
 `GET /api/v1/trending?language=&limit=50` → `{ windowStart, windowEnd, language, terms: [{ term,
 isBigram, score, uniqueArticles, sourceCount }], meta }`, with the same `meta.ingest` block as §6.1
 so the front end can show a warming cloud with the machinery it already has. Redis-cached under
-`trending:<language>` for ~15 minutes.
+`<queue>:trending:<language>` for ~15 minutes — scoped to the ingest queue exactly as its pending
+keys are, so a test run and a local dev server sharing one Redis cannot write each other's cloud or
+each other's sample lock.
+
+**What is cached is the whole ranked list, and `limit` slices it on the way out.** The key names a
+language and nothing else, so caching one caller's slice lets a `?limit=4` request serve a four-term
+cloud to everyone behind it for the next fifteen minutes — observed, not hypothetical. Terms are
+ordered by score then term (§10.5), which is what makes every limit a prefix of one list rather than
+a different question, so readers asking for different amounts never disagree about what ranks first.
 
 **There is no `day` parameter and no archive read.** The old contract took `?day=` and could serve a
 closed day; a rolling window has no addressable periods, and the snapshot history is deliberately not
