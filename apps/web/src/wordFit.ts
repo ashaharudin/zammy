@@ -17,7 +17,7 @@
  * long enough to trigger it today — `artificial intelligence` clears both df
  * gates but is stopped by the propriety gate, so `ai` is what ships. This is a
  * guard against a real library behaviour at the shipped n <= 2, not a fix for
- * a failure anyone has seen (ADR-0006).
+ * a failure anyone has seen (ADR-0007).
  */
 
 /**

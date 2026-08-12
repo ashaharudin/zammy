@@ -61,7 +61,7 @@ const MIN_SHARED_TOKENS = 2;
  *
  *   1 — content tokens, digits dropped (§10.2)
  *   2 — plurals folded (ADR-0005)
- *   3 — wire-service and desk stopwords added (ADR-0006)
+ *   3 — wire-service and desk stopwords added (ADR-0007)
  */
 export const TOKENIZER_VERSION = 3;
 

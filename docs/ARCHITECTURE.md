@@ -1008,7 +1008,7 @@ Tokenization must survive identifiers — my probe's regex shredded
 a cloud look broken.
 
 **And it stops at two.** Trigrams were measured against the recorded corpora and refused
-([ADR-0006](adr/0006-the-cloud-stops-at-two-word-phrases.md)): 858 distinct three-grams yield one
+([ADR-0007](adr/0007-the-cloud-stops-at-two-word-phrases.md)): 858 distinct three-grams yield one
 that clears the gates, and it is a restatement of a phrase already in the cloud. The refusal is
 structural rather than a small-sample result — a trigram's article set is a subset of both its
 bigrams', so it can only tie on merit, and it out-ranks them only by having a smaller baseline to
@@ -1048,7 +1048,7 @@ So four mechanisms are **required for the first cut**, not deferred as polish:
   desk furniture** — `ap`, `rep`, `ceo`, `daily`. These defeat the breadth gate rather than merely
   surviving frequency, because `LOS ANGELES (AP) —` opens a wire story whatever it is about, so two
   outlets carrying AP copy look like two newsrooms choosing a word
-  ([ADR-0006](adr/0006-the-cloud-stops-at-two-word-phrases.md)).
+  ([ADR-0007](adr/0007-the-cloud-stops-at-two-word-phrases.md)).
 - **Every term must carry a proper noun.** The first live cloud confirmed what the
   baseline can only fix a week in: generic vocabulary ("community", "finally", "rise") topped day
   one. With only headline text to work from, propriety comes from case evidence in running text — a
@@ -1063,6 +1063,18 @@ So four mechanisms are **required for the first cut**, not deferred as polish:
   `gas flows`, `flows rise`, `power play` and `shape tmk` to buy it, which is not a trade worth
   keeping. Weekdays and months — grammatically proper, journalistically generic — are stopworded
   instead, since no case evidence can catch them.
+- **No term may contain a verb.** The propriety gate above closed one junk class and opened
+  another: once one name could anchor a phrase, the rest of its headline came with it. Twelve of the
+  live cloud's forty-two terms were fragments of that shape, six a name beside a verb — "graham
+  advances", "trump slipped", "leaving turkey". A topic is a nominal; a name plus a verb is a
+  headline with its middle removed. The test cannot be morphological, because "funding" and "games"
+  wear the same `-ing` and `-s` as "giving" and "advances", so it is lexical: a curated list of news
+  verbs split by which inflection has nominalized
+  ([ADR-0006](adr/0006-a-curated-verb-lexicon-keeps-predicates-out-of-the-cloud.md), which records the
+  three corpus-evidence rules this beat and why). Corpus case outranks the lexicon, so "Sitting Bull"
+  survives, and a participle counts only after the first word, since in front it modifies ("armed
+  forces"). The sibling class — adjective or title plus a name, "president trump" and "late sen" —
+  is still open.
 - **A unigram subsumed by a surviving bigram is suppressed.** The live cloud showed "ben" beside
   "ben carroll" — the same story twice. When a bigram survives every gate, any unigram that is one
   of its words is dropped; the phrase is the more specific name for the topic.
@@ -1125,7 +1137,7 @@ it already has. Redis-cached under `trending:<day>:<language>` for ~15 minutes.
   the largest font. Measured: `artificial intelligence` (23 chars) never places at 56px on a 700px
   board. No term the recorded corpora emit is long enough to hit this, so the clamp is a guard, not
   a repair; the word would stay in the `<ol>` either way, so the two views would disagree with
-  nothing to say why ([ADR-0006](adr/0006-the-cloud-stops-at-two-word-phrases.md)).
+  nothing to say why ([ADR-0007](adr/0007-the-cloud-stops-at-two-word-phrases.md)).
 - Each word is a real `<button>` that navigates to `/?q=<term>` — so the cloud feeds the
   demand-driven ingestion loop, and browsing becomes the mechanism that populates topics.
 - **Accessibility is not optional here.** A wordcloud is close to unusable for screen readers and
@@ -1239,8 +1251,10 @@ and migrations as a deploy step ([0003](adr/0003-kysely-and-hand-written-sql-ins
 the package boundary that keeps server concerns out of the browser bundle
 ([0004](adr/0004-shared-contains-only-what-ships-to-the-browser.md)); how article grouping decides
 two headlines are one story ([0005](adr/0005-headline-tokens-not-embeddings-decide-article-grouping.md));
-and the cloud's n-gram ceiling, with the stopword class and the render bound that came out of
-measuring it ([0006](adr/0006-the-cloud-stops-at-two-word-phrases.md)). Also settled without needing an
+the verb lexicon that keeps predicates out of the cloud
+([0006](adr/0006-a-curated-verb-lexicon-keeps-predicates-out-of-the-cloud.md)); and the cloud's n-gram
+ceiling, with the stopword class and the render bound that came out of measuring it
+([0007](adr/0007-the-cloud-stops-at-two-word-phrases.md)). Also settled without needing an
 ADR, being cheap to reverse: `APP_TIMEZONE` rather than UTC for the cloud's day, closed days freeze
 (§10.1), `DEFAULT_LANGUAGE=en` (§6.1), and no coverage-gap map (§1).
 

@@ -18,9 +18,12 @@ cloud's biggest word.
 
 Both recorded fixtures, collapsed by URL: 141 articles across 49 domains. The
 gate cascade, by n-gram order — distinct, then `df_articles >= 2`, then
-`df_domains >= 2`, then carrying a proper noun. **Measured against the stopword
-vocabulary as it was before the list this same change adds**, since that is what
-the question was asked against:
+`df_domains >= 2`, then the §10.3 phrase gates (a proper noun anchors it, no
+word of it is a verb). **Measured against the stopword vocabulary as it was
+before the list this same change adds**, since that is what the question was
+asked against. ADR-0006's verb lexicon landed while this was being measured and
+moves none of these counts: nothing in the third-order term space these corpora
+produce is a predicate.
 
 | n | distinct | df ≥ 2 | domains ≥ 2 | + proper noun |
 | --- | --- | --- | --- | --- |

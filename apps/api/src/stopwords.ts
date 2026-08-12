@@ -13,7 +13,7 @@
  * A second class joined it later (`WIRE_AND_DESK`, below): the words a newsroom
  * writes about the article rather than about the story. Those defeat the
  * breadth gate instead of merely surviving frequency, so they need naming
- * separately (ADR-0006).
+ * separately (ADR-0007).
  *
  * This list is the shared tokenizer's vocabulary, not the cloud's alone —
  * `contentTokens` feeds article grouping too, so any edit here changes what
@@ -100,7 +100,7 @@ const WIRE_AND_DESK = [
  * run rather than being skipped over, so `new york`, `new zealand` and `new
  * delhi` are unreachable at any n, with `york` and `zealand` standing in.
  *
- * Removing it was measured and refused (ADR-0006). The gain is zero on every
+ * Removing it was measured and refused (ADR-0007). The gain is zero on every
  * recorded corpus, and the mechanism that would deliver it is the same one that
  * costs: the propriety gate admits a phrase on `.some()`, so `new` never has to
  * qualify — one name beside it is enough. `new gaza` then suppresses `gaza`

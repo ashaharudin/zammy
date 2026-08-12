@@ -6,7 +6,7 @@ import { maxPlaceableFont } from "./wordFit.js";
  * generous here means the word disappears, which is the bug this exists to
  * fix. The reference numbers are the measured drop boundaries on a 700px board
  * with d3-cloud 1.2.9, **at a 0.600em advance**: 20 chars → 54.9px, 22 → 49.9,
- * 26 → 42.9, 30 → 36.9 (ADR-0006).
+ * 26 → 42.9, 30 → 36.9 (ADR-0007).
  *
  * The advance matters, which is why it is stated: a wider face has a lower
  * cliff — Menlo at 0.6021em drops 26 chars from 41.9 — so these constants are

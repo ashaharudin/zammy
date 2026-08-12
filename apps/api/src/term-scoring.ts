@@ -1,4 +1,5 @@
 import { STOPWORDS } from "./stopwords.js";
+import { PAST_FORMS, VERB_FORMS } from "./verb-lexicon.js";
 
 /**
  * Term extraction and scoring for the landing-page cloud (ARCHITECTURE 10.2,
@@ -108,7 +109,9 @@ export function scoreTerms(
 
   const scored: ScoredTerm[] = [];
   for (const [term, entry] of stats) {
-    if (!term.split(" ").some(isProperNoun)) continue;
+    const words = term.split(" ");
+    if (!words.some(isProperNoun)) continue;
+    if (words.some((word, index) => isVerb(word, index, isProperNoun))) continue;
     const dfDomains = entry.byDomain.size;
     if (dfDomains < minDomains) continue;
 
@@ -208,6 +211,35 @@ function properNounEvidence(
   }
 
   return (term) => capitalizedMidSentence.has(term) && !seenLowercase.has(term);
+}
+
+/**
+ * Is this word of a phrase a VERB — does the phrase state something rather
+ * than name something? One name anchors a phrase, but a name plus a verb is a
+ * headline with its middle removed: "graham advances", "trump slipped",
+ * "leaving turkey" are events reported ABOUT a topic, never the topic, and
+ * they lead nowhere when clicked.
+ *
+ * Decided lexically (see verb-lexicon.ts), because morphology cannot do it:
+ * "medicaid funding" and "patriot games" wear the same -ing and -s as "giving"
+ * and "advances". What the lexicon encodes is which lemmas nominalize.
+ *
+ * Two guards keep it from eating real names:
+ *
+ *  - A word with proper-noun evidence is never read as a verb. Corpus case
+ *    outranks the lexicon, so "Ken Burns" and "Patriot Games" survive on the
+ *    same evidence that admitted them.
+ *  - A past participle counts only AFTER the first word. In front it is a
+ *    modifier — "armed forces", "planned parenthood", "displaced families" —
+ *    whereas nothing follows a name as a participle except a predicate.
+ */
+function isVerb(
+  word: string,
+  index: number,
+  isProperNoun: (term: string) => boolean,
+): boolean {
+  if (isProperNoun(word)) return false;
+  return VERB_FORMS.has(word) || (index > 0 && PAST_FORMS.has(word));
 }
 
 function keepable(token: string): boolean {

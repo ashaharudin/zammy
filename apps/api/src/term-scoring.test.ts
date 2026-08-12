@@ -126,7 +126,7 @@ describe("scoreTerms against the recorded latest-news sample (§10.1)", () => {
   });
 });
 
-describe("wire-service and desk furniture (ADR-0006)", () => {
+describe("wire-service and desk furniture (ADR-0007)", () => {
   // Both recorded corpora together — `los angeles ap` only exists across the
   // two, and the whole point of this class is that it clears the breadth gate
   // by being reproduced across outlets rather than chosen by them.
@@ -150,6 +150,75 @@ describe("wire-service and desk furniture (ADR-0006)", () => {
     for (const real of ["donald trump", "gianni infantino", "world cup", "los angeles"]) {
       expect(emitted.has(real), `"${real}" was lost to the stopword list`).toBe(true);
     }
+  });
+});
+
+describe("a name beside a verb is an event, not a topic (§10.3)", () => {
+  /** Two domains, so the breadth gate passes and only the gate under test speaks. */
+  const emit = (title: string, prose: string): Set<string> =>
+    new Set(
+      scoreTerms(
+        [
+          { title, description: prose, sourceDomain: "a.com" },
+          { title, description: prose, sourceDomain: "b.com" },
+        ],
+        EMPTY_BASELINE,
+      ).map((t) => t.term),
+    );
+
+  it("drops the verb that follows a name (graham advances)", () => {
+    // Measured failure (2026-08-12 live cloud): once one proper word could
+    // anchor a phrase, the OTHER half of a headline came with it — "graham
+    // advances", "trump slipped", "schaffer reflects". A clause, not a topic.
+    const emitted = emit(
+      "Kelowna Advances In The Contest",
+      "The town advances while rivals stall in Kelowna.",
+    );
+    expect(emitted.has("kelowna advances")).toBe(false);
+    expect(emitted.has("kelowna")).toBe(true);
+  });
+
+  it("drops the verb that PRECEDES a name (leaving turkey)", () => {
+    // The junk arrives in both orders — "giving rob" and "leaving turkey" sat
+    // beside "graham advances" in the same cloud.
+    const emitted = emit(
+      "Leaving Kelowna Behind, Crews Regroup",
+      "Crews are leaving today; they were last seen in Kelowna.",
+    );
+    expect(emitted.has("leaving kelowna")).toBe(false);
+  });
+
+  it("keeps a deverbal NOUN beside a name, whatever suffix it wears", () => {
+    // "funding" and "games" wear the same -ing and -s as "leaving" and
+    // "advances", so no suffix rule can separate them. The lexicon can: it
+    // records which lemmas have nominalized in which inflection.
+    const emitted = emit(
+      "Kelowna Funding Survives The Kelowna Games",
+      "Officials discussed funding, and the games drew crowds in Kelowna.",
+    );
+    expect(emitted.has("kelowna funding")).toBe(true);
+    expect(emitted.has("kelowna games")).toBe(true);
+  });
+
+  it("keeps a participle that PRECEDES the name it modifies", () => {
+    // In front, "-ed" modifies ("armed forces", "planned parenthood"); only
+    // after a name is it a predicate.
+    const emitted = emit(
+      "Displaced Kelowna Residents Return Home",
+      "The displaced families of Kelowna are going home.",
+    );
+    expect(emitted.has("displaced kelowna")).toBe(true);
+  });
+
+  it("lets corpus capitalization outrank the lexicon (Sitting Bull)", () => {
+    // "Sitting" is a verb form and also the front half of a name. Here it is
+    // never lowercase and appears capitalized mid-sentence, so the §10.3 case
+    // evidence stands and the lexicon does not get to overrule it.
+    const emitted = emit(
+      "Kelowna Honours Sitting Bull",
+      "A statue of Sitting Bull was unveiled in Kelowna.",
+    );
+    expect(emitted.has("sitting bull")).toBe(true);
   });
 });
 
@@ -208,7 +277,7 @@ describe("scoring mechanisms in isolation", () => {
     // BREAKS an n-gram run rather than being skipped, so "new york" is
     // unreachable at any n and "york" stands in for it. Un-stopwording "new"
     // was measured and refused — the propriety gate admits a phrase on ONE
-    // name, so "new <name>" would then suppress the name itself (ADR-0006).
+    // name, so "new <name>" would then suppress the name itself (ADR-0007).
     const corpus = [
       article("Blackout Hits New York Again", "a.com", "Crews worked overnight in New York."),
       article("New York Mayor Answers Critics", "b.com", "Officials in New York promised a review."),

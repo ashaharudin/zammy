@@ -56,7 +56,8 @@ _Avoid_: term, tag, phrase
 
 **Term**:
 A proper noun, or a two-word phrase containing one, extracted from article headlines and ranked
-for the landing-page cloud. Generic words never qualify, however frequent — alone or paired.
+for the landing-page cloud. Generic words never qualify, however frequent — alone or paired — and
+neither does anything containing a verb: a term names something, it does not state something.
 Terms are output, keywords are input; clicking a term opens a topic. A term is a surface form,
 not a concept: "China" and "Chinese" are two terms and both may appear.
 _Avoid_: topic, keyword, trend, tag
