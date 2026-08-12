@@ -34,6 +34,7 @@ means "not supported."
 | `offset` | **ignored** (identical to control) | |
 | `sort_by` | **ignored** — no sort control exists | |
 | `start_date` alone | valid (open-ended window) | |
+| `start_date`/`end_date` bounds | **both inclusive** — closed `[start, end]`, second precision | §6e |
 | Extra response field | `source_category` (absent from OpenAPI spec) | |
 
 ## 2. Cloudflare blocks default library User-Agents
@@ -195,12 +196,63 @@ days; what changed is how much of it one CALL may span. Consequences taken into 
 - A reminder that upstream limits DRIFT. §1's table is a snapshot of 2026-08-04; treat any limit
   not enforced by our own pre-flight checks as subject to silent change.
 
+## 6e. `start_date` / `end_date` bounds are both INCLUSIVE (probed 2026-08-11)
+
+Probed to close a gap §1 left open: it verified that the date parameters *work* and §6d caught the
+range cap, but never measured **inclusivity at each end**. That matters because §6.3 slices coverage
+gaps into 7-day segments — if both bounds were exclusive, an article published exactly on a seam
+instant would never be returned while coverage was recorded across it. A silent hole, in the same
+class as the "full page-5 means truncated" bug: real data loss that reports no error.
+
+4 calls; recorded in `fixtures/search-date-bound-inclusivity.json`.
+
+Method: one discovery call over a closed day (`2026-08-08`) for `keywords=climate`, then pick a target
+article whose `published` instant is **unique** in that set (ties would make presence/absence
+ambiguous). With `P` = that instant, two 120-second probe windows place the target on each bound in
+turn:
+
+| Probe | Window | Target position | Result | Verdict |
+| --- | --- | --- | --- | --- |
+| `start_eq_P` | `[P, P+120s]` | oldest in window | returned, 1 row | `start_date` **inclusive** (`>=`) |
+| `end_eq_P` | `[P-120s, P]` | newest in window | returned, 1 row | `end_date` **inclusive** (`<=`) |
+| `start_eq_end_eq_P` | `[P, P]` | only member | returned, 1 row | degenerate window is a valid single-instant query |
+
+So the upstream window is a **closed interval `[start, end]`**.
+
+Two guards make the absence-side of this trustworthy rather than assumed:
+
+- **Truncation guard.** In `start_eq_P` the target is the *oldest* row, so under the 20-row page cap a
+  crowded window could push it off page 1 and fake an "exclusive" verdict. The probe therefore only
+  reads absence as exclusion when the window returned **fewer than 20 rows**; both windows returned 1,
+  so absence would have been meaningful. Encoded in the script as an explicit `INDETERMINATE` verdict
+  it never had to use.
+- **Precision check.** 20 rows over the 24-hour discovery window collapsed to 1 row over each
+  120-second window, so second-level bounds are genuinely honoured — not silently rounded to the day,
+  which would have made the whole result meaningless (and is the failure mode §1's bogus-parameter
+  control exists to catch).
+
+**Implication — the mismatch is safe, and load-bearing.** Our own windows are half-open `[from, to)`
+(ARCHITECTURE §6.3, and `tstzrange`'s default in §7.2); upstream's are closed. Asking for `[A, B)`
+therefore returns the article at `B` too. That surplus row is harmless — `ON CONFLICT (id) DO NOTHING`
+absorbs it — and recording coverage as `[A, B)` leaves `B` uncovered, so a later request re-fetches
+rather than trusting coverage it never earned. Both errors fall on the re-fetch side. The dangerous
+pairing was the inverse (exclusive upstream, inclusive coverage), and it is now ruled out by
+measurement rather than by assumption.
+
+Unmeasured: whether the bounds stay inclusive. §6d is the standing reminder that upstream limits
+drift, and this is a behaviour our own pre-flight checks do not enforce — so it is exactly the kind of
+thing that can change silently. The convention is written down (§6.3) precisely so a re-probe has
+something to contradict.
+
 ## 7. Quota cost of this exercise
 
 41 calls total; `x-ratelimit-remaining` went 999 → 977 over the measured span, day resetting at
 `2026-08-05T00:00:00+00:00`. Well within budget.
 
 The §6c follow-up (2026-08-10) spent 8 further calls; `x-ratelimit-remaining` ended at 992.
+
+The §6e follow-up (2026-08-11) spent 4 further calls; `x-ratelimit-remaining` ended at 914,
+`x-ratelimit-burst-remaining` at 56.
 
 ---
 

@@ -57,6 +57,7 @@ spec, which is incomplete and in places wrong.
 | **Max retrievable results** | **100 per query** (5 pages) |
 | **Max lookback** | **30 days** |
 | **Max date range per call** | **7 days** (drift: observed live 2026-08-11; the 2026-08-04 probe's single 30-day call now 400s — `date_range: Max range is 7 days`) |
+| **`start_date`/`end_date` bounds** | **both INCLUSIVE** — a closed `[start, end]` interval, honoured to the second (2026-08-11, PROBE §6e) |
 | Default sort | `published` DESC (undocumented, but consistent and page-stable) |
 | `domain` | supported |
 | `offset`, `sort_by` | silently ignored — no sort control exists |
@@ -447,7 +448,29 @@ bounds a proxy for what users feel; bounding wall-clock time bounds the thing it
 observed call, the default admits one call reliably and a second when upstream is fast, then defers the
 rest — so a cold search paints in well under a second instead of ~3.5s.
 
-Two subtleties worth naming, both direct consequences of probe data:
+**Window bounds are half-open everywhere we own; upstream's are not.** Every window in this system —
+requested, segment, recorded coverage — is **half-open `[from, to)`**: `>= from`, `< to`. One
+convention, stated once, so segment seams cannot be reasoned about two ways. `tstzrange` already
+defaults to `[)` (§7.2), so Postgres agrees with us for free.
+
+Upstream does **not**: `start_date`/`end_date` are both *inclusive* (§2, PROBE §6e). So asking for
+segment `[A, B)` returns the article published exactly at `B`. That surplus row is deliberately left
+alone, because the mismatch resolves in the safe direction:
+
+- The seam instant is **fetched twice** across adjacent segments `[A, B)` and `[B, C)`, and
+  `ON CONFLICT (id) DO NOTHING` (§7.4) makes the second sighting a no-op.
+- We record coverage as `[A, B)`, so `B` is never marked covered by the segment that merely
+  overlapped it — a later request touching `B` re-fetches rather than trusting coverage it does not
+  have.
+
+The inverse pairing is the one that would have bitten: exclusive upstream bounds under inclusive
+recorded coverage would leave the seam article unfetchable while coverage claimed the instant — a
+silent hole, in the same class as the page-5 truncation bug below: real data loss that reports no
+error. The probe ruled it out; the
+convention is what keeps it ruled out. **Do not "fix" the duplicate by recording closed coverage** —
+that trades a free no-op for that hole.
+
+Two further subtleties worth naming, both direct consequences of probe data:
 
 - **A full page-5 means "truncated", not "finished".** Treating it as complete would silently and
   permanently hide history behind the 100-cap — a data-loss bug that no error would ever report.
@@ -627,6 +650,12 @@ CREATE TABLE fetch_log (                       -- quota accounting + observabili
 spans are merged on write so the table stays small. Without it, we could not distinguish "no
 articles exist in this window" from "we never asked about this window" — and would either re-fetch
 constantly or show false gaps in the timeline.
+
+`span` is always written **half-open, `[from, to)`** — `tstzrange`'s default bounds, and the same
+convention §6.3 uses for requested and segment windows. Write it explicitly (`tstzrange(from, to,
+'[)')`) rather than leaning on the default: upstream's date bounds are *closed* (§2), so a reader who
+assumes the two agree will mis-reason about segment seams. §6.3 explains why the mismatch is the safe
+direction and must not be "fixed" here.
 
 ### 7.3 Timeline reads — keyset pagination over article groups
 
