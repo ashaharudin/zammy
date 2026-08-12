@@ -11,13 +11,12 @@ import { scoreTerms, type CorpusArticle } from "./term-scoring.js";
  * of one afternoon rather than a check on the mechanisms (§12).
  */
 
-const FIXTURE = new URL(
-  "../../../fixtures/search-keywordless-category-sample.json",
-  import.meta.url,
-).pathname;
+function fixturePath(name: string): string {
+  return new URL(`../../../fixtures/${name}`, import.meta.url).pathname;
+}
 
-function loadCorpus(): CorpusArticle[] {
-  const data = JSON.parse(readFileSync(FIXTURE, "utf8")) as {
+function loadCorpus(fixture: string): CorpusArticle[] {
+  const data = JSON.parse(readFileSync(fixturePath(fixture), "utf8")) as {
     calls: Array<{ news: unknown[] }>;
   };
   const raw = data.calls.flatMap((call) => call.news).map((item) => RawSighting.parse(item));
@@ -38,7 +37,7 @@ function loadCorpus(): CorpusArticle[] {
 const EMPTY_BASELINE = new Map<string, number>();
 
 describe("scoreTerms against the recorded keywordless sample (§10.3)", () => {
-  const corpus = loadCorpus();
+  const corpus = loadCorpus("search-keywordless-category-sample.json");
 
   // §10.3's three probe-demonstrated failures, asserted on the DAY-ONE
   // configuration — empty baseline — because that is when scoring degrades
@@ -98,6 +97,35 @@ describe("scoreTerms against the recorded keywordless sample (§10.3)", () => {
   });
 });
 
+describe("scoreTerms against the recorded latest-news sample (§10.1)", () => {
+  // The breadth sample's own corpus — the one the live cloud is mostly built
+  // from, and where the nonsense phrases were reported.
+  const top50 = scoreTerms(
+    loadCorpus("latest-news-v2-sample.json"),
+    EMPTY_BASELINE,
+  ).slice(0, 50);
+
+  it("emits no phrase of purely common words (the 'gas flows' class)", () => {
+    // Measured from this fixture before the propriety gate reached phrases:
+    // adjacent survivors of the stopword list, adding up to nothing anyone
+    // would search for.
+    const emitted = new Set(top50.map((t) => t.term));
+    for (const nonsense of [
+      "gas flows",
+      "flows rise",
+      "gas production",
+      "power play",
+      "shape tmk",
+    ]) {
+      expect(emitted.has(nonsense), `nonsense phrase "${nonsense}" survived`).toBe(false);
+    }
+
+    // The names this sample is genuinely about must still carry the cloud.
+    expect(emitted.has("gianni infantino")).toBe(true);
+    expect(emitted.has("world cup")).toBe(true);
+  });
+});
+
 describe("scoring mechanisms in isolation", () => {
   const article = (
     title: string,
@@ -105,22 +133,47 @@ describe("scoring mechanisms in isolation", () => {
     description: string | null = null,
   ): CorpusArticle => ({ title, description, sourceDomain: domain });
 
-  it("bigrams are terms of their own — and generic words survive ONLY inside them", () => {
+  it("a phrase needs one name to anchor it; two common words are not a topic", () => {
     const corpus = [
-      article("Climate policy shift announced", "a.com"),
-      article("New climate policy criticised", "b.com"),
+      article("Kelowna policy shift announced", "a.com", "The Kelowna policy drew praise."),
+      article("New Kelowna policy criticised", "b.com", "Critics of the Kelowna policy spoke."),
+      article("Climate policy shift announced", "a.com", "The climate policy debate continued."),
+      article("New climate policy criticised", "b.com", "Critics of the climate policy spoke."),
     ];
     const terms = scoreTerms(corpus, EMPTY_BASELINE);
-    const bigram = terms.find((t) => t.term === "climate policy");
-    expect(bigram).toBeDefined();
-    expect(bigram!.isBigram).toBe(true);
-    expect(bigram!.dfArticles).toBe(2);
+    const anchored = terms.find((t) => t.term === "kelowna policy");
+    expect(anchored).toBeDefined();
+    expect(anchored!.isBigram).toBe(true);
+    expect(anchored!.dfArticles).toBe(2);
 
-    // "climate" and "policy" are common nouns (seen lowercase in running
-    // text): as unigrams they are noise, as a phrase they are a topic.
+    // A common word rides along inside a phrase a name anchors — "policy"
+    // is noise alone, and "climate policy" is two pieces of noise adjacent.
     const emitted = new Set(terms.map((t) => t.term));
-    expect(emitted.has("climate")).toBe(false);
+    expect(emitted.has("climate policy")).toBe(false);
     expect(emitted.has("policy")).toBe(false);
+    expect(emitted.has("climate")).toBe(false);
+  });
+
+  it("drops a phrase of purely common words (slipped away)", () => {
+    // Measured failure (2026-08-11 dev cloud): "slipped away", "secretly
+    // moved" — verb phrases that mean nothing as topics, admitted because
+    // the propriety gate exempted phrases entirely.
+    const corpus = [
+      article(
+        "Suspect Slipped Away After Kelowna Raid",
+        "a.com",
+        "The suspect slipped away before officers reached Kelowna.",
+      ),
+      article(
+        "Witness Watched Man Slipped Away Near Kelowna",
+        "b.com",
+        "He slipped away down a lane beside Kelowna.",
+      ),
+    ];
+    const emitted = new Set(scoreTerms(corpus, EMPTY_BASELINE).map((t) => t.term));
+
+    expect(emitted.has("slipped away")).toBe(false);
+    expect(emitted.has("kelowna")).toBe(true);
   });
 
   it("suppresses a unigram subsumed by a surviving bigram (ben vs ben carroll)", () => {

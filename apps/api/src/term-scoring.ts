@@ -68,11 +68,11 @@ export function extractTerms(article: CorpusArticle): Set<string> {
  * per-domain cap applies only inside the score, damping single-outlet floods
  * that the domain gate alone lets through.
  *
- * Unigrams must additionally be PROPER NOUNS (§10.3): the day-one cloud
- * otherwise fills with generic vocabulary ("community", "finally") that the
- * baseline needs a week of history to suppress. Phrases stay eligible as
- * they are — "climate policy" is a topic even though both words alone are
- * noise.
+ * Every term must additionally carry a PROPER NOUN (§10.3): the day-one
+ * cloud otherwise fills with generic vocabulary ("community", "finally")
+ * that the baseline needs a week of history to suppress. One name anchors a
+ * phrase — "michigan senate" is a topic — but two common words adjacent are
+ * not ("slipped away", "gas flows").
  */
 export function scoreTerms(
   corpus: readonly CorpusArticle[],
@@ -108,7 +108,7 @@ export function scoreTerms(
 
   const scored: ScoredTerm[] = [];
   for (const [term, entry] of stats) {
-    if (!term.includes(" ") && !isProperNoun(term)) continue;
+    if (!term.split(" ").some(isProperNoun)) continue;
     const dfDomains = entry.byDomain.size;
     if (dfDomains < minDomains) continue;
 

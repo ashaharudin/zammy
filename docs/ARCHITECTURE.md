@@ -1000,8 +1000,10 @@ Body text is unavailable (§2), so terms come from `title` + `description` only.
 they appear in headlines" — an honest limitation, and headlines are dense with topical nouns, so it
 works better than it sounds.
 
-Unigrams **and bigrams**: headlines are short, and "climate policy" is a better topic than "climate"
-plus "policy" counted separately. Tokenization must survive identifiers — my probe's regex shredded
+Unigrams **and bigrams**: headlines are short, and "michigan senate" is a better topic than
+"michigan" plus "senate" counted separately — a phrase names the story more precisely than either
+word does, which is why §10.3 also lets a surviving phrase suppress the unigrams inside it.
+Tokenization must survive identifiers — my probe's regex shredded
 `CVE-2026-1234` into a `cve-` token that then ranked #1, which is exactly the class of bug that makes
 a cloud look broken.
 
@@ -1035,14 +1037,20 @@ So four mechanisms are **required for the first cut**, not deferred as polish:
   perennial news vocabulary is suppressed and genuinely unusual terms rise. This is what makes the
   cloud show *today* rather than *news in general*.
 - **A real stopword list** (plus min length, numeral and identifier filtering), not a hand-rolled set.
-- **Unigrams must be proper nouns; phrases are exempt.** The first live cloud confirmed what the
+- **Every term must carry a proper noun.** The first live cloud confirmed what the
   baseline can only fix a week in: generic vocabulary ("community", "finally", "rise") topped day
   one. With only headline text to work from, propriety comes from case evidence in running text — a
   term qualifies when it is capitalized mid-sentence at least once and NEVER seen lowercase, so
-  Title Case headlines prove nothing and prose betrays every common noun. Bigrams stay eligible as
-  they are: "climate policy" is a topic even though both words alone are noise. Weekdays and months
-  — grammatically proper, journalistically generic — are stopworded instead, since no case evidence
-  can catch them.
+  Title Case headlines prove nothing and prose betrays every common noun. **One qualifying word
+  anchors a phrase**: "michigan senate" and "trump tariffs" are topics, and the common word rides
+  along. Two common words adjacent are not — the second live cloud showed "slipped away" and
+  "secretly moved", verb phrases that survive stopwording, mean nothing as a topic, and lead
+  nowhere when clicked. This is a reversal: phrases were initially exempt on the strength of
+  "climate policy", and that example is the real cost — a topical phrase of two common nouns no
+  longer appears. Measured against the recorded latest-news sample, the exemption was paying for
+  `gas flows`, `flows rise`, `power play` and `shape tmk` to buy it, which is not a trade worth
+  keeping. Weekdays and months — grammatically proper, journalistically generic — are stopworded
+  instead, since no case evidence can catch them.
 - **A unigram subsumed by a surviving bigram is suppressed.** The live cloud showed "ben" beside
   "ben carroll" — the same story twice. When a bigram survives every gate, any unigram that is one
   of its words is dropped; the phrase is the more specific name for the topic.
@@ -1063,9 +1071,10 @@ cloud at ~40–50 terms, beyond which it becomes visual mush.
 **The baseline needs a week to exist**, which matters for launch: on day one `baseline_7d` is empty and
 scoring collapses to the raw frequency I just showed produces garbage. So the day-one cloud must lean on
 the mechanisms that work immediately — the `df_domains >= 2` gate, the per-domain cap, the proper-noun
-gate on unigrams, and a shipped stopword list seeded with generic news vocabulary ("report", "says",
+gate on every term, and a shipped stopword list seeded with generic news vocabulary ("report", "says",
 "after", "found", "earlier"…) — with the baseline improving it over the first week. The propriety gate
-does most of what makes day one presentable: names and phrases carry a cloud on their own.
+does most of what makes day one presentable: names, and the phrases built around them, carry a cloud
+on their own.
 
 ### 10.4 Storage and API
 
