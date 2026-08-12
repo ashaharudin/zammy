@@ -126,6 +126,33 @@ describe("scoreTerms against the recorded latest-news sample (§10.1)", () => {
   });
 });
 
+describe("wire-service and desk furniture (ADR-0006)", () => {
+  // Both recorded corpora together — `los angeles ap` only exists across the
+  // two, and the whole point of this class is that it clears the breadth gate
+  // by being reproduced across outlets rather than chosen by them.
+  const corpus = [
+    ...loadCorpus("latest-news-v2-sample.json"),
+    ...loadCorpus("search-keywordless-category-sample.json"),
+  ];
+  const emitted = new Set(scoreTerms(corpus, EMPTY_BASELINE).map((t) => t.term));
+
+  it("drops the words a newsroom writes about the article, not the story", () => {
+    // Measured before this list existed: all five of these were in the cloud,
+    // and `angeles ap` — the `LOS ANGELES (AP) —` dateline — ranked 12th of 33.
+    // Bare `ap` never was, being subsumed by `angeles ap`; it is asserted as a
+    // forward guard now that the phrase suppressing it is gone.
+    for (const furniture of ["angeles ap", "ap", "ceo", "daily", "rep", "weekly"]) {
+      expect(emitted.has(furniture), `desk furniture "${furniture}" survived`).toBe(false);
+    }
+  });
+
+  it("keeps the names the corpus is actually about", () => {
+    for (const real of ["donald trump", "gianni infantino", "world cup", "los angeles"]) {
+      expect(emitted.has(real), `"${real}" was lost to the stopword list`).toBe(true);
+    }
+  });
+});
+
 describe("scoring mechanisms in isolation", () => {
   const article = (
     title: string,
@@ -174,6 +201,23 @@ describe("scoring mechanisms in isolation", () => {
 
     expect(emitted.has("slipped away")).toBe(false);
     expect(emitted.has("kelowna")).toBe(true);
+  });
+
+  it("cannot reach a place name built on a stopword (new york)", () => {
+    // A known limit, pinned so it is not rediscovered as a bug: a stopword
+    // BREAKS an n-gram run rather than being skipped, so "new york" is
+    // unreachable at any n and "york" stands in for it. Un-stopwording "new"
+    // was measured and refused — the propriety gate admits a phrase on ONE
+    // name, so "new <name>" would then suppress the name itself (ADR-0006).
+    const corpus = [
+      article("Blackout Hits New York Again", "a.com", "Crews worked overnight in New York."),
+      article("New York Mayor Answers Critics", "b.com", "Officials in New York promised a review."),
+    ];
+    const emitted = new Set(scoreTerms(corpus, EMPTY_BASELINE).map((t) => t.term));
+
+    expect(emitted.has("new york")).toBe(false);
+    expect(emitted.has("new")).toBe(false);
+    expect(emitted.has("york")).toBe(true);
   });
 
   it("suppresses a unigram subsumed by a surviving bigram (ben vs ben carroll)", () => {

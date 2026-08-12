@@ -1007,6 +1007,13 @@ Tokenization must survive identifiers — my probe's regex shredded
 `CVE-2026-1234` into a `cve-` token that then ranked #1, which is exactly the class of bug that makes
 a cloud look broken.
 
+**And it stops at two.** Trigrams were measured against the recorded corpora and refused
+([ADR-0006](adr/0006-the-cloud-stops-at-two-word-phrases.md)): 858 distinct three-grams yield one
+that clears the gates, and it is a restatement of a phrase already in the cloud. The refusal is
+structural rather than a small-sample result — a trigram's article set is a subset of both its
+bigrams', so it can only tie on merit, and it out-ranks them only by having a smaller baseline to
+divide by.
+
 ### 10.3 Scoring — why the obvious approach fails
 
 I ran naive document-frequency over an 80-article live sample. The top terms were:
@@ -1037,6 +1044,11 @@ So four mechanisms are **required for the first cut**, not deferred as polish:
   perennial news vocabulary is suppressed and genuinely unusual terms rise. This is what makes the
   cloud show *today* rather than *news in general*.
 - **A real stopword list** (plus min length, numeral and identifier filtering), not a hand-rolled set.
+  It carries a second class beyond generic news vocabulary: **wire services, honorifics, mastheads and
+  desk furniture** — `ap`, `rep`, `ceo`, `daily`. These defeat the breadth gate rather than merely
+  surviving frequency, because `LOS ANGELES (AP) —` opens a wire story whatever it is about, so two
+  outlets carrying AP copy look like two newsrooms choosing a word
+  ([ADR-0006](adr/0006-the-cloud-stops-at-two-word-phrases.md)).
 - **Every term must carry a proper noun.** The first live cloud confirmed what the
   baseline can only fix a week in: generic vocabulary ("community", "finally", "rise") topped day
   one. With only headline text to work from, propriety comes from case evidence in running text — a
@@ -1108,6 +1120,12 @@ it already has. Redis-cached under `trending:<day>:<language>` for ~15 minutes.
 
 - Font size ∝ **`sqrt(score)`**, clamped to a `[12px, 56px]` range. Linear scaling makes the top term
   absurd and the tail illegible.
+- **And clamped again by LENGTH**, because d3-cloud drops a word too wide for the board instead of
+  shrinking it — silently, and the top-ranked term meets the bound first, since rank is what assigns
+  the largest font. Measured: `artificial intelligence` (23 chars) never places at 56px on a 700px
+  board. No term the recorded corpora emit is long enough to hit this, so the clamp is a guard, not
+  a repair; the word would stay in the `<ol>` either way, so the two views would disagree with
+  nothing to say why ([ADR-0006](adr/0006-the-cloud-stops-at-two-word-phrases.md)).
 - Each word is a real `<button>` that navigates to `/?q=<term>` — so the cloud feeds the
   demand-driven ingestion loop, and browsing becomes the mechanism that populates topics.
 - **Accessibility is not optional here.** A wordcloud is close to unusable for screen readers and
@@ -1218,8 +1236,11 @@ Resolved by design review, each with an ADR: the archive boundary and report-onl
 the dedup boundaries in both directions, and surrogate article identity
 ([0002](adr/0002-articles-are-deduplicated-stories-sightings-are-emissions.md)); Kysely over an ORM
 and migrations as a deploy step ([0003](adr/0003-kysely-and-hand-written-sql-instead-of-an-orm.md));
-and the package boundary that keeps server concerns out of the browser bundle
-([0004](adr/0004-shared-contains-only-what-ships-to-the-browser.md)). Also settled without needing an
+the package boundary that keeps server concerns out of the browser bundle
+([0004](adr/0004-shared-contains-only-what-ships-to-the-browser.md)); how article grouping decides
+two headlines are one story ([0005](adr/0005-headline-tokens-not-embeddings-decide-article-grouping.md));
+and the cloud's n-gram ceiling, with the stopword class and the render bound that came out of
+measuring it ([0006](adr/0006-the-cloud-stops-at-two-word-phrases.md)). Also settled without needing an
 ADR, being cheap to reverse: `APP_TIMEZONE` rather than UTC for the cloud's day, closed days freeze
 (§10.1), `DEFAULT_LANGUAGE=en` (§6.1), and no coverage-gap map (§1).
 
