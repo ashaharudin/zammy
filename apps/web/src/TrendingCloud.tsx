@@ -4,6 +4,7 @@ import cloud from "d3-cloud";
 import type { TrendingResponse, TrendingTerm } from "@zammy/shared";
 import { fetchTrending } from "./api.js";
 import { MONO } from "./theme.js";
+import { maxPlaceableFont } from "./wordFit.js";
 
 /**
  * The landing-page wordcloud (ARCHITECTURE 10.5): the day's most-referenced
@@ -78,7 +79,14 @@ interface PlacedWord {
   size: number;
 }
 
-/** Font ∝ sqrt(score), clamped — linear makes the top term absurd (§10.5). */
+/**
+ * Font ∝ sqrt(score), clamped — linear makes the top term absurd (§10.5).
+ *
+ * The second clamp is by LENGTH, and it is not cosmetic: a word too wide for
+ * the board is dropped by d3-cloud without a word of complaint, and the term
+ * at risk is always the highest-scoring one, because rank is what assigns
+ * FONT_MAX. Sizing it down keeps it in the cloud (see wordFit.ts).
+ */
 function fontSizes(terms: readonly TrendingTerm[]): Map<string, number> {
   const roots = terms.map((t) => Math.sqrt(Math.max(t.score, 0)));
   const min = Math.min(...roots);
@@ -87,7 +95,10 @@ function fontSizes(terms: readonly TrendingTerm[]): Map<string, number> {
   return new Map(
     terms.map((t, i) => [
       t.term,
-      FONT_MIN + ((roots[i]! - min) / span) * (FONT_MAX - FONT_MIN),
+      Math.min(
+        FONT_MIN + ((roots[i]! - min) / span) * (FONT_MAX - FONT_MIN),
+        maxPlaceableFont(t.term.length, LAYOUT_WIDTH, FONT_MIN),
+      ),
     ]),
   );
 }
