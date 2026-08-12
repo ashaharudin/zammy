@@ -30,22 +30,22 @@ export interface SegmentJob {
 }
 
 /**
- * The §10.1 daily breadth sample, triggered by the first landing-page visitor
- * of the day. One per (day, language): the Redis first-visitor lock elects
- * the enqueuer and the jobId dedups whatever slips past it.
+ * The §10.1 breadth sample, triggered by the first landing-page visitor after
+ * the last snapshot staled. One per language: the Redis first-visitor lock
+ * elects the enqueuer and the jobId dedups whatever slips past it. No day key
+ * — the window rolls with the clock (ADR-0008), so consecutive samples are the
+ * same job identity and the freshness lock is what spaces them.
  */
 export interface SampleJob {
   kind: "sample";
-  /** APP_TIMEZONE day key, YYYY-MM-DD (§10.1). */
-  day: string;
   language: string;
 }
 
 export type IngestJob = SegmentJob | SampleJob;
 
 /** The pending-set identity a trending read polls (§10.4 meta.ingest). */
-export function samplePendingId(job: Pick<SampleJob, "day" | "language">): string {
-  return `sample_${job.day}_${job.language}`;
+export function samplePendingId(job: Pick<SampleJob, "language">): string {
+  return `sample_${job.language}`;
 }
 
 /** Entries older than this are presumed lost to a crashed consumer (see below). */

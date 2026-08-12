@@ -21,8 +21,9 @@ the upstream actually does, and [docs/adr/](./adr/) for decisions and the altern
   populates it, everyone after reads from storage.
 - Accumulate articles over time so a topic's timeline deepens beyond what one upstream call returns —
   driven by actual use, not by a scheduled watchlist (§9).
-- **A landing page wordcloud of the day's most-referenced terms**, each word sized by how many
-  *unique articles* reference it, and clickable to run that search (§10). Note the vocabulary: a
+- **A landing page wordcloud of the last 24 hours' most-referenced terms**, each word sized by how
+  many *unique articles* reference it and how recently, and clickable to run that search (§10). The
+  window rolls continuously rather than resetting at midnight. Note the vocabulary: a
   **term** is a word extracted from headlines; a **topic** is a saved canonical query. They meet when
   a click turns one into the other.
 - A clean, fast front end; keywords in, timeline out.
@@ -746,7 +747,10 @@ order is the display order; `ORDER BY` in §7.3 is the only source of truth.
 ### 7.5 Retention
 
 A nightly job reports articles (and their sightings) older than `RETENTION_DAYS` (default 90)
-belonging to no recently-hit topic, plus topics with `last_hit_at` older than 30 days.
+belonging to no recently-hit topic, plus topics with `last_hit_at` older than 30 days. The same job
+**deletes** `term_snapshots` rows older than `BASELINE_WINDOW_DAYS + 1` (§10.4) — the one derived
+table that grows without bound. Deleting derived rows is not what ADR-0001 guards against: the
+snapshots are recomputable in principle and worthless once outside the baseline window.
 
 **It reports and does not delete.** Point-in-time recovery protects against accidents, not against
 this job doing exactly what it was told — a legitimate prune noticed three months later is outside
@@ -916,9 +920,10 @@ this is the main thing the model adds rather than removes:
 
 ## 10. Landing page — topic wordcloud
 
-The day's most-referenced topics, each word sized by the number of unique articles referencing it, and
-clicking a word runs that search. It doubles as the answer to cold start (§9.3): the landing page is
-never blank, and it gives users something to act on before they know what to type.
+The last 24 hours' most-referenced topics, each word sized by how many unique articles reference it
+and how recently they did, and clicking a word runs that search. It doubles as the answer to cold
+start (§9.3): the landing page is never blank, and it gives users something to act on before they
+know what to type.
 
 I probed this feature's assumptions before specifying it (4 calls). The corpus mechanism works, and
 **the naive scoring does not** — see §10.3, which is the part worth reading. The probe exercised
@@ -926,13 +931,23 @@ keywordless `/search`; the sample has since moved to `/latest-news` (below), whi
 arithmetic but none of the scoring findings — those are properties of headline corpora, not of the
 endpoint that fetched them.
 
-### 10.1 Corpus — where the day's articles come from
+**The window rolls; it does not reset.** The cloud covers `TREND_WINDOW_HOURS` (default 24) back from
+now, and an article's contribution decays with its age inside that window (§10.3). This replaces an
+earlier design in which the cloud aggregated a fixed `APP_TIMEZONE` calendar day and froze when the
+day closed — what that cost, and what the roll buys, is
+[ADR-0008](adr/0008-the-cloud-rolls-over-a-weighted-24-hour-window.md). `APP_TIMEZONE` does not
+disappear with it: article grouping still bounds a group by the local calendar day (§7.4,
+[ADR-0005](adr/0005-headline-tokens-not-embeddings-decide-article-grouping.md)). The cloud simply
+stops being the thing that needs a midnight.
+
+### 10.1 Corpus — where the window's articles come from
 
 Demand-driven ingestion alone cannot feed this: a wordcloud must know what is prominent *before*
 anyone searches. So the corpus is a union of two sources:
 
-1. **Everything already stored for today** — articles with `published` inside the current local day,
-   accumulated from user searches. Free, zero upstream calls, and it broadens through the day.
+1. **Everything already stored inside the window** — articles with `published` in
+   `[now - TREND_WINDOW_HOURS, now)`, accumulated from user searches. Free, zero upstream calls, and
+   it broadens as people use the product.
 2. **A breadth sample from `/v2/latest-news`** — the upstream's own editorially-mixed feed of the
    newest ~20 articles per page, `SAMPLE_PAGES` pages per sample (default 2, ~40 articles).
    Probed (PROBE-FINDINGS 6c): v2 accepts a **comma-separated multi-category filter** — one call
@@ -975,24 +990,32 @@ remains the one unmeasured input; the cadence knob absorbs it either way.
 "First visitor" still needs a **Redis lock** (`lock:sample:<language>`, TTL = the freshness window) —
 a no-op in single-replica local dev, but without it the first concurrent requests across multiple
 Fargate tasks (§4.1) would each enqueue a sample. The waste is smaller than under the old 12–24 call
-design, but the 60/60s burst budget still says one election, not N.
+design, but the 60/60s burst budget still says one election, not N. The key carries no day: cadence
+is now governed by the TTL alone, where the frozen-day design had to key the lock per day so that a
+rollover did not leave the new day's first visitor waiting out last night's TTL.
 
-**"Today" is the `APP_TIMEZONE` day, not the UTC day.** Under UTC, a Vancouver afternoon is already
-tomorrow, so the most-visited surface in the product would show a near-empty cloud every day after
-about 5pm local. A configured timezone keeps the stable daily aggregate that the 7-day baseline and
-the Redis cache are built on while fixing that.
+**There is no midnight.** The window ends at `now` on every recompute, so the cloud is never emptier
+at 5pm than at 9am and nothing has to be true of the local calendar for it to be right. This is what
+retires the old design's timezone problem rather than solving it: under a UTC calendar day a
+Vancouver afternoon was already tomorrow and the landing page went near-empty after about 5pm local,
+which is why `APP_TIMEZONE` existed here at all.
 
-**Today's aggregate is recomputed on each sample; a day freezes once it closes.** Articles for
-yesterday can still arrive — a slow feed, a deferred backfill — and they are still stored and still
-appear in timelines, but they do not retroactively rewrite a closed day's cloud. A baseline built on
-shifting history cannot be reasoned about, and nobody looks at Tuesday's cloud on Thursday.
+**The aggregate is recomputed on each sample, and there is nothing to freeze.** Every recompute
+re-reads the window from `articles`, so a late-arriving article — a slow feed, a deferred backfill —
+counts from the moment it lands, at whatever weight its age gives it, and ages out of its own accord.
+The frozen-day design had to refuse those articles to keep its baseline reasonable about; a rolling
+window has no closed period for them to rewrite. What replaces the freeze is the **snapshot history**
+the baseline reads (§10.3): each recompute records its raw per-term counts under the hour it ran, and
+those rows are immutable once written. History is a record of what we computed, not a claim about
+what a period contained.
 
 One caveat carried over from the probe, sharper now: `/latest-news` is a snapshot of *this moment's*
-news, with no way to ask about earlier in the day at all. The day's corpus is therefore an
-**accumulation of hourly snapshots plus whatever user searches stored** — a rolling record of what
-was prominent while people were looking, not a census of the day. Hours with no visitors are simply
-absent. Worth saying plainly, because "top topics of the day" implies more completeness than the
-source can give.
+news, with no way to ask about earlier at all. The window's corpus is therefore an **accumulation of
+hourly snapshots plus whatever user searches stored** — a rolling record of what was prominent while
+people were looking, not a census of the last 24 hours. Hours with no visitors are simply absent.
+Worth saying plainly, because "top topics right now" implies more completeness than the source can
+give — though the roll does narrow the gap the old design had, where a day's cloud was carried
+disproportionately by whichever hours happened to be busy and stayed that way until midnight.
 
 ### 10.2 Term extraction
 
@@ -1032,7 +1055,7 @@ Three distinct failures, all of which the design has to answer:
    are frequent in *all* news, so raw frequency can never distinguish them from real topics.
 3. **A tokenization artifact ranked first** (`cve-`).
 
-So four mechanisms are **required for the first cut**, not deferred as polish:
+So six mechanisms are **required for the first cut**, not deferred as polish:
 
 - **Distinct source domains, not just article count.** A term in 8 articles from one outlet is not a
   topic of the day; a term in 8 articles across 6 outlets is. Terms need `df_domains >= 2` to appear
@@ -1040,9 +1063,20 @@ So four mechanisms are **required for the first cut**, not deferred as polish:
   unique-article count remains the displayed number and the size input, but distinct-domain breadth
   gates and dampens it. Without that gate the feature does not work; flagging it rather than
   silently redefining the metric.
-- **A rolling baseline.** Score today's frequency against that term's trailing 7-day mean, so
+- **A rolling baseline.** Score the window's frequency against what that term normally does, so
   perennial news vocabulary is suppressed and genuinely unusual terms rise. This is what makes the
-  cloud show *today* rather than *news in general*.
+  cloud show *now* rather than *news in general*. Its input is the **hourly snapshot history**
+  (§10.4): every recompute records each surviving term's raw window count under the hour it ran, and
+  the baseline is the mean of those counts over the `BASELINE_WINDOW_DAYS` (default 7) of snapshots
+  ending one window-length ago. The exclusion is the point — a snapshot taken less than
+  `TREND_WINDOW_HOURS` ago shares most of its corpus with the live window, so including it would let
+  a term suppress itself. Two properties follow from sampling being visit-driven. Absence *within* a
+  recorded snapshot counts as a zero, because a snapshot we computed is evidence the term was not
+  prominent then; an hour with **no** snapshot is not an observation at all, so the divisor is the
+  number of snapshots actually recorded in the range, not the number of hours in it. And a genuine
+  one-day story is not one snapshot but roughly twenty-four consecutive ones, since the window drags
+  it along — so yesterday's big story arrives today already carrying a real baseline, which is the
+  suppression working, not a bug.
 - **A real stopword list** (plus min length, numeral and identifier filtering), not a hand-rolled set.
   It carries a second class beyond generic news vocabulary: **wire services, honorifics, mastheads and
   desk furniture** — `ap`, `rep`, `ceo`, `daily`. These defeat the breadth gate rather than merely
@@ -1079,20 +1113,44 @@ So four mechanisms are **required for the first cut**, not deferred as polish:
   "ben carroll" — the same story twice. When a bigram survives every gate, any unigram that is one
   of its words is dropped; the phrase is the more specific name for the topic.
 
+**And an article's weight decays with its age.** A flat 24-hour window would rank a story that broke
+23 hours ago exactly level with one breaking now, and then drop it off a cliff an hour later — the
+cliff being visible precisely because the window slides continuously rather than in daily steps. So
+each article contributes
+
+```
+w(age) = 0.5 ^ (age_hours / TERM_HALF_LIFE_HOURS)     TERM_HALF_LIFE_HOURS default 8
+```
+
+which is `1.0` for something published this minute and `≈0.125` at the 24-hour edge: still present,
+clearly outranked, and fading rather than vanishing. Exponential over linear because the interesting
+distinction is at the recent end — a linear ramp separates a 1-hour-old story from a 5-hour-old one
+by 17%, which is not a distinction a reader would recognise. Both knobs want tuning against real
+traffic, and they interact: a half-life much shorter than the window makes the older half of the
+window decorative, and one much longer makes the whole thing flat again.
+
 Starting formula, explicitly expected to need tuning against real data:
 
 ```
-score(term) = sqrt(df_domains) × df_articles / (baseline_7d + k)
+score(term) = sqrt(df_domains) × weighted_df / (baseline + k)
 ```
 
-with `df_articles` counted over **`articles`, never `sightings`** — the 50×-repeated
-link-roundup post would otherwise weight its headline terms 50 times and swamp everything. The
-collapse earns its keep twice.
+with `weighted_df` summing `w(age)` over the **`articles`** carrying the term — never `sightings`,
+because the 50×-repeated link-roundup post would otherwise weight its headline terms 50 times and
+swamp everything. The collapse earns its keep twice.
 
-Additional guards: cap any single domain's contribution to `df_articles` (default 3), and cap the
-cloud at ~40–50 terms, beyond which it becomes visual mush.
+Additional guards: cap any single domain's contribution (default 3 articles — under weighting, its
+**most recent** three, which is the same rule read through the decay), and cap the cloud at ~40–50
+terms, beyond which it becomes visual mush.
 
-**The baseline needs a week to exist**, which matters for launch: on day one `baseline_7d` is empty and
+**The weight moves the size, never the number.** `df_articles` — the count the API returns as
+`uniqueArticles` and the accessible `<ol>` prints — stays the true, uncapped, unweighted number of
+distinct articles in the window. A reader who sees "14 articles" can go and find fourteen articles;
+a decayed 6.3 rounded to 6 would be a number that answers no question anyone asked. The same
+unweighted count is what the snapshot history records, so the baseline compares like with like
+across time instead of comparing a term against how recent it happened to be when last observed.
+
+**The baseline needs a week to exist**, which matters for launch: on day one it is empty and
 scoring collapses to the raw frequency I just showed produces garbage. So the day-one cloud must lean on
 the mechanisms that work immediately — the `df_domains >= 2` gate, the per-domain cap, the proper-noun
 gate on every term, and a shipped stopword list seeded with generic news vocabulary ("report", "says",
@@ -1103,28 +1161,61 @@ on their own.
 ### 10.4 Storage and API
 
 ```sql
-CREATE TABLE daily_terms (
-  day          date    NOT NULL,
-  language     text    NOT NULL,
-  term         text    NOT NULL,
-  is_bigram    boolean NOT NULL,
-  df_articles  int     NOT NULL,       -- distinct articles (the displayed "unique articles")
-  df_domains   int     NOT NULL,       -- distinct source domains
-  score        real    NOT NULL,
-  PRIMARY KEY (day, language, term)
+-- The live cloud: ONE row set per language, replaced wholesale on each recompute.
+-- There is no day column, because there is no day — `window_start`/`window_end`
+-- record which 24 hours these numbers describe, and the next recompute replaces them.
+CREATE TABLE trending_terms (
+  language     text        NOT NULL,
+  term         text        NOT NULL,
+  is_bigram    boolean     NOT NULL,
+  df_articles  int         NOT NULL,   -- distinct articles (the displayed "unique articles")
+  df_domains   int         NOT NULL,   -- distinct source domains
+  weighted_df  real        NOT NULL,   -- recency-weighted and per-domain-capped; the size input
+  score        real        NOT NULL,
+  window_start timestamptz NOT NULL,
+  window_end   timestamptz NOT NULL,
+  PRIMARY KEY (language, term)
 );
-CREATE INDEX daily_terms_top_idx ON daily_terms (day, language, score DESC);
+CREATE INDEX trending_terms_top_idx ON trending_terms (language, score DESC);
 
--- Trailing mean per term, updated as days roll over; the suppressor for generic vocabulary.
+-- Hourly snapshot history — the baseline's only input, and the only thing here
+-- that accumulates. RAW counts: never weighted, never capped, so a mean over them
+-- compares like with like (§10.3). Immutable once written; pruned past the window.
+CREATE TABLE term_snapshots (
+  bucket_hour timestamptz NOT NULL,
+  language    text        NOT NULL,
+  term        text        NOT NULL,
+  df_articles int         NOT NULL,
+  PRIMARY KEY (bucket_hour, language, term)
+);
+CREATE INDEX term_snapshots_prune_idx ON term_snapshots (bucket_hour);
+
+-- Materialized trailing mean per term, recomputed from term_snapshots on each
+-- sample; the suppressor for generic vocabulary. Read whole into memory to score.
 CREATE TABLE term_baseline (
-  language text, term text, mean_df real, updated_on date,
+  language text, term text, mean_df real, updated_at timestamptz,
   PRIMARY KEY (language, term)
 );
 ```
 
-`GET /api/v1/trending?day=&language=&limit=50` → `[{ term, score, uniqueArticles, sourceCount }]`,
-plus the same `meta.ingest` block as §6.1 so the front end can show a warming cloud with the machinery
-it already has. Redis-cached under `trending:<day>:<language>` for ~15 minutes.
+Two recomputes inside the same hour write the same `bucket_hour`; the later one wins by upsert, so
+the history holds at most one observation per hour per language however often the sampler runs.
+Snapshots older than `BASELINE_WINDOW_DAYS + 1` are pruned by the nightly chore (§7.5) — the one
+table here that would otherwise grow without bound, and unlike article data it is derived, so
+deleting it is not the irreversible act ADR-0001 guards against.
+
+`GET /api/v1/trending?language=&limit=50` → `{ windowStart, windowEnd, language, terms: [{ term,
+isBigram, score, uniqueArticles, sourceCount }], meta }`, with the same `meta.ingest` block as §6.1
+so the front end can show a warming cloud with the machinery it already has. Redis-cached under
+`trending:<language>` for ~15 minutes.
+
+**There is no `day` parameter and no archive read.** The old contract took `?day=` and could serve a
+closed day; a rolling window has no addressable periods, and the snapshot history is deliberately not
+a substitute — it stores raw counts for the baseline, not scored clouds, so it cannot reconstruct
+what the cloud showed at 3pm on Tuesday. That is a capability the roll gives up
+([ADR-0008](adr/0008-the-cloud-rolls-over-a-weighted-24-hour-window.md)), and nothing in v1 asked for
+it. The cache TTL is now the only thing that makes two readers a few minutes apart see the same
+cloud, where the day key used to guarantee it for the whole day.
 
 ### 10.5 Rendering
 
@@ -1144,7 +1235,11 @@ it already has. Redis-cached under `trending:<day>:<language>` for ~15 minutes.
   keyboard-only navigation, so the same data renders as an ordered `<ol>` of terms with their article
   counts — visually hidden by default, toggleable for everyone (it is genuinely useful sighted, too).
   Font size is decorative; the count is the accessible signal. Colour never carries meaning on its own.
-- Deterministic layout seed per `(day, language)`, so the cloud does not reshuffle on every poll.
+- Deterministic layout seed **per `language`**, so the cloud does not reshuffle on every poll. This
+  matters more than it did: the seed used to key on `(day, language)` and the day was stable for
+  hours, whereas a rolling window changes its `windowEnd` on every single response. Seeding on
+  anything derived from the window would reshuffle the whole board each poll — the layout must be
+  a function of the terms, not of when they were counted.
 
 ---
 
@@ -1218,7 +1313,7 @@ it already has. Redis-cached under `trending:<day>:<language>` for ~15 minutes.
 | 3 | Query Service: canonicalization, coverage-gap planning with adaptive subdivision, single-flight, Redis page cache, **plus the in-process job queue and `meta.ingest` contract** — the deadline-bounded fill (§6.3) produces deferred work by construction, so the queue lands here, not later. |
 | 4 | Front end: search → timeline → infinite scroll → freshness states → progressive fill (§6.5). |
 | 5 | Refresh-on-read, adaptive subdivision backfill, budget guards (§9.4), retention, metrics. |
-| 5b | **Wordcloud (§10):** breadth sample, term aggregation with domain-breadth gating and rolling baseline, `/api/v1/trending`, d3-cloud landing page with accessible list equivalent. Scorer tested against `fixtures/search-keywordless-category-sample.json` including the empty-baseline day-one case. |
+| 5b | **Wordcloud (§10):** breadth sample, term aggregation over a rolling recency-weighted 24h window with domain-breadth gating and a snapshot-fed baseline, `/api/v1/trending`, d3-cloud landing page with accessible list equivalent. Scorer tested against `fixtures/search-keywordless-category-sample.json` including the empty-baseline day-one case. |
 | 5d | **Grouping maintenance:** `articles.tokens_version`, and `pnpm regroup [--days=N] [--tokens-only]` to re-derive stored tokens and re-run the grouping decision for groups of one after a rule change (ADR-0005). |
 | 5c | **Article grouping (§14.3):** `group_id` / `group_published` / `title_tokens` on `articles`, write-time grouping after the collapse, the keyset moved onto the group axis, per-topic representative from the source-authority list, and the "related" disclosure in the timeline. |
 | 6 *(later)* | **AWS deploy:** Terraform/CDK, Fargate task definitions, RDS + ElastiCache, secret wiring, migration-on-deploy (§4.1). |
@@ -1255,8 +1350,10 @@ the verb lexicon that keeps predicates out of the cloud
 ([0006](adr/0006-a-curated-verb-lexicon-keeps-predicates-out-of-the-cloud.md)); and the cloud's n-gram
 ceiling, with the stopword class and the render bound that came out of measuring it
 ([0007](adr/0007-the-cloud-stops-at-two-word-phrases.md)). Also settled without needing an
-ADR, being cheap to reverse: `APP_TIMEZONE` rather than UTC for the cloud's day, closed days freeze
-(§10.1), `DEFAULT_LANGUAGE=en` (§6.1), and no coverage-gap map (§1).
+ADR, being cheap to reverse: `DEFAULT_LANGUAGE=en` (§6.1) and no coverage-gap map (§1). Two entries
+that were on this list — `APP_TIMEZONE` rather than UTC for the cloud's day, and closed days freeze —
+have since been reversed and needed an ADR after all: the cloud rolls over a weighted 24-hour window
+([0008](adr/0008-the-cloud-rolls-over-a-weighted-24-hour-window.md)), which retires both.
 
 Resolved by decision: **deployment target is AWS** (ECS Fargate + RDS + ElastiCache), with Docker
 Compose as the local development environment (§4.1). Correcting the earlier claim that the deployment
@@ -1426,7 +1523,7 @@ Still open:
    The workable design was: at read time, merge two unigrams when they share a 4-character prefix
    **and** their embeddings exceed a measured cosine threshold; the higher-ranked term survives, the
    other is dropped with no transfer of counts (matching the bigram-subsumption rule in §10.3), with
-   over-fetch from `daily_terms` to refill the freed slot. Both conditions are load-bearing and cover
+   over-fetch from `trending_terms` to refill the freed slot. Both conditions are load-bearing and cover
    each other's blind spot: orthography alone merges `iran`/`iraq` and `austria`/`australia`;
    embeddings alone merge `trump`/`biden` and `israel`/`palestine`, because they measure *relatedness*,
    not *sameness*. Neither is safe on its own, which is why the cheap version of this feature does

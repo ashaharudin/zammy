@@ -21,16 +21,21 @@ export const TrendingTerm = z.object({
 });
 export type TrendingTerm = z.infer<typeof TrendingTerm>;
 
+/**
+ * No `day`: the cloud rolls over a window ending now (ADR-0008), so there are
+ * no addressable periods to ask for. A stale `?day=` from the old contract is
+ * stripped here rather than rejected — the bookmark lands on the live cloud.
+ */
 export const TrendingQuery = z.object({
-  /** UTC day. Defaults to today; the API's own quota also resets at UTC midnight. */
-  day: z.iso.date().optional(),
   language: z.string().min(2).max(8).default("en"),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 export type TrendingQuery = z.infer<typeof TrendingQuery>;
 
 export const TrendingResponse = z.object({
-  day: z.iso.date(),
+  /** The window these counts describe: [windowStart, windowEnd). */
+  windowStart: z.iso.datetime(),
+  windowEnd: z.iso.datetime(),
   language: z.string(),
   terms: z.array(TrendingTerm),
   meta: ResponseMeta,

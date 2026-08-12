@@ -4,7 +4,7 @@ import { TrendingCloud, useTrending } from "./TrendingCloud.js";
 import { searchPlaceholder } from "./searchPlaceholder.js";
 
 /**
- * The empty state: the day's wordcloud with the command-bar prompt scaled up
+ * The empty state: the rolling 24-hour wordcloud with the command-bar prompt scaled up
  * and centered beneath it (ARCHITECTURE 10) — the landing page is never
  * blank, and the cloud gives users something to click before they know what
  * to type (§9.3 cold start).

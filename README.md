@@ -1,7 +1,8 @@
 # Zammy
 
 A news aggregator: keywords in, a time-ordered timeline of headlines out, with a landing-page
-wordcloud of the day's most-referenced topics. Backed by [Currents API](https://currentsapi.services).
+wordcloud of the last 24 hours' most-referenced topics. Backed by
+[Currents API](https://currentsapi.services).
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the design, and why it is shaped this way.
 - **[docs/PROBE-FINDINGS.md](docs/PROBE-FINDINGS.md)** — what 45 live API calls revealed. Read this

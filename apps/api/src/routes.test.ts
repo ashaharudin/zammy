@@ -24,11 +24,15 @@ afterEach(async () => {
 
 /**
  * Fictional, fixture-era clock. A real-clock harness would share its
- * trending day — and therefore the sample lock — with whatever the trending
- * suite or a local dev server is doing on the actual calendar day, and those
- * collide through the one Redis everything here deliberately shares.
+ * trending window with whatever the trending suite or a local dev server is
+ * doing, and those collide through the one Redis everything here shares. The
+ * sample lock is no longer day-keyed (ADR-0008), so the purge above is what
+ * keeps this suite independent.
  */
 const ROUTES_NOW = new Date("2026-08-06T12:00:00.000Z");
+
+/** This suite's own cloud, for the shared-Redis reason above. */
+const TRENDING_LANG = "pt";
 
 async function setup(): Promise<void> {
   harness = await createTestHarness({}, ROUTES_NOW);
@@ -36,10 +40,11 @@ async function setup(): Promise<void> {
   const trendingDeps: TrendingDeps = {
     ...harness.deps,
     trending: {
-      appTimezone: "UTC",
       sampleCategories: ["science_technology", "politics_government"],
       samplePages: 1,
       sampleRefreshMinutes: 60,
+      windowHours: 24,
+      halfLifeHours: 8,
       baselineWindowDays: 7,
     },
   };
@@ -48,10 +53,11 @@ async function setup(): Promise<void> {
   registerMetricsRoute(app, harness.metrics);
   await app.ready();
 
-  // Day-keyed Redis state (sample lock, trending cache) outlives ephemeral
-  // test databases; clear this suite's fictional day so reruns start fresh.
-  const today = ROUTES_NOW.toISOString().slice(0, 10);
-  await harness.redis.del(`lock:sample:${today}:en`, `trending:${today}:en`);
+  // Sample lock and trending cache outlive ephemeral test databases; clear
+  // them so reruns start fresh. Both are keyed by LANGUAGE alone now
+  // (ADR-0008), so this suite uses its own — purging "en" mid-run would
+  // re-elect a sample underneath the trending suite running beside it.
+  await harness.redis.del(`lock:sample:${TRENDING_LANG}`, `trending:${TRENDING_LANG}`);
 
   // Deterministic fingerprints collide with previous runs via shared Redis.
   const canonical = canonicalize(
@@ -156,26 +162,36 @@ describe("GET /api/v1/reference", () => {
 });
 
 describe("GET /api/v1/trending", () => {
-  it("answers with the §10.4 contract and queues the day's sample", async () => {
+  it("answers with the §10.4 contract and queues a sample", async () => {
     await setup();
 
-    const response = await app.inject({ method: "GET", url: "/api/v1/trending" });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/trending?language=${TRENDING_LANG}`,
+    });
 
     expect(response.statusCode).toBe(200);
     const body = TrendingResponse.parse(response.json()); // shared contract IS the assertion
-    expect(body.language).toBe("en");
-    // A fresh day: the cloud warms behind this very request (§10.1).
+    expect(body.language).toBe(TRENDING_LANG);
+    // The response says which 24 hours it describes, ending now (ADR-0008).
+    expect(body.windowEnd).toBe(ROUTES_NOW.toISOString());
+    expect(Date.parse(body.windowEnd) - Date.parse(body.windowStart)).toBe(24 * 3_600_000);
+    // A cold cloud warms behind this very request (§10.1).
     expect(body.meta.ingest.state).toBe("in_progress");
     expect(body.meta.ingest.pendingJobs).toBeGreaterThanOrEqual(1);
   });
 
-  it("rejects a malformed day without touching anything", async () => {
+  it("ignores a stale ?day= rather than 400ing a bookmark", async () => {
+    // The parameter is gone (ADR-0008) and there is no archive to serve. A
+    // link saved under the old contract should still land on the live cloud,
+    // not on an error page.
     await setup();
     const response = await app.inject({
       method: "GET",
-      url: "/api/v1/trending?day=not-a-day",
+      url: `/api/v1/trending?language=${TRENDING_LANG}&day=2026-08-01`,
     });
-    expect(response.statusCode).toBe(400);
+    expect(response.statusCode).toBe(200);
+    expect(TrendingResponse.parse(response.json()).windowEnd).toBe(ROUTES_NOW.toISOString());
   });
 });
 

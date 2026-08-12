@@ -112,9 +112,30 @@ const EnvSchema = z
     SAMPLE_PAGES: z.coerce.number().int().min(1).max(5).default(2),
 
     /**
-     * The wordcloud's calendar day (ARCHITECTURE 10.1). Under UTC a Vancouver
-     * afternoon is already tomorrow, and the landing page would go near-empty
-     * every day after ~5pm local. IANA name, validated against Intl.
+     * How far back the wordcloud looks (ARCHITECTURE 10.1). The window rolls
+     * with the clock rather than resetting at midnight (ADR-0008), so this is
+     * the only thing that decides what "now" covers.
+     */
+    TREND_WINDOW_HOURS: z.coerce.number().int().min(1).max(168).default(24),
+
+    /**
+     * Recency half-life inside that window (§10.3). An article contributes
+     * `0.5 ^ (age / this)`: ~0.125 at the 24-hour edge by default. Much
+     * shorter than TREND_WINDOW_HOURS makes the window's older half
+     * decorative; much longer and the weighting stops doing anything.
+     */
+    TERM_HALF_LIFE_HOURS: z.coerce.number().min(0.5).max(168).default(8),
+
+    /**
+     * How many days of hourly snapshots the baseline means over (§10.3).
+     * Also what the nightly prune keeps, plus a day of slack (§7.5).
+     */
+    BASELINE_WINDOW_DAYS: z.coerce.number().int().min(1).max(90).default(7),
+
+    /**
+     * The calendar day ARTICLE GROUPING is bounded by (§7.4, ADR-0005) — a
+     * group never spans two local days. The wordcloud no longer uses this:
+     * it rolled its window instead (ADR-0008). IANA name, validated by Intl.
      */
     APP_TIMEZONE: z
       .string()

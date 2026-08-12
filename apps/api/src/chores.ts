@@ -1,11 +1,17 @@
 import { Queue, Worker } from "bullmq";
 import { Redis } from "ioredis";
 import type { Kysely } from "kysely";
-import { retentionReport, type Database, type RetentionReport } from "@zammy/storage";
+import {
+  pruneTermSnapshots,
+  retentionReport,
+  type Database,
+  type RetentionReport,
+} from "@zammy/storage";
 
 /**
  * Non-upstream chores (ARCHITECTURE 9.1): work with a clock but no quota
- * cost. Currently one — the nightly retention REPORT (§7.5, ADR-0001).
+ * cost. The nightly retention REPORT (§7.5, ADR-0001), and with it the one
+ * prune that DOES delete — `term_snapshots` past the baseline's reach.
  *
  * The schedule lives in BullMQ's job scheduler, which is Redis-shared state:
  * N Fargate tasks register the same scheduler id and exactly one instance
@@ -18,7 +24,7 @@ const TOPIC_IDLE_DAYS = 30;
 
 export interface ChoreDeps {
   db: Kysely<Database>;
-  config: { retentionDays: number };
+  config: { retentionDays: number; baselineWindowDays: number };
   now: () => Date;
   log: { info: (obj: object, msg: string) => void };
 }
@@ -38,6 +44,20 @@ export async function runRetentionChore(deps: ChoreDeps): Promise<RetentionRepor
     { report, retentionDays: deps.config.retentionDays, topicIdleDays: TOPIC_IDLE_DAYS },
     "retention report — report-only, nothing deleted (ADR-0001)",
   );
+
+  // The one exception to report-only, and it is not an exception to ADR-0001:
+  // these rows are derived (§10.4) and worthless once the baseline can no
+  // longer reach them. A day of slack past the window so a late chore run
+  // cannot cut into the range the next refresh reads.
+  const cutoff = new Date(
+    deps.now().getTime() - (deps.config.baselineWindowDays + 1) * 86_400_000,
+  );
+  const prunedSnapshots = await pruneTermSnapshots(deps.db, { before: cutoff });
+  deps.log.info(
+    { prunedSnapshots, cutoff: cutoff.toISOString() },
+    "pruned term_snapshots past the baseline window (§10.4)",
+  );
+
   return report;
 }
 

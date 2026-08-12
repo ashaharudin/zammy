@@ -16,6 +16,8 @@ export interface CorpusArticle {
   title: string;
   description: string | null;
   sourceDomain: string | null;
+  /** When the story broke. Its age inside the window sets its weight (§10.3). */
+  published: Date;
 }
 
 export interface ScoredTerm {
@@ -25,10 +27,16 @@ export interface ScoredTerm {
   dfArticles: number;
   /** Distinct source domains — the breadth gate. */
   dfDomains: number;
+  /** Recency-weighted and per-domain-capped — what the score is built on. */
+  weightedDf: number;
   score: number;
 }
 
 export interface ScoreOptions {
+  /** The rolling window's end — every article's age is measured from here. */
+  now: Date;
+  /** Recency half-life in hours. Tuning knob, default 8 (§10.3). */
+  halfLifeHours?: number;
   /** Baseline smoothing. Explicitly expected to need tuning (§10.3). */
   k?: number;
   /** Max articles one domain may contribute to the SCORE's df (§10.3). */
@@ -37,7 +45,12 @@ export interface ScoreOptions {
   minDomains?: number;
 }
 
-const DEFAULTS: Required<ScoreOptions> = { k: 3, perDomainCap: 3, minDomains: 2 };
+const DEFAULTS: Required<Omit<ScoreOptions, "now">> = {
+  halfLifeHours: 8,
+  k: 3,
+  perDomainCap: 3,
+  minDomains: 2,
+};
 
 /**
  * Headline terms for one article: distinct unigrams and bigrams over
@@ -78,31 +91,33 @@ export function extractTerms(article: CorpusArticle): Set<string> {
 export function scoreTerms(
   corpus: readonly CorpusArticle[],
   baseline: ReadonlyMap<string, number>,
-  options: ScoreOptions = {},
+  options: ScoreOptions,
 ): ScoredTerm[] {
-  const { k, perDomainCap, minDomains } = { ...DEFAULTS, ...options };
+  const { now, halfLifeHours, k, perDomainCap, minDomains } = { ...DEFAULTS, ...options };
   const isProperNoun = properNounEvidence(corpus);
 
+  // Per domain, the WEIGHTS of that domain's articles — not a count. The cap
+  // then takes the largest few, which under a decay is the most recent few.
   const stats = new Map<
     string,
-    { articles: number; byDomain: Map<string, number>; unknownDomain: number }
+    { articles: number; byDomain: Map<string, number[]>; unknownDomain: number[] }
   >();
 
   for (const article of corpus) {
+    const weight = recencyWeight(article.published, now, halfLifeHours);
     for (const term of extractTerms(article)) {
       let entry = stats.get(term);
       if (!entry) {
-        entry = { articles: 0, byDomain: new Map(), unknownDomain: 0 };
+        entry = { articles: 0, byDomain: new Map(), unknownDomain: [] };
         stats.set(term, entry);
       }
       entry.articles += 1;
       if (article.sourceDomain) {
-        entry.byDomain.set(
-          article.sourceDomain,
-          (entry.byDomain.get(article.sourceDomain) ?? 0) + 1,
-        );
+        const weights = entry.byDomain.get(article.sourceDomain);
+        if (weights) weights.push(weight);
+        else entry.byDomain.set(article.sourceDomain, [weight]);
       } else {
-        entry.unknownDomain += 1;
+        entry.unknownDomain.push(weight);
       }
     }
   }
@@ -115,9 +130,9 @@ export function scoreTerms(
     const dfDomains = entry.byDomain.size;
     if (dfDomains < minDomains) continue;
 
-    let cappedDf = Math.min(entry.unknownDomain, perDomainCap);
-    for (const count of entry.byDomain.values()) {
-      cappedDf += Math.min(count, perDomainCap);
+    let weightedDf = cappedWeight(entry.unknownDomain, perDomainCap);
+    for (const weights of entry.byDomain.values()) {
+      weightedDf += cappedWeight(weights, perDomainCap);
     }
 
     scored.push({
@@ -125,7 +140,8 @@ export function scoreTerms(
       isBigram: term.includes(" "),
       dfArticles: entry.articles,
       dfDomains,
-      score: (Math.sqrt(dfDomains) * cappedDf) / ((baseline.get(term) ?? 0) + k),
+      weightedDf,
+      score: (Math.sqrt(dfDomains) * weightedDf) / ((baseline.get(term) ?? 0) + k),
     });
   }
 
@@ -144,6 +160,33 @@ export function scoreTerms(
     (a, b) =>
       b.score - a.score || b.dfArticles - a.dfArticles || a.term.localeCompare(b.term),
   );
+}
+
+/**
+ * An article's weight from its age: `0.5 ^ (age / halfLife)` (§10.3). 1.0 for
+ * something published this minute, ~0.125 at the 24-hour edge with the default
+ * 8-hour half-life — present, clearly outranked, fading rather than vanishing.
+ * Articles outside the window never reach here; the corpus read bounds it.
+ * A future `published` (upstream clock skew) is clamped to 1 rather than
+ * allowed to out-weigh the present.
+ */
+function recencyWeight(published: Date, now: Date, halfLifeHours: number): number {
+  const ageHours = (now.getTime() - published.getTime()) / 3_600_000;
+  if (ageHours <= 0) return 1;
+  return 0.5 ** (ageHours / halfLifeHours);
+}
+
+/**
+ * A domain contributes at most `cap` articles — under weighting, its `cap`
+ * most recent, since a larger weight IS a younger article. Same rule as the
+ * unweighted `min(count, cap)` it replaces, read through the decay (§10.3).
+ */
+function cappedWeight(weights: readonly number[], cap: number): number {
+  if (weights.length <= cap) return weights.reduce((sum, w) => sum + w, 0);
+  return [...weights]
+    .sort((a, b) => b - a)
+    .slice(0, cap)
+    .reduce((sum, w) => sum + w, 0);
 }
 
 /**
