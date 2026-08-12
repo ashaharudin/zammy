@@ -1,4 +1,4 @@
-import type { TrendingResponse } from "@zammy/shared";
+import { TRENDING_LIMIT_MAX, type TrendingResponse } from "@zammy/shared";
 import {
   hourBucket,
   ingestSightings,
@@ -83,7 +83,11 @@ export async function readTrending(
 
   const cached = await readCachedPage<TrendingResponse>(deps.redis, cacheKey);
   if (cached) {
-    return { ...cached, meta: { ...cached.meta, servedFrom: "cache" } };
+    return {
+      ...cached,
+      terms: cached.terms.slice(0, query.limit),
+      meta: { ...cached.meta, servedFrom: "cache" },
+    };
   }
 
   // The first visitor after the last snapshot staled elects the next sample
@@ -107,9 +111,14 @@ export async function readTrending(
     // Redis down: no sample this visit; the stored cloud still serves (§11).
   }
 
+  // The FULL ranked list, not this caller's slice: the cache key names a
+  // language and nothing else, so a `?limit=4` request would otherwise cache
+  // a four-term cloud and every reader behind it would see one for the next
+  // fifteen minutes. Terms are ordered by score then term (§10.5), so every
+  // limit is a prefix of the same list and readers never disagree about rank.
   const terms = await readTrendingTerms(deps.db, {
     language: query.language,
-    limit: query.limit,
+    limit: TRENDING_LIMIT_MAX,
   });
   const pendingJobs = await deps.queue.pendingCount(
     samplePendingId({ language: query.language }),
@@ -144,7 +153,7 @@ export async function readTrending(
     await writeCachedPage(deps.redis, cacheKey, response, TRENDING_CACHE_TTL_MS);
   }
 
-  return response;
+  return { ...response, terms: response.terms.slice(0, query.limit) };
 }
 
 /**

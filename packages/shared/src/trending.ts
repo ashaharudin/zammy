@@ -22,13 +22,20 @@ export const TrendingTerm = z.object({
 export type TrendingTerm = z.infer<typeof TrendingTerm>;
 
 /**
+ * The most terms any caller may ask for. Exported because the API caches ONE
+ * ranked list per language and serves every caller a prefix of it, so this is
+ * also the length it computes and stores (§10.4).
+ */
+export const TRENDING_LIMIT_MAX = 100;
+
+/**
  * No `day`: the cloud rolls over a window ending now (ADR-0008), so there are
  * no addressable periods to ask for. A stale `?day=` from the old contract is
  * stripped here rather than rejected — the bookmark lands on the live cloud.
  */
 export const TrendingQuery = z.object({
   language: z.string().min(2).max(8).default("en"),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+  limit: z.coerce.number().int().min(1).max(TRENDING_LIMIT_MAX).default(50),
 });
 export type TrendingQuery = z.infer<typeof TrendingQuery>;
 

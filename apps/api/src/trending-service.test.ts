@@ -146,6 +146,37 @@ describe("the first visitor after the snapshot staled (§10.1)", () => {
     expect(again.meta.servedFrom).toBe("cache");
   }, 30_000);
 
+  it("caches per language, not per limit — a narrow read cannot shrink the cloud", async () => {
+    // Reproduced live: `curl '/api/v1/trending?limit=4'` cached a four-term
+    // body, and the landing page — which asks for 50 — rendered a four-word
+    // cloud for the next fifteen minutes. The cache key names a language, so
+    // what it holds has to be the whole ranked list, not one caller's slice.
+    harness = await createTestHarness({}, NOW);
+    const deps = trendingDeps(harness);
+    harness.queue.startConsumer((job) =>
+      job.kind === "sample"
+        ? processSampleJob(deps, job)
+        : processSegmentJob(harness.deps, job),
+    );
+
+    await readTrending(deps, { language: "en", limit: 50 });
+    await vi.waitFor(
+      async () => expect(await harness.queue.pendingCount("sample_en")).toBe(0),
+      { timeout: 20_000, interval: 250 },
+    );
+
+    // A caller asking for one term still gets exactly one…
+    const narrow = await readTrending(deps, { language: "en", limit: 1 });
+    expect(narrow.terms).toHaveLength(1);
+
+    // …and the next reader gets the cloud, from that same cache entry.
+    const wide = await readTrending(deps, { language: "en", limit: 50 });
+    expect(wide.meta.servedFrom).toBe("cache");
+    expect(wide.terms.length).toBeGreaterThan(1);
+    // Still a prefix of one ranked list, so the two agree about what is first.
+    expect(wide.terms[0]!.term).toBe(narrow.terms[0]!.term);
+  }, 30_000);
+
   it("re-elects a sample once the freshness window passes — cost scales with the clock, not readers", async () => {
     harness = await createTestHarness({}, NOW);
     // 60ms freshness window: "an hour" at test speed.
