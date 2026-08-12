@@ -1,14 +1,15 @@
 import type { TrendingResponse } from "@zammy/shared";
 import {
+  hourBucket,
   ingestSightings,
-  readDailyTerms,
-  readDayCorpus,
   readTermBaseline,
+  readTrendingTerms,
+  readWindowCorpus,
+  recordTermSnapshot,
   refreshTermBaseline,
-  replaceDailyTerms,
+  replaceTrendingTerms,
   upsertTopic,
 } from "@zammy/storage";
-import { zonedDayBounds, zonedDayKey } from "./app-day.js";
 import { fingerprintOf } from "./canonical.js";
 import { groupCreatedArticles, groupingDepsFor } from "./grouping-service.js";
 import { samplePendingId, type SampleJob } from "./ingest-queue.js";
@@ -21,20 +22,27 @@ import type { TimelineDeps } from "./timeline-service.js";
  * path: serve what is stored instantly, repair freshness behind the reader,
  * spend upstream calls only when a real visitor implies demand.
  *
- * The daily breadth sample exists because demand-driven ingestion alone
- * cannot feed a cloud — it must know what is prominent before anyone
- * searches (§10.1). It is triggered by the first visitor of the day, never
- * by a cron: a day with no visitors costs nothing.
+ * The breadth sample exists because demand-driven ingestion alone cannot feed
+ * a cloud — it must know what is prominent before anyone searches (§10.1). It
+ * is triggered by the first visitor after the last snapshot staled, never by a
+ * cron: an hour with no visitors costs nothing.
+ *
+ * The window rolls with `now` rather than resetting at midnight (ADR-0008), so
+ * nothing here is keyed by day: one live cloud per language, one lock, one
+ * cache entry, and no period that can be closed or asked about after the fact.
  */
 
 export interface TrendingConfig {
-  appTimezone: string;
   /** Curated v2-taxonomy categories, comma-joined into ONE call (§10.1). */
   sampleCategories: readonly string[];
   /** Pages per sample. 1 by default; the lever if ~20 proves thin (§10.1). */
   samplePages: number;
   /** How long a snapshot stays fresh; the cadence knob (§10.1, default 60). */
   sampleRefreshMinutes: number;
+  /** How far back the cloud looks, in hours (§10.1, default 24). */
+  windowHours: number;
+  /** Recency half-life in hours (§10.3, default 8). */
+  halfLifeHours: number;
   baselineWindowDays: number;
 }
 
@@ -42,17 +50,21 @@ export interface TrendingDeps extends TimelineDeps {
   trending: TrendingConfig;
 }
 
-/** §10.4: trending:<day>:<language>, ~15 minutes. */
+/** §10.4: trending:<language>, ~15 minutes. */
 const TRENDING_CACHE_TTL_MS = 15 * 60 * 1000;
+
+/** The window ending at `now`, as the corpus read and the response want it. */
+function windowBounds(now: Date, windowHours: number): { from: Date; to: Date } {
+  return { from: new Date(now.getTime() - windowHours * 3_600_000), to: now };
+}
 
 export async function readTrending(
   deps: TrendingDeps,
-  query: { day?: string; language: string; limit: number },
+  query: { language: string; limit: number },
 ): Promise<TrendingResponse> {
   const now = deps.now();
-  const today = zonedDayKey(now, deps.trending.appTimezone);
-  const day = query.day ?? today;
-  const cacheKey = `trending:${day}:${query.language}`;
+  const { from } = windowBounds(now, deps.trending.windowHours);
+  const cacheKey = `trending:${query.language}`;
 
   const cached = await readCachedPage<TrendingResponse>(deps.redis, cacheKey);
   if (cached) {
@@ -63,36 +75,35 @@ export async function readTrending(
   // (§10.1): the lock's TTL IS the freshness window, so cost scales with the
   // clock (≤24 calls/day per language), never with readers. It also keeps N
   // Fargate tasks' simultaneous visitors to one election; the jobId dedup
-  // backstops it. Closed days never sample — they are frozen (§10.1).
-  if (day === today) {
-    try {
-      // Day-keyed so the window resets at rollover: the new day's first
-      // visitor samples immediately instead of waiting out last night's TTL.
-      const elected = await deps.redis.set(
-        `lock:sample:${day}:${query.language}`,
-        "1",
-        "PX",
-        Math.max(1, Math.round(deps.trending.sampleRefreshMinutes * 60_000)),
-        "NX",
-      );
-      if (elected === "OK") {
-        await deps.queue.enqueueSample({ kind: "sample", day, language: query.language });
-      }
-    } catch {
-      // Redis down: no sample this visit; the stored cloud still serves (§11).
+  // backstops it. No day in the key — the TTL alone governs cadence now, where
+  // the frozen-day design had to reset it at each rollover (ADR-0008).
+  try {
+    const elected = await deps.redis.set(
+      `lock:sample:${query.language}`,
+      "1",
+      "PX",
+      Math.max(1, Math.round(deps.trending.sampleRefreshMinutes * 60_000)),
+      "NX",
+    );
+    if (elected === "OK") {
+      await deps.queue.enqueueSample({ kind: "sample", language: query.language });
     }
+  } catch {
+    // Redis down: no sample this visit; the stored cloud still serves (§11).
   }
 
-  const terms = await readDailyTerms(deps.db, {
-    day,
+  const terms = await readTrendingTerms(deps.db, {
     language: query.language,
     limit: query.limit,
   });
-  const pendingJobs = await deps.queue.pendingCount(samplePendingId({ day, language: query.language }));
+  const pendingJobs = await deps.queue.pendingCount(
+    samplePendingId({ language: query.language }),
+  );
   const state: "complete" | "in_progress" = pendingJobs > 0 ? "in_progress" : "complete";
 
   const response: TrendingResponse = {
-    day,
+    windowStart: from.toISOString(),
+    windowEnd: now.toISOString(),
     language: query.language,
     terms: terms.map((t) => ({
       term: t.term,
@@ -112,8 +123,8 @@ export async function readTrending(
 
   // Cache only a settled, non-empty cloud: an in_progress one must keep
   // growing under the front end's poll (§6.5), and an empty "complete" can
-  // be a lock-race artifact on the day's very first concurrent visitors —
-  // freezing that for 15 minutes would blank the landing page it exists to fill.
+  // be a lock-race artifact on the very first concurrent visitors — freezing
+  // that for 15 minutes would blank the landing page it exists to fill.
   if (state === "complete" && response.terms.length > 0) {
     await writeCachedPage(deps.redis, cacheKey, response, TRENDING_CACHE_TTL_MS);
   }
@@ -123,21 +134,22 @@ export async function readTrending(
 
 /**
  * Queue-consumer handler for the §10.1 breadth sample. Idempotent end to end
- * — category fetches upsert into ordinary topics, the aggregate is replaced
- * wholesale — so BullMQ's at-least-once redelivery after a deploy is safe.
+ * — category fetches upsert into ordinary topics, the cloud is replaced
+ * wholesale, the snapshot upserts on its hour — so BullMQ's at-least-once
+ * redelivery after a deploy is safe.
  */
 export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Promise<void> {
   const now = deps.now();
-  const bounds = zonedDayBounds(job.day, deps.trending.appTimezone);
-  const to = new Date(Math.min(bounds.to.getTime(), now.getTime()));
+  const { from, to } = windowBounds(now, deps.trending.windowHours);
 
-  // Yesterday closed when this day's first visitor arrived: fold it into the
-  // rolling baseline BEFORE scoring, so today is judged against history that
-  // does not include today (§10.3).
+  // Fold the snapshot history into the baseline BEFORE scoring. The refresh
+  // reads only snapshots older than one window, so the corpus about to be
+  // scored cannot contribute to what suppresses it (§10.3).
   await refreshTermBaseline(deps.db, {
     language: job.language,
-    upToDay: job.day,
-    windowDays: deps.trending.baselineWindowDays,
+    now,
+    windowHours: deps.trending.windowHours,
+    baselineWindowDays: deps.trending.baselineWindowDays,
   });
 
   // Corpus source 2: ONE /v2/latest-news call carrying the whole curated
@@ -168,10 +180,10 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
       );
     } catch (error) {
       // Quota or upstream trouble: keep what we have and still recompute —
-      // the day's stored articles beat a blank cloud, and the next visitor
+      // the window's stored articles beat a blank cloud, and the next visitor
       // past the freshness window tries again (§11).
       deps.log?.warn(
-        { err: error, day: job.day },
+        { err: error },
         "latest-news sample failed; scoring with the stored corpus only",
       );
       break;
@@ -195,23 +207,33 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
     if (result.isLastPage) break;
   }
 
-  // Recompute the day's aggregate over BOTH corpus sources — the sample and
-  // everything user searches already stored today (§10.1).
-  const corpus = await readDayCorpus(deps.db, {
-    language: job.language,
-    from: bounds.from,
-    to,
-  });
+  // Recompute over BOTH corpus sources — the sample and everything user
+  // searches already stored inside the window (§10.1).
+  const corpus = await readWindowCorpus(deps.db, { language: job.language, from, to });
   const baseline = await readTermBaseline(deps.db, job.language);
-  await replaceDailyTerms(deps.db, {
-    day: job.day,
-    language: job.language,
-    terms: scoreTerms(corpus, baseline),
+  const scored = scoreTerms(corpus, baseline, {
+    now,
+    halfLifeHours: deps.trending.halfLifeHours,
   });
 
-  // Next poll must see the fresh aggregate, not a pre-sample cache entry.
+  await replaceTrendingTerms(deps.db, {
+    language: job.language,
+    windowStart: from,
+    windowEnd: to,
+    terms: scored,
+  });
+
+  // Record what this recompute saw, at RAW counts, under the hour it ran:
+  // tomorrow's baseline is made of these rows and nothing else (§10.3).
+  await recordTermSnapshot(deps.db, {
+    language: job.language,
+    bucketHour: hourBucket(now),
+    terms: scored,
+  });
+
+  // Next poll must see the fresh cloud, not a pre-sample cache entry.
   try {
-    await deps.redis.del(`trending:${job.day}:${job.language}`);
+    await deps.redis.del(`trending:${job.language}`);
   } catch {
     // 15 minutes of staleness at worst; the cache is not correctness (§7.1).
   }

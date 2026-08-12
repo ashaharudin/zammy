@@ -150,7 +150,6 @@ export function registerTrendingRoute(
 
     return reply.send(
       await readTrending(options.deps, {
-        ...(parsed.data.day ? { day: parsed.data.day } : {}),
         language: parsed.data.language,
         limit: parsed.data.limit,
       }),

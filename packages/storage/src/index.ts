@@ -12,5 +12,5 @@ export * from "./timeline.js";
 export * from "./coverage.js";
 export * from "./topics.js";
 export * from "./retention.js";
-export * from "./daily-terms.js";
+export * from "./trending-terms.js";
 export * from "./grouping.js";

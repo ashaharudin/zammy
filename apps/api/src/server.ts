@@ -46,9 +46,6 @@ const SAMPLE_CATEGORIES = [
 ] as const;
 
 
-/** §10.3: the trailing mean's window. A week of history makes the cloud good. */
-const BASELINE_WINDOW_DAYS = 7;
-
 export interface App {
   app: FastifyInstance;
   pool: Pool;
@@ -143,11 +140,12 @@ export async function buildApp(config: Config): Promise<App> {
   const trendingDeps: TrendingDeps = {
     ...deps,
     trending: {
-      appTimezone: config.APP_TIMEZONE,
       sampleCategories: SAMPLE_CATEGORIES,
       samplePages: config.SAMPLE_PAGES,
       sampleRefreshMinutes: config.SAMPLE_REFRESH_MINUTES,
-      baselineWindowDays: BASELINE_WINDOW_DAYS,
+      windowHours: config.TREND_WINDOW_HOURS,
+      halfLifeHours: config.TERM_HALF_LIFE_HOURS,
+      baselineWindowDays: config.BASELINE_WINDOW_DAYS,
     },
   };
 
@@ -163,7 +161,10 @@ export async function buildApp(config: Config): Promise<App> {
     retention: () =>
       runRetentionChore({
         db,
-        config: { retentionDays: config.RETENTION_DAYS },
+        config: {
+          retentionDays: config.RETENTION_DAYS,
+          baselineWindowDays: config.BASELINE_WINDOW_DAYS,
+        },
         now: () => new Date(),
         log: app.log,
       }),

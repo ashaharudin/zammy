@@ -3,11 +3,12 @@ import { useQuery } from "@tanstack/react-query";
 import cloud from "d3-cloud";
 import type { TrendingResponse, TrendingTerm } from "@zammy/shared";
 import { fetchTrending } from "./api.js";
+import { layoutSeed } from "./layoutSeed.js";
 import { MONO } from "./theme.js";
 import { maxPlaceableFont } from "./wordFit.js";
 
 /**
- * The landing-page wordcloud (ARCHITECTURE 10.5): the day's most-referenced
+ * The landing-page wordcloud (ARCHITECTURE 10.5): the last 24 hours' most-referenced
  * topics, sized by unique articles, each word a real <button> that runs the
  * search — the cloud feeds the demand-driven loop.
  *
@@ -103,7 +104,7 @@ function fontSizes(terms: readonly TrendingTerm[]): Map<string, number> {
   );
 }
 
-/** Deterministic per (day, language): the cloud must not reshuffle per poll. */
+/** Deterministic per language (see layoutSeed): no reshuffle per poll. */
 function seededRandom(seed: string): () => number {
   let h = 2166136261;
   for (const ch of seed) {
@@ -128,7 +129,7 @@ export function TrendingCloud({ onSearch }: { onSearch: (q: string) => void }) {
 
   // The layout always runs at LAYOUT_WIDTH and the result is scaled down to
   // the viewport — re-running d3-cloud at the measured width would break the
-  // deterministic per-(day, language) placement (§10.5).
+  // deterministic per-language placement (§10.5).
   useEffect(() => {
     const el = sectionRef.current;
     if (!el) return;
@@ -179,7 +180,7 @@ export function TrendingCloud({ onSearch }: { onSearch: (q: string) => void }) {
       .rotate(0)
       .font(MONO)
       .fontSize((d) => d.size ?? FONT_MIN)
-      .random(seededRandom(`${data?.day}:${data?.language}`))
+      .random(seededRandom(layoutSeed({ language: data?.language ?? "" })))
       .on("end", (words) => {
         const byTerm = new Map(terms.map((t) => [t.term, t]));
         setPlaced(
@@ -196,14 +197,14 @@ export function TrendingCloud({ onSearch }: { onSearch: (q: string) => void }) {
       layout.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.day, data?.language, JSON.stringify(terms.map((t) => t.term))]);
+  }, [data?.language, JSON.stringify(terms.map((t) => t.term))]);
 
   if (trending.isError) return null; // the landing page still works as a search box
 
   return (
     <section
       ref={sectionRef}
-      aria-label="Today's topics"
+      aria-label="Topics from the last 24 hours"
       style={{ width: "100%", maxWidth: "760px" }}
     >
       <div
@@ -216,7 +217,7 @@ export function TrendingCloud({ onSearch }: { onSearch: (q: string) => void }) {
           color: "var(--fg-faint)",
         }}
       >
-        <span>{warming ? "gathering today's news…" : ""}</span>
+        <span>{warming ? "gathering the latest news…" : ""}</span>
         {terms.length > 0 && (
           <button
             onClick={() => setAsList(!asList)}

@@ -29,21 +29,36 @@ function loadCorpus(fixture: string): CorpusArticle[] {
       title: s.title,
       description: s.description,
       sourceDomain: s.sourceDomain,
+      // Sightings carry an ISO string; storage hands the scorer a Date.
+      published: new Date(s.published),
     });
   }
   return [...byUrl.values()];
 }
 
+/**
+ * The window's end for a recorded corpus: its newest article. Ages inside the
+ * fixture are then the real ones, which is what the weighting reads (§10.3) —
+ * pinning a wall-clock `now` would just decay a recorded day into nothing.
+ */
+function corpusNow(corpus: readonly CorpusArticle[]): Date {
+  return new Date(Math.max(...corpus.map((a) => a.published.getTime())));
+}
+
 const EMPTY_BASELINE = new Map<string, number>();
+
+/** The window's end. Fixtures are dated; what matters is age relative to this. */
+const NOW = new Date("2026-08-12T12:00:00.000Z");
 
 describe("scoreTerms against the recorded keywordless sample (§10.3)", () => {
   const corpus = loadCorpus("search-keywordless-category-sample.json");
+  const now = corpusNow(corpus);
 
   // §10.3's three probe-demonstrated failures, asserted on the DAY-ONE
   // configuration — empty baseline — because that is when scoring degrades
   // to raw frequency and only the structural gates stand between the cloud
   // and the garbage top-12 the probe recorded.
-  const top50 = scoreTerms(corpus, EMPTY_BASELINE).slice(0, 50);
+  const top50 = scoreTerms(corpus, EMPTY_BASELINE, { now }).slice(0, 50);
 
   it("never emits identifier fragments or numeric tokens (the cve- artifact)", () => {
     for (const { term } of top50) {
@@ -100,10 +115,8 @@ describe("scoreTerms against the recorded keywordless sample (§10.3)", () => {
 describe("scoreTerms against the recorded latest-news sample (§10.1)", () => {
   // The breadth sample's own corpus — the one the live cloud is mostly built
   // from, and where the nonsense phrases were reported.
-  const top50 = scoreTerms(
-    loadCorpus("latest-news-v2-sample.json"),
-    EMPTY_BASELINE,
-  ).slice(0, 50);
+  const latest = loadCorpus("latest-news-v2-sample.json");
+  const top50 = scoreTerms(latest, EMPTY_BASELINE, { now: corpusNow(latest) }).slice(0, 50);
 
   it("emits no phrase of purely common words (the 'gas flows' class)", () => {
     // Measured from this fixture before the propriety gate reached phrases:
@@ -134,7 +147,9 @@ describe("wire-service and desk furniture (ADR-0007)", () => {
     ...loadCorpus("latest-news-v2-sample.json"),
     ...loadCorpus("search-keywordless-category-sample.json"),
   ];
-  const emitted = new Set(scoreTerms(corpus, EMPTY_BASELINE).map((t) => t.term));
+  const emitted = new Set(
+    scoreTerms(corpus, EMPTY_BASELINE, { now: corpusNow(corpus) }).map((t) => t.term),
+  );
 
   it("drops the words a newsroom writes about the article, not the story", () => {
     // Measured before this list existed: all five of these were in the cloud,
@@ -159,10 +174,11 @@ describe("a name beside a verb is an event, not a topic (§10.3)", () => {
     new Set(
       scoreTerms(
         [
-          { title, description: prose, sourceDomain: "a.com" },
-          { title, description: prose, sourceDomain: "b.com" },
+          { title, description: prose, sourceDomain: "a.com", published: NOW },
+          { title, description: prose, sourceDomain: "b.com", published: NOW },
         ],
         EMPTY_BASELINE,
+        { now: NOW },
       ).map((t) => t.term),
     );
 
@@ -223,11 +239,25 @@ describe("a name beside a verb is an event, not a topic (§10.3)", () => {
 });
 
 describe("scoring mechanisms in isolation", () => {
+  /** Published now, so recency weighting is a no-op and the gate under test is alone. */
   const article = (
     title: string,
     domain: string,
     description: string | null = null,
-  ): CorpusArticle => ({ title, description, sourceDomain: domain });
+  ): CorpusArticle => ({ title, description, sourceDomain: domain, published: NOW });
+
+  /** …and the same, `ageHours` old, for the tests that are about age. */
+  const aged = (
+    title: string,
+    domain: string,
+    description: string | null,
+    ageHours: number,
+  ): CorpusArticle => ({
+    title,
+    description,
+    sourceDomain: domain,
+    published: new Date(NOW.getTime() - ageHours * 3_600_000),
+  });
 
   it("a phrase needs one name to anchor it; two common words are not a topic", () => {
     const corpus = [
@@ -236,7 +266,7 @@ describe("scoring mechanisms in isolation", () => {
       article("Climate policy shift announced", "a.com", "The climate policy debate continued."),
       article("New climate policy criticised", "b.com", "Critics of the climate policy spoke."),
     ];
-    const terms = scoreTerms(corpus, EMPTY_BASELINE);
+    const terms = scoreTerms(corpus, EMPTY_BASELINE, { now: NOW });
     const anchored = terms.find((t) => t.term === "kelowna policy");
     expect(anchored).toBeDefined();
     expect(anchored!.isBigram).toBe(true);
@@ -266,7 +296,7 @@ describe("scoring mechanisms in isolation", () => {
         "He slipped away down a lane beside Kelowna.",
       ),
     ];
-    const emitted = new Set(scoreTerms(corpus, EMPTY_BASELINE).map((t) => t.term));
+    const emitted = new Set(scoreTerms(corpus, EMPTY_BASELINE, { now: NOW }).map((t) => t.term));
 
     expect(emitted.has("slipped away")).toBe(false);
     expect(emitted.has("kelowna")).toBe(true);
@@ -282,7 +312,7 @@ describe("scoring mechanisms in isolation", () => {
       article("Blackout Hits New York Again", "a.com", "Crews worked overnight in New York."),
       article("New York Mayor Answers Critics", "b.com", "Officials in New York promised a review."),
     ];
-    const emitted = new Set(scoreTerms(corpus, EMPTY_BASELINE).map((t) => t.term));
+    const emitted = new Set(scoreTerms(corpus, EMPTY_BASELINE, { now: NOW }).map((t) => t.term));
 
     expect(emitted.has("new york")).toBe(false);
     expect(emitted.has("new")).toBe(false);
@@ -294,7 +324,7 @@ describe("scoring mechanisms in isolation", () => {
       article("Minister Ben Carroll announces funding", "a.com", "Praise for Ben Carroll followed."),
       article("Statement from Ben Carroll on transport", "b.com", "Critics answered Ben Carroll."),
     ];
-    const emitted = new Set(scoreTerms(corpus, EMPTY_BASELINE).map((t) => t.term));
+    const emitted = new Set(scoreTerms(corpus, EMPTY_BASELINE, { now: NOW }).map((t) => t.term));
 
     // Both words qualify as proper nouns, but every sighting of "ben" is a
     // sighting of "ben carroll" — the phrase alone represents the topic.
@@ -308,7 +338,7 @@ describe("scoring mechanisms in isolation", () => {
       article("Community Rallies Around Kelowna", "a.com", "The community gathered in Kelowna."),
       article("Community Fund Launched In Kelowna", "b.com", "A fund for the community near Kelowna."),
     ];
-    const emitted = new Set(scoreTerms(corpus, EMPTY_BASELINE).map((t) => t.term));
+    const emitted = new Set(scoreTerms(corpus, EMPTY_BASELINE, { now: NOW }).map((t) => t.term));
 
     // Title Case capitalizes "Community", but the descriptions show it
     // lowercase in prose — a common noun. "Kelowna" is never lowercase and
@@ -326,8 +356,8 @@ describe("scoring mechanisms in isolation", () => {
     ];
     // "kelowna" and "congress" both qualify as proper nouns, but Congress is
     // in the news EVERY day — the baseline is what makes today visible.
-    const flat = scoreTerms(corpus, EMPTY_BASELINE);
-    const biased = scoreTerms(corpus, new Map([["congress", 5]]));
+    const flat = scoreTerms(corpus, EMPTY_BASELINE, { now: NOW });
+    const biased = scoreTerms(corpus, new Map([["congress", 5]]), { now: NOW });
 
     const rank = (terms: typeof flat, term: string) =>
       terms.findIndex((t) => t.term === term);
@@ -335,6 +365,27 @@ describe("scoring mechanisms in isolation", () => {
     expect(
       biased.find((t) => t.term === "congress")!.score,
     ).toBeLessThan(flat.find((t) => t.term === "congress")!.score);
+  });
+
+  it("ranks a fresh story above an equally-covered stale one (§10.3)", () => {
+    // The rolling window's whole point: two topics identical in every input
+    // the frozen-day design could see — same article count, same breadth —
+    // separated only by age. One broke an hour ago, one twenty hours ago.
+    const corpus = [
+      aged("Evacuations near Kelowna ordered", "a.com", "Crews reached Kelowna overnight.", 1),
+      aged("Fires close roads by Kelowna", "b.com", "Smoke covered Kelowna by dawn.", 1),
+      aged("Verdict delivered in Truro case", "a.com", "The hearing in Truro ended.", 20),
+      aged("Appeal expected after Truro ruling", "b.com", "Lawyers left Truro without comment.", 20),
+    ];
+    const terms = scoreTerms(corpus, EMPTY_BASELINE, { now: NOW });
+    const kelowna = terms.find((t) => t.term === "kelowna")!;
+    const truro = terms.find((t) => t.term === "truro")!;
+
+    expect(kelowna.score).toBeGreaterThan(truro.score);
+    // The weight moves the SIZE, never the number: both are still two
+    // articles, and the accessible list must be able to say so.
+    expect(kelowna.dfArticles).toBe(2);
+    expect(truro.dfArticles).toBe(2);
   });
 
   it("caps any single domain's contribution to df_articles (§10.3)", () => {
@@ -350,7 +401,7 @@ describe("scoring mechanisms in isolation", () => {
       article("Emergency declared on the Danube", "c.com"),
       article("Aid promised along the Danube", "d.com"),
     ];
-    const terms = scoreTerms(flood, EMPTY_BASELINE);
+    const terms = scoreTerms(flood, EMPTY_BASELINE, { now: NOW });
     const equifax = terms.find((t) => t.term === "equifax")!;
     const danube = terms.find((t) => t.term === "danube")!;
 

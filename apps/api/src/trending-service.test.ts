@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { processSegmentJob } from "./timeline-service.js";
 import {
@@ -5,18 +6,21 @@ import {
   readTrending,
   type TrendingDeps,
 } from "./trending-service.js";
+import { deriveDedupKey } from "@zammy/currents-client";
+import { ingestSightings, upsertTopic } from "@zammy/storage";
+import { fingerprintOf } from "./canonical.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
 
 /**
  * The landing-page cloud (ARCHITECTURE 10.1, post-6c): the first visitor
  * after the last /v2/latest-news snapshot staled triggers ONE background
- * sample call and is served the stored cloud instantly; a closed day is
- * frozen and free.
+ * sample call and is served the stored cloud instantly. The window rolls with
+ * `now` rather than resetting at midnight (ADR-0008), so nothing here is keyed
+ * by day and there is no frozen period to ask about.
  */
 
 /** All 100 recorded /v2/latest-news sightings are published 2026-08-11. */
 const NOW = new Date("2026-08-11T05:00:00.000Z");
-const DAY = "2026-08-11";
 
 /** A curated slice of the v2 taxonomy that the recorded feed actually carries. */
 const CATEGORIES = [
@@ -38,10 +42,11 @@ function trendingDeps(h: TestHarness, overrides: Partial<TrendingDeps["trending"
   return {
     ...h.deps,
     trending: {
-      appTimezone: "UTC",
       sampleCategories: CATEGORIES,
       samplePages: 1,
       sampleRefreshMinutes: 60,
+      windowHours: 24,
+      halfLifeHours: 8,
       baselineWindowDays: 7,
       ...overrides,
     },
@@ -49,20 +54,69 @@ function trendingDeps(h: TestHarness, overrides: Partial<TrendingDeps["trending"
 }
 
 /** Sample-keyed Redis state outlives ephemeral test databases; clear it. */
-async function purgeTrendingKeys(h: TestHarness, day: string, language: string) {
-  await h.redis.del(`lock:sample:${day}:${language}`, `trending:${day}:${language}`);
+async function purgeTrendingKeys(h: TestHarness, language: string) {
+  await h.redis.del(`lock:sample:${language}`, `trending:${language}`);
+}
+
+/**
+ * Store articles at chosen ages — the corpus source the sample does not
+ * supply (§10.1 source 1), and the only way to put a story at a known
+ * distance from `now`.
+ */
+async function storeArticles(
+  h: TestHarness,
+  articles: Array<{
+    title: string;
+    /** Prose the propriety gate reads: the NAME capitalized mid-sentence,
+     * everything generic lowercase, or nothing survives §10.3. */
+    prose: string;
+    domain: string;
+    ageHours: number;
+  }>,
+) {
+  const fingerprint = fingerprintOf({
+    keywords: ["seeded"],
+    language: "en",
+    country: null,
+    category: null,
+  });
+  await upsertTopic(h.deps.db, {
+    fingerprint,
+    keywords: ["seeded"],
+    language: "en",
+    country: null,
+    category: null,
+  });
+  await ingestSightings(h.deps.db, {
+    fingerprint,
+    sightings: articles.map((a, index) => ({
+      id: randomUUID(),
+      url: `https://${a.domain}/seeded-${index}`,
+      dedupKey: deriveDedupKey(`https://${a.domain}/seeded-${index}`),
+      title: a.title,
+      description: a.prose,
+      author: null,
+      imageUrl: null,
+      language: "en",
+      categories: [],
+      sourceCategories: [],
+      sourceDomain: a.domain,
+      published: new Date(NOW.getTime() - a.ageHours * 3_600_000).toISOString(),
+      raw: {},
+    })),
+  });
 }
 
 describe("the first visitor after the snapshot staled (§10.1)", () => {
   it("queues ONE single-call sample, serves instantly, fills the cloud behind the reader", async () => {
     harness = await createTestHarness({}, NOW);
-    await purgeTrendingKeys(harness, DAY, "en");
+    await purgeTrendingKeys(harness, "en");
     const deps = trendingDeps(harness);
 
     // The first visitor pays nothing synchronously — the whole §9 posture.
     const first = await readTrending(deps, { language: "en", limit: 50 });
     expect(harness.counting.searchCalls).toBe(0);
-    expect(first.day).toBe(DAY);
+    expect(first.windowEnd).toBe(NOW.toISOString());
     expect(first.terms).toEqual([]);
     expect(first.meta.ingest.state).toBe("in_progress");
     expect(first.meta.ingest.pendingJobs).toBe(1);
@@ -78,7 +132,7 @@ describe("the first visitor after the snapshot staled (§10.1)", () => {
     );
     await vi.waitFor(
       async () =>
-        expect(await harness.queue.pendingCount(`sample_${DAY}_en`)).toBe(0),
+        expect(await harness.queue.pendingCount("sample_en")).toBe(0),
       { timeout: 20_000, interval: 250 },
     );
 
@@ -100,7 +154,7 @@ describe("the first visitor after the snapshot staled (§10.1)", () => {
 
   it("re-elects a sample once the freshness window passes — cost scales with the clock, not readers", async () => {
     harness = await createTestHarness({}, NOW);
-    await purgeTrendingKeys(harness, DAY, "en");
+    await purgeTrendingKeys(harness, "en");
     // 60ms freshness window: "an hour" at test speed.
     const deps = trendingDeps(harness, { sampleRefreshMinutes: 0.001 });
 
@@ -113,21 +167,21 @@ describe("the first visitor after the snapshot staled (§10.1)", () => {
     await readTrending(deps, { language: "en", limit: 50 });
     await vi.waitFor(
       async () =>
-        expect(await harness.queue.pendingCount(`sample_${DAY}_en`)).toBe(0),
+        expect(await harness.queue.pendingCount("sample_en")).toBe(0),
       { timeout: 20_000, interval: 100 },
     );
     expect(harness.counting.searchCalls).toBe(1);
 
     // Inside the window a read re-elects nothing (cache cleared to prove it
     // is the LOCK holding, not the response cache).
-    await harness.redis.del(`trending:${DAY}:en`);
+    await harness.redis.del("trending:en");
     await new Promise((r) => setTimeout(r, 80)); // let the 60ms lock expire
 
     const later = await readTrending(deps, { language: "en", limit: 50 });
     expect(later.meta.ingest.state).toBe("in_progress"); // next snapshot warming
     await vi.waitFor(
       async () =>
-        expect(await harness.queue.pendingCount(`sample_${DAY}_en`)).toBe(0),
+        expect(await harness.queue.pendingCount("sample_en")).toBe(0),
       { timeout: 20_000, interval: 100 },
     );
     expect(harness.counting.searchCalls).toBe(2);
@@ -142,10 +196,10 @@ describe("the sample is a write path, so it groups what it creates (§14.3)", ()
     // it — and this is the most syndication-dense source we have, one
     // latest-news page spanning every category and outlet.
     harness = await createTestHarness({}, NOW);
-    await purgeTrendingKeys(harness, DAY, "en");
+    await purgeTrendingKeys(harness, "en");
     const deps = trendingDeps(harness);
 
-    await processSampleJob(deps, { kind: "sample", day: DAY, language: "en" });
+    await processSampleJob(deps, { kind: "sample", language: "en" });
 
     const rows = await harness.deps.db
       .selectFrom("articles")
@@ -164,17 +218,55 @@ describe("the sample is a write path, so it groups what it creates (§14.3)", ()
   }, 30_000);
 });
 
-describe("closed days are frozen (§10.1)", () => {
-  it("requesting yesterday triggers no sample and spends nothing", async () => {
+describe("the window rolls (§10.1, ADR-0008)", () => {
+  it("covers the last TREND_WINDOW_HOURS from now, and drops what has aged out", async () => {
     harness = await createTestHarness({}, NOW);
-    await purgeTrendingKeys(harness, "2026-08-10", "en");
+    await purgeTrendingKeys(harness, "en");
     const deps = trendingDeps(harness);
 
-    const closed = await readTrending(deps, { day: "2026-08-10", language: "en", limit: 50 });
+    // Two stories, both stored, both breadth-gated by two outlets each. The
+    // fresh one broke 8-9 hours ago, which at 05:00 UTC is YESTERDAY'S
+    // calendar day — the case the frozen-day design got wrong and the reason
+    // the landing page went thin every morning. The stale one is 30 hours old:
+    // outside the rolling window, and outside any reading of "today".
+    await storeArticles(harness, [
+      {
+        title: "Evacuations Near Kelowna Ordered",
+        prose: "Officials in Kelowna ordered the evacuation.",
+        domain: "a.com",
+        ageHours: 8,
+      },
+      {
+        title: "Smoke Covers Kelowna By Dawn",
+        prose: "Crews worked through the night in Kelowna.",
+        domain: "b.com",
+        ageHours: 9,
+      },
+      {
+        title: "Verdict Delivered In The Truro Case",
+        prose: "The hearing in Truro ended without comment.",
+        domain: "a.com",
+        ageHours: 30,
+      },
+      {
+        title: "Appeal Expected After The Truro Ruling",
+        prose: "Lawyers left Truro on the same afternoon.",
+        domain: "b.com",
+        ageHours: 31,
+      },
+    ]);
 
-    expect(harness.counting.searchCalls).toBe(0);
-    expect(closed.terms).toEqual([]);
-    expect(closed.meta.ingest).toEqual({ state: "complete", pendingJobs: 0 });
-    expect(await harness.redis.exists("lock:sample:2026-08-10:en")).toBe(0);
-  });
+    await processSampleJob(deps, { kind: "sample", language: "en" });
+    const cloud = await readTrending(deps, { language: "en", limit: 50 });
+    const emitted = new Set(cloud.terms.map((t) => t.term));
+
+    expect(emitted.has("kelowna")).toBe(true);
+    expect(emitted.has("truro")).toBe(false);
+
+    // The response says which 24 hours it describes, and there is no `day`.
+    const start = new Date(cloud.windowStart).getTime();
+    const end = new Date(cloud.windowEnd).getTime();
+    expect(end).toBe(NOW.getTime());
+    expect(end - start).toBe(24 * 3_600_000);
+  }, 30_000);
 });
