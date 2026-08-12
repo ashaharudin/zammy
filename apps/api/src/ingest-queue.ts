@@ -154,6 +154,17 @@ export class IngestQueue {
     if (pending.length > 0) await this.redis.del(...pending);
   }
 
+  /**
+   * The queue this instance owns. Exposed because the trending keys are
+   * scoped by it for the same reason `pendingKey` is (below): replicas share
+   * the "ingest" queue and must elect ONE sampler, while a differently-named
+   * queue — every test harness makes its own — must not touch the state a
+   * local dev server is using through the same Redis.
+   */
+  get name(): string {
+    return this.queueName;
+  }
+
   async close(): Promise<void> {
     await this.worker?.close();
     await this.queue.close();

@@ -50,8 +50,23 @@ export interface TrendingDeps extends TimelineDeps {
   trending: TrendingConfig;
 }
 
-/** §10.4: trending:<language>, ~15 minutes. */
+/** §10.4: the cached cloud, ~15 minutes. */
 const TRENDING_CACHE_TTL_MS = 15 * 60 * 1000;
+
+/**
+ * Both keys are scoped to the ingest queue, exactly as its pending keys are.
+ * Replicas share the "ingest" queue and so still elect ONE sampler between
+ * them, while a differently-named queue cannot reach this one's state — which
+ * matters now that the day is gone from the key (ADR-0008): `lock:sample:en`
+ * would otherwise be the SAME string in a test run and in the local dev
+ * server sharing that Redis, and a 60-minute lock left by either would
+ * silence the other's sampling.
+ */
+const cacheKeyFor = (deps: TrendingDeps, language: string): string =>
+  `${deps.queue.name}:trending:${language}`;
+
+const sampleLockFor = (deps: TrendingDeps, language: string): string =>
+  `${deps.queue.name}:lock:sample:${language}`;
 
 /** The window ending at `now`, as the corpus read and the response want it. */
 function windowBounds(now: Date, windowHours: number): { from: Date; to: Date } {
@@ -64,7 +79,7 @@ export async function readTrending(
 ): Promise<TrendingResponse> {
   const now = deps.now();
   const { from } = windowBounds(now, deps.trending.windowHours);
-  const cacheKey = `trending:${query.language}`;
+  const cacheKey = cacheKeyFor(deps, query.language);
 
   const cached = await readCachedPage<TrendingResponse>(deps.redis, cacheKey);
   if (cached) {
@@ -79,7 +94,7 @@ export async function readTrending(
   // the frozen-day design had to reset it at each rollover (ADR-0008).
   try {
     const elected = await deps.redis.set(
-      `lock:sample:${query.language}`,
+      sampleLockFor(deps, query.language),
       "1",
       "PX",
       Math.max(1, Math.round(deps.trending.sampleRefreshMinutes * 60_000)),
@@ -233,7 +248,7 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
 
   // Next poll must see the fresh cloud, not a pre-sample cache entry.
   try {
-    await deps.redis.del(`trending:${job.language}`);
+    await deps.redis.del(cacheKeyFor(deps, job.language));
   } catch {
     // 15 minutes of staleness at worst; the cache is not correctness (§7.1).
   }

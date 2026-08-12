@@ -23,16 +23,12 @@ afterEach(async () => {
 });
 
 /**
- * Fictional, fixture-era clock. A real-clock harness would share its
- * trending window with whatever the trending suite or a local dev server is
- * doing, and those collide through the one Redis everything here shares. The
- * sample lock is no longer day-keyed (ADR-0008), so the purge above is what
- * keeps this suite independent.
+ * Fictional, fixture-era clock, so a rerun cannot inherit a real topic's
+ * coverage. The trending keys need no such care: they are scoped to this
+ * harness's own queue name, so neither the trending suite nor a local dev
+ * server shares them (see trending-service.ts).
  */
 const ROUTES_NOW = new Date("2026-08-06T12:00:00.000Z");
-
-/** This suite's own cloud, for the shared-Redis reason above. */
-const TRENDING_LANG = "pt";
 
 async function setup(): Promise<void> {
   harness = await createTestHarness({}, ROUTES_NOW);
@@ -52,12 +48,6 @@ async function setup(): Promise<void> {
   registerTrendingRoute(app, { deps: trendingDeps });
   registerMetricsRoute(app, harness.metrics);
   await app.ready();
-
-  // Sample lock and trending cache outlive ephemeral test databases; clear
-  // them so reruns start fresh. Both are keyed by LANGUAGE alone now
-  // (ADR-0008), so this suite uses its own — purging "en" mid-run would
-  // re-elect a sample underneath the trending suite running beside it.
-  await harness.redis.del(`lock:sample:${TRENDING_LANG}`, `trending:${TRENDING_LANG}`);
 
   // Deterministic fingerprints collide with previous runs via shared Redis.
   const canonical = canonicalize(
@@ -165,14 +155,11 @@ describe("GET /api/v1/trending", () => {
   it("answers with the §10.4 contract and queues a sample", async () => {
     await setup();
 
-    const response = await app.inject({
-      method: "GET",
-      url: `/api/v1/trending?language=${TRENDING_LANG}`,
-    });
+    const response = await app.inject({ method: "GET", url: "/api/v1/trending" });
 
     expect(response.statusCode).toBe(200);
     const body = TrendingResponse.parse(response.json()); // shared contract IS the assertion
-    expect(body.language).toBe(TRENDING_LANG);
+    expect(body.language).toBe("en");
     // The response says which 24 hours it describes, ending now (ADR-0008).
     expect(body.windowEnd).toBe(ROUTES_NOW.toISOString());
     expect(Date.parse(body.windowEnd) - Date.parse(body.windowStart)).toBe(24 * 3_600_000);
@@ -188,7 +175,7 @@ describe("GET /api/v1/trending", () => {
     await setup();
     const response = await app.inject({
       method: "GET",
-      url: `/api/v1/trending?language=${TRENDING_LANG}&day=2026-08-01`,
+      url: "/api/v1/trending?day=2026-08-01",
     });
     expect(response.statusCode).toBe(200);
     expect(TrendingResponse.parse(response.json()).windowEnd).toBe(ROUTES_NOW.toISOString());
