@@ -172,9 +172,10 @@ The measured gain, meanwhile, is zero: removing `new` changes no term at 141 or
 183 articles, because every `New <Name>` phrase in the corpora occurs once, far
 below the breadth gate. So this is §14.7's lesson in a new costume — an
 unmeasured gain against a mechanism that fails toward deleting good output — and
-it stays stopworded. Making it safe needs a phrase-position rule (a leading
+it stays stopworded. Making it safe would need a phrase-position rule (a leading
 common word cannot anchor a bigram), which is a change to the propriety gate
-itself and wants its own measurement.
+itself and wants its own measurement. **That measurement has since been taken
+and the rule refused — see the amendment at the end of this page.**
 
 ## Measured and declined: folding dotted initialisms
 
@@ -260,3 +261,146 @@ disappearing, and every term the cloud shows today is unaffected.
 The cost is that font size becomes slightly less faithful to score for long
 terms. §10.5 already says font size is decorative and the article count is the
 accessible signal, so this trades the weaker channel to keep the word on screen.
+
+## Amended 2026-08-11: the phrase-position rule is closed, not open
+
+The question left open above — would a phrase-position rule make un-stopwording
+`new` safe? — was measured against all three recorded fixtures, collapsed by URL
+as `term-scoring.test.ts` does: 141 articles / 49 domains for the two the page
+already uses, 183 / 73 with `search-climate-duplicates`. **No code changed. The
+rule is refused, and not on yield: it is refuted structurally.**
+
+`new york` and `new trump` are the same shape — a non-proper leading word
+followed by a proper trailing one. They differ in neither position nor
+propriety, only in document frequency, so no rule reading positions can separate
+them. Whichever way such a rule points it must treat the pair alike: point it at
+the leading word and both are refused, point it at the trailing word and both
+are admitted. This is the same kind of closure as "the arithmetic is closed"
+above — a bound on the mechanism, not a shortfall in the corpus.
+
+Both readings were implemented and scored anyway, because the class each one
+costs is worth knowing.
+
+### Reading 1: the leading word must be a proper noun
+
+| corpus | terms | lost | gained |
+| --- | --- | --- | --- |
+| 141 | 28 → 27 | `president donald`, `world cup` | `cup` |
+| 183 | 47 → 46 | `president donald`, `world cup` | `cup` |
+
+The rule **cannot gain a phrase**: `isProperNoun(words[0])` admits a strict
+subset of `.some(isProperNoun)`, so the only way a term can arrive is a unigram
+resurrected by the bigram that used to subsume it. `cup` standing in for `world
+cup` is the entire upside, and it is the trigram trade run backwards — a less
+specific name for the same topic.
+
+Across 56 subsampled runs (7 sizes × 8 mulberry32 seeds, the method used higher
+up this page) the cloud changes in 30 of them, net **−24 terms** summed over all
+runs. Four distinct bigrams are removed: `president donald` ×24, `world cup`
+×17, `abdul el-sayed` ×5, `tmk energy` ×1. Three are names — one of them a
+person's full name — against one instance of the `shape tmk` nonsense class. 46
+removals of real terms to 1 of junk.
+
+Two pinned expectations fail under it. `world cup` is asserted present by the
+wire-and-desk block of `term-scoring.test.ts`, and `displaced kelowna` by
+ADR-0006's participle case. The second is the more telling: ADR-0006 wrote the
+`index > 0` guard *because* a modifier in front of a name is a modifier ("armed
+forces", "planned parenthood"), and this rule deletes that whole class from the
+propriety side immediately after the verb lexicon was built to protect it.
+
+The class is not an artifact of two fixtures. Six constructed trailing anchors,
+each using its modifier lowercase once in prose the way running text does — the
+condition that makes the leading word fail the case test in any real corpus —
+are all six deleted: `hurricane milton`, `storm milton`, `president donald`,
+`mount fuji`, `lake michigan`, `cyclone freddy`. What survives in their place is
+what §10.3 and ADR-0006 exist to exclude: `milton nears`, `nears landfall`,
+`donald speaks`, `freddy batters`. The rule deletes the name and keeps the
+clause.
+
+The narrower variant the question suggested — `.some()` as shipped, plus a small
+modifier list (`new`, `world`, `president`, `hurricane`, `storm`, `tropical`)
+barred from leading — measures **identically** on the fixtures (28 → 27, 47 →
+46, the same two terms lost, `cup` gained) and identically on the
+counterfactual. It cannot do better: barring `new` from leading is precisely
+what refuses `new york`.
+
+### Reading 2: the trailing word must be a proper noun
+
+At 183 it loses `australian river`, `democratic primary`, `senate primary` and
+`united states`, gaining bare `australian`, `democratic`, `united`; at 141 it
+loses `democratic primary` and `senate primary` for `democratic`. And it leaves
+the hazard exactly where it was — on the synthetic corpus below it admits `new
+trump`, which then deletes `trump`, which is the failure `new` was declined over.
+
+### The counterfactual, on synthetic corpora
+
+Each `New <Name>` phrase occurs once in the fixtures, far below the breadth
+gate, so two corpora were constructed: three articles across three domains in
+which every `York` sits inside `New York`, and six across four in which `Trump`
+appears alone in four articles and `New Trump` in two.
+
+| variant | new-york corpus | new-trump corpus |
+| --- | --- | --- |
+| shipped gate, `new` stopworded | `york` 3 | `trump` 6 |
+| shipped gate, `new` freed | `new york` 3 | `new trump` 2 — **`trump` deleted** |
+| leading rule, `new` freed | `york` 3 | `trump` 6 |
+| trailing rule, `new` freed | `new york` 3 | `new trump` 2 — **`trump` deleted** |
+| narrow rule, `new` freed | `york` 3 | `trump` 6 |
+| shipped gate + contained subsumption, `new` freed | `new york` 3 | `trump` 6 *and* `new trump` 2 |
+
+Row 2 is this page's original argument, previously reasoned and now measured: a
+df-2 phrase deletes a df-6 name. Every variant that keeps `trump` fails to
+deliver `new york`, and the one row that does both is not a position rule.
+
+### What would actually work, and what it costs
+
+The separating fact is coverage, which is what the subsumption rule's own
+comment claims to be about — "every `Ben Carroll` headline also produced `ben`"
+— and does not check. `new york` covers 3 of `york`'s 3 articles; `new trump`
+covers 2 of `trump`'s 6.
+
+Requiring full coverage before a phrase deletes a word is a small change and it
+is not free. At 183 it adds six unigrams the shipped rule deletes today, every
+one of them a partial covering:
+
+| unigram | df | covering phrase(s) | df |
+| --- | --- | --- | --- |
+| `trump` | 9 | `donald trump` | 4 |
+| `democratic` | 5 | `democratic primary` | 3 |
+| `michigan` | 4 | `michigan senate` | 2 |
+| `senate` | 4 | `michigan senate`, `senate primary` | 2, 2 |
+| `abdul` | 3 | `abdul el-sayed` | 2 |
+| `australian` | 3 | `australian river` | 2 |
+
+That is a change to what the cloud *is* — 47 → 53 terms — defensible on its own
+evidence, since a term covering 9 articles is currently deleted in favour of one
+covering 4, and pinned against by `term-scoring.test.ts`, which asserts `trump`
+is absent. It wants its own ADR, and freeing `new` is not the argument for it:
+with contained subsumption in place, freeing `new` still changes **no term at
+183**, and its effect on the synthetic corpus is to add `new trump` beside
+`trump` rather than instead of it — junk gained, which is the cost this page
+originally said it would rather have than a deletion, but a cost with no
+measured gain behind it.
+
+### The grouping bar, measured regardless
+
+5 of the 183 titles contain `new`. Same-story pairs under the ADR-0005 bar
+(Jaccard ≥ 0.5 with the 2-shared-token floor, over **all** pairs — a superset of
+the same-day, same-language bound) hold at **15 → 15** with `new` freed, and no
+pair crosses in either direction. The constructed hazard reproduces unchanged:
+"New Rules For Drivers" / "New Rules For Landlords" go from `shared 1, 0.333` to
+`shared 2, 0.500`, exactly the default threshold. The cost is therefore still
+real and still invisible in this corpus.
+
+Since nothing here changes the stopword list, `TOKENIZER_VERSION` stays at 3 and
+there is no `pnpm regroup` backlog to clear.
+
+### Verdict
+
+`new` stays a stopword, the propriety gate keeps `.some()`, and `new york`, `new
+zealand` and `new delhi` stay unreachable — a named limit, as above. The open
+question is now closed: the position rule was the cheap candidate and it is
+refuted from both directions at once, deleting names it should keep while
+refusing the names it was proposed for. The live thread for anyone returning to
+this is the subsumption rule's missing coverage check, measured above, which
+stands or falls on its own account and not on `new`.
