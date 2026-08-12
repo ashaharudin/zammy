@@ -109,6 +109,11 @@ const WIRE_AND_DESK = [
  * apply at all: `keepable` is what `headlineTokens` filters through, so a
  * frequent token returning to the vocabulary can only raise Jaccard and can
  * push a pair across the two-token floor.
+ *
+ * The rescue this left open — a phrase-position rule on the propriety gate —
+ * has since been measured and refused (ADR-0007, amendment). `new york` and
+ * `new trump` are the same shape, so a positional rule admits both or refuses
+ * both; what separates them is coverage, in the subsumption rule.
  */
 const NEWS_EXTENSION = [
   ...CALENDAR,
