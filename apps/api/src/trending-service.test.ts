@@ -53,11 +53,6 @@ function trendingDeps(h: TestHarness, overrides: Partial<TrendingDeps["trending"
   };
 }
 
-/** Sample-keyed Redis state outlives ephemeral test databases; clear it. */
-async function purgeTrendingKeys(h: TestHarness, language: string) {
-  await h.redis.del(`lock:sample:${language}`, `trending:${language}`);
-}
-
 /**
  * Store articles at chosen ages — the corpus source the sample does not
  * supply (§10.1 source 1), and the only way to put a story at a known
@@ -110,7 +105,6 @@ async function storeArticles(
 describe("the first visitor after the snapshot staled (§10.1)", () => {
   it("queues ONE single-call sample, serves instantly, fills the cloud behind the reader", async () => {
     harness = await createTestHarness({}, NOW);
-    await purgeTrendingKeys(harness, "en");
     const deps = trendingDeps(harness);
 
     // The first visitor pays nothing synchronously — the whole §9 posture.
@@ -154,7 +148,6 @@ describe("the first visitor after the snapshot staled (§10.1)", () => {
 
   it("re-elects a sample once the freshness window passes — cost scales with the clock, not readers", async () => {
     harness = await createTestHarness({}, NOW);
-    await purgeTrendingKeys(harness, "en");
     // 60ms freshness window: "an hour" at test speed.
     const deps = trendingDeps(harness, { sampleRefreshMinutes: 0.001 });
 
@@ -174,7 +167,7 @@ describe("the first visitor after the snapshot staled (§10.1)", () => {
 
     // Inside the window a read re-elects nothing (cache cleared to prove it
     // is the LOCK holding, not the response cache).
-    await harness.redis.del("trending:en");
+    await harness.redis.del(`${harness.queue.name}:trending:en`);
     await new Promise((r) => setTimeout(r, 80)); // let the 60ms lock expire
 
     const later = await readTrending(deps, { language: "en", limit: 50 });
@@ -196,7 +189,6 @@ describe("the sample is a write path, so it groups what it creates (§14.3)", ()
     // it — and this is the most syndication-dense source we have, one
     // latest-news page spanning every category and outlet.
     harness = await createTestHarness({}, NOW);
-    await purgeTrendingKeys(harness, "en");
     const deps = trendingDeps(harness);
 
     await processSampleJob(deps, { kind: "sample", language: "en" });
@@ -221,7 +213,6 @@ describe("the sample is a write path, so it groups what it creates (§14.3)", ()
 describe("the window rolls (§10.1, ADR-0008)", () => {
   it("covers the last TREND_WINDOW_HOURS from now, and drops what has aged out", async () => {
     harness = await createTestHarness({}, NOW);
-    await purgeTrendingKeys(harness, "en");
     const deps = trendingDeps(harness);
 
     // Two stories, both stored, both breadth-gated by two outlets each. The
