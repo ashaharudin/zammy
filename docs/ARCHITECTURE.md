@@ -1051,6 +1051,18 @@ So four mechanisms are **required for the first cut**, not deferred as polish:
   `gas flows`, `flows rise`, `power play` and `shape tmk` to buy it, which is not a trade worth
   keeping. Weekdays and months — grammatically proper, journalistically generic — are stopworded
   instead, since no case evidence can catch them.
+- **No term may contain a verb.** The propriety gate above closed one junk class and opened
+  another: once one name could anchor a phrase, the rest of its headline came with it. Twelve of the
+  live cloud's forty-two terms were fragments of that shape, six a name beside a verb — "graham
+  advances", "trump slipped", "leaving turkey". A topic is a nominal; a name plus a verb is a
+  headline with its middle removed. The test cannot be morphological, because "funding" and "games"
+  wear the same `-ing` and `-s` as "giving" and "advances", so it is lexical: a curated list of news
+  verbs split by which inflection has nominalized
+  ([ADR-0006](adr/0006-a-curated-verb-lexicon-keeps-predicates-out-of-the-cloud.md), which records the
+  three corpus-evidence rules this beat and why). Corpus case outranks the lexicon, so "Sitting Bull"
+  survives, and a participle counts only after the first word, since in front it modifies ("armed
+  forces"). The sibling class — adjective or title plus a name, "president trump" and "late sen" —
+  is still open.
 - **A unigram subsumed by a surviving bigram is suppressed.** The live cloud showed "ben" beside
   "ben carroll" — the same story twice. When a bigram survives every gate, any unigram that is one
   of its words is dropped; the phrase is the more specific name for the topic.
