@@ -25,7 +25,20 @@ export function freshnessTier(windowEnd: Date, now: Date): "hot" | "recent" | "h
   return ttl === 60_000 ? "hot" : ttl === 600_000 ? "recent" : "historical";
 }
 
-/** page:<fingerprint>:<windowHash>:<cursor>:<limit> (§7.1). */
+/**
+ * The serialized page's SHAPE generation. Cached pages are returned as-is —
+ * no re-validation on read, by design (§7.1: a cache never costs correctness
+ * work) — so a deploy that changes the wire shape must change the key, or a
+ * client parsing with the new schema chokes on a page cached by the old
+ * build for up to the historical tier's 24h TTL.
+ *
+ *   2 — slots are storylines; entries carry `storylineId` and `coverage` (ADR-0009)
+ *   3 — the second section renamed `coverage` → `moreCoverage`: the bare word
+ *       already names fetched time spans (CONTEXT.md)
+ */
+const PAGE_SHAPE_VERSION = 3;
+
+/** page:v<shape>:<fingerprint>:<windowHash>:<cursor>:<limit> (§7.1). */
 export function pageCacheKey(
   fingerprint: string,
   window: { from: Date; to: Date },
@@ -36,7 +49,7 @@ export function pageCacheKey(
     .update(`${window.from.getTime()}-${window.to.getTime()}`)
     .digest("hex")
     .slice(0, 16);
-  return `page:${fingerprint}:${windowHash}:${cursor ?? "first"}:${limit}`;
+  return `page:v${PAGE_SHAPE_VERSION}:${fingerprint}:${windowHash}:${cursor ?? "first"}:${limit}`;
 }
 
 export async function readCachedPage<T>(redis: Redis, key: string): Promise<T | null> {

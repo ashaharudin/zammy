@@ -4,9 +4,12 @@ import { ingestSightings, upsertTopic } from "./ingest.js";
 import { migrateToLatest } from "./migrator.js";
 import {
   countStaleTokenArticles,
+  mergeGroups,
   readGroupCandidates,
   readStaleTokenArticles,
+  readStorylineDay,
   recordGrouping,
+  setStoryline,
 } from "./grouping.js";
 import {
   createTestDatabase,
@@ -372,6 +375,206 @@ describe("article groups in storage", () => {
     await recordGrouping(harness.db, { articleId: seedId, titleTokens: tokens, tokensVersion: 2, groupId: otherId });
 
     expect((await readArticle(seedId)).group_id).toBe(seedId);
+  });
+});
+
+describe("storylines in storage (ADR-0009)", () => {
+  let harness: TestDatabase;
+
+  const ingest = async (...sightings: Sighting[]) =>
+    ingestSightings(harness.db, { fingerprint: TOPIC, sightings });
+
+  const readRow = async (id: string) =>
+    harness.db
+      .selectFrom("articles")
+      .select(["id", "group_id", "storyline_id", "storyline_published", "story_tokens"])
+      .where("id", "=", id)
+      .executeTakeFirstOrThrow();
+
+  beforeAll(async () => {
+    harness = await createTestDatabase();
+    await migrateToLatest(harness.db);
+    await upsertTopic(harness.db, { fingerprint: TOPIC, keywords: ["storyline"] });
+  });
+
+  afterAll(async () => {
+    await harness.drop();
+  });
+
+  it("seeds every new article into its own group's storyline", async () => {
+    // Structural, like group membership: a null storyline_id would sort first
+    // under the keyset and corrupt paging, so the trigger owns it.
+    const result = await ingest(
+      story({
+        url: "https://solo.example/1",
+        title: "A lone storyline",
+        published: "2026-08-11T10:00:00.000Z",
+      }),
+    );
+
+    const id = result.createdArticles[0]!.id;
+    const row = await readRow(id);
+    expect(row.storyline_id).toBe(id);
+    expect(row.storyline_published).toEqual(new Date("2026-08-11T10:00:00.000Z"));
+    expect(row.story_tokens).toEqual([]);
+  });
+
+  it("gives a singleton that joins a group that group's storyline", async () => {
+    const seed = await ingest(
+      story({
+        url: "https://a.example/join",
+        title: "Port strike halts grain exports",
+        published: "2026-08-11T09:00:00.000Z",
+      }),
+    );
+    const joiner = await ingest(
+      story({
+        url: "https://b.example/join",
+        title: "Port strike halts grain exports again",
+        published: "2026-08-11T11:00:00.000Z",
+      }),
+    );
+    const seedId = seed.createdArticles[0]!.id;
+    const joinerId = joiner.createdArticles[0]!.id;
+    const tokens = ["port", "strike", "halt", "grain", "export"];
+
+    await recordGrouping(harness.db, {
+      articleId: seedId,
+      titleTokens: tokens,
+      tokensVersion: 4,
+      groupId: null,
+    });
+    // Attach the seed's group to some other storyline first, so the joiner
+    // must follow the group's storyline, not the group id.
+    const hub = await ingest(
+      story({
+        url: "https://hub.example/join",
+        title: "Dockworkers walk out across coast",
+        published: "2026-08-11T08:00:00.000Z",
+      }),
+    );
+    const hubId = hub.createdArticles[0]!.id;
+    await setStoryline(harness.db, { groupId: seedId, storylineId: hubId });
+
+    await recordGrouping(harness.db, {
+      articleId: joinerId,
+      titleTokens: [...tokens, "again"],
+      tokensVersion: 4,
+      groupId: seedId,
+    });
+
+    const row = await readRow(joinerId);
+    expect(row.group_id).toBe(seedId);
+    expect(row.storyline_id).toBe(hubId);
+    // The hub's storyline position follows the earliest member across ALL its
+    // groups — here the hub article's own 08:00.
+    expect(row.storyline_published).toEqual(new Date("2026-08-11T08:00:00.000Z"));
+  });
+
+  it("merges one group into another, storyline and position included", async () => {
+    const mk = async (url: string, title: string, published: string) => {
+      const result = await ingest(story({ url, title, published }));
+      const id = result.createdArticles[0]!.id;
+      await recordGrouping(harness.db, {
+        articleId: id,
+        titleTokens: ["merge", "test"],
+        tokensVersion: 4,
+        groupId: null,
+      });
+      return id;
+    };
+
+    // Two multi-member poles of one story — the shape ADR-0005 could not heal.
+    const a1 = await mk("https://p1.example/m", "Pole one first", "2026-08-11T10:00:00.000Z");
+    const a2 = await mk("https://p2.example/m", "Pole one second", "2026-08-11T11:00:00.000Z");
+    const b1 = await mk("https://p3.example/m", "Pole two first", "2026-08-11T09:00:00.000Z");
+    const b2 = await mk("https://p4.example/m", "Pole two second", "2026-08-11T12:00:00.000Z");
+    await recordGrouping(harness.db, { articleId: a2, titleTokens: ["merge", "test"], tokensVersion: 4, groupId: a1 });
+    await recordGrouping(harness.db, { articleId: b2, titleTokens: ["merge", "test"], tokensVersion: 4, groupId: b1 });
+
+    const outcome = await mergeGroups(harness.db, { winnerGroupId: a1, loserGroupId: b1 });
+    expect(outcome.merged).toBe(true);
+
+    for (const id of [a1, a2, b1, b2]) {
+      const row = await readRow(id);
+      expect(row.group_id).toBe(a1);
+      expect(row.storyline_id).toBe(a1);
+      // The merged group's position reaches back to pole two's 09:00 member.
+      expect(row.storyline_published).toEqual(new Date("2026-08-11T09:00:00.000Z"));
+    }
+
+    // Idempotent: the loser is empty now, so a replay is a no-op.
+    expect((await mergeGroups(harness.db, { winnerGroupId: a1, loserGroupId: b1 })).merged).toBe(
+      false,
+    );
+  });
+
+  it("carries a merged hub's spokes along to the winner's storyline", async () => {
+    const mk = async (url: string, title: string, published: string) => {
+      const result = await ingest(story({ url, title, published }));
+      const id = result.createdArticles[0]!.id;
+      await recordGrouping(harness.db, {
+        articleId: id,
+        titleTokens: ["spoke", "carry"],
+        tokensVersion: 4,
+        groupId: null,
+      });
+      return id;
+    };
+
+    const winner = await mk("https://w.example/s", "Winner story", "2026-08-11T10:00:00.000Z");
+    const loserHub = await mk("https://l.example/s", "Loser hub story", "2026-08-11T11:00:00.000Z");
+    const spoke = await mk("https://sp.example/s", "Spoke angle piece", "2026-08-11T12:00:00.000Z");
+    await setStoryline(harness.db, { groupId: spoke, storylineId: loserHub });
+
+    await mergeGroups(harness.db, { winnerGroupId: winner, loserGroupId: loserHub });
+
+    // The spoke's GROUP is untouched — it was never the same piece — but its
+    // storyline follows its hub into the winner's story.
+    const row = await readRow(spoke);
+    expect(row.group_id).toBe(spoke);
+    expect(row.storyline_id).toBe(winner);
+  });
+
+  it("reads a day-language corpus for the storyline pass", async () => {
+    const rows = await readStorylineDay(harness.db, {
+      from: DAY_FROM,
+      to: DAY_TO,
+      language: "en",
+    });
+    // Everything this suite ingested is in the window; spot-check the shape.
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.groupId).toMatch(/^\d+$/);
+      expect(row.storylineId).toMatch(/^\d+$/);
+      expect(Array.isArray(row.storyTokens)).toBe(true);
+    }
+  });
+
+  it("records story tokens alongside title tokens", async () => {
+    const result = await ingest(
+      story({
+        url: "https://tokens.example/1",
+        title: "Copper prices surge",
+        published: "2026-08-11T13:00:00.000Z",
+      }),
+    );
+    const id = result.createdArticles[0]!.id;
+    await recordGrouping(harness.db, {
+      articleId: id,
+      titleTokens: ["copper", "price", "surge"],
+      storyTokens: ["copper", "price", "surge", "mine", "chile"],
+      tokensVersion: 4,
+      groupId: null,
+    });
+
+    expect((await readRow(id)).story_tokens).toEqual([
+      "copper",
+      "price",
+      "surge",
+      "mine",
+      "chile",
+    ]);
   });
 });
 

@@ -9,7 +9,8 @@
     "start": "node --env-file-if-exists=../../.env dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
-    "regroup": "tsc -b && node --env-file-if-exists=../../.env dist/regroup-cli.js"
+    "regroup": "tsc -b && node --env-file-if-exists=../../.env dist/regroup-cli.js",
+    "measure:storylines": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-measure-cli.js"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

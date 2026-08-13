@@ -658,26 +658,29 @@ convention §6.3 uses for requested and segment windows. Write it explicitly (`t
 assumes the two agree will mis-reason about segment seams. §6.3 explains why the mismatch is the safe
 direction and must not be "fixed" here.
 
-### 7.3 Timeline reads — keyset pagination over article groups
+### 7.3 Timeline reads — keyset pagination over storylines
 
 ```sql
--- Step 1: the page of GROUPS. Both columns are functions of the group, so
--- DISTINCT folds a group's members into the one row that represents it here.
-SELECT DISTINCT a.group_id, a.group_published
+-- Step 1: the page of STORYLINES (ADR-0009; originally groups, one layer
+-- down). Both columns are functions of the storyline, so DISTINCT folds its
+-- members into the one row that represents it here.
+SELECT DISTINCT a.storyline_id, a.storyline_published
 FROM topic_articles ta
 JOIN articles a ON a.id = ta.article_id
 WHERE ta.fingerprint = $1
-  AND a.group_published >= $2 AND a.group_published < $3
-  AND (a.group_published, a.group_id) < ($4, $5)   -- cursor; omitted on first page
-ORDER BY a.group_published DESC, a.group_id DESC
+  AND a.published >= $2 AND a.published < $3
+  AND (a.storyline_published, a.storyline_id) < ($4, $5)   -- cursor; omitted on first page
+ORDER BY a.storyline_published DESC, a.storyline_id DESC
 LIMIT $6;
 
--- Step 2: their members, for THIS topic only — groups are global, membership
--- is not, and the representative is chosen from what actually matched (§14.3).
+-- Step 2: their members, for THIS topic only — storylines are global,
+-- membership is not, and the representative is chosen from what actually
+-- matched (§14.3). Each member carries its group_id, which is what splits the
+-- slot's disclosure into "same story" and "more coverage".
 SELECT a.*
 FROM topic_articles ta
 JOIN articles a ON a.id = ta.article_id
-WHERE ta.fingerprint = $1 AND a.group_id = ANY($7)
+WHERE ta.fingerprint = $1 AND a.storyline_id = ANY($7)
 ORDER BY a.published DESC, a.id DESC;
 ```
 
@@ -688,7 +691,10 @@ unpredictable and `hasMore` unreliable. Grouping (§14.3) keeps that property ra
 away: the group is materialized at write time, so `LIMIT` still counts what the reader sees. An
 ungrouped article is a group of one whose position and identity are its own, so a store with no
 grouping pages exactly as it did before the columns existed — including the cursor, which is
-unchanged in shape.
+unchanged in shape. Storylines (ADR-0009) repeat the move one layer up: the slot is a day's
+coverage of one story — a hub group plus the angle pieces attached to it — materialized at write
+time onto `storyline_id`/`storyline_published`, and a group leading its own storyline pages
+exactly as groups did before the layer existed.
 
 Keyset, not `OFFSET`: cost is constant regardless of depth, and — critically for a feed where new
 articles arrive constantly — rows cannot shift between pages and cause duplicates or skips. The
@@ -1486,6 +1492,13 @@ Still open:
      one story, where two outlets share a subject and almost no vocabulary. That gap is the honest
      case for vectors; it is not a case for lowering the threshold, which would merely merge
      different stories that share words.
+
+     **Resolved lexically (ADR-0009), vectors still unbuilt:** a second, looser relation — day-rare
+     anchor plus rarity-weighted mass over title AND description tokens — clusters a day's groups
+     hub-and-spoke into **storylines**, and the storyline is the slot the timeline pages (§7.3).
+     The angle piece that names the story only in its description attaches there, which is what the
+     gap actually was on live data. Thresholds were measured before pinning; the measurement CLI
+     (`pnpm measure:storylines`) stays in the repo as the instrument.
    - **Grouping is forward-looking, and `pnpm regroup` is how you change that deliberately.** Every
      rule above decides at write time, so articles stored before a rule existed keep the grouping —
      and the tokens — they were given. `title_tokens` is a materialized derivation of a rule that has
@@ -1507,10 +1520,14 @@ Still open:
      arrived it had a 0.750 match elsewhere. Measured over 8,240 live articles: +31 grouped, no new
      single-outlet merges.
 
-     Only groups of **one** are adopted. Merging two established groups is transitive merging — the
-     chaining the day window exists to bound — whereas adopting a singleton keeps every member within
-     one hop of the article that pulled it in. The SQL enforces it, so a candidate that gained
-     members between the query and the write is refused rather than stranding them.
+     Only groups of **one** were adopted at first. Merging two established groups looked like
+     transitive merging — the chaining the day window exists to bound — and ADR-0005 refused it.
+     **Superseded (ADR-0009):** an arrival whose matches clear the full bar against members of TWO
+     groups is direct evidence they are one story, and such groups now merge whole, arrival-time and
+     backfill alike; that is what healed a story that had locked into "to leave" / "to step down"
+     poles. The singleton rule survives in SQL for the ordinary join path — an article with members
+     of its own still never moves alone — and `mergeGroups` is the one sanctioned way a whole group
+     moves.
 
      The cost is that a slot a reader has already seen can now fold into another slot, and a group
      adopting an earlier article moves down the timeline. Both were already possible — a new article

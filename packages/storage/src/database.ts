@@ -69,16 +69,27 @@ export interface ArticlesTable {
    * insert may omit it, and every row still lands in a group.
    */
   group_id: Generated<string>;
-  /** MIN(published) over the group — the timeline's keyset axis (§7.3). */
+  /** MIN(published) over the group. */
   group_published: DefaultedTimestamp;
   /** Headline tokens; what same-day grouping candidates are matched on. */
   title_tokens: Generated<string[]>;
   /**
-   * Which tokenizer produced `title_tokens`. Rows below the current version
-   * compare against stale vocabulary until the regroup command re-derives
-   * them (ADR-0005); 0 means "older than the version column".
+   * Which tokenizer produced `title_tokens` AND `story_tokens` — both are
+   * derivations of one tokenizer generation (ADR-0009). Rows below the current
+   * version compare against stale vocabulary until the regroup command
+   * re-derives them (ADR-0005); 0 means "older than the version column".
    */
   tokens_version: Generated<number>;
+  /**
+   * The storyline's identity: its HUB group's id, self for a group leading its
+   * own storyline (ADR-0009). Trigger-seeded from `group_id`, so every row is
+   * in a storyline structurally.
+   */
+  storyline_id: Generated<string>;
+  /** MIN(published) over the storyline — the timeline's keyset axis (§7.3). */
+  storyline_published: DefaultedTimestamp;
+  /** Title+description tokens; the storyline layer's matching surface. */
+  story_tokens: Generated<string[]>;
 }
 
 export interface TopicsTable {

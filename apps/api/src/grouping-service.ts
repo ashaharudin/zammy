@@ -1,5 +1,6 @@
 import type { Kysely } from "kysely";
 import {
+  mergeGroups,
   readGroupCandidates,
   recordGrouping,
   type CreatedArticle,
@@ -12,6 +13,8 @@ import {
   rankedMatches,
   TOKENIZER_VERSION,
 } from "./grouping.js";
+import { storyTokens, type StorylineRules } from "./storyline.js";
+import { attachSeededGroups } from "./storyline-service.js";
 import type { Metrics } from "./metrics.js";
 
 /**
@@ -33,6 +36,8 @@ export interface GroupingDeps {
     threshold: number;
     /** The calendar day candidates are drawn from — §10.1's rule, not UTC. */
     timeZone: string;
+    /** The layer above (ADR-0009), switchable independently of grouping. */
+    storyline: { enabled: boolean } & StorylineRules;
   };
   metrics?: Metrics;
   log?: { warn: (obj: object, msg: string) => void };
@@ -74,15 +79,16 @@ export function groupingDepsFor(deps: {
 const CANDIDATE_LIMIT = 200;
 
 /**
- * How many groups of one a single arrival may adopt.
+ * How many groups a single arrival may merge into the one it joined.
  *
- * Adoption happens inside the request that triggered the ingest, so this
+ * Merging happens inside the request that triggered the ingest, so this
  * bounds write amplification rather than correctness: ten is far above what
- * real coverage produces (the largest live case adopted two), and a day
+ * real coverage produces (the largest live adoption case pulled two, and the
+ * ADR-0009 sweep saw no arrival bridge more than a handful), and a day
  * pathological enough to exceed it gets a slightly worse grouping, never a
  * wrong row.
  */
-const ADOPT_LIMIT = 10;
+const MERGE_LIMIT = 10;
 
 /**
  * Group each newly-created article, and return how many joined an existing
@@ -101,9 +107,11 @@ export async function groupCreatedArticles(
   if (!deps.config.enabled || created.length === 0) return 0;
 
   let grouped = 0;
+  const seeded: CreatedArticle[] = [];
   for (const article of created) {
     try {
       if ((await groupArticle(deps, article)) !== null) grouped += 1;
+      else seeded.push(article);
     } catch (error) {
       deps.log?.warn(
         { err: error, articleId: article.id },
@@ -111,6 +119,28 @@ export async function groupCreatedArticles(
       );
     }
   }
+
+  // Storyline attachment runs once per BATCH, not per article: each seeded
+  // group needs the day's corpus, and reading it per article was measured
+  // blowing the §6.3 sync-fill deadline (ADR-0009). An article that JOINED a
+  // group inherited that group's storyline inside `recordGrouping`; only the
+  // ones that seeded a new group have a decision left to make.
+  await attachSeededGroups(
+    {
+      db: deps.db,
+      config: {
+        enabled: deps.config.storyline.enabled,
+        rules: deps.config.storyline,
+        timeZone: deps.config.timeZone,
+      },
+      ...(deps.log ? { log: deps.log } : {}),
+    },
+    seeded.map((article) => ({
+      groupId: article.id,
+      published: article.published,
+      language: article.language,
+    })),
+  );
 
   deps.metrics?.articlesGrouped(grouped);
   return grouped;
@@ -127,6 +157,7 @@ export async function groupArticle(
   article: CreatedArticle,
 ): Promise<string | null> {
   const tokens = headlineTokens(article.title);
+  const story = storyTokens(article.title, article.description);
 
   // A headline that reduces to fewer than two tokens can never clear the
   // shared-token floor, in either direction. Recording the tokens anyway keeps
@@ -136,6 +167,7 @@ export async function groupArticle(
     await recordGrouping(deps.db, {
       articleId: article.id,
       titleTokens: tokens,
+      storyTokens: story,
       tokensVersion: TOKENIZER_VERSION,
       groupId: null,
     });
@@ -163,52 +195,54 @@ export async function groupArticle(
   await recordGrouping(deps.db, {
     articleId: article.id,
     titleTokens: tokens,
+    storyTokens: story,
     tokensVersion: TOKENIZER_VERSION,
     groupId: chosen?.groupId ?? null,
   });
 
-  if (chosen) await adoptStragglers(deps, chosen.groupId, matches);
+  if (chosen) await mergeBridgedGroups(deps, chosen.groupId, matches);
 
   // The group joined, so a caller re-running this over stored rows can tell a
-  // real move from a verdict that merely confirmed where the article already is.
+  // real move from a verdict that merely confirmed where the article already
+  // is. `null` also tells the batch layer this article SEEDED a group, which
+  // is what queues it for the storyline attach decision (ADR-0009).
   return chosen?.groupId ?? null;
 }
 
 /**
- * Pull every OTHER group of one this article matched into the group it joined.
+ * Merge every OTHER group this article matched into the group it joined.
  *
- * Grouping evaluates an article once, at creation, so an article that arrives
- * before its story's coverage exists never gets another chance — and
- * best-match-wins meant a later arrival could match it, join somewhere better,
- * and leave it stranded. This is the moment both articles are known to be the
- * same story, so it is the moment to act.
+ * Grouping evaluates an article once, at creation, so one story's coverage
+ * can form two poles that drift apart on wording ("to leave" / "to step
+ * down") — and once both poles had members, nothing could reunite them:
+ * ADR-0005 allowed only singletons to move, fearing transitive chaining. The
+ * newcomer whose matches span BOTH groups is direct evidence they are one
+ * story — both sides cleared the full grouping bar against the same headline,
+ * shared-token floor and figures veto included — and ADR-0009 measured what
+ * acting on it does: 66 merges over a 31-day live corpus, every sampled one
+ * genuine syndication, largest healed split the Leavitt departure's 5+7.
  *
- * Only groups of ONE are adopted. Merging two real groups is transitive
- * merging, which is the chaining the day window exists to bound; adopting a
- * singleton keeps every member within one hop of the article that pulled it in.
- * `recordGrouping` enforces the singleton rule in SQL, so a candidate that
- * gained members since the query is refused rather than stranding them.
+ * Singleton matches ride the same path: merging a group of one IS the old
+ * adoption, one mechanism instead of two. Merged rows keep their stored
+ * tokens and version — a stale row must not look fresh, and the regroup
+ * command remains the one place staleness is repaired.
  */
-async function adoptStragglers(
+async function mergeBridgedGroups(
   deps: GroupingDeps,
   groupId: string,
-  matches: readonly { id: string; groupId: string; title: string }[],
+  matches: readonly { id: string; groupId: string }[],
 ): Promise<void> {
-  let adopted = 0;
+  let merged = 0;
+  const seen = new Set<string>([groupId]);
   for (const match of matches) {
-    if (adopted >= ADOPT_LIMIT) break;
-    // Already in the group, or plainly not a group of one.
-    if (match.groupId === groupId || match.id !== match.groupId) continue;
+    if (merged >= MERGE_LIMIT) break;
+    if (seen.has(match.groupId)) continue;
+    seen.add(match.groupId);
 
-    await recordGrouping(deps.db, {
-      articleId: match.id,
-      // Re-derived from the headline rather than copied from the row: the
-      // stored tokens may predate the current tokenizer, and writing them back
-      // under today's version number would make a stale row look fresh.
-      titleTokens: headlineTokens(match.title),
-      tokensVersion: TOKENIZER_VERSION,
-      groupId,
+    const outcome = await mergeGroups(deps.db, {
+      winnerGroupId: groupId,
+      loserGroupId: match.groupId,
     });
-    adopted += 1;
+    if (outcome.merged) merged += 1;
   }
 }

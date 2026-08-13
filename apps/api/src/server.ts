@@ -132,6 +132,11 @@ export async function buildApp(config: Config): Promise<App> {
         enabled: config.GROUPING_ENABLED,
         threshold: config.GROUPING_SIMILARITY_THRESHOLD,
         timeZone: config.APP_TIMEZONE,
+        storyline: {
+          enabled: config.STORYLINE_ENABLED,
+          anchorMaxShare: config.STORYLINE_ANCHOR_SHARE,
+          massThreshold: config.STORYLINE_MASS_THRESHOLD,
+        },
       },
     },
     now: () => new Date(),
