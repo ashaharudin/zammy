@@ -374,7 +374,12 @@ function RelatedSection({
   const [showAll, setShowAll] = useState(false);
   const rows = collapseCopies(articles);
   const capped = softCap && !showAll ? rows.slice(0, SAME_STORY_CAP) : rows;
-  const hidden = rows.length - capped.length;
+  // Hidden ARTICLES, not hidden rows: the disclosure button promises "N
+  // related" in articles, and a row absorbing word-identical copies carries
+  // several. Counting rows here left the two numbers irreconcilable — a
+  // reader could see "17 related" yet only ever count 14 (live report:
+  // 11 same-story articles collapsing to 8 rows swallowed 3 from the tally).
+  const hidden = articles.length - capped.reduce((total, row) => total + row.copies, 0);
 
   return (
     <section aria-label={label}>
