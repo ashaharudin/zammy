@@ -536,6 +536,43 @@ describe("storylines in storage (ADR-0009)", () => {
     expect(row.storyline_id).toBe(winner);
   });
 
+  it("re-points the storyline to the winner when the winner absorbs its own hub", async () => {
+    const mk = async (url: string, title: string, published: string) => {
+      const result = await ingest(story({ url, title, published }));
+      const id = result.createdArticles[0]!.id;
+      await recordGrouping(harness.db, {
+        articleId: id,
+        titleTokens: ["hub", "absorb"],
+        tokensVersion: 4,
+        groupId: null,
+      });
+      return id;
+    };
+
+    // The production shape: the bridge article arrives through a SPOKE's
+    // wording, so the spoke's group wins the merge and absorbs the hub it
+    // hangs off. The storyline must follow the winner — an id naming a
+    // dissolved group is invisible to the hubs-only attach path.
+    const hub = await mk("https://hub.example/a", "Hub story", "2026-08-11T10:00:00.000Z");
+    const winner = await mk("https://win.example/a", "Winner angle", "2026-08-11T11:00:00.000Z");
+    const spoke = await mk("https://spk.example/a", "Other spoke", "2026-08-11T12:00:00.000Z");
+    await setStoryline(harness.db, { groupId: winner, storylineId: hub });
+    await setStoryline(harness.db, { groupId: spoke, storylineId: hub });
+
+    await mergeGroups(harness.db, { winnerGroupId: winner, loserGroupId: hub });
+
+    for (const id of [hub, winner]) {
+      const row = await readRow(id);
+      expect(row.group_id).toBe(winner);
+      expect(row.storyline_id).toBe(winner);
+    }
+    // The other spoke's group is untouched, but its hub dissolved into the
+    // winner's group, so its storyline follows there too.
+    const row = await readRow(spoke);
+    expect(row.group_id).toBe(spoke);
+    expect(row.storyline_id).toBe(winner);
+  });
+
   it("reads a day-language corpus for the storyline pass", async () => {
     const rows = await readStorylineDay(harness.db, {
       from: DAY_FROM,
