@@ -1,21 +1,26 @@
 import { useEffect, useRef, useState } from "react";
 import type { TimelinePage } from "@zammy/shared";
 import type { Reference, TopicQuery } from "./api.js";
+import { defaultedTopic } from "./browserDefaults.js";
+import { filterChips, type Chip, type ChipOption } from "./filterChips.js";
 import { MONO } from "./theme.js";
+import { upstreamHealthRecord } from "./upstreamHealth.js";
 
 /**
- * The persistent chrome once a topic is open: prompt + query + the language
- * picker, and underneath a terse meta row that renders the response's
- * freshness honestly (§8.1) — count, coverage, asOf/servedFrom, stale and
- * degraded states. The count line is aria-live so screen readers hear the
- * timeline grow during progressive fill.
+ * The persistent chrome once a topic is open: prompt + query, and underneath a
+ * meta row carrying the response's asOf stamp (§8.1) followed by the topic's
+ * filter chips — location, language, category.
+ *
+ * The chips replaced a flag icon and a servedFrom/degraded/stale readout. The
+ * icon said less than a word does, and the freshness readout was operational
+ * detail standing where the reader's own filters belong; degraded state is
+ * logged now (see upstreamHealth) rather than shown.
  *
  * Ingest progress is deliberately not here: the timeline owns that state and
- * says it in motion (see IngestBeacon/IngestGhosts). A second, textual copy in
- * the chrome duplicated it and pushed servedFrom off the row while it showed.
+ * says it in motion (see IngestBeacon/IngestGhosts).
  *
- * Country and category filters were dropped from the UI (2026-08-10) — the
- * API still accepts them, and shared links carrying them keep working.
+ * Country and category filters, dropped from the UI on 2026-08-10, are back as
+ * chips; shared links carrying them have kept working throughout.
  */
 export function CommandBar({
   topic,
@@ -28,7 +33,7 @@ export function CommandBar({
   /** The newest response — the authority on meta. */
   page: TimelinePage | undefined;
   reference: Reference | undefined;
-  onSearch: (topic: TopicQuery) => void;
+  onSearch: (topic: TopicQuery, options?: { replace?: boolean }) => void;
   onClear: () => void;
 }) {
   const [q, setQ] = useState(topic.q);
@@ -39,10 +44,8 @@ export function CommandBar({
     setQ(topic.q);
   }, [topic]);
 
-  const submit = (language: string | undefined) => {
-    if (!q.trim()) return;
-    onSearch({ ...topic, q: q.trim(), language });
-  };
+  useUpstreamHealthLog(page);
+  useBrowserDefaults(topic, reference, onSearch);
 
   return (
     <header
@@ -58,7 +61,7 @@ export function CommandBar({
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          submit(topic.language);
+          if (q.trim()) onSearch({ ...topic, q: q.trim() });
         }}
         style={{
           maxWidth: "760px",
@@ -100,43 +103,87 @@ export function CommandBar({
             background: "transparent",
           }}
         />
-        <LanguagePicker
-          value={topic.language}
-          languages={reference?.languages ?? {}}
-          onSelect={(code) => submit(code)}
-        />
       </form>
       <div
         style={{
           maxWidth: "760px",
           margin: "0 auto",
           display: "flex",
-          justifyContent: "space-between",
-          alignItems: "baseline",
-          gap: "1rem",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "0.4rem",
           padding: "0 1rem 0.5rem",
           fontFamily: MONO,
           fontSize: "0.75rem",
           color: "var(--fg-faint)",
         }}
       >
-        <span>
-          {page ? <AsOf iso={page.meta.asOf} /> : "searching…"}
-        </span>
-        <span>
-          {page?.meta.degraded && (
-            <span style={{ color: "var(--amber)", marginRight: "0.75rem" }}>
-              degraded: {page.meta.degraded}
-            </span>
-          )}
-          {page?.meta.stale && (
-            <span style={{ color: "var(--amber)", marginRight: "0.75rem" }}>stale</span>
-          )}
-          {page?.meta.servedFrom}
-        </span>
+        <span>{page ? <AsOf iso={page.meta.asOf} /> : "searching…"}</span>
+        {filterChips(topic, reference).map((chip) => (
+          <FilterChip
+            key={chip.kind}
+            chip={chip}
+            onSelect={(code) => onSearch({ ...topic, [chip.kind]: code })}
+          />
+        ))}
       </div>
     </header>
   );
+}
+
+/**
+ * §11's degraded and stale states, logged instead of shown. console is the
+ * transport until the app has a real one; the record is already the shape a
+ * transport would ship, so adopting one is a change of sink, not of caller.
+ */
+function useUpstreamHealthLog(page: TimelinePage | undefined) {
+  const lastLogged = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!page) return;
+    const record = upstreamHealthRecord(page.meta);
+    if (!record) {
+      lastLogged.current = null;
+      return;
+    }
+    // Progressive fill re-renders this bar on every page; one line per distinct
+    // state, not one per response.
+    const key = `${record.degraded}:${record.stale}:${record.servedFrom}`;
+    if (lastLogged.current === key) return;
+    lastLogged.current = key;
+    console.warn("[zammy]", record);
+  }, [page]);
+}
+
+/**
+ * The starting filters for a topic that names none: the browser's own country
+ * and language, falling back to Worldwide and English (§8.1, defaultedTopic).
+ *
+ * Only once the reference list has arrived — a detected code upstream does not
+ * carry would be rejected. Applied as a real search rather than a display-only
+ * default, because a chip reading "Canada" over an unfiltered timeline would
+ * be a lie; replace, not push, because the reader did not ask to go here.
+ */
+function useBrowserDefaults(
+  topic: TopicQuery,
+  reference: Reference | undefined,
+  onSearch: (topic: TopicQuery, options?: { replace?: boolean }) => void,
+) {
+  useEffect(() => {
+    if (!reference) return;
+    const next = defaultedTopic(topic, readBrowser(), reference);
+    if (next.language !== topic.language || next.country !== topic.country) {
+      onSearch(next, { replace: true });
+    }
+  }, [topic, reference, onSearch]);
+}
+
+/** The one place that reads the browser's own settings. */
+function readBrowser(): { locales: readonly string[]; timeZone: string | undefined } {
+  return {
+    locales: navigator.languages?.length ? navigator.languages : [navigator.language],
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  };
 }
 
 /** The response's asOf freshness stamp: day, date, time, timezone (§8.1). */
@@ -156,56 +203,16 @@ function AsOf({ iso }: { iso: string }) {
 }
 
 /**
- * Representative flag per upstream language code. A language is not a country,
- * so these are conventional picks, not statements; unknown codes get 🌐.
+ * One filter as a word plus the list it can be changed to. Picking an entry
+ * re-runs the search immediately — a filter that waits for a second Enter
+ * reads as broken. A custom popover rather than a native <select> so the
+ * closed control reads as part of the meta line rather than as a form field.
  */
-const LANGUAGE_FLAGS: Record<string, string> = {
-  ar: "🇸🇦",
-  zh: "🇨🇳",
-  nl: "🇳🇱",
-  en: "🇬🇧",
-  fi: "🇫🇮",
-  fr: "🇫🇷",
-  de: "🇩🇪",
-  hi: "🇮🇳",
-  it: "🇮🇹",
-  ja: "🇯🇵",
-  ko: "🇰🇷",
-  msa: "🇲🇾",
-  pt: "🇵🇹",
-  ru: "🇷🇺",
-  es: "🇪🇸",
-  vi: "🇻🇳",
-  da: "🇩🇰",
-  cs: "🇨🇿",
-  el: "🇬🇷",
-  hu: "🇭🇺",
-  sr: "🇷🇸",
-  th: "🇹🇭",
-  tr: "🇹🇷",
-};
-
-const ANY_LANGUAGE = "🌐";
-
-function flagFor(code: string | undefined): string {
-  if (!code) return ANY_LANGUAGE;
-  return LANGUAGE_FLAGS[code] ?? ANY_LANGUAGE;
-}
-
-/**
- * Flag-icon trigger with a flag + name listbox. Picking an entry re-runs the
- * search immediately — a filter icon that waits for a second Enter reads as
- * broken. A custom popover rather than a native <select> because the closed
- * control must render as just the flag.
- */
-function LanguagePicker({
-  value,
-  languages,
+function FilterChip({
+  chip,
   onSelect,
 }: {
-  value: string | undefined;
-  /** Display name → code, from /api/v1/reference. */
-  languages: Record<string, string>;
+  chip: Chip;
   onSelect: (code: string | undefined) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -227,15 +234,6 @@ function LanguagePicker({
     };
   }, [open]);
 
-  const entries: { code: string | undefined; flag: string; label: string }[] = [
-    { code: undefined, flag: ANY_LANGUAGE, label: "any language" },
-    ...Object.entries(languages).map(([name, code]) => ({
-      code,
-      flag: flagFor(code),
-      label: name,
-    })),
-  ];
-
   return (
     <div ref={container} style={{ position: "relative" }}>
       <button
@@ -243,27 +241,27 @@ function LanguagePicker({
         onClick={() => setOpen(!open)}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={`Language filter: ${value ?? "any"}`}
-        title="Language"
+        aria-label={`${CHIP_LABELS[chip.kind]}: ${chip.label}`}
         style={{
           border: "1px solid var(--border)",
           borderRadius: "999px",
           background: "var(--chip-bg)",
+          color: "inherit",
           cursor: "pointer",
-          fontSize: "1rem",
-          lineHeight: 1,
-          padding: "0.25rem 0.45rem",
+          font: "inherit",
+          lineHeight: 1.3,
+          padding: "0.05rem 0.5rem",
         }}
       >
-        {flagFor(value)}
+        {chip.label}
       </button>
       {open && (
         <ul
           role="listbox"
-          aria-label="Language"
+          aria-label={CHIP_LABELS[chip.kind]}
           style={{
             position: "absolute",
-            right: 0,
+            left: 0,
             top: "calc(100% + 0.35rem)",
             margin: 0,
             padding: "0.25rem",
@@ -278,37 +276,59 @@ function LanguagePicker({
             zIndex: 20,
           }}
         >
-          {entries.map((entry) => (
-            <li key={entry.code ?? "*"}>
-              <button
-                type="button"
-                role="option"
-                aria-selected={entry.code === value}
-                onClick={() => {
-                  setOpen(false);
-                  onSelect(entry.code);
-                }}
-                style={{
-                  display: "flex",
-                  gap: "0.5rem",
-                  alignItems: "center",
-                  width: "100%",
-                  border: "none",
-                  background: entry.code === value ? "var(--chip-bg)" : "none",
-                  borderRadius: "6px",
-                  cursor: "pointer",
-                  padding: "0.3rem 0.5rem",
-                  fontSize: "0.85rem",
-                  textAlign: "left",
-                }}
-              >
-                <span aria-hidden="true">{entry.flag}</span>
-                {entry.label}
-              </button>
-            </li>
+          {chip.options.map((option) => (
+            <Option
+              key={option.code ?? "*"}
+              option={option}
+              selected={option.code === chip.code}
+              onSelect={() => {
+                setOpen(false);
+                onSelect(option.code);
+              }}
+            />
           ))}
         </ul>
       )}
     </div>
+  );
+}
+
+const CHIP_LABELS: Record<Chip["kind"], string> = {
+  country: "Location",
+  language: "Language",
+  category: "Category",
+};
+
+function Option({
+  option,
+  selected,
+  onSelect,
+}: {
+  option: ChipOption;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <li>
+      <button
+        type="button"
+        role="option"
+        aria-selected={selected}
+        onClick={onSelect}
+        style={{
+          display: "block",
+          width: "100%",
+          border: "none",
+          background: selected ? "var(--chip-bg)" : "none",
+          borderRadius: "6px",
+          cursor: "pointer",
+          padding: "0.3rem 0.5rem",
+          fontSize: "0.85rem",
+          textAlign: "left",
+        }}
+      >
+        {option.label}
+      </button>
+    </li>
   );
 }

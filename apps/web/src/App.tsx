@@ -42,8 +42,13 @@ export function App() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  const navigate = useCallback((next: TopicQuery | null) => {
-    window.history.pushState(null, "", `${window.location.pathname}${searchFor(next)}`);
+  // `replace` is for a transition the reader did not make — the detected
+  // filter defaults land on the topic they just opened, and a history entry
+  // for that would make Back appear to do nothing.
+  const navigate = useCallback((next: TopicQuery | null, options?: { replace?: boolean }) => {
+    const url = `${window.location.pathname}${searchFor(next)}`;
+    if (options?.replace) window.history.replaceState(null, "", url);
+    else window.history.pushState(null, "", url);
     setTopic(next);
   }, []);
 
