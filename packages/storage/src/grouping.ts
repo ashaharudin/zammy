@@ -217,6 +217,17 @@ export async function mergeGroups(
       .executeTakeFirst();
     if (!winner || !loser) return { merged: false };
 
+    // The winner may be a SPOKE of the very hub it is absorbing — the bridge
+    // article arrived through the spoke's wording. Keeping the winner's
+    // storyline id would leave the storyline named after a group that no
+    // longer exists, and the attach path offers hubs only (groups leading the
+    // storyline they are in), so the story would become invisible to every
+    // later arrival. The winner's group takes over as hub instead.
+    const storylineId =
+      winner.storyline_id === input.loserGroupId
+        ? input.winnerGroupId
+        : winner.storyline_id;
+
     await trx
       .updateTable("articles")
       .set({ group_id: input.winnerGroupId })
@@ -228,7 +239,7 @@ export async function mergeGroups(
     // too, because their hub is now part of the winner's story.
     await trx
       .updateTable("articles")
-      .set({ storyline_id: winner.storyline_id })
+      .set({ storyline_id: storylineId })
       .where((eb) =>
         eb.or([
           eb("group_id", "=", input.winnerGroupId),
@@ -238,8 +249,8 @@ export async function mergeGroups(
       .execute();
 
     await refreshGroupPosition(trx, input.winnerGroupId);
-    await refreshStorylinePosition(trx, winner.storyline_id);
-    if (loser.storyline_id !== winner.storyline_id) {
+    await refreshStorylinePosition(trx, storylineId);
+    if (loser.storyline_id !== storylineId) {
       await refreshStorylinePosition(trx, loser.storyline_id);
     }
     return { merged: true };
