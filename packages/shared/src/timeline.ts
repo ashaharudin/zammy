@@ -69,18 +69,23 @@ export const TopicSummary = z.object({
 export type TopicSummary = z.infer<typeof TopicSummary>;
 
 /**
- * One slot in the timeline: a story as this topic saw it covered (§14.3).
+ * One slot in the timeline: a day's coverage of a story as this topic saw it
+ * (§14.3, ADR-0009).
  *
  * Most slots are one article. Where several outlets ran the same story at
  * different URLs — which URL-based dedup deliberately does not collapse, since
  * the wordcloud's breadth signal counts those rows (§10.3) — the slot carries
- * one member as the headline and the rest as `related`.
+ * one member as the headline and the other copies as `related`. Where the day
+ * produced coverage AROUND the story — retrospectives, successor speculation,
+ * fact-checks, clustered by the storyline layer — those arrive as `coverage`:
+ * different pieces, same story, and the disclosure renders them as their own
+ * section.
  */
 export const TimelineEntry = z.object({
-  /** Stable per group; the id half of this page's cursor. */
-  groupId: z.string().regex(/^\d+$/),
+  /** Stable per storyline; the id half of this page's cursor. */
+  storylineId: z.string().regex(/^\d+$/),
   /**
-   * The group's earliest published, NOT the representative's.
+   * The storyline's earliest published, NOT the representative's.
    *
    * This is both where the slot sits and the time the UI shows, and the two
    * must agree: positioning a slot at 6 hours ago while showing the
@@ -89,15 +94,21 @@ export const TimelineEntry = z.object({
    * pattern ADR-0002 already uses for an article's earliest sighting.
    */
   published: z.iso.datetime(),
-  /** The newest member's published. Equals `published` for a group of one. */
+  /** The newest member's published. Equals `published` for a slot of one. */
   updatedAt: z.iso.datetime(),
   /**
-   * The headline: any tier-1 source in the group, else its earliest member.
-   * Chosen per topic, so it is always an article that matched this search.
+   * The headline: any tier-1 source in the slot's LEAD group — its
+   * most-syndicated — else that group's earliest member. Chosen per topic, so
+   * it is always an article that matched this search.
    */
   article: Article,
-  /** The group's other members in this topic, newest first. Usually empty. */
+  /** Same story, other outlets: the lead group's other members, newest first. */
   related: z.array(Article),
+  /** Same storyline, different pieces: every other group's members, newest
+   * first. `moreCoverage`, not `coverage` — that word is taken (CONTEXT.md:
+   * the fetched time spans), and one word with two meanings is the confusion
+   * the language doc exists to prevent. */
+  moreCoverage: z.array(Article),
 });
 export type TimelineEntry = z.infer<typeof TimelineEntry>;
 

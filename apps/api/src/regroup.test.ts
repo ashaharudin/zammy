@@ -142,6 +142,59 @@ describe("regroup", () => {
     expect(new Set((await groupsOf(ids)).map((r) => r.group_id)).size).toBe(2);
   });
 
+  it("heals a two-pole split on bridge evidence (ADR-0009 pass 3)", async () => {
+    // The split merge-repair exists for: both poles have members, so pass 2
+    // (singletons only) can never reunite them. The bridge article's matches
+    // span both groups at the bar, and pass 3 acts on it.
+    harness = await createTestHarness({}, NOW);
+    const fingerprint = randomBytes(32).toString("hex");
+    await upsertTopic(harness.deps.db, { fingerprint, keywords: ["mayor"], language: "en" });
+
+    const titles = {
+      a1: "Mayor resigns in budget scandal over audit report",
+      a2: "Mayor resigns in budget scandal over audit reports",
+      b1: "Mayor resigns at city hall council meeting",
+      b2: "Mayor resigns at city hall council meetings",
+      bridge: "Mayor resigns over budget scandal at city hall",
+    };
+    const ingested = await ingestSightings(harness.deps.db, {
+      fingerprint,
+      sightings: Object.values(titles).map((title, i) =>
+        sighting(`outlet${i}.example`, title, `2026-08-11T10:0${i}:00.000Z`),
+      ),
+    });
+    const ids = new Map(ingested.createdArticles.map((a) => [a.title, a.id]));
+
+    // Stored as the split would exist on a pre-ADR-0009 database: two
+    // two-member groups, the bridge filed with pole A, tokens current.
+    const tokens: Record<string, { tokens: string[]; group: string }> = {
+      [titles.a1]: { tokens: ["mayor", "resign", "budget", "scandal", "audit", "report"], group: titles.a1 },
+      [titles.a2]: { tokens: ["mayor", "resign", "budget", "scandal", "audit", "report"], group: titles.a1 },
+      [titles.b1]: { tokens: ["mayor", "resign", "city", "hall", "council", "meeting"], group: titles.b1 },
+      [titles.b2]: { tokens: ["mayor", "resign", "city", "hall", "council", "meeting"], group: titles.b1 },
+      [titles.bridge]: { tokens: ["mayor", "resign", "budget", "scandal", "city", "hall"], group: titles.a1 },
+    };
+    for (const [title, spec] of Object.entries(tokens)) {
+      await recordGrouping(harness.deps.db, {
+        articleId: ids.get(title)!,
+        titleTokens: spec.tokens,
+        tokensVersion: TOKENIZER_VERSION,
+        groupId: title === spec.group ? null : ids.get(spec.group)!,
+      });
+    }
+
+    const result = await regroup(deps(), { days: 1, now: () => NOW });
+
+    expect(result.merged).toBeGreaterThanOrEqual(1);
+    const rows = await harness.deps.db
+      .selectFrom("articles")
+      .select(["group_id", "storyline_id"])
+      .where("id", "in", [...ids.values()])
+      .execute();
+    expect(new Set(rows.map((row) => row.group_id)).size).toBe(1);
+    expect(new Set(rows.map((row) => row.storyline_id)).size).toBe(1);
+  });
+
   it("never takes an existing group apart", async () => {
     const ids = await seedStaleRows();
     // Put both rows in one group first; the pass must not move either out.

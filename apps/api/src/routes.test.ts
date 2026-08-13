@@ -101,8 +101,8 @@ describe("GET /api/v1/timeline", () => {
         })
       ).json(),
     );
-    const firstIds = new Set(first.items.map((i) => i.groupId));
-    expect(second.items.every((i) => !firstIds.has(i.groupId))).toBe(true);
+    const firstIds = new Set(first.items.map((i) => i.storylineId));
+    expect(second.items.every((i) => !firstIds.has(i.storylineId))).toBe(true);
   });
 
   it("rejects bad input with field-level 400s, spending zero quota", async () => {

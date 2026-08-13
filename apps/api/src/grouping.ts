@@ -62,8 +62,12 @@ const MIN_SHARED_TOKENS = 2;
  *   1 — content tokens, digits dropped (§10.2)
  *   2 — plurals folded (ADR-0005)
  *   3 — wire-service and desk stopwords added (ADR-0007)
+ *   4 — story tokens (title+description) materialized alongside (ADR-0009);
+ *       `headlineTokens` itself is unchanged, but rows below 4 have no
+ *       `story_tokens` and are invisible to the storyline layer until
+ *       re-derived.
  */
-export const TOKENIZER_VERSION = 3;
+export const TOKENIZER_VERSION = 4;
 
 /**
  * The distinct content-bearing tokens of a headline (§10.2's tokenizer),
@@ -94,8 +98,13 @@ export function headlineTokens(title: string): string[] {
  *
  * Consistency matters more than linguistic correctness: `series` → `serie`
  * is wrong as English and harmless here, because both sides map alike.
+ *
+ * Exported for the storyline layer (ADR-0009), which folds title AND
+ * description tokens and must stem them identically — two stemmers disagreeing
+ * about what a word is would make the two layers disagree about what a story
+ * is, the same failure mode that keeps `contentTokens` shared.
  */
-function singular(token: string): string {
+export function singular(token: string): string {
   if (token.endsWith("ss")) return token; // press, boss, glass
   if (token.endsWith("ies") && token.length >= 5) return `${token.slice(0, -3)}y`;
   // Drop the final `s` and nothing more, as Porter's first step does. The

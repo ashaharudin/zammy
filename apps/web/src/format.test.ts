@@ -28,11 +28,12 @@ const article = (id: string, published: string): Article => ({
 });
 
 const entry = (id: string, published: string, headlinePublished = published): TimelineEntry => ({
-  groupId: id,
+  storylineId: id,
   published,
   updatedAt: headlinePublished,
   article: article(id, headlinePublished),
   related: [],
+  moreCoverage: [],
 });
 
 describe("hasLaterCoverage", () => {
@@ -76,7 +77,7 @@ describe("groupByDay", () => {
     const days = groupByDay([nextDay, straddling]);
 
     expect(days).toHaveLength(2);
-    expect(days[1]?.items.map((item) => item.groupId)).toEqual(["1"]);
+    expect(days[1]?.items.map((item) => item.storylineId)).toEqual(["1"]);
   });
 
   it("keeps consecutive slots from one day in a single bucket", () => {

@@ -21,14 +21,22 @@ more sightings. This is the unit users see and the unit anything countable count
 _Avoid_: cluster, story, item, post
 
 **Group**:
-A day's coverage of one story: the articles several outlets published about it, kept as separate
-articles and joined rather than merged. One group is one slot in the timeline. Most groups hold a
-single article, and a group never spans two calendar days.
+One story as several outlets ran it: the same piece syndicated at different URLs, kept as separate
+articles and joined rather than merged. Groups cluster into storylines, and the storyline is the
+timeline slot. Most groups hold a single article, and a group never spans two calendar days.
 _Avoid_: cluster, duplicate, merge, story
 
+**Storyline**:
+A day's coverage of one story: its most-syndicated group at the centre (the hub) and the day's
+angle pieces — retrospectives, follow-ups, fact-checks — attached one hop from it, each a group of
+its own. One storyline is one slot in the timeline; most storylines hold a single group, and a
+storyline never spans two calendar days — an ongoing story recurs each day it has coverage.
+_Avoid_: cluster, thread, saga, topic
+
 **Representative**:
-The member of a group whose headline the timeline shows. Chosen per topic, from the members that
-matched that search, by source authority — never by how often upstream re-emitted it.
+The article whose headline a timeline slot shows. Chosen per topic from the storyline's LEAD
+group — its most syndicated — among the members that matched that search, by source authority;
+never by how often upstream re-emitted it.
 _Avoid_: primary, canonical, best, winner
 
 **Seed**:

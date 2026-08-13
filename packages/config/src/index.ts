@@ -88,6 +88,35 @@ const EnvSchema = z
      */
     GROUPING_SIMILARITY_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
 
+    // --- storylines (ARCHITECTURE 14.3 amendment, ADR-0009) ---
+    /**
+     * Whether a day's groups cluster into storyline slots. Off restores one
+     * slot per group; storylines already recorded page as their groups again
+     * only after a regroup — flipping this off changes ATTACHMENT, not stored
+     * state, so flip it back on and nothing was lost.
+     */
+    STORYLINE_ENABLED: z
+      .enum(["true", "false"])
+      .default("true")
+      .transform((value) => value === "true"),
+    /**
+     * A shared token anchors a storyline link only below this share of the
+     * day's corpus. MEASURED (ADR-0009): 0.05 admits a story's own name on
+     * the day it dominates coverage (df 64 of 1,453 = 4.4%) and refuses
+     * beat vocabulary ("trump" ≈ 20% of any day).
+     */
+    STORYLINE_ANCHOR_SHARE: z.coerce.number().min(0).max(1).default(0.05),
+    /**
+     * Floor on the summed rarity (ln(dayN/df)) of everything a pair shares.
+     * MEASURED (ADR-0009): at 8, the Leavitt day clusters 31 groups of
+     * genuine departure coverage with strays in the low single digits; 6
+     * over-attaches, 10 starts shedding real angles. A wrong attach is a
+     * stray link under a headline — cheap by design — so err low here, the
+     * OPPOSITE direction from GROUPING_SIMILARITY_THRESHOLD, where a wrong
+     * merge corrupts the slot itself.
+     */
+    STORYLINE_MASS_THRESHOLD: z.coerce.number().min(0).default(8),
+
     /**
      * Applied when a search omits language. Omitting it upstream returns every
      * language mixed together, so "all" must be an explicit choice (§6.1).

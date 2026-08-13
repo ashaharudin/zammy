@@ -83,9 +83,16 @@ export async function createTestHarness(
       // Non-binding by default: the recorded fixture is denser than a real
       // topic, and only the §9.4 tests are ABOUT the cap.
       perTopicDailyCallCap: 10_000,
-      // Grouping ON by default, as it ships (§14.3) — a planner test that
-      // passes only with the feature disabled has not tested the planner.
-      grouping: { enabled: true, threshold: 0.5, timeZone: "UTC" },
+      // Grouping and storylines ON by default, as they ship (§14.3,
+      // ADR-0009) — a planner test that passes only with the feature
+      // disabled has not tested the planner. Storyline rules are the
+      // measured defaults.
+      grouping: {
+        enabled: true,
+        threshold: 0.5,
+        timeZone: "UTC",
+        storyline: { enabled: true, anchorMaxShare: 0.05, massThreshold: 8 },
+      },
       ...configOverrides,
     },
     now: now ? () => now : () => new Date(),
@@ -122,7 +129,10 @@ export async function purgeTopicKeys(redis: Redis, fingerprint: string): Promise
   // Pending-job registries are queue-scoped and test queues are uniquely
   // named, so they never collide across runs and need no purging here.
   const patterns = [
+    // Both key generations: pre-shape-version keys put the fingerprint first,
+    // versioned ones (§7.1, ADR-0009) put it after `v<shape>`.
     `page:${fingerprint}:*`,
+    `page:v*:${fingerprint}:*`,
     `lock:refresh:${fingerprint}:*`,
     "ref:languages",
     "ref:regions",

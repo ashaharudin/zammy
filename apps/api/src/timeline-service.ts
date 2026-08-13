@@ -14,7 +14,8 @@ import {
   recordCoverage,
   upsertTopic,
   type Database,
-  type TimelineGroup,
+  type SlotMember,
+  type TimelineSlot,
 } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
 import { sliceSpan, subtractCoverage, type Span } from "./coverage-gaps.js";
@@ -29,7 +30,11 @@ import type { Metrics } from "./metrics.js";
 import { refreshLockKey, release, tryAcquire } from "./single-flight.js";
 import { reserveTopicCall } from "./topic-budget.js";
 import type { IngestQueue, SegmentJob } from "./ingest-queue.js";
-import { groupCreatedArticles, groupingDepsFor } from "./grouping-service.js";
+import {
+  groupCreatedArticles,
+  groupingDepsFor,
+  type GroupingDeps,
+} from "./grouping-service.js";
 import { chooseRepresentative } from "./source-authority.js";
 
 /**
@@ -58,8 +63,9 @@ export interface TimelineDeps {
     minSegmentMs: number;
     /** §9.4: upstream calls one topic may spend per UTC day, both paths combined. */
     perTopicDailyCallCap: number;
-    /** §14.3: write-time article grouping, and the day it draws candidates from. */
-    grouping: { enabled: boolean; threshold: number; timeZone: string };
+    /** §14.3: write-time article grouping (and its storyline layer, ADR-0009),
+     * and the day both draw candidates from. */
+    grouping: GroupingDeps["config"];
   };
   now: () => Date;
   metrics?: Metrics;
@@ -288,27 +294,73 @@ async function planAndRead(
 }
 
 /**
- * A stored group → the slot the browser renders (§14.3).
+ * A stored storyline → the slot the browser renders (§14.3, ADR-0009).
  *
- * The headline is chosen HERE, per topic and per read, from the members that
- * matched this search — a group-wide choice could surface an article that
- * never matched the user's keywords and hide the matching one under "related".
- * The group's position is not chosen here and never changes with the headline:
- * `published` is the group's, so a later tier-1 article takes the headline in
- * place without moving the slot up the timeline (§7.3).
+ * The slot's LEAD GROUP is its most-syndicated group — the story itself,
+ * rather than an angle piece that happens to cite a tier-1 domain — and the
+ * headline is chosen from the lead group's members that matched this search,
+ * per topic and per read: a slot-wide choice could surface an article that
+ * never matched the user's keywords and hide the matching one under
+ * "related". The split the disclosure renders falls out of the same
+ * structure: lead-group members are the same story syndicated (`related`),
+ * every other group's members are the day's wider coverage (`coverage`).
+ * The slot's position is not chosen here and never changes with the
+ * headline: `published` is the storyline's (§7.3).
  */
-function toEntry(group: TimelineGroup): TimelineEntry {
-  const article = chooseRepresentative(group.members);
+function toEntry(slot: TimelineSlot): TimelineEntry {
+  const byGroup = new Map<string, SlotMember[]>();
+  for (const member of slot.members) {
+    const list = byGroup.get(member.groupId);
+    if (list) list.push(member);
+    else byGroup.set(member.groupId, [member]);
+  }
+
+  // Largest group leads; ties break earliest-published then lowest id, so a
+  // replayed read reaches the same slot (§7.4's replay discipline, again).
+  let lead: { groupId: string; members: SlotMember[] } | null = null;
+  for (const [groupId, members] of byGroup) {
+    if (!lead || leadBeats({ groupId, members }, lead)) lead = { groupId, members };
+  }
+  const leadMembers = lead?.members ?? [];
+
+  const article = chooseRepresentative(leadMembers.map((member) => member.article));
   return {
-    groupId: group.id,
-    published: group.published,
-    // Members are newest first, so the head is the group's latest coverage.
+    storylineId: slot.id,
+    published: slot.published,
+    // Members are newest first, so the head is the slot's latest coverage.
     // This is what the UI shows as "updated", the same treatment ADR-0002
     // gives an article whose later sightings do not move it.
-    updatedAt: group.members[0]?.published ?? group.published,
+    updatedAt: slot.members[0]?.article.published ?? slot.published,
     article,
-    related: group.members.filter((member) => member.id !== article.id),
+    related: leadMembers
+      .map((member) => member.article)
+      .filter((member) => member.id !== article.id),
+    moreCoverage: slot.members
+      .filter((member) => member.groupId !== lead?.groupId)
+      .map((member) => member.article),
   };
+}
+
+function leadBeats(
+  candidate: { groupId: string; members: SlotMember[] },
+  incumbent: { groupId: string; members: SlotMember[] },
+): boolean {
+  if (candidate.members.length !== incumbent.members.length) {
+    return candidate.members.length > incumbent.members.length;
+  }
+  const byTime =
+    earliest(candidate.members) - earliest(incumbent.members);
+  if (byTime !== 0) return byTime < 0;
+  return BigInt(candidate.groupId) < BigInt(incumbent.groupId);
+}
+
+function earliest(members: readonly SlotMember[]): number {
+  let min = Number.POSITIVE_INFINITY;
+  for (const member of members) {
+    const t = Date.parse(member.article.published);
+    if (t < min) min = t;
+  }
+  return min;
 }
 
 /**

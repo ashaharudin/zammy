@@ -67,10 +67,13 @@ export interface IngestResult {
   createdArticles: CreatedArticle[];
 }
 
-/** What grouping needs to know about a newly-created article. */
+/** What grouping — and the storyline layer above it — needs to know about a
+ * newly-created article. Description included because story tokens derive
+ * from title AND description (ADR-0009). */
 export interface CreatedArticle {
   id: string;
   title: string;
+  description: string | null;
   language: string | null;
   published: Date;
 }
@@ -217,12 +220,13 @@ export async function ingestSightings(
     if (createdIds.length > 0) {
       const rows = await trx
         .selectFrom("articles")
-        .select(["id", "title", "language", "published"])
+        .select(["id", "title", "description", "language", "published"])
         .where("id", "in", createdIds)
         .execute();
       result.createdArticles = rows.map((row) => ({
         id: row.id,
         title: row.title,
+        description: row.description,
         language: row.language,
         published: row.published,
       }));

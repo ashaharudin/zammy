@@ -87,22 +87,28 @@ export async function readGroupCandidates(
 }
 
 /**
- * Record one grouping decision: store the article's headline tokens and, when
+ * Record one grouping decision: store the article's derived tokens and, when
  * a group was chosen, move it there.
  *
  * `groupId: null` means "stays a group of one" — still a write, because the
  * tokens are what make this article a candidate for the next arrival.
+ * `storyTokens` travels with `titleTokens` when provided — both are
+ * derivations of one tokenizer generation (ADR-0009) — and is left untouched
+ * when omitted, so older callers keep meaning what they meant.
  *
  * Only a SINGLETON may move. Re-pointing an article that already has members
  * would strand them in a group whose seed lives elsewhere, and the guard also
  * makes the call idempotent: a replayed batch (retries make that routine,
- * §7.4) re-runs it as a no-op.
+ * §7.4) re-runs it as a no-op. A moved article also takes the target group's
+ * STORYLINE — a group's members share one storyline by invariant, and the
+ * join is what proves the two belong to the same story's coverage.
  */
 export async function recordGrouping(
   db: Kysely<Database>,
   input: {
     articleId: string;
     titleTokens: readonly string[];
+    storyTokens?: readonly string[];
     /** Which tokenizer produced them, so staleness stays findable (ADR-0005). */
     tokensVersion: number;
     groupId: string | null;
@@ -111,7 +117,11 @@ export async function recordGrouping(
   await db.transaction().execute(async (trx) => {
     await trx
       .updateTable("articles")
-      .set({ title_tokens: [...input.titleTokens], tokens_version: input.tokensVersion })
+      .set({
+        title_tokens: [...input.titleTokens],
+        tokens_version: input.tokensVersion,
+        ...(input.storyTokens ? { story_tokens: [...input.storyTokens] } : {}),
+      })
       .where("id", "=", input.articleId)
       .execute();
 
@@ -119,9 +129,26 @@ export async function recordGrouping(
       return;
     }
 
+    const before = await trx
+      .selectFrom("articles")
+      .select("storyline_id")
+      .where("id", "=", input.articleId)
+      .executeTakeFirst();
+
     const moved = await trx
       .updateTable("articles")
-      .set({ group_id: input.groupId })
+      .set({
+        group_id: input.groupId,
+        // The target group's storyline, from any of its members — the seed row
+        // may be gone one day (group_id carries no FK), and falling back to
+        // the article's own storyline degrades softly instead of violating
+        // NOT NULL.
+        storyline_id: sql`coalesce(
+          (select member.storyline_id from articles member
+            where member.group_id = ${input.groupId} limit 1),
+          storyline_id
+        )`,
+      })
       .where("id", "=", input.articleId)
       .where(sql<boolean>`id = group_id`)
       .where(({ not, exists, selectFrom }) =>
@@ -138,7 +165,115 @@ export async function recordGrouping(
 
     if (Number(moved.numUpdatedRows) > 0) {
       await refreshGroupPosition(trx, input.groupId);
+      const after = await trx
+        .selectFrom("articles")
+        .select("storyline_id")
+        .where("id", "=", input.articleId)
+        .executeTakeFirstOrThrow();
+      await refreshStorylinePosition(trx, after.storyline_id);
+      // The storyline it left keeps only the members it still has; its
+      // position must not keep pointing at an article that moved away.
+      if (before && before.storyline_id !== after.storyline_id) {
+        await refreshStorylinePosition(trx, before.storyline_id);
+      }
     }
+  });
+}
+
+/**
+ * Merge one group into another: the ADR-0009 repair for a split ADR-0005
+ * declared unfixable by construction.
+ *
+ * Grouping evaluates an article once, at arrival, and only singletons may
+ * move — so when one story's coverage forms two poles ("to leave" / "to step
+ * down"), the split locks in the moment both poles have two members. The
+ * repair acts on BRIDGE EVIDENCE: an arrival whose matches span both groups
+ * above the grouping bar proves they are one story, and this call is how the
+ * caller acts on it. Whole groups move — never a subset, so no member is ever
+ * stranded — and the loser's storyline follows: if the loser led a storyline,
+ * its spokes re-point to the winner's; if it was a spoke, only its own
+ * members move.
+ *
+ * Idempotent: a replayed merge finds the loser empty and does nothing.
+ */
+export async function mergeGroups(
+  db: Kysely<Database>,
+  input: { winnerGroupId: string; loserGroupId: string },
+): Promise<{ merged: boolean }> {
+  if (input.winnerGroupId === input.loserGroupId) return { merged: false };
+
+  return db.transaction().execute(async (trx) => {
+    const winner = await trx
+      .selectFrom("articles")
+      .select("storyline_id")
+      .where("group_id", "=", input.winnerGroupId)
+      .limit(1)
+      .executeTakeFirst();
+    const loser = await trx
+      .selectFrom("articles")
+      .select("storyline_id")
+      .where("group_id", "=", input.loserGroupId)
+      .limit(1)
+      .executeTakeFirst();
+    if (!winner || !loser) return { merged: false };
+
+    await trx
+      .updateTable("articles")
+      .set({ group_id: input.winnerGroupId })
+      .where("group_id", "=", input.loserGroupId)
+      .execute();
+
+    // Normalize storylines: the merged group's members take the winner's
+    // storyline, and — when the loser LED its storyline — its spokes follow
+    // too, because their hub is now part of the winner's story.
+    await trx
+      .updateTable("articles")
+      .set({ storyline_id: winner.storyline_id })
+      .where((eb) =>
+        eb.or([
+          eb("group_id", "=", input.winnerGroupId),
+          eb("storyline_id", "=", input.loserGroupId),
+        ]),
+      )
+      .execute();
+
+    await refreshGroupPosition(trx, input.winnerGroupId);
+    await refreshStorylinePosition(trx, winner.storyline_id);
+    if (loser.storyline_id !== winner.storyline_id) {
+      await refreshStorylinePosition(trx, loser.storyline_id);
+    }
+    return { merged: true };
+  });
+}
+
+/**
+ * Move one whole GROUP to a storyline (ADR-0009): the attach decision's write
+ * half, and the rebuild pass's only mutation.
+ *
+ * The caller owns the one-hop discipline — a hub that still has spokes is only
+ * ever moved by a rebuild that is reassigning every group of the day anyway.
+ */
+export async function setStoryline(
+  db: Kysely<Database>,
+  input: { groupId: string; storylineId: string },
+): Promise<void> {
+  await db.transaction().execute(async (trx) => {
+    const current = await trx
+      .selectFrom("articles")
+      .select("storyline_id")
+      .where("group_id", "=", input.groupId)
+      .limit(1)
+      .executeTakeFirst();
+    if (!current || current.storyline_id === input.storylineId) return;
+
+    await trx
+      .updateTable("articles")
+      .set({ storyline_id: input.storylineId })
+      .where("group_id", "=", input.groupId)
+      .execute();
+
+    await refreshStorylinePosition(trx, input.storylineId);
+    await refreshStorylinePosition(trx, current.storyline_id);
   });
 }
 
@@ -164,13 +299,30 @@ async function refreshGroupPosition(
   `.execute(db);
 }
 
+/** The storyline twin of `refreshGroupPosition`, for the same keyset reason. */
+async function refreshStorylinePosition(
+  db: Kysely<Database>,
+  storylineId: string,
+): Promise<void> {
+  await sql`
+    update articles a
+    set storyline_published = s.min_published
+    from (
+      select min(published) as min_published from articles where storyline_id = ${storylineId}
+    ) s
+    where a.storyline_id = ${storylineId}
+      and s.min_published is not null
+      and a.storyline_published is distinct from s.min_published
+  `.execute(db);
+}
+
 /**
  * The ingest path's cheaper half: an article's `published` only ever moves
  * EARLIER (`LEAST`, ADR-0002), so folding a new sighting can only ever lower
- * its group's position — never raise it. That makes the maintenance a `least`
- * against one timestamp instead of a MIN over the group, and the `where` turns
- * the overwhelmingly common case (a sighting no earlier than the group's
- * position) into a no-op.
+ * its group's — and therefore its storyline's — position, never raise it.
+ * That makes the maintenance a `least` against one timestamp instead of a MIN
+ * over the group, and the `where` turns the overwhelmingly common case (a
+ * sighting no earlier than the position) into a no-op.
  */
 export async function lowerGroupPosition(
   db: Kysely<Database>,
@@ -182,12 +334,20 @@ export async function lowerGroupPosition(
     where group_id = (select group_id from articles where id = ${input.articleId})
       and group_published > ${input.published}
   `.execute(db);
+  await sql`
+    update articles
+    set storyline_published = ${input.published}
+    where storyline_id = (select storyline_id from articles where id = ${input.articleId})
+      and storyline_published > ${input.published}
+  `.execute(db);
 }
 
 /** An article the maintenance pass may need to re-derive (ADR-0005). */
 export interface StoredArticle {
   id: string;
   title: string;
+  /** Story tokens derive from title AND description (ADR-0009). */
+  description: string | null;
   language: string | null;
   published: Date;
   /** The group it is in now — what a re-run compares its verdict against. */
@@ -212,6 +372,7 @@ export async function readStaleTokenArticles(
     .select([
       "a.id",
       "a.title",
+      "a.description",
       "a.language",
       "a.published",
       "a.group_id",
@@ -230,10 +391,50 @@ export async function readStaleTokenArticles(
   return rows.map((row) => ({
     id: row.id,
     title: row.title,
+    description: row.description,
     language: row.language,
     published: row.published,
     groupId: row.group_id,
     isGroupOfOne: row.is_group_of_one,
+  }));
+}
+
+/** One row of a day-language corpus, as the storyline pass consumes it. */
+export interface StorylineDayRow {
+  id: string;
+  groupId: string;
+  storylineId: string;
+  published: Date;
+  storyTokens: string[];
+}
+
+/**
+ * Every article of one `APP_TIMEZONE` day in one language — the corpus the
+ * storyline decision is made against (ADR-0009). Whole-day on purpose: the
+ * anchor rule is DAY-RELATIVE ("rare within this day"), so a narrower read
+ * would compute a different rarity than the rule means. A day is bounded
+ * (~1,500 rows at current volume), and the read is one index scan.
+ */
+export async function readStorylineDay(
+  db: Kysely<Database>,
+  query: { from: Date; to: Date; language: string | null },
+): Promise<StorylineDayRow[]> {
+  const rows = await db
+    .selectFrom("articles as a")
+    .select(["a.id", "a.group_id", "a.storyline_id", "a.published", "a.story_tokens"])
+    .where("a.published", ">=", query.from)
+    .where("a.published", "<", query.to)
+    .where(sql<boolean>`a.language is not distinct from ${query.language}`)
+    .orderBy("a.published", "asc")
+    .orderBy("a.id", "asc")
+    .execute();
+
+  return rows.map((row) => ({
+    id: row.id,
+    groupId: row.group_id,
+    storylineId: row.storyline_id,
+    published: row.published,
+    storyTokens: row.story_tokens,
   }));
 }
 

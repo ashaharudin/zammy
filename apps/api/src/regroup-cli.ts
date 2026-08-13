@@ -32,6 +32,11 @@ try {
         enabled: config.GROUPING_ENABLED,
         threshold: config.GROUPING_SIMILARITY_THRESHOLD,
         timeZone: config.APP_TIMEZONE,
+        storyline: {
+          enabled: config.STORYLINE_ENABLED,
+          anchorMaxShare: config.STORYLINE_ANCHOR_SHARE,
+          massThreshold: config.STORYLINE_MASS_THRESHOLD,
+        },
       },
       log: { warn: (obj, msg) => console.log(msg, JSON.stringify(obj)) },
     },
@@ -39,7 +44,8 @@ try {
   );
 
   console.log(
-    `stale: ${result.stale}  re-tokenized: ${result.retokenized}  regrouped: ${result.regrouped}`,
+    `stale: ${result.stale}  re-tokenized: ${result.retokenized}  regrouped: ${result.regrouped}  ` +
+      `merged: ${result.merged}  reclustered: ${result.reclustered}`,
   );
 } finally {
   await db.destroy();

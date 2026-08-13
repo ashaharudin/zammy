@@ -596,8 +596,8 @@ describe("cursor plumbing through the service", () => {
       cursorString: first.page.nextCursor!,
     });
 
-    const firstIds = new Set(first.items.map((i) => i.groupId));
+    const firstIds = new Set(first.items.map((i) => i.storylineId));
     expect(second.items.length).toBeGreaterThan(0);
-    expect(second.items.every((i) => !firstIds.has(i.groupId))).toBe(true);
+    expect(second.items.every((i) => !firstIds.has(i.storylineId))).toBe(true);
   });
 });

@@ -99,8 +99,11 @@ function useHeldNewItems(items: TimelineEntry[], topicKey: string) {
   return {
     visible,
     // Articles, not slots: the pill promises "N new articles" and a held slot
-    // can carry several (§14.3). Counting slots would under-promise.
-    newCount: held.reduce((total, entry) => total + 1 + entry.related.length, 0),
+    // can carry several (§14.3) — copies and coverage both count.
+    newCount: held.reduce(
+      (total, entry) => total + 1 + entry.related.length + entry.moreCoverage.length,
+      0,
+    ),
     reveal: () => setAnchor(newest),
   };
 }
@@ -221,7 +224,7 @@ function Rail({
             </RailEntry>
             {!dayCollapsed &&
               day.items.map((entry) => (
-                <RailEntry key={entry.groupId} marker="○">
+                <RailEntry key={entry.storylineId} marker="○">
                   <GroupCard entry={entry} />
                 </RailEntry>
               ))}
@@ -286,17 +289,20 @@ function LoadOlder({ loading, onLoadOlder }: { loading: boolean; onLoadOlder: ()
 }
 
 /**
- * One timeline slot (§14.3): the group's headline article, with the other
- * outlets that ran the same story reachable behind a "related" disclosure.
+ * One timeline slot (§14.3, ADR-0009): the storyline's headline article, with
+ * the day's remaining coverage behind one disclosure in two sections —
+ * "same story" (the lead group's other copies) and "more coverage" (the
+ * storyline's other groups: retrospectives, follow-ups, fact-checks).
  *
- * The time shown is the GROUP's, not the headline article's — the slot sits at
- * the group's earliest published, and a card showing "3 hours ago" beneath
+ * The time shown is the STORYLINE's, not the headline article's — the slot
+ * sits at its earliest published, and a card showing "3 hours ago" beneath
  * rows from five hours ago reads as a bug. Later coverage surfaces as an
  * "updated" stamp instead, the same treatment §8.1 gives a re-emitted article.
  */
 function GroupCard({ entry }: { entry: TimelineEntry }) {
   const [showRelated, setShowRelated] = useState(false);
   const updated = hasLaterCoverage(entry);
+  const total = entry.related.length + entry.moreCoverage.length;
 
   return (
     <div style={{ maxWidth: "640px" }}>
@@ -305,7 +311,7 @@ function GroupCard({ entry }: { entry: TimelineEntry }) {
         published={entry.published}
         updatedAt={updated ? entry.updatedAt : null}
       />
-      {entry.related.length > 0 && (
+      {total > 0 && (
         <>
           <button
             onClick={() => setShowRelated(!showRelated)}
@@ -319,49 +325,144 @@ function GroupCard({ entry }: { entry: TimelineEntry }) {
               padding: "0.3rem 0.2rem 0",
             }}
           >
-            {showRelated ? "▲" : "▼"} {entry.related.length} related
+            {showRelated ? "▲" : "▼"} {total} related
           </button>
           {showRelated && (
-            <ul
+            <div
               style={{
-                listStyle: "none",
                 margin: "0.25rem 0 0",
                 padding: "0 0 0 0.9rem",
                 borderLeft: "1px solid var(--border)",
                 display: "flex",
                 flexDirection: "column",
-                gap: "0.4rem",
+                gap: "0.5rem",
               }}
             >
-              {entry.related.map((article) => (
-                <li key={article.id}>
-                  <a
-                    href={article.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ fontSize: "0.85rem", lineHeight: 1.3, textDecoration: "none" }}
-                  >
-                    {article.title}
-                  </a>
-                  <div
-                    style={{
-                      fontSize: "0.7rem",
-                      color: "var(--fg-faint)",
-                      display: "flex",
-                      gap: "0.5rem",
-                    }}
-                  >
-                    <time dateTime={article.published}>{timeLabel(article.published)}</time>
-                    {article.sourceDomain && <span>{article.sourceDomain}</span>}
-                  </div>
-                </li>
-              ))}
-            </ul>
+              {entry.related.length > 0 && (
+                <RelatedSection label="same story" articles={entry.related} softCap />
+              )}
+              {entry.moreCoverage.length > 0 && (
+                <RelatedSection label="more coverage" articles={entry.moreCoverage} />
+              )}
+            </div>
           )}
         </>
       )}
     </div>
   );
+}
+
+/** Same-story copies shown before the "+N more" expander unfolds the rest. */
+const SAME_STORY_CAP = 3;
+
+/**
+ * One disclosure section. "Same story" rows are syndication copies, so
+ * word-identical titles collapse to one row with a copy count — four "The
+ * Latest:" wire updates are one fact, not four lines — and the section
+ * soft-caps behind an expander: the copies prove breadth, the coverage
+ * section is the part worth the vertical space.
+ */
+function RelatedSection({
+  label,
+  articles,
+  softCap,
+}: {
+  label: string;
+  articles: Article[];
+  softCap?: boolean;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const rows = collapseCopies(articles);
+  const capped = softCap && !showAll ? rows.slice(0, SAME_STORY_CAP) : rows;
+  const hidden = rows.length - capped.length;
+
+  return (
+    <section aria-label={label}>
+      <h3
+        style={{
+          margin: "0 0 0.3rem",
+          fontSize: "0.65rem",
+          fontWeight: 600,
+          textTransform: "uppercase",
+          letterSpacing: "0.08em",
+          color: "var(--fg-faint)",
+        }}
+      >
+        {label}
+      </h3>
+      <ul
+        style={{
+          listStyle: "none",
+          margin: 0,
+          padding: 0,
+          display: "flex",
+          flexDirection: "column",
+          gap: "0.4rem",
+        }}
+      >
+        {capped.map(({ article, copies }) => (
+          <li key={article.id}>
+            <a
+              href={article.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ fontSize: "0.85rem", lineHeight: 1.3, textDecoration: "none" }}
+            >
+              {article.title}
+            </a>
+            <div
+              style={{
+                fontSize: "0.7rem",
+                color: "var(--fg-faint)",
+                display: "flex",
+                gap: "0.5rem",
+              }}
+            >
+              <time dateTime={article.published}>{timeLabel(article.published)}</time>
+              {article.sourceDomain && <span>{article.sourceDomain}</span>}
+              {copies > 1 && <span>×{copies} outlets</span>}
+            </div>
+          </li>
+        ))}
+      </ul>
+      {hidden > 0 && (
+        <button
+          onClick={() => setShowAll(true)}
+          style={{
+            border: "none",
+            background: "none",
+            color: "var(--fg-faint)",
+            cursor: "pointer",
+            fontSize: "0.7rem",
+            padding: "0.3rem 0 0",
+          }}
+        >
+          +{hidden} more
+        </button>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Fold word-identical titles into one row with a count. First occurrence wins
+ * the row — articles arrive newest first, so the row shows the latest copy —
+ * and the fold is by exact title: near-identical wire variants stay separate
+ * rows, which is honest about what the outlets actually printed.
+ */
+function collapseCopies(articles: Article[]): { article: Article; copies: number }[] {
+  const rows: { article: Article; copies: number }[] = [];
+  const byTitle = new Map<string, number>();
+  for (const article of articles) {
+    const index = byTitle.get(article.title);
+    if (index === undefined) {
+      byTitle.set(article.title, rows.length);
+      rows.push({ article, copies: 1 });
+    } else {
+      rows[index]!.copies += 1;
+    }
+  }
+  return rows;
 }
 
 function ArticleCard({

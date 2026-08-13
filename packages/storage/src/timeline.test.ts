@@ -28,7 +28,8 @@ const OTHER_TOPIC = testFingerprint("07e7"); // registered, never ingested into
  * the collapse assertions below read the same as they did before groups
  * existed — which is the point: grouping must not change an ungrouped store.
  */
-const articlesOn = (page: TimelinePage) => page.items.flatMap((group) => group.members);
+const articlesOn = (page: TimelinePage) =>
+  page.items.flatMap((slot) => slot.members.map((member) => member.article));
 
 describe("timeline reads over the collapsed fixture", () => {
   let harness: TestDatabase;
@@ -255,7 +256,7 @@ describe("a grouped story is one slot in the timeline", () => {
 
     expect(page.items).toHaveLength(2); // the group + the ferry story
     const group = page.items.find((item) => item.id === groupId);
-    expect(group?.members.map((member) => member.id).sort()).toEqual([...members].sort());
+    expect(group?.members.map((member) => member.article.id).sort()).toEqual([...members].sort());
   });
 
   it("positions the group at its earliest member, not its seed", async () => {
@@ -272,7 +273,7 @@ describe("a grouped story is one slot in the timeline", () => {
     const page = await readTimelinePage(harness.db, { fingerprint: GROUPED_TOPIC, limit: 25 });
     const group = page.items.find((item) => item.id === groupId);
 
-    expect(group?.members.map((member) => member.published)).toEqual([
+    expect(group?.members.map((member) => member.article.published)).toEqual([
       "2026-08-11T18:00:00.000Z",
       "2026-08-11T15:00:00.000Z",
       "2026-08-11T09:00:00.000Z",
@@ -287,7 +288,7 @@ describe("a grouped story is one slot in the timeline", () => {
     expect(page.items).toHaveLength(1);
     expect(page.items[0]?.id).toBe(groupId);
     expect(page.items[0]?.members).toHaveLength(1);
-    expect(page.items[0]?.members[0]?.sourceDomain).toBe("outlet2.example");
+    expect(page.items[0]?.members[0]?.article.sourceDomain).toBe("outlet2.example");
   });
 
   it("counts GROUPS against the page limit, so page size stays predictable", async () => {
@@ -313,7 +314,7 @@ describe("a grouped story is one slot in the timeline", () => {
     // Two slots hold all four articles, each exactly once: a member is never
     // both inside its group and loose on some other page.
     const slots = [...first.items, ...second.items];
-    const seen = slots.flatMap((slot) => slot.members.map((member) => member.id));
+    const seen = slots.flatMap((slot) => slot.members.map((member) => member.article.id));
     expect(slots).toHaveLength(2);
     expect(new Set(seen).size).toBe(seen.length);
     expect(seen).toHaveLength(4);
