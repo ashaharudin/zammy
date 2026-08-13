@@ -224,11 +224,7 @@ function Rail({
               </h2>
             </RailEntry>
             {!dayCollapsed &&
-              day.items.map((entry) => (
-                <RailEntry key={entry.storylineId} marker="○">
-                  <GroupCard entry={entry} />
-                </RailEntry>
-              ))}
+              day.items.map((entry) => <GroupCard key={entry.storylineId} entry={entry} />)}
           </section>
         );
       })}
@@ -306,14 +302,23 @@ function GroupCard({ entry }: { entry: TimelineEntry }) {
   const total = entry.related.length + entry.moreCoverage.length;
 
   return (
-    <div style={{ maxWidth: "640px" }}>
-      <ArticleCard
-        article={entry.article}
-        published={entry.published}
-        updatedAt={updated ? entry.updatedAt : null}
-      />
+    <RailEntry
+      marker="○"
+      // The headline card alone is the marker's anchor: the disclosure and the
+      // rows it opens are content BELOW the article, and a glyph that slid down
+      // to the middle of an expanded slot would no longer point at anything.
+      head={
+        <div style={{ maxWidth: "640px" }}>
+          <ArticleCard
+            article={entry.article}
+            published={entry.published}
+            updatedAt={updated ? entry.updatedAt : null}
+          />
+        </div>
+      }
+    >
       {total > 0 && (
-        <>
+        <div style={{ maxWidth: "640px" }}>
           <button
             onClick={() => setShowRelated(!showRelated)}
             aria-expanded={showRelated}
@@ -347,9 +352,9 @@ function GroupCard({ entry }: { entry: TimelineEntry }) {
               )}
             </div>
           )}
-        </>
+        </div>
       )}
-    </div>
+    </RailEntry>
   );
 }
 
@@ -614,6 +619,7 @@ function RailEntry({
   big,
   pulse,
   toggle,
+  head,
   children,
 }: {
   marker: string;
@@ -621,6 +627,12 @@ function RailEntry({
   pulse?: boolean;
   /** Makes the rail marker itself the control — the day dot collapses its articles. */
   toggle?: { expanded: boolean; label: string; onToggle: () => void };
+  /**
+   * The part of the entry the marker centres on, for entries that grow
+   * downward: `children` then renders below it without moving the glyph.
+   * Omit it and the marker centres on the entry as a whole.
+   */
+  head?: React.ReactNode;
   children: React.ReactNode;
 }) {
   // Decorative for every other entry; a real button only where it does something,
@@ -636,48 +648,60 @@ function RailEntry({
     background: "var(--bg)",
     fontSize: big ? "0.9rem" : "0.75rem",
     // Day markers anchor to their heading's line. Everything else centres on
-    // its row: the entry's vertical padding is symmetric, so the entry's
-    // midpoint is the card's midpoint. Tall cards therefore carry their dot
-    // lower down the rail than short ones.
+    // its anchor box — `head` when the entry has one, otherwise the entry
+    // itself, whose vertical padding is symmetric. Tall cards therefore carry
+    // their dot lower down the rail than short ones.
     ...(big
       ? { top: "1.55rem" }
       : { top: "50%", transform: "translateY(-50%)", lineHeight: 1 }),
   } as const;
 
+  const glyph = toggle ? (
+    <button
+      onClick={toggle.onToggle}
+      aria-expanded={toggle.expanded}
+      aria-label={toggle.label}
+      style={{
+        // `font: inherit` first: the shorthand would otherwise reset the
+        // rail's marker size back to the button default.
+        font: "inherit",
+        ...markerStyle,
+        // A 1.5rem box keeps the glyph on the rail's centre line while
+        // giving the pointer a 24px target instead of the glyph's ~22×16.
+        width: "1.5rem",
+        height: "1.5rem",
+        left: markerLeft("1.5rem"),
+        // Same split as markerStyle, offset by the taller box's extra 4px.
+        ...(big ? { top: "1.32rem" } : { top: "50%", transform: "translateY(-50%)" }),
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        border: "none",
+        padding: 0,
+        lineHeight: 1,
+        cursor: "pointer",
+      }}
+    >
+      {marker}
+    </button>
+  ) : (
+    <span aria-hidden="true" className={pulse ? "shimmer" : undefined} style={markerStyle}>
+      {marker}
+    </span>
+  );
+
   return (
     <div style={{ position: "relative", padding: big ? "1.5rem 0 0.5rem" : "0.35rem 0" }}>
-      {toggle ? (
-        <button
-          onClick={toggle.onToggle}
-          aria-expanded={toggle.expanded}
-          aria-label={toggle.label}
-          style={{
-            // `font: inherit` first: the shorthand would otherwise reset the
-            // rail's marker size back to the button default.
-            font: "inherit",
-            ...markerStyle,
-            // A 1.5rem box keeps the glyph on the rail's centre line while
-            // giving the pointer a 24px target instead of the glyph's ~22×16.
-            width: "1.5rem",
-            height: "1.5rem",
-            left: markerLeft("1.5rem"),
-            // Same split as markerStyle, offset by the taller box's extra 4px.
-            ...(big ? { top: "1.32rem" } : { top: "50%", transform: "translateY(-50%)" }),
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            border: "none",
-            padding: 0,
-            lineHeight: 1,
-            cursor: "pointer",
-          }}
-        >
-          {marker}
-        </button>
+      {head === undefined ? (
+        glyph
       ) : (
-        <span aria-hidden="true" className={pulse ? "shimmer" : undefined} style={markerStyle}>
-          {marker}
-        </span>
+        // The marker's containing block, so its 50% resolves against the head
+        // alone. Full-width and flush with the entry's content box, which keeps
+        // markerLeft's offsets — measured from the entry — exact.
+        <div style={{ position: "relative" }}>
+          {glyph}
+          {head}
+        </div>
       )}
       {children}
     </div>
