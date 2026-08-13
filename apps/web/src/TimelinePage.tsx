@@ -4,6 +4,7 @@ import { isTerminalPage } from "@zammy/shared";
 import { ApiError, type TopicQuery } from "./api.js";
 import { isCollapsed, noDaysCollapsed, toggleDay } from "./dayCollapse.js";
 import { groupByDay, hasLaterCoverage, relativeTime, timeLabel } from "./format.js";
+import { collapseCopies, outletLinks } from "./relatedRows.js";
 import { MONO } from "./theme.js";
 import { CommandBar } from "./CommandBar.js";
 import { useReference, useTimeline } from "./useTimeline.js";
@@ -356,11 +357,15 @@ function GroupCard({ entry }: { entry: TimelineEntry }) {
 const SAME_STORY_CAP = 3;
 
 /**
- * One disclosure section. "Same story" rows are syndication copies, so
- * word-identical titles collapse to one row with a copy count — four "The
- * Latest:" wire updates are one fact, not four lines — and the section
- * soft-caps behind an expander: the copies prove breadth, the coverage
- * section is the part worth the vertical space.
+ * One disclosure section, its heading a disclosure of its own: clicking it
+ * folds the section's rows, and the folded heading carries its article count
+ * so the "N related" promise stays reconcilable while part of it is hidden.
+ *
+ * "Same story" rows are syndication copies, so word-identical titles collapse
+ * to one row — four "The Latest:" wire updates are one fact, not four lines —
+ * listing each outlet that printed it, linked to that outlet's own copy. The
+ * section soft-caps behind an expander: the copies prove breadth, the
+ * coverage section is the part worth the vertical space.
  */
 function RelatedSection({
   label,
@@ -372,6 +377,7 @@ function RelatedSection({
   softCap?: boolean;
 }) {
   const [showAll, setShowAll] = useState(false);
+  const [open, setOpen] = useState(true);
   const rows = collapseCopies(articles);
   const capped = softCap && !showAll ? rows.slice(0, SAME_STORY_CAP) : rows;
   // Hidden ARTICLES, not hidden rows: the disclosure button promises "N
@@ -379,7 +385,7 @@ function RelatedSection({
   // several. Counting rows here left the two numbers irreconcilable — a
   // reader could see "17 related" yet only ever count 14 (live report:
   // 11 same-story articles collapsing to 8 rows swallowed 3 from the tally).
-  const hidden = articles.length - capped.reduce((total, row) => total + row.copies, 0);
+  const hidden = articles.length - capped.reduce((total, row) => total + row.copies.length, 0);
 
   return (
     <section aria-label={label}>
@@ -393,44 +399,84 @@ function RelatedSection({
           color: "var(--fg-faint)",
         }}
       >
-        {label}
+        {/* Typography lives on the h3, keeping the heading a heading to a
+            screen reader with the toggle inside it. The global `button`
+            rule inherits font and color, but the UA stylesheet resets
+            text-transform and letter-spacing on buttons — inherit those
+            explicitly or the label drops out of uppercase. No glyph: the
+            count appearing is the collapsed signal. */}
+        <button
+          onClick={() => setOpen(!open)}
+          aria-expanded={open}
+          style={{
+            border: "none",
+            background: "none",
+            cursor: "pointer",
+            padding: 0,
+            textTransform: "inherit",
+            letterSpacing: "inherit",
+          }}
+        >
+          {label}
+          {!open && ` (${articles.length})`}
+        </button>
       </h3>
-      <ul
-        style={{
-          listStyle: "none",
-          margin: 0,
-          padding: 0,
-          display: "flex",
-          flexDirection: "column",
-          gap: "0.4rem",
-        }}
-      >
-        {capped.map(({ article, copies }) => (
-          <li key={article.id}>
-            <a
-              href={article.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ fontSize: "0.85rem", lineHeight: 1.3, textDecoration: "none" }}
-            >
-              {article.title}
-            </a>
-            <div
-              style={{
-                fontSize: "0.7rem",
-                color: "var(--fg-faint)",
-                display: "flex",
-                gap: "0.5rem",
-              }}
-            >
-              <time dateTime={article.published}>{timeLabel(article.published)}</time>
-              {article.sourceDomain && <span>{article.sourceDomain}</span>}
-              {copies > 1 && <span>×{copies} outlets</span>}
-            </div>
-          </li>
-        ))}
-      </ul>
-      {hidden > 0 && (
+      {open && (
+        <ul
+          style={{
+            listStyle: "none",
+            margin: 0,
+            padding: 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.4rem",
+          }}
+        >
+          {capped.map(({ article, copies }) => (
+            <li key={article.id}>
+              <a
+                href={article.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ fontSize: "0.85rem", lineHeight: 1.3, textDecoration: "none" }}
+              >
+                {article.title}
+              </a>
+              <div
+                style={{
+                  fontSize: "0.7rem",
+                  color: "var(--fg-faint)",
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  gap: "0.3rem 0.5rem",
+                }}
+              >
+                <time dateTime={article.published}>{timeLabel(article.published)}</time>
+                {outletLinks(copies).map((outlet) => (
+                  <a
+                    key={outlet.article.id}
+                    href={outlet.article.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    // The headline card's source-chip treatment: the chip is the
+                    // signal these are tappable sources, not more metadata text.
+                    style={{
+                      background: "var(--chip-bg)",
+                      borderRadius: "4px",
+                      padding: "0.1rem 0.4rem",
+                      textDecoration: "none",
+                    }}
+                  >
+                    {outlet.label}
+                  </a>
+                ))}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {open && hidden > 0 && (
         <button
           onClick={() => setShowAll(true)}
           style={{
@@ -447,27 +493,6 @@ function RelatedSection({
       )}
     </section>
   );
-}
-
-/**
- * Fold word-identical titles into one row with a count. First occurrence wins
- * the row — articles arrive newest first, so the row shows the latest copy —
- * and the fold is by exact title: near-identical wire variants stay separate
- * rows, which is honest about what the outlets actually printed.
- */
-function collapseCopies(articles: Article[]): { article: Article; copies: number }[] {
-  const rows: { article: Article; copies: number }[] = [];
-  const byTitle = new Map<string, number>();
-  for (const article of articles) {
-    const index = byTitle.get(article.title);
-    if (index === undefined) {
-      byTitle.set(article.title, rows.length);
-      rows.push({ article, copies: 1 });
-    } else {
-      rows[index]!.copies += 1;
-    }
-  }
-  return rows;
 }
 
 function ArticleCard({
