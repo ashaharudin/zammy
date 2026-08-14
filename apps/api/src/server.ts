@@ -158,18 +158,13 @@ export async function buildApp(config: Config): Promise<App> {
       lookbackDays: config.CURRENTS_MAX_LOOKBACK_DAYS,
       minSegmentMs: MIN_SEGMENT_MS,
       perTopicDailyCallCap: config.PER_TOPIC_DAILY_CALL_CAP,
-      storylinesV2: config.STORYLINES_V2,
       grouping: {
         enabled: config.GROUPING_ENABLED,
         threshold: config.GROUPING_SIMILARITY_THRESHOLD,
         timeZone: config.APP_TIMEZONE,
-        storyline: {
-          enabled: config.STORYLINE_ENABLED,
-          anchorMaxShare: config.STORYLINE_ANCHOR_SHARE,
-          massThreshold: config.STORYLINE_MASS_THRESHOLD,
-        },
         linker: {
-          enabled: config.STORYLINES_V2,
+          // Structural, not optional: no storylines means no timeline rows.
+          enabled: true,
           rules: {
             anchorMaxShare: config.STORYLINE_ANCHOR_MAX_SHARE,
             anchorDfFloor: config.STORYLINE_ANCHOR_DF_FLOOR,
@@ -230,16 +225,11 @@ export async function buildApp(config: Config): Promise<App> {
     // then looks at — a membership change and its label in one night, rather
     // than a label that describes yesterday's membership.
     //
-    // The WHOLE pass rides the flag, not just the sweep: a rollback freezes the
-    // v2 model, and a frozen model must not keep mutating status or spending
-    // Gemini calls on rows no reader can see. The rows keep; the first nightly
-    // pass after the flag returns catches everything up.
     storylines: async () => {
-      if (!config.STORYLINES_V2) return;
       await runDormancyChore(choreDeps);
       await runLateCandidateChore({
         ...choreDeps,
-        linker: deps.config.grouping.linker!,
+        linker: deps.config.grouping.linker,
         labeler,
       });
       await runStorylineLabelChore({ ...choreDeps, labeler });

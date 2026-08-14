@@ -188,11 +188,11 @@ describe("regroup", () => {
     expect(result.merged).toBeGreaterThanOrEqual(1);
     const rows = await harness.deps.db
       .selectFrom("articles")
-      .select(["group_id", "storyline_id"])
+      .select(["group_id"])
       .where("id", "in", [...ids.values()])
       .execute();
     expect(new Set(rows.map((row) => row.group_id)).size).toBe(1);
-    expect(new Set(rows.map((row) => row.storyline_id)).size).toBe(1);
+
   });
 
   it("never takes an existing group apart", async () => {

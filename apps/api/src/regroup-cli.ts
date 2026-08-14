@@ -32,13 +32,8 @@ try {
         enabled: config.GROUPING_ENABLED,
         threshold: config.GROUPING_SIMILARITY_THRESHOLD,
         timeZone: config.APP_TIMEZONE,
-        storyline: {
-          enabled: config.STORYLINE_ENABLED,
-          anchorMaxShare: config.STORYLINE_ANCHOR_SHARE,
-          massThreshold: config.STORYLINE_MASS_THRESHOLD,
-        },
-        // Regroup does not re-run the v2 linker: rebuilding v2 state is the
-        // backfill's job (S5), which replays chronologically from scratch
+        // Regroup does not re-run the linker: rebuilding storyline state is
+        // the backfill's job, which replays chronologically from scratch
         // rather than repairing in place. Disabled explicitly so the CLI
         // cannot half-link a window as a side effect of re-tokenizing it.
         linker: {
@@ -65,7 +60,7 @@ try {
 
   console.log(
     `stale: ${result.stale}  re-tokenized: ${result.retokenized}  regrouped: ${result.regrouped}  ` +
-      `merged: ${result.merged}  reclustered: ${result.reclustered}`,
+      `merged: ${result.merged}`,
   );
 } finally {
   await db.destroy();

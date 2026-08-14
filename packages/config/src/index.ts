@@ -88,34 +88,6 @@ const EnvSchema = z
      */
     GROUPING_SIMILARITY_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
 
-    // --- storylines (ARCHITECTURE 14.3 amendment, ADR-0009) ---
-    /**
-     * Whether a day's groups cluster into storyline slots. Off restores one
-     * slot per group; storylines already recorded page as their groups again
-     * only after a regroup — flipping this off changes ATTACHMENT, not stored
-     * state, so flip it back on and nothing was lost.
-     */
-    STORYLINE_ENABLED: z
-      .enum(["true", "false"])
-      .default("true")
-      .transform((value) => value === "true"),
-    /**
-     * A shared token anchors a storyline link only below this share of the
-     * day's corpus. MEASURED (ADR-0009): 0.05 admits a story's own name on
-     * the day it dominates coverage (df 64 of 1,453 = 4.4%) and refuses
-     * beat vocabulary ("trump" ≈ 20% of any day).
-     */
-    STORYLINE_ANCHOR_SHARE: z.coerce.number().min(0).max(1).default(0.05),
-    /**
-     * Floor on the summed rarity (ln(dayN/df)) of everything a pair shares.
-     * MEASURED (ADR-0009): at 8, the Leavitt day clusters 31 groups of
-     * genuine departure coverage with strays in the low single digits; 6
-     * over-attaches, 10 starts shedding real angles. A wrong attach is a
-     * stray link under a headline — cheap by design — so err low here, the
-     * OPPOSITE direction from GROUPING_SIMILARITY_THRESHOLD, where a wrong
-     * merge corrupts the slot itself.
-     */
-    STORYLINE_MASS_THRESHOLD: z.coerce.number().min(0).default(8),
     /**
      * How many days of articles the storyline linker measures rarity against
      * (ADR-0011). A storyline is unbounded in time, so day-relative rarity
@@ -197,16 +169,16 @@ const EnvSchema = z
     STORYLINE_LABEL_SAMPLE: z.coerce.number().int().min(2).max(40).default(10),
     // --- the v2 linker (ADR-0011); every default below is pinned from
     //     `pnpm measure:storylines-v2`, recorded in docs/STORYLINE-LINKING.md ---
-    /**
-     * The ADR-0011 write path: provisional storylines, group→storyline linking,
-     * bridges and auto-merge. Off by default until the full-history backfill
-     * (S5) has run and been verified — the old day-clustered path keeps writing
-     * meanwhile, and the two do not interfere: they write different tables.
-     */
-    STORYLINES_V2: z
-      .enum(["true", "false"])
-      .default("false")
-      .transform((value) => value === "true"),
+    // There is deliberately NO storyline on/off switch here any more.
+    //
+    // STORYLINES_V2 selected between two models and migration 0012 dropped the
+    // other one; STORYLINE_ENABLED gated the day-clustering pass, which is
+    // gone. What replaced them cannot be a knob: the timeline pages over
+    // `storyline_days`, and every group's provisional storyline-of-one is what
+    // puts a row there. Turning linking off does not degrade the timeline to
+    // plain slots — measured, it empties it — so a flag would be an outage
+    // switch wearing a feature flag's clothes. Rolling the cutover back is a
+    // deploy revert plus `migrate down`, not a boolean.
     /**
      * A shared token anchors a link only below this share of the TRAILING
      * corpus. MEASURED: 0.002 (≈32 articles of a 16k fortnight) is where

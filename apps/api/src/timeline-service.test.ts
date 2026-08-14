@@ -115,7 +115,14 @@ describe("cold search — the synchronous fill", () => {
 
 describe("truncation — a full final page means hidden history, not success", () => {
   it("records the fetched frontier as covered and enqueues ONLY the remainder", async () => {
-    harness = await createTestHarness({}, NOW);
+    // A deadline wide enough not to be what this test measures. The default
+    // 1200ms no longer fits five pages: linking costs a measured ~190ms per
+    // batch (ADR-0011) and five batches spend most of the budget, so under load
+    // the fill stops at three calls and this asserts a timing accident instead
+    // of the truncation handling it is named for. That the default is now tight
+    // is a real finding, recorded in `grouping-service.ts` and the S9 notes —
+    // not something to hide by asserting three.
+    harness = await createTestHarness({ syncFillDeadlineMs: 10_000 }, NOW);
 
     const result = await readTimeline(harness.deps, broadQuery(), { limit: 100 });
 
@@ -202,12 +209,18 @@ describe("truncation — a full final page means hidden history, not success", (
 
 describe("the deadline is wall-clock, not a call count", () => {
   it("defers the rest of the plan when calls are slow", async () => {
-    harness = await createTestHarness({ syncFillDeadlineMs: 500 }, NOW);
-    harness.counting.delayMs = 300;
+    // 1000ms calls against a 1500ms deadline, not 300 against 500: the shorter
+    // pair left ~200ms for everything that is not an upstream call, and the
+    // write path now spends a measured ~190ms of it linking (ADR-0011). The
+    // property under test is unchanged — the fill stops on a CLOCK rather than
+    // a call count — and it is now tested with slack rather than by a
+    // photo-finish.
+    harness = await createTestHarness({ syncFillDeadlineMs: 1500 }, NOW);
+    harness.counting.delayMs = 1000;
 
     const result = await readTimeline(harness.deps, broadQuery(), { limit: 25 });
 
-    // 300ms/call against a 500ms deadline: call 1 at t≈0, call 2 at t≈300,
+    // 1000ms/call against a 1500ms deadline: call 1 at t≈0, call 2 at t≈1000,
     // call 3 would start past the deadline → deferred with a resume page.
     expect(harness.counting.searchCalls).toBe(2);
     expect(result.meta.ingest.state).toBe("in_progress");
@@ -604,114 +617,3 @@ describe("cursor plumbing through the service", () => {
   });
 });
 
-describe("seeded arrivals (ADR-0010) — a phrase click carries its storyline", () => {
-  /** A topic named by two words drawn from a slot the reader is looking at. */
-  const phraseQuery = (keywords: string[]): CanonicalQuery => ({
-    fingerprint: randomBytes(32).toString("hex"),
-    keywords: [...keywords].sort(),
-    language: "en",
-    country: null,
-    category: null,
-    window: { ...WINDOW },
-  });
-
-  /** Two words every member of a slot carries — what a phrase guarantees. */
-  const sharedWords = (entry: TimelineEntry): string[] => {
-    const sets = [entry.article, ...entry.related, ...entry.moreCoverage].map(
-      (member) => new Set(storyTokens(member.title, member.description)),
-    );
-    return [...sets[0]!].filter((token) => sets.every((set) => set.has(token))).slice(0, 2);
-  };
-
-  it("puts the slot in the topic its phrase opened, before any fill", async () => {
-    harness = await createTestHarness({}, NOW);
-    const source = await readTimeline(harness.deps, climateQuery(), { limit: 100 });
-    const slot = source.items.find((item) => sharedWords(item).length === 2)!;
-    const query = phraseQuery(sharedWords(slot));
-
-    const opened = await readTimeline(harness.deps, query, {
-      limit: 25,
-      seedStorylineId: slot.storylineId,
-    });
-
-    // "include, but is not limited to": the slot is there whatever upstream
-    // did or did not return for these two words.
-    const seeded = opened.items.find((item) => item.storylineId === slot.storylineId);
-    expect(seeded).toBeDefined();
-    expect(seeded!.article.url).toBe(slot.article.url);
-  });
-
-  it("never serves a cached page that predates the seed", async () => {
-    harness = await createTestHarness({}, NOW);
-    const source = await readTimeline(harness.deps, climateQuery(), { limit: 100 });
-    const slot = source.items.find((item) => sharedWords(item).length === 2)!;
-    const query = phraseQuery(sharedWords(slot));
-    await readTimeline(harness.deps, query, { limit: 25 });
-
-    // A topic that does not know this storyline, with a settled page cached
-    // over that fact. The state is MADE rather than found — the fixture's
-    // upstream returns these two words' articles like any other search — and
-    // what is under test is the planner's cache decision, not how a topic
-    // comes to be missing a slot.
-    await harness.deps.db
-      .deleteFrom("topic_articles")
-      .where("fingerprint", "=", hexToBytea(query.fingerprint))
-      .where((eb) =>
-        eb(
-          "article_id",
-          "in",
-          eb
-            .selectFrom("articles")
-            .select("id")
-            .where("storyline_id", "=", slot.storylineId),
-        ),
-      )
-      .execute();
-
-    // Cached at a limit nothing has used yet, so the entry is written AFTER
-    // the delete and genuinely lacks the slot.
-    const bare = await readTimeline(harness.deps, query, { limit: 7 });
-    expect(bare.items.some((item) => item.storylineId === slot.storylineId)).toBe(false);
-    expect((await readTimeline(harness.deps, query, { limit: 7 })).meta.servedFrom).toBe("cache");
-
-    const opened = await readTimeline(harness.deps, query, {
-      limit: 7,
-      seedStorylineId: slot.storylineId,
-    });
-
-    expect(opened.meta.servedFrom).not.toBe("cache");
-    expect(opened.items.some((item) => item.storylineId === slot.storylineId)).toBe(true);
-  });
-
-  it("a repeat of the same link costs the cache nothing", async () => {
-    harness = await createTestHarness({}, NOW);
-    const source = await readTimeline(harness.deps, climateQuery(), { limit: 100 });
-    const slot = source.items.find((item) => sharedWords(item).length === 2)!;
-    const query = phraseQuery(sharedWords(slot));
-
-    await readTimeline(harness.deps, query, { limit: 25, seedStorylineId: slot.storylineId });
-    const again = await readTimeline(harness.deps, query, {
-      limit: 25,
-      seedStorylineId: slot.storylineId,
-    });
-
-    // Nothing left to enroll, so the ordinary cache path resumes.
-    expect(again.meta.servedFrom).toBe("cache");
-  });
-
-  it("refuses a storyline that does not carry every keyword", async () => {
-    harness = await createTestHarness({}, NOW);
-    const source = await readTimeline(harness.deps, climateQuery(), { limit: 100 });
-    const slot = source.items[0]!;
-    const query = phraseQuery(["bananas", "quixotic"]);
-
-    const opened = await readTimeline(harness.deps, query, {
-      limit: 25,
-      seedStorylineId: slot.storylineId,
-    });
-
-    // A crafted link is a link to nothing: the gate is the keywords, not the
-    // caller's say-so.
-    expect(opened.items).toEqual([]);
-  });
-});

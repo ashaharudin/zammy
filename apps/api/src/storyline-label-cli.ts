@@ -13,30 +13,20 @@ import {
 import { labelStoryline, type LabelOutcome } from "./storyline-label-service.js";
 
 /**
- * `pnpm label:storylines [--limit=N] [--preview] [--dry-run]` — the labeler's
+ * `pnpm label:storylines [--limit=N] [--dry-run]` — the labeler's
  * operator command (ADR-0011, "Labels").
  *
  * Default mode labels real v2 storylines: everything promoted that has no label
  * or whose membership has drifted since it got one. This is what S5's backfill
  * pass and any later repair run does.
  *
- * `--preview` is a READ-ONLY harness over the dev archive, and it exists
- * because the v2 storylines it would otherwise label do not exist yet — the
- * linker is S3. It borrows the OLD `articles.storyline_id` day-bounded storylines purely as
- * a source of real multi-article coverage, runs the real selection, prompt,
- * validation and fallback over it, and writes nothing. What it measures is what
- * this session needs measured: what the labels look like on real headlines, and
- * what a thousand of them cost. It is not a backfill and does not pretend to
- * be — ADR-0011 ignores the old day-bounded storylines entirely — and it goes with the old
- * columns in S9.
  */
 
 const args = process.argv.slice(2);
 const flag = (name: string): string | undefined =>
   args.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
-const preview = args.includes("--preview");
 const dryRun = args.includes("--dry-run");
-const limit = Number(flag("limit") ?? (preview ? 40 : 200));
+const limit = Number(flag("limit") ?? 200);
 
 const config = loadConfig();
 const db = createDb(config.DATABASE_URL);
@@ -57,8 +47,7 @@ console.log(
 
 try {
   const startedAt = Date.now();
-  if (preview) await runPreview();
-  else await runLabeller();
+  await runLabeller();
   console.log(`\nran in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
 } finally {
   await db.destroy();
@@ -101,97 +90,6 @@ async function runLabeller(): Promise<void> {
   }
 
   report(outcomes.map((outcome) => ({ label: outcome.label, source: outcome.source })));
-}
-
-/**
- * Read-only over the dev archive's OLD day-bounded storylines. Same functions, no writes.
- */
-async function runPreview(): Promise<void> {
-  const { rows } = await sql<{
-    storyline_id: string;
-    groups: number;
-    members: Array<{ title: string; description: string | null; published: string }>;
-  }>`
-    select
-      storyline_id,
-      count(distinct group_id)::int as groups,
-      json_agg(json_build_object(
-        'title', title, 'description', description, 'published', published
-      ) order by published) as members
-    from (
-      select distinct on (a.storyline_id, a.group_id)
-             a.storyline_id, a.group_id, a.title, a.description, a.published
-      from articles a
-      order by a.storyline_id, a.group_id, a.published asc, a.id asc
-    ) hero
-    group by storyline_id
-    having count(distinct group_id) > 1
-    order by count(distinct group_id) desc
-    limit ${limit}
-  `.execute(db);
-
-  console.log(
-    `${rows.length} multi-group day-bounded storylines from the archive (read-only; ` +
-      "the old day-bounded model, borrowed as coverage — see the header)\n",
-  );
-
-  const results: Array<{ label: string | null; source: string }> = [];
-  let promptChars = 0;
-
-  for (const row of rows) {
-    const members: LabelMember[] = row.members.map((member) => ({
-      title: member.title,
-      description: member.description,
-      published: new Date(member.published),
-    }));
-    const sample = selectLabelMembers(members, config.STORYLINE_LABEL_SAMPLE);
-    const prompt = buildLabelPrompt(sample);
-    promptChars += prompt.length;
-
-    let label: string | null = null;
-    let source = "none";
-    let note = "";
-
-    if (generator) {
-      const result = await generator.generate({ prompt });
-      if (result.ok) {
-        const validated = validateLabel(result.text, sample);
-        if (validated) {
-          label = validated;
-          source = "model";
-        } else {
-          note = `contract: ${result.text.slice(0, 40)}`;
-        }
-      } else {
-        note = result.reason;
-      }
-    }
-    if (label === null) {
-      const fallback = fallbackLabel(sample);
-      if (fallback) {
-        label = fallback;
-        source = "bigram";
-      }
-    }
-
-    results.push({ label, source });
-    console.log(
-      `  ${(label ?? "—").padEnd(28)} ${source.padEnd(7)} ${String(row.groups).padStart(3)} groups` +
-        `  ${sample[sample.length - 1]!.title.slice(0, 60)}${note ? `  (${note})` : ""}`,
-    );
-  }
-
-  report(results);
-
-  // The cost figure this session owes (~4 chars/token is the usual English
-  // rule of thumb; the recorded fixture's usageMetadata puts a 10-headline
-  // prompt at ~812 tokens, which agrees).
-  const meanPromptTokens = rows.length ? promptChars / rows.length / 4 : 0;
-  console.log(
-    `\nprompt size: ${meanPromptTokens.toFixed(0)} tokens mean over ${rows.length} labels ` +
-      `(+~4 out). Per 1,000 labels: ~${((meanPromptTokens * 1000) / 1_000_000).toFixed(2)}M ` +
-      "input tokens — see docs/STORYLINE-LABELS.md for what that costs.",
-  );
 }
 
 function report(results: Array<{ label: string | null; source: string }>): void {

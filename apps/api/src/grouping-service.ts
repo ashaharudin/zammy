@@ -13,8 +13,7 @@ import {
   rankedMatches,
   TOKENIZER_VERSION,
 } from "./grouping.js";
-import { storyTokens, type StorylineRules } from "./storyline.js";
-import { attachSeededGroups } from "./storyline-service.js";
+import { storyTokens } from "./storyline.js";
 import { recordStoryDfForArticles } from "./story-df.js";
 import {
   linkSeededGroups,
@@ -43,18 +42,12 @@ export interface GroupingDeps {
     threshold: number;
     /** The calendar day candidates are drawn from — §10.1's rule, not UTC. */
     timeZone: string;
-    /** The layer above (ADR-0009), switchable independently of grouping. */
-    storyline: { enabled: boolean } & StorylineRules;
     /**
-     * The ADR-0011 linker, behind its own flag and running ALONGSIDE the old
-     * one until the cutover: they write different tables, so both can be on
-     * while the backfill is verified, and neither reads the other's state.
-     *
-     * Optional, and absent means OFF — the v2 write path must never turn
-     * itself on by default, so a caller that has not heard of it yet gets the
-     * behaviour it expects rather than a new table filling up behind it.
+     * The storyline layer (ADR-0011), switchable independently of grouping —
+     * off leaves articles grouped and storyline-less, which the read path
+     * renders as plain slots.
      */
-    linker?: LinkerConfig;
+    linker: LinkerConfig;
   };
   /**
    * The labeler, for the promotion and merge triggers (ADR-0011). Absent means
@@ -126,6 +119,17 @@ const MERGE_LIMIT = 10;
  * Group each newly-created article, and return how many joined an existing
  * group.
  *
+ * With grouping DISABLED this still runs, and must: it writes the article's
+ * tokens and births its storyline, and the timeline pages over storylines now
+ * (migration 0012). Skipping it outright — which is what the flag used to do —
+ * leaves an article in no storyline, and an article in no storyline is in no
+ * timeline. The old model survived the same flag because a database trigger
+ * seeded identity on INSERT whatever the app thought; this is that trigger's
+ * job, moved up a layer with the storyline itself.
+ *
+ * So `enabled: false` means what it always meant — nothing is MATCHED, every
+ * article is its own group and its own slot — rather than "nothing happens".
+ *
  * Never throws. A grouping failure must not fail the read that triggered the
  * ingest: the articles are already stored and already paged, and the worst
  * case of skipping this is a timeline that shows two cards where it could have
@@ -136,7 +140,7 @@ export async function groupCreatedArticles(
   deps: GroupingDeps,
   created: readonly CreatedArticle[],
 ): Promise<number> {
-  if (!deps.config.enabled || created.length === 0) return 0;
+  if (created.length === 0) return 0;
 
   let grouped = 0;
   const seeded: CreatedArticle[] = [];
@@ -147,7 +151,18 @@ export async function groupCreatedArticles(
   }[] = [];
   for (const article of created) {
     try {
-      if ((await groupArticle(deps, article)) !== null) grouped += 1;
+      if (!deps.config.enabled) {
+        // Tokens without a verdict: the article stays the group of one the
+        // insert made it, and is offered to the linker as one.
+        await recordGrouping(deps.db, {
+          articleId: article.id,
+          titleTokens: headlineTokens(article.title),
+          storyTokens: storyTokens(article.title, article.description),
+          tokensVersion: TOKENIZER_VERSION,
+          groupId: null,
+        });
+        seeded.push(article);
+      } else if ((await groupArticle(deps, article)) !== null) grouped += 1;
       else seeded.push(article);
       // Only after the decision was recorded: `groupArticle` is what writes
       // `story_tokens`, and counting an article whose tokens never landed
@@ -181,12 +196,20 @@ export async function groupCreatedArticles(
     counted,
   );
 
-  // The v2 linker (ADR-0011), on the seeded groups only — an article that
+  // The linker (ADR-0011), on the seeded groups only — an article that
   // JOINED a group inherited that group's storylines, so only the ones that
   // SEEDED a group have a decision left to make. It runs after the df
   // maintenance above deliberately: the arriving group's own tokens belong in
   // the corpus its rarity is measured against, or a story breaking across a
   // dozen simultaneous groups would read each of them as unprecedented.
+  //
+  // MEASURED, and it is charged to the §6.3 sync-fill deadline: linking one
+  // upstream page's worth of seeded groups costs ~190ms — a birth, a corpus
+  // read, a candidate scan and an attach per group, all round trips. Against
+  // the 1200ms default that is ~16%, and it is the reason a cold search fits
+  // fewer upstream calls than it did before the cutover. Worth revisiting if
+  // the deadline starts binding: nothing here is on a reader's critical path
+  // except by being on the same clock.
   if (deps.config.linker) {
     const outcomes = await linkSeededGroups(
       {
@@ -214,28 +237,6 @@ export async function groupCreatedArticles(
       else void tail;
     }
   }
-
-  // Storyline attachment runs once per BATCH, not per article: each seeded
-  // group needs the day's corpus, and reading it per article was measured
-  // blowing the §6.3 sync-fill deadline (ADR-0009). An article that JOINED a
-  // group inherited that group's storyline inside `recordGrouping`; only the
-  // ones that seeded a new group have a decision left to make.
-  await attachSeededGroups(
-    {
-      db: deps.db,
-      config: {
-        enabled: deps.config.storyline.enabled,
-        rules: deps.config.storyline,
-        timeZone: deps.config.timeZone,
-      },
-      ...(deps.log ? { log: deps.log } : {}),
-    },
-    seeded.map((article) => ({
-      groupId: article.id,
-      published: article.published,
-      language: article.language,
-    })),
-  );
 
   deps.metrics?.articlesGrouped(grouped);
   return grouped;
@@ -378,6 +379,7 @@ async function mergeBridgedGroups(
     const outcome = await mergeGroups(deps.db, {
       winnerGroupId: groupId,
       loserGroupId: match.groupId,
+      timeZone: deps.config.timeZone,
     });
     if (outcome.merged) merged += 1;
   }

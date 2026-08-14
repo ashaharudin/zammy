@@ -11,6 +11,7 @@ import * as storyTokenDf from "./migrations/0008-story-token-df.js";
 import * as storylineBridges from "./migrations/0009-storyline-bridges.js";
 import * as labelDrift from "./migrations/0010-storyline-label-drift.js";
 import * as labelSource from "./migrations/0011-storyline-label-source.js";
+import * as dropDayStorylines from "./migrations/0012-drop-day-storylines.js";
 
 /**
  * Migrations as a static record rather than a directory scan: the file provider
@@ -30,6 +31,7 @@ const migrations: Record<string, Migration> = {
   "0009-storyline-bridges": storylineBridges,
   "0010-storyline-label-drift": labelDrift,
   "0011-storyline-label-source": labelSource,
+  "0012-drop-day-storylines": dropDayStorylines,
 };
 
 /**

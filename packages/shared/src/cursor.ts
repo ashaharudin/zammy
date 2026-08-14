@@ -19,10 +19,10 @@ export interface Cursor {
    * because that is what it is and what makes it stable; the field predates
    * grouping and renaming it would break every cursor in flight.
    *
-   * Under STORYLINES_V2 it holds a storyline UUID instead: the keyset axis
-   * becomes `(day_slot_published, storyline_id)` and the id half is whatever
-   * identifies a slot in the generation that minted the cursor (ADR-0011). The
-   * name stays wrong in the same useful way it already was.
+   * It holds a STORYLINE UUID now: the keyset axis is
+   * `(day_slot_published, storyline_id)` (ADR-0011). The name stays wrong in
+   * the same useful way it already was — renaming it would break every cursor
+   * in flight, which is exactly what the field exists to avoid.
    */
   articleId: string;
 }

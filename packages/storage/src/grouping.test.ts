@@ -378,7 +378,7 @@ describe("article groups in storage", () => {
   });
 });
 
-describe("storylines in storage (ADR-0009)", () => {
+describe("what the storyline layer reads from storage", () => {
   let harness: TestDatabase;
 
   const ingest = async (...sightings: Sighting[]) =>
@@ -387,7 +387,7 @@ describe("storylines in storage (ADR-0009)", () => {
   const readRow = async (id: string) =>
     harness.db
       .selectFrom("articles")
-      .select(["id", "group_id", "storyline_id", "storyline_published", "story_tokens"])
+      .select(["id", "group_id", "group_published", "story_tokens"])
       .where("id", "=", id)
       .executeTakeFirstOrThrow();
 
@@ -401,77 +401,12 @@ describe("storylines in storage (ADR-0009)", () => {
     await harness.drop();
   });
 
-  it("seeds every new article into its own group's storyline", async () => {
-    // Structural, like group membership: a null storyline_id would sort first
-    // under the keyset and corrupt paging, so the trigger owns it.
-    const result = await ingest(
-      story({
-        url: "https://solo.example/1",
-        title: "A lone storyline",
-        published: "2026-08-11T10:00:00.000Z",
-      }),
-    );
-
-    const id = result.createdArticles[0]!.id;
-    const row = await readRow(id);
-    expect(row.storyline_id).toBe(id);
-    expect(row.storyline_published).toEqual(new Date("2026-08-11T10:00:00.000Z"));
-    expect(row.story_tokens).toEqual([]);
-  });
-
-  it("gives a singleton that joins a group that group's storyline", async () => {
-    const seed = await ingest(
-      story({
-        url: "https://a.example/join",
-        title: "Port strike halts grain exports",
-        published: "2026-08-11T09:00:00.000Z",
-      }),
-    );
-    const joiner = await ingest(
-      story({
-        url: "https://b.example/join",
-        title: "Port strike halts grain exports again",
-        published: "2026-08-11T11:00:00.000Z",
-      }),
-    );
-    const seedId = seed.createdArticles[0]!.id;
-    const joinerId = joiner.createdArticles[0]!.id;
-    const tokens = ["port", "strike", "halt", "grain", "export"];
-
-    await recordGrouping(harness.db, {
-      articleId: seedId,
-      titleTokens: tokens,
-      tokensVersion: 4,
-      groupId: null,
-    });
-    // Attach the seed's group to some other storyline first, so the joiner
-    // must follow the group's storyline, not the group id.
-    const hub = await ingest(
-      story({
-        url: "https://hub.example/join",
-        title: "Dockworkers walk out across coast",
-        published: "2026-08-11T08:00:00.000Z",
-      }),
-    );
-    const hubId = hub.createdArticles[0]!.id;
-    await setStoryline(harness.db, { groupId: seedId, storylineId: hubId });
-
-    await recordGrouping(harness.db, {
-      articleId: joinerId,
-      titleTokens: [...tokens, "again"],
-      tokensVersion: 4,
-      groupId: seedId,
-    });
-
-    const row = await readRow(joinerId);
-    expect(row.group_id).toBe(seedId);
-    expect(row.storyline_id).toBe(hubId);
-    // The hub's storyline position follows the earliest member across ALL its
-    // groups — here the hub article's own 08:00.
-    expect(row.storyline_published).toEqual(new Date("2026-08-11T08:00:00.000Z"));
-  });
-
-  it("merges one group into another, storyline and position included", async () => {
+  it("merges one group into another, position included", async () => {
+    // What SURVIVED the cutover from this block: the group layer's own
+    // behaviour. The storyline half — a hub's spokes following a merge, a
+    // winner re-pointing at itself — went with migration 0012, because a
+    // storyline holds GROUPS now and a group that ceases to exist leaves
+    // through `storyline_groups` rather than through a column here.
     const mk = async (url: string, title: string, published: string) => {
       const result = await ingest(story({ url, title, published }));
       const id = result.createdArticles[0]!.id;
@@ -498,9 +433,8 @@ describe("storylines in storage (ADR-0009)", () => {
     for (const id of [a1, a2, b1, b2]) {
       const row = await readRow(id);
       expect(row.group_id).toBe(a1);
-      expect(row.storyline_id).toBe(a1);
       // The merged group's position reaches back to pole two's 09:00 member.
-      expect(row.storyline_published).toEqual(new Date("2026-08-11T09:00:00.000Z"));
+      expect(row.group_published).toEqual(new Date("2026-08-11T09:00:00.000Z"));
     }
 
     // Idempotent: the loser is empty now, so a replay is a no-op.
@@ -509,86 +443,10 @@ describe("storylines in storage (ADR-0009)", () => {
     );
   });
 
-  it("carries a merged hub's spokes along to the winner's storyline", async () => {
-    const mk = async (url: string, title: string, published: string) => {
-      const result = await ingest(story({ url, title, published }));
-      const id = result.createdArticles[0]!.id;
-      await recordGrouping(harness.db, {
-        articleId: id,
-        titleTokens: ["spoke", "carry"],
-        tokensVersion: 4,
-        groupId: null,
-      });
-      return id;
-    };
-
-    const winner = await mk("https://w.example/s", "Winner story", "2026-08-11T10:00:00.000Z");
-    const loserHub = await mk("https://l.example/s", "Loser hub story", "2026-08-11T11:00:00.000Z");
-    const spoke = await mk("https://sp.example/s", "Spoke angle piece", "2026-08-11T12:00:00.000Z");
-    await setStoryline(harness.db, { groupId: spoke, storylineId: loserHub });
-
-    await mergeGroups(harness.db, { winnerGroupId: winner, loserGroupId: loserHub });
-
-    // The spoke's GROUP is untouched — it was never the same piece — but its
-    // storyline follows its hub into the winner's story.
-    const row = await readRow(spoke);
-    expect(row.group_id).toBe(spoke);
-    expect(row.storyline_id).toBe(winner);
-  });
-
-  it("re-points the storyline to the winner when the winner absorbs its own hub", async () => {
-    const mk = async (url: string, title: string, published: string) => {
-      const result = await ingest(story({ url, title, published }));
-      const id = result.createdArticles[0]!.id;
-      await recordGrouping(harness.db, {
-        articleId: id,
-        titleTokens: ["hub", "absorb"],
-        tokensVersion: 4,
-        groupId: null,
-      });
-      return id;
-    };
-
-    // The production shape: the bridge article arrives through a SPOKE's
-    // wording, so the spoke's group wins the merge and absorbs the hub it
-    // hangs off. The storyline must follow the winner — an id naming a
-    // dissolved group is invisible to the hubs-only attach path.
-    const hub = await mk("https://hub.example/a", "Hub story", "2026-08-11T10:00:00.000Z");
-    const winner = await mk("https://win.example/a", "Winner angle", "2026-08-11T11:00:00.000Z");
-    const spoke = await mk("https://spk.example/a", "Other spoke", "2026-08-11T12:00:00.000Z");
-    await setStoryline(harness.db, { groupId: winner, storylineId: hub });
-    await setStoryline(harness.db, { groupId: spoke, storylineId: hub });
-
-    await mergeGroups(harness.db, { winnerGroupId: winner, loserGroupId: hub });
-
-    for (const id of [hub, winner]) {
-      const row = await readRow(id);
-      expect(row.group_id).toBe(winner);
-      expect(row.storyline_id).toBe(winner);
-    }
-    // The other spoke's group is untouched, but its hub dissolved into the
-    // winner's group, so its storyline follows there too.
-    const row = await readRow(spoke);
-    expect(row.group_id).toBe(spoke);
-    expect(row.storyline_id).toBe(winner);
-  });
-
-  it("reads a day-language corpus for the storyline pass", async () => {
-    const rows = await readStorylineDay(harness.db, {
-      from: DAY_FROM,
-      to: DAY_TO,
-      language: "en",
-    });
-    // Everything this suite ingested is in the window; spot-check the shape.
-    expect(rows.length).toBeGreaterThan(0);
-    for (const row of rows) {
-      expect(row.groupId).toMatch(/^\d+$/);
-      expect(row.storylineId).toMatch(/^\d+$/);
-      expect(Array.isArray(row.storyTokens)).toBe(true);
-    }
-  });
-
   it("records story tokens alongside title tokens", async () => {
+    // `story_tokens` outlived the model that introduced it: it is the LINKER's
+    // input now (ADR-0011), which is why 0012 dropped its neighbours and left
+    // this one standing.
     const result = await ingest(
       story({
         url: "https://tokens.example/1",

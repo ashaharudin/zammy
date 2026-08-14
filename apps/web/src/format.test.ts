@@ -34,7 +34,6 @@ const entry = (id: string, published: string, headlinePublished = published): Ti
   article: article(id, headlinePublished),
   related: [],
   moreCoverage: [],
-  storylinePhrase: null,
   storyline: null,
 });
 

@@ -360,11 +360,11 @@ category   string   optional   validated against /available/categories
 from, to   ISO-8601 optional   timeline window
 cursor     opaque   optional   keyset cursor from a previous response
 limit      int      optional   default 25, max 100 — a CEILING, not a promise (§6.5)
-storyline  digits   optional   seed: enroll this storyline's articles in the topic before
-                              planning, gated on every keyword being present in the
-                              article and on the topic's language (ADR-0010). What a
-                              storyline-phrase chip sends. NOT part of the fingerprint —
-                              it says where the reader came from, not what they searched.
+storyline  uuid     optional   the STORYLINE VIEW (ADR-0011): the timeline filtered to
+                              one storyline, alias-resolving. Carries no keywords —
+                              `q` is optional only for this — because the view's
+                              search box is empty by definition, and typing exits it.
+                              NOT part of the fingerprint; it has no topic at all.
 ```
 
 Response:
@@ -663,31 +663,40 @@ convention §6.3 uses for requested and segment windows. Write it explicitly (`t
 assumes the two agree will mis-reason about segment seams. §6.3 explains why the mismatch is the safe
 direction and must not be "fixed" here.
 
-### 7.3 Timeline reads — keyset pagination over storylines
+### 7.3 Timeline reads — keyset pagination over storyline-days
 
 ```sql
--- Step 1: the page of STORYLINES (ADR-0009; originally groups, one layer
--- down). Both columns are functions of the storyline, so DISTINCT folds its
--- members into the one row that represents it here.
-SELECT DISTINCT a.storyline_id, a.storyline_published
-FROM topic_articles ta
-JOIN articles a ON a.id = ta.article_id
-WHERE ta.fingerprint = $1
-  AND a.published >= $2 AND a.published < $3
-  AND (a.storyline_published, a.storyline_id) < ($4, $5)   -- cursor; omitted on first page
-ORDER BY a.storyline_published DESC, a.storyline_id DESC
+-- Step 1: the page of STORYLINE-DAYS (ADR-0011). A storyline is unbounded in
+-- time; the paginated unit is not — each day a storyline has coverage it takes
+-- one slot, so no slot spans days and the keyset survives unchanged in shape.
+SELECT DISTINCT sd.storyline_id, sd.day_key, sd.day_slot_published
+FROM articles a
+JOIN storyline_groups sg ON sg.group_id = a.group_id
+JOIN storyline_days sd ON sd.storyline_id = sg.storyline_id
+                      AND sd.day_key = to_char(a.published AT TIME ZONE $tz, 'YYYY-MM-DD')
+JOIN topic_articles ta ON ta.article_id = a.id AND ta.fingerprint = $1
+WHERE a.published >= $2 AND a.published < $3
+  AND (sd.day_slot_published, sd.storyline_id) < ($4, $5)  -- cursor; omitted on first page
+ORDER BY sd.day_slot_published DESC, sd.storyline_id DESC
 LIMIT $6;
 
--- Step 2: their members, for THIS topic only — storylines are global,
--- membership is not, and the representative is chosen from what actually
--- matched (§14.3). Each member carries its group_id, which is what splits the
--- slot's disclosure into "same story" and "more coverage".
-SELECT a.*
-FROM topic_articles ta
-JOIN articles a ON a.id = ta.article_id
-WHERE ta.fingerprint = $1 AND a.storyline_id = ANY($7)
+-- Step 2: their members, per (storyline, day), for THIS topic only —
+-- storylines are global, membership is not, and the representative is chosen
+-- from what actually matched (§14.3). Each member carries its group_id, which
+-- is what splits the slot's disclosure into "same story" and "more coverage".
+SELECT a.*, sg.storyline_id || '|' || to_char(...) AS slot_key
+FROM articles a
+JOIN storyline_groups sg ON sg.group_id = a.group_id
+JOIN topic_articles ta ON ta.article_id = a.id AND ta.fingerprint = $1
+WHERE (sg.storyline_id, day_key) IN ($7)
 ORDER BY a.published DESC, a.id DESC;
 ```
+
+This is the first real join in the hot read path, and it supersedes the LETTER of ADR-0002's "one
+index scan with no join". The spirit is preserved and is what mattered: position is precomputed at
+write time in `storyline_days`, step one is still a pure index scan over a keyset, and reads never
+re-sort. The join buys membership, which the old model denormalized onto every article row and could
+only afford because a storyline was day-bounded. Measured at 2–6ms per page over the dev archive.
 
 Deduplication is a *property of the table*, not a filter applied afterwards — which is the whole
 reason `articles` and `sightings` are separate. Post-filtering would be wrong here: with one URL
@@ -696,10 +705,11 @@ unpredictable and `hasMore` unreliable. Grouping (§14.3) keeps that property ra
 away: the group is materialized at write time, so `LIMIT` still counts what the reader sees. An
 ungrouped article is a group of one whose position and identity are its own, so a store with no
 grouping pages exactly as it did before the columns existed — including the cursor, which is
-unchanged in shape. Storylines (ADR-0009) repeat the move one layer up: the slot is a day's
-coverage of one story — a hub group plus the angle pieces attached to it — materialized at write
-time onto `storyline_id`/`storyline_published`, and a group leading its own storyline pages
-exactly as groups did before the layer existed.
+unchanged in shape. Storylines (ADR-0011) repeat the move one layer up: the slot is one storyline's
+coverage on one day, materialized at write time as a `storyline_days` row positioned at that day's
+earliest article. Every group is born a provisional storyline of one, so a group that never links
+pages exactly as groups did before the layer existed — which is what makes the provisional
+storyline-of-one the ordinary article slot rather than a special case the read path must know about.
 
 Keyset, not `OFFSET`: cost is constant regardless of depth, and — critically for a feed where new
 articles arrive constantly — rows cannot shift between pages and cause duplicates or skips. The
@@ -781,9 +791,8 @@ that word in `title`/`description`), so a local index would answer a *different*
 return wrong result sets. Keyword resolution is upstream-only. A local index may return later purely
 for **filtering within an already-fetched topic**, which is an honestly different feature.
 
-The storyline seed (ADR-0010) does not breach this. It resolves no keywords and finds no articles:
-the caller names one storyline it is already showing, and the keyword array is a *gate* on that
-storyline's members, not a query over the corpus. It cannot answer "which articles match these
+The storyline view (ADR-0011) does not breach this. It resolves no keywords and finds no articles:
+the caller names one storyline by UUID and gets that storyline's day slots. It cannot answer "which articles match these
 words" — only "does this article, already in hand, carry all of them", which is the narrower claim
 `topic_articles` can afford to record.
 
@@ -815,12 +824,20 @@ modern; keywords in, timeline out.
   post like a daily link roundup — the card shows the same quiet treatment from `latest_seen` rather
   than repeating the story. This is the user-visible half of §7.4; without it, over half of a typical
   timeline is one post repeated.
-- **Storyline phrase** — a slot with wider coverage hangs two words in the gutter on the far side
-  of the rail, and clicking them searches for that story (ADR-0010). Both words appear in every
-  article the slot shows, and the click carries `?storyline=<id>` so the topic it opens is seeded
-  with that storyline before anything is fetched — the results are a superset of the slot, by
-  construction rather than by hope. Left of the spine on purpose: the right-hand column is the
-  reader's present, and the phrase is a way out of it.
+- **Storyline label** — every slot of a labelled storyline hangs its two-or-three-word label in the
+  gutter on the far side of the rail, and clicking it opens the **storyline view**: the timeline
+  filtered to that UUID, the label as a dismissible chip, the search box empty, typing exits
+  (ADR-0011). The label's words are never executed as a search — labels are deliberately non-unique,
+  so only the UUID identifies the story. When two same-label storylines are on screen together a
+  quiet date qualifier separates them, at the coarsest precision that actually does: month, escalating
+  to the day when namesakes share one. A provisional storyline-of-one carries no label and renders
+  as the plain article slot. Left of the spine on purpose: the right-hand column is the reader's
+  present, and the label is a way out of it.
+- **Surfaced storylines** — a search never narrows to a storyline; it surfaces the ones whose profile
+  tokens contain every keyword, as pills inside the sticky command bar under the `asOf` stamp, each
+  a size-bucket glyph plus the label. In the chrome rather than in the results, because search and
+  storylines are separate axes and a strip among the results reads as part of the result set. The
+  bar's bottom edge is the handle that hides the row, and the collapsed state persists.
 - **Freshness banner** — renders `meta.asOf` / `meta.stale` / `meta.degraded` honestly.
 - **States** — skeleton cards on first load, distinct empty state ("no articles yet for X" vs. "no
   more history"), and an error state with retry.
@@ -1510,12 +1527,20 @@ Still open:
      case for vectors; it is not a case for lowering the threshold, which would merely merge
      different stories that share words.
 
-     **Resolved lexically (ADR-0009), vectors still unbuilt:** a second, looser relation — day-rare
-     anchor plus rarity-weighted mass over title AND description tokens — clusters a day's groups
-     hub-and-spoke into **storylines**, and the storyline is the slot the timeline pages (§7.3).
-     The angle piece that names the story only in its description attaches there, which is what the
-     gap actually was on live data. Thresholds were measured before pinning; the measurement CLI
-     (`pnpm measure:storylines`) stays in the repo as the instrument.
+     **Resolved lexically, vectors still unbuilt, and the answer outgrew the question.** ADR-0009
+     clustered a DAY's groups hub-and-spoke; ADR-0011 replaced that with a **storyline** — a
+     persistent, unbounded arc of one event, identified by UUID, that groups attach to across days
+     (§7.3). The relation is the same shape — a rare shared anchor plus rarity-weighted mass over
+     title AND description tokens — with rarity measured against a rolling 14-day corpus rather than
+     one day, because a storyline that outlives a day cannot ask a question whose answer depends on
+     which day it is asked. The angle piece that names the story only in its description attaches
+     there, which is what the gap actually was on live data.
+
+     Every threshold was measured before pinning and the sweep stays in the repo as the instrument
+     (`pnpm measure:storylines-v2`, recorded in docs/STORYLINE-LINKING.md). The percolation alarm
+     that ADR-0009's first cut tripped — one storyline swallowing 1,179 of a day's 1,190 groups —
+     never rings again: across the whole threshold grid the largest storyline stays under 2.2% of
+     the corpus, and 0.18% at the pinned values.
    - **Grouping is forward-looking, and `pnpm regroup` is how you change that deliberately.** Every
      rule above decides at write time, so articles stored before a rule existed keep the grouping —
      and the tokens — they were given. `title_tokens` is a materialized derivation of a rule that has
