@@ -77,8 +77,12 @@ pre-storylines height. Two decisions worth keeping in S7:
 - The handle is the bar's own bottom edge, so the control costs no row of its
   own, and it stays put in both states — which is what makes a closed row
   findable again.
-- Collapsed, the caret names what it hides ("▼ 3 storylines"). Expanded it is a
-  bare caret; the pills above it are their own explanation.
+- The caret is bare in both states, and the handle carries a background a shade
+  darker than the bar instead: the tint is what says "press me", and it says it
+  without adding a word of chrome to a bar whose whole point is terseness. Mix
+  toward black rather than reach for `--chip-bg` — that token is *lighter* than
+  the surface in the dark theme, which would make the handle brighter than the
+  chrome it belongs to.
 - The collapsed state persists across searches. A reader who closed the row is
   saying "not what I am here for", and re-opening it on the next query would be
   the nag D's dismissal was.

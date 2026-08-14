@@ -72,7 +72,6 @@ export function VariantE({
         pills={pills}
         pillsExpanded={expanded}
         onTogglePills={() => setExpanded(!expanded)}
-        pillsCollapsedLabel={`${surfaced.length} storyline${surfaced.length === 1 ? "" : "s"}`}
       />
       <Page>
         <Rail

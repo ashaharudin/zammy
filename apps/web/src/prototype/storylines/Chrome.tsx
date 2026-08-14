@@ -25,7 +25,6 @@ export function CommandBar({
   pills,
   pillsExpanded = true,
   onTogglePills,
-  pillsCollapsedLabel,
 }: {
   query: string;
   /** The storyline being viewed: label as a dismissible chip, box empty. */
@@ -39,8 +38,6 @@ export function CommandBar({
   /** Whether that row is showing. The handle bar below it does the toggling. */
   pillsExpanded?: boolean;
   onTogglePills?: () => void;
-  /** What the handle says while the row is hidden, e.g. "3 storylines". */
-  pillsCollapsedLabel?: string;
 }) {
   return (
     <header
@@ -151,7 +148,13 @@ export function CommandBar({
             width: "100%",
             border: "none",
             borderTop: "1px solid var(--border)",
-            background: "none",
+            // A shade darker than the bar it hangs from, so the handle reads as
+            // a surface to press rather than as the bar's border — which is
+            // what carries its findability now that the caret says nothing.
+            // Mixed toward black rather than set to --chip-bg: the chip token
+            // is LIGHTER than the surface in the dark theme, which would make
+            // the handle brighter than the chrome it belongs to.
+            background: "color-mix(in srgb, var(--surface) 90%, #000)",
             color: "var(--fg-faint)",
             cursor: "pointer",
             padding: 0,
@@ -160,16 +163,7 @@ export function CommandBar({
             fontSize: "0.6rem",
           }}
         >
-          {/* Expanded, the caret alone: the pills above it say what it hides.
-              Collapsed, the caret needs to say what is behind it, or the row
-              the reader closed becomes a row they cannot find again. */}
-          {pillsExpanded ? (
-            "▲"
-          ) : (
-            <span style={{ fontFamily: MONO, letterSpacing: "0.04em" }}>
-              ▼ {pillsCollapsedLabel}
-            </span>
-          )}
+          {pillsExpanded ? "▲" : "▼"}
         </button>
       )}
     </header>
