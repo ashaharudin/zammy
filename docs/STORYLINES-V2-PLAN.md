@@ -180,6 +180,11 @@ from S8.
 storyline duplication all verified in the browser preview against backfilled
 dev data.
 
+The surfacing variant is settled: the top strip, per
+[S8's verdict](S8-STORYLINE-SURFACING-VERDICT.md), which also carries three
+smaller findings S7 should fold in (no gutter label inside the storyline view,
+the per-slot collision qualifier, dormancy shown on surfaced storylines).
+
 ## S8 — UX prototypes (throwaway)
 
 **Depends on**: nothing hard — mock data suffices; S6's wire shape makes it
@@ -194,6 +199,12 @@ Throwaway code, no production wiring. Output: a short written verdict — which
 variant (or combination) S7 builds, and why.
 
 **Done when**: all three are clickable and the verdict is recorded.
+
+**Done**: the three variants live on branch `claude/s8-implementation-25f41f`
+(`apps/web/src/prototype/storylines/`, `pnpm prototype:storylines`); the verdict
+is [S8-STORYLINE-SURFACING-VERDICT.md](S8-STORYLINE-SURFACING-VERDICT.md) —
+**S7 builds A, the top strip**; B (storyline as a rail slot) is refused;
+C (command-bar typeahead) is deferred to its own session, out of S7's scope.
 
 ## S9 — Cutover and cleanup
 
