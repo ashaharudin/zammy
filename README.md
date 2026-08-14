@@ -99,9 +99,11 @@ Note `--build`: `docker compose up` alone reuses a stale image and will silently
 
 ## Deployment
 
-AWS (ECS Fargate + RDS + ElastiCache) is the deployment target; Docker Compose here is the local
-development environment, not a deploy target. The same image runs in both, differing only by
-environment variables — see [ARCHITECTURE 4.1](docs/ARCHITECTURE.md). Infrastructure-as-code arrives
+Oracle Cloud (OCI) is the deployment target — see
+[docs/DEPLOYMENT-OCI.md](docs/DEPLOYMENT-OCI.md) for the plan. AWS (ECS Fargate + RDS +
+ElastiCache, [ARCHITECTURE 4.1](docs/ARCHITECTURE.md)) remains an option but not an immediate
+goal. Docker Compose here is the local development environment, not a deploy target; the same
+image runs everywhere, differing only by environment variables. Infrastructure-as-code arrives
 with Phase 6.
 
 ## Conventions worth knowing
