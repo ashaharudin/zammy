@@ -13,19 +13,32 @@ export interface Route {
   /** null on the landing page: filters standing without a topic. */
   q: string | null;
   filters: TopicFilters;
+  /**
+   * The storyline a `storylinePhrase` chip opened this topic from (ADR-0010).
+   * A sibling of `q` rather than a filter, because it shares q's lifetime
+   * exactly: it belongs to THIS topic, and the reader's next search must not
+   * inherit it. In the URL so a shared link seeds for its recipient too —
+   * provenance travels with the link.
+   */
+  storyline?: string;
 }
 
 const PARAM_KEYS = { language: "lang", country: "country", category: "category" } as const;
 
 export function parseRoute(search: string): Route {
   const params = new URLSearchParams(search);
+  const q = params.get("q")?.trim() || null;
+  const storyline = params.get("storyline") ?? undefined;
   return {
-    q: params.get("q")?.trim() || null,
+    q,
     filters: {
       language: params.get(PARAM_KEYS.language) ?? undefined,
       country: params.get(PARAM_KEYS.country) ?? undefined,
       category: params.get(PARAM_KEYS.category) ?? undefined,
     },
+    // A seed without keywords seeds nothing; dropping it here keeps the hero's
+    // URL to the filters it is actually showing.
+    ...(q && storyline ? { storyline } : {}),
   };
 }
 
@@ -36,6 +49,7 @@ export function routeSearch(route: Route): string {
     const value = route.filters[filter as keyof TopicFilters];
     if (value) params.set(key, value);
   }
+  if (route.q && route.storyline) params.set("storyline", route.storyline);
   const search = params.toString();
   return search ? `?${search}` : "";
 }

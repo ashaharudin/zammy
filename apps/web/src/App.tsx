@@ -15,6 +15,7 @@ import { TimelinePage } from "./TimelinePage.js";
  * before there is a topic, a search adopts whatever is set, and clearing back
  * to the hero keeps them, so a reader states "Malay, sports" once.
  */
+
 export function App() {
   const [route, setRoute] = useState<Route>(() => parseRoute(window.location.search));
 
@@ -51,8 +52,13 @@ export function App() {
 
   return (
     <TimelinePage
-      topic={{ q: route.q, ...route.filters }}
-      onSearch={({ q, ...filters }, options) => navigate({ q, filters }, options)}
+      topic={{ q: route.q, ...route.filters, ...(route.storyline ? { storyline: route.storyline } : {}) }}
+      // `storyline` splits off from the filters here rather than riding with
+      // them: the filters survive the transition, the seed belongs to the
+      // topic it opened (ADR-0010) and only travels when a caller passes it.
+      onSearch={({ q, storyline, ...filters }, options) =>
+        navigate({ q, filters, ...(storyline ? { storyline } : {}) }, options)
+      }
       onClear={() => navigate({ q: null, filters: route.filters })}
     />
   );

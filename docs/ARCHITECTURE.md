@@ -360,6 +360,11 @@ category   string   optional   validated against /available/categories
 from, to   ISO-8601 optional   timeline window
 cursor     opaque   optional   keyset cursor from a previous response
 limit      int      optional   default 25, max 100 — a CEILING, not a promise (§6.5)
+storyline  digits   optional   seed: enroll this storyline's articles in the topic before
+                              planning, gated on every keyword being present in the
+                              article and on the topic's language (ADR-0010). What a
+                              storyline-phrase chip sends. NOT part of the fingerprint —
+                              it says where the reader came from, not what they searched.
 ```
 
 Response:
@@ -776,6 +781,12 @@ that word in `title`/`description`), so a local index would answer a *different*
 return wrong result sets. Keyword resolution is upstream-only. A local index may return later purely
 for **filtering within an already-fetched topic**, which is an honestly different feature.
 
+The storyline seed (ADR-0010) does not breach this. It resolves no keywords and finds no articles:
+the caller names one storyline it is already showing, and the keyword array is a *gate* on that
+storyline's members, not a query over the corpus. It cannot answer "which articles match these
+words" — only "does this article, already in hand, carry all of them", which is the narrower claim
+`topic_articles` can afford to record.
+
 ---
 
 ## 8. Component 4 — Front end (`apps/web`)
@@ -804,6 +815,12 @@ modern; keywords in, timeline out.
   post like a daily link roundup — the card shows the same quiet treatment from `latest_seen` rather
   than repeating the story. This is the user-visible half of §7.4; without it, over half of a typical
   timeline is one post repeated.
+- **Storyline phrase** — a slot with wider coverage hangs two words in the gutter on the far side
+  of the rail, and clicking them searches for that story (ADR-0010). Both words appear in every
+  article the slot shows, and the click carries `?storyline=<id>` so the topic it opens is seeded
+  with that storyline before anything is fetched — the results are a superset of the slot, by
+  construction rather than by hope. Left of the spine on purpose: the right-hand column is the
+  reader's present, and the phrase is a way out of it.
 - **Freshness banner** — renders `meta.asOf` / `meta.stale` / `meta.degraded` honestly.
 - **States** — skeleton cards on first load, distinct empty state ("no articles yet for X" vs. "no
   more history"), and an error state with retry.

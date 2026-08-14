@@ -6,11 +6,13 @@ import {
   type SearchParams,
   type SearchResult,
 } from "@zammy/currents-client";
-import { readCoverage, recordCoverage, upsertTopic } from "@zammy/storage";
+import type { TimelineEntry } from "@zammy/shared";
+import { hexToBytea, readCoverage, recordCoverage, upsertTopic } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
 import { subtractCoverage } from "./coverage-gaps.js";
 import { refreshLockKey, tryAcquire } from "./single-flight.js";
 import { processSegmentJob, readTimeline } from "./timeline-service.js";
+import { storyTokens } from "./storyline.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
 
 /**
@@ -599,5 +601,117 @@ describe("cursor plumbing through the service", () => {
     const firstIds = new Set(first.items.map((i) => i.storylineId));
     expect(second.items.length).toBeGreaterThan(0);
     expect(second.items.every((i) => !firstIds.has(i.storylineId))).toBe(true);
+  });
+});
+
+describe("seeded arrivals (ADR-0010) — a phrase click carries its storyline", () => {
+  /** A topic named by two words drawn from a slot the reader is looking at. */
+  const phraseQuery = (keywords: string[]): CanonicalQuery => ({
+    fingerprint: randomBytes(32).toString("hex"),
+    keywords: [...keywords].sort(),
+    language: "en",
+    country: null,
+    category: null,
+    window: { ...WINDOW },
+  });
+
+  /** Two words every member of a slot carries — what a phrase guarantees. */
+  const sharedWords = (entry: TimelineEntry): string[] => {
+    const sets = [entry.article, ...entry.related, ...entry.moreCoverage].map(
+      (member) => new Set(storyTokens(member.title, member.description)),
+    );
+    return [...sets[0]!].filter((token) => sets.every((set) => set.has(token))).slice(0, 2);
+  };
+
+  it("puts the slot in the topic its phrase opened, before any fill", async () => {
+    harness = await createTestHarness({}, NOW);
+    const source = await readTimeline(harness.deps, climateQuery(), { limit: 100 });
+    const slot = source.items.find((item) => sharedWords(item).length === 2)!;
+    const query = phraseQuery(sharedWords(slot));
+
+    const opened = await readTimeline(harness.deps, query, {
+      limit: 25,
+      seedStorylineId: slot.storylineId,
+    });
+
+    // "include, but is not limited to": the slot is there whatever upstream
+    // did or did not return for these two words.
+    const seeded = opened.items.find((item) => item.storylineId === slot.storylineId);
+    expect(seeded).toBeDefined();
+    expect(seeded!.article.url).toBe(slot.article.url);
+  });
+
+  it("never serves a cached page that predates the seed", async () => {
+    harness = await createTestHarness({}, NOW);
+    const source = await readTimeline(harness.deps, climateQuery(), { limit: 100 });
+    const slot = source.items.find((item) => sharedWords(item).length === 2)!;
+    const query = phraseQuery(sharedWords(slot));
+    await readTimeline(harness.deps, query, { limit: 25 });
+
+    // A topic that does not know this storyline, with a settled page cached
+    // over that fact. The state is MADE rather than found — the fixture's
+    // upstream returns these two words' articles like any other search — and
+    // what is under test is the planner's cache decision, not how a topic
+    // comes to be missing a slot.
+    await harness.deps.db
+      .deleteFrom("topic_articles")
+      .where("fingerprint", "=", hexToBytea(query.fingerprint))
+      .where((eb) =>
+        eb(
+          "article_id",
+          "in",
+          eb
+            .selectFrom("articles")
+            .select("id")
+            .where("storyline_id", "=", slot.storylineId),
+        ),
+      )
+      .execute();
+
+    // Cached at a limit nothing has used yet, so the entry is written AFTER
+    // the delete and genuinely lacks the slot.
+    const bare = await readTimeline(harness.deps, query, { limit: 7 });
+    expect(bare.items.some((item) => item.storylineId === slot.storylineId)).toBe(false);
+    expect((await readTimeline(harness.deps, query, { limit: 7 })).meta.servedFrom).toBe("cache");
+
+    const opened = await readTimeline(harness.deps, query, {
+      limit: 7,
+      seedStorylineId: slot.storylineId,
+    });
+
+    expect(opened.meta.servedFrom).not.toBe("cache");
+    expect(opened.items.some((item) => item.storylineId === slot.storylineId)).toBe(true);
+  });
+
+  it("a repeat of the same link costs the cache nothing", async () => {
+    harness = await createTestHarness({}, NOW);
+    const source = await readTimeline(harness.deps, climateQuery(), { limit: 100 });
+    const slot = source.items.find((item) => sharedWords(item).length === 2)!;
+    const query = phraseQuery(sharedWords(slot));
+
+    await readTimeline(harness.deps, query, { limit: 25, seedStorylineId: slot.storylineId });
+    const again = await readTimeline(harness.deps, query, {
+      limit: 25,
+      seedStorylineId: slot.storylineId,
+    });
+
+    // Nothing left to enroll, so the ordinary cache path resumes.
+    expect(again.meta.servedFrom).toBe("cache");
+  });
+
+  it("refuses a storyline that does not carry every keyword", async () => {
+    harness = await createTestHarness({}, NOW);
+    const source = await readTimeline(harness.deps, climateQuery(), { limit: 100 });
+    const slot = source.items[0]!;
+    const query = phraseQuery(["bananas", "quixotic"]);
+
+    const opened = await readTimeline(harness.deps, query, {
+      limit: 25,
+      seedStorylineId: slot.storylineId,
+    });
+
+    // A crafted link is a link to nothing: the gate is the keywords, not the
+    // caller's say-so.
+    expect(opened.items).toEqual([]);
   });
 });

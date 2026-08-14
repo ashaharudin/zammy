@@ -16,6 +16,17 @@ export const TimelineQuery = z.object({
   /** Opaque keyset cursor from a previous response. */
   cursor: z.string().max(512).optional(),
   /**
+   * A storyline whose articles this topic should be SEEDED with (ADR-0010) —
+   * what a `storylinePhrase` chip sends when it opens the story it names.
+   *
+   * Deliberately absent from the fingerprint: it says where the reader came
+   * from, never what they searched for, so the same phrase reached from a
+   * chip and from the search box is one topic. It admits only articles that
+   * carry every keyword, so it can add provenance to a topic but never
+   * membership the keywords do not support.
+   */
+  storyline: z.string().regex(/^\d+$/).max(20).optional(),
+  /**
    * A CEILING, not a promise. One upstream call is 20 raw sightings, which after
    * collapsing can be as few as 6 articles — so a short page is normal. Distinguish
    * "still arriving" from "that's all" via `meta.ingest`, never via item count.
@@ -109,6 +120,16 @@ export const TimelineEntry = z.object({
    * the fetched time spans), and one word with two meanings is the confusion
    * the language doc exists to prevent. */
   moreCoverage: z.array(Article),
+  /**
+   * Two words the whole slot shares, offered as a search for the story itself
+   * (ADR-0010). Null for a slot with no `moreCoverage` — one article is not a
+   * story with a name yet — and null when the coverage shares no two adjacent
+   * words the headline also uses.
+   *
+   * Both words appear in every article the slot shows, which is what makes
+   * the search it opens a superset of this slot rather than a guess.
+   */
+  storylinePhrase: z.string().nullable(),
 });
 export type TimelineEntry = z.infer<typeof TimelineEntry>;
 

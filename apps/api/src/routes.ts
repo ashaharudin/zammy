@@ -74,6 +74,7 @@ export async function registerQueryRoutes(
       const result = await readTimeline(deps, canonical.query, {
         limit: parsed.data.limit,
         ...(parsed.data.cursor ? { cursorString: parsed.data.cursor } : {}),
+        ...(parsed.data.storyline ? { seedStorylineId: parsed.data.storyline } : {}),
       });
       return await reply.send(result);
     } catch (error) {

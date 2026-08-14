@@ -16,6 +16,35 @@
   --amber: #b58900;
   --activity: #0f8b8d;
   --shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+
+  /*
+   * Rail geometry (ARCHITECTURE 8.1). One centre line for the whole rail, and
+   * three quantities derived from each other rather than hand-tuned — the
+   * glyphs sat 0.9px off the spine when they were picked independently:
+   *
+   *   --rail-gutter  room to the LEFT of the spine, where a slot's storyline
+   *                  phrase hangs (ADR-0010). It is the only free variable.
+   *   --rail-center  the spine's own centre line, from the rail's left edge.
+   *   --rail-inset   where the rail's CONTENT starts; the extra 1.8rem clears
+   *                  the widest marker plus breathing room.
+   *
+   * These live in CSS rather than in the TSX because the gutter is the one
+   * piece of this layout that has to respond to viewport width, and the TSX
+   * cannot. Narrow screens keep the phrase — a bigram wraps to two lines
+   * rather than truncating — but not the space a wide one gives it.
+   */
+  --rail-gutter: 6.5rem;
+  --rail-center: calc(var(--rail-gutter) + 0.7rem);
+  --rail-inset: calc(var(--rail-center) + 1.8rem);
+  /* The rail's own 760px, plus whatever the gutter takes, so widening the
+     gutter moves the spine right instead of squeezing the cards. */
+  --page-max: calc(760px + var(--rail-gutter));
+}
+
+@media (max-width: 760px) {
+  :root {
+    --rail-gutter: 4rem;
+  }
 }
 
 @media (prefers-color-scheme: dark) {

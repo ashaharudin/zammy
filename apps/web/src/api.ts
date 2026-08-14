@@ -21,6 +21,14 @@ export interface TopicFilters {
 /** What the user is searching for. */
 export interface TopicQuery extends TopicFilters {
   q: string;
+  /**
+   * The storyline a `storylinePhrase` chip was clicked on (ADR-0010). Not a
+   * filter, and deliberately not in `TopicFilters`: a filter OUTLIVES the
+   * topic, and this is the one piece of query state that must not — it seeds
+   * the topic with the slot the reader came from, so carrying it into their
+   * next search would keep enrolling that slot in unrelated topics.
+   */
+  storyline?: string;
 }
 
 export const Reference = z.object({
@@ -72,6 +80,10 @@ export async function fetchTimeline(
   if (topic.language) params.set("language", topic.language);
   if (topic.country) params.set("country", topic.country);
   if (topic.category) params.set("category", topic.category);
+  // Sent on every page of the topic, not only the first: the attach is
+  // idempotent, and a reader who lands deep in a shared link still expects
+  // the storyline that link names to be in the results.
+  if (topic.storyline) params.set("storyline", topic.storyline);
   if (cursor) params.set("cursor", cursor);
 
   const response = await fetch(`/api/v1/timeline?${params}`, { signal });

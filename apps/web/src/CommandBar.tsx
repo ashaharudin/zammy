@@ -63,10 +63,16 @@ export function CommandBar({
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          if (q.trim()) onSearch({ ...topic, q: q.trim() });
+          // Filters carry over; the storyline seed does not. It is provenance
+          // for one phrase click (ADR-0010), and spreading it into whatever
+          // the reader types next would keep enrolling that slot in unrelated
+          // topics. The filter chips below DO keep it: they narrow this same
+          // topic rather than starting another.
+          const { storyline: _seed, ...carried } = topic;
+          if (q.trim()) onSearch({ ...carried, q: q.trim() });
         }}
         style={{
-          maxWidth: "760px",
+          maxWidth: "var(--page-max)",
           margin: "0 auto",
           display: "flex",
           alignItems: "center",
@@ -108,7 +114,7 @@ export function CommandBar({
       </form>
       <div
         style={{
-          maxWidth: "760px",
+          maxWidth: "var(--page-max)",
           margin: "0 auto",
           display: "flex",
           alignItems: "center",

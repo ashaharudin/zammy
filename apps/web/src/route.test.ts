@@ -23,6 +23,23 @@ describe("parseRoute", () => {
       filters: { language: "msa", country: undefined, category: "sports" },
     });
   });
+
+  it("reads a storyline seed beside the keywords, not among the filters", () => {
+    // ADR-0010: it shares q's lifetime, so a shared phrase link seeds for its
+    // recipient — and the reader's next search cannot inherit it.
+    expect(parseRoute("?q=mail-in+voting&storyline=23905")).toEqual({
+      q: "mail-in voting",
+      filters: { language: undefined, country: undefined, category: undefined },
+      storyline: "23905",
+    });
+  });
+
+  it("drops a seed with no keywords, which seeds nothing", () => {
+    expect(parseRoute("?storyline=23905&lang=en")).toEqual({
+      q: null,
+      filters: { language: "en", country: undefined, category: undefined },
+    });
+  });
 });
 
 describe("routeSearch", () => {
@@ -45,8 +62,28 @@ describe("routeSearch", () => {
     expect(routeSearch({ q: null, filters: {} })).toBe("");
   });
 
+  it("writes the seed last, after the topic it belongs to", () => {
+    expect(routeSearch({ q: "mail-in voting", filters: { language: "en" }, storyline: "23905" })).toBe(
+      "?q=mail-in+voting&lang=en&storyline=23905",
+    );
+  });
+
+  it("will not write a seed the hero would carry into the next search", () => {
+    expect(routeSearch({ q: null, filters: { language: "en" }, storyline: "23905" })).toBe("?lang=en");
+  });
+
   it("round-trips what it wrote", () => {
     const route = { q: "banjir", filters: { language: "msa", country: "MY", category: "sports" } };
+
+    expect(parseRoute(routeSearch(route))).toEqual(route);
+  });
+
+  it("round-trips a seeded topic", () => {
+    const route = {
+      q: "mail-in voting",
+      filters: { language: "en", country: undefined, category: undefined },
+      storyline: "23905",
+    };
 
     expect(parseRoute(routeSearch(route))).toEqual(route);
   });

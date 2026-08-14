@@ -35,8 +35,9 @@ export function freshnessTier(windowEnd: Date, now: Date): "hot" | "recent" | "h
  *   2 — slots are storylines; entries carry `storylineId` and `coverage` (ADR-0009)
  *   3 — the second section renamed `coverage` → `moreCoverage`: the bare word
  *       already names fetched time spans (CONTEXT.md)
+ *   4 — entries carry `storylinePhrase` (ADR-0010)
  */
-const PAGE_SHAPE_VERSION = 3;
+const PAGE_SHAPE_VERSION = 4;
 
 /** page:v<shape>:<fingerprint>:<windowHash>:<cursor>:<limit> (§7.1). */
 export function pageCacheKey(
