@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import type { TopicFilters } from "./api.js";
 import { Hero } from "./Hero.js";
 import { parseRoute, routeSearch, type Route } from "./route.js";
@@ -16,7 +16,30 @@ import { TimelinePage } from "./TimelinePage.js";
  * to the hero keeps them, so a reader states "Malay, sports" once.
  */
 
+// PROTOTYPE (S8) — throwaway exploration of how search surfaces storylines,
+// dev-only and mock-fed. Open http://localhost:5173/prototype/storylines while
+// `pnpm dev:web` runs, or `pnpm prototype:storylines`. Lands on a throwaway
+// branch, never on main.
+const StorylinesPrototype = lazy(() =>
+  import("./prototype/storylines/StorylinesPrototype.js").then((m) => ({
+    default: m.StorylinesPrototype,
+  })),
+);
+const showStorylinesPrototype =
+  !import.meta.env.PROD && window.location.pathname.startsWith("/prototype/storylines");
+
 export function App() {
+  if (showStorylinesPrototype) {
+    return (
+      <Suspense fallback={null}>
+        <StorylinesPrototype />
+      </Suspense>
+    );
+  }
+  return <TopicApp />;
+}
+
+function TopicApp() {
   const [route, setRoute] = useState<Route>(() => parseRoute(window.location.search));
 
   useEffect(() => {
