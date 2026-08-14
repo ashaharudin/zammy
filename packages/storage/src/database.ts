@@ -263,6 +263,18 @@ export interface StoryCorpusDaysTable {
   articles: number;
 }
 
+/**
+ * One group that qualified for both storylines of a pair (ADR-0011). K distinct
+ * such groups merge them; one is refused. Stored canonically ordered, so a pair
+ * is one row set however the qualifiers happened to sort.
+ */
+export interface StorylineBridgesTable {
+  storyline_lo: string;
+  storyline_hi: string;
+  group_id: string;
+  observed_at: Generated<Date>;
+}
+
 export interface Database {
   sightings: SightingsTable;
   articles: ArticlesTable;
@@ -278,6 +290,7 @@ export interface Database {
   storyline_days: StorylineDaysTable;
   story_token_days: StoryTokenDaysTable;
   story_corpus_days: StoryCorpusDaysTable;
+  storyline_bridges: StorylineBridgesTable;
 }
 
 /**

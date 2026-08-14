@@ -12,7 +12,8 @@
     "regroup": "tsc -b && node --env-file-if-exists=../../.env dist/regroup-cli.js",
     "measure:storylines": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-measure-cli.js",
     "story:df": "tsc -b && node --env-file-if-exists=../../.env dist/story-df-cli.js",
-    "label:storylines": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-label-cli.js"
+    "label:storylines": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-label-cli.js",
+    "measure:storylines-v2": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-sweep-cli.js"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

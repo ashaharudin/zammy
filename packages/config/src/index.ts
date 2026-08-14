@@ -195,6 +195,67 @@ const EnvSchema = z
      * turn was, and few enough that the prompt stays a flash-tier call.
      */
     STORYLINE_LABEL_SAMPLE: z.coerce.number().int().min(2).max(40).default(10),
+    // --- the v2 linker (ADR-0011); every default below is pinned from
+    //     `pnpm measure:storylines-v2`, recorded in docs/STORYLINE-LINKING.md ---
+    /**
+     * The ADR-0011 write path: provisional storylines, group→storyline linking,
+     * bridges and auto-merge. Off by default until the full-history backfill
+     * (S5) has run and been verified — the old day-clustered path keeps writing
+     * meanwhile, and the two do not interfere: they write different tables.
+     */
+    STORYLINES_V2: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+    /**
+     * A shared token anchors a link only below this share of the TRAILING
+     * corpus. MEASURED: 0.002 (≈32 articles of a 16k fortnight) is where
+     * beat-and-boilerplate storylines stop forming — at 0.005 the sweep builds
+     * a "White House press secretary" storyline that swallows every briefing
+     * regardless of subject, and at 0.01 a stock-ratings one. Below 0.002 real
+     * coverage starts fragmenting (the largest genuine storyline halves).
+     */
+    STORYLINE_ANCHOR_MAX_SHARE: z.coerce.number().min(0).max(1).default(0.002),
+    /**
+     * Floor under that share, in articles: a share of a small corpus is noise.
+     * UNMEASURED — English never reaches it (0.002 of 16k is 32), so it only
+     * binds for a language whose window holds under ~5,000 articles, and the
+     * dev archive has no such language to measure against.
+     */
+    STORYLINE_ANCHOR_DF_FLOOR: z.coerce.number().int().min(1).default(10),
+    /**
+     * Floor on the summed rarity (Σ ln(N/df)) of what a group and a storyline
+     * share. MEASURED: at 20, 41% of groups attach and the largest storyline
+     * holds 35 groups (0.18% of the corpus); 16 is the looser alternative
+     * measured (52% attach, largest 63). NOT transferable from ADR-0009's 8 —
+     * masses scale with ln(corpus), and the corpus grew eleven-fold.
+     *
+     * Note this is NOT the lever against boilerplate: syndicated legal
+     * disclaimers share many moderately-rare tokens, so raising mass makes
+     * them MORE prominent, not less. The anchor share is that lever.
+     */
+    STORYLINE_MASS_THRESHOLD_V2: z.coerce.number().min(0).default(20),
+    /**
+     * K: independent groups that must bridge two storylines before they merge.
+     * MEASURED: K=1 quadruples merges (826 → 3,416) for no gain in the alarm,
+     * which is single-bridge percolation exactly as ADR-0011 predicted; K=2 is
+     * where it settles.
+     */
+    STORYLINE_MERGE_BRIDGES: z.coerce.number().int().min(1).default(2),
+    /**
+     * Days without coverage after which a storyline leaves the normal candidate
+     * set. UNMEASURED, and honestly so: the dev archive is 31 days, so 30, 90
+     * and 365 replay identically — nothing in it is ever dormant. ADR-0011's
+     * starting knob, kept, and the first thing S5's full-history backfill can
+     * actually measure.
+     */
+    STORYLINE_DORMANCY_DAYS: z.coerce.number().int().min(1).default(90),
+    /**
+     * How much harder a dormant storyline is to join: anchor ceiling divided by
+     * this, mass floor multiplied by it. One knob because the two must move
+     * together. UNMEASURED for the same reason as the window above.
+     */
+    STORYLINE_DORMANT_STRICTNESS: z.coerce.number().min(1).default(1.5),
 
     /**
      * Applied when a search omits language. Omitting it upstream returns every
