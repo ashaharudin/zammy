@@ -396,9 +396,17 @@ export async function readStorylineLabelInput(
   };
 }
 
+/** Where a paged label pass has reached. Both halves, because `created_at`
+ * alone does not identify a row: a backfill creates thousands of storylines
+ * inside one transaction and Postgres stamps them all with its start time. */
+export interface LabelCursor {
+  createdAt: Date;
+  id: string;
+}
+
 /**
- * Storylines the labeler may have work for, most recent coverage first, with
- * the group count each label decision needs.
+ * Storylines the labeler may have work for, newest first, with the group count
+ * each label decision needs.
  *
  * Deliberately NOT filtered by "needs a label": whether a stale label has
  * drifted is a rule, and a rule in a WHERE clause is a rule with no test and no
@@ -406,10 +414,18 @@ export async function readStorylineLabelInput(
  * labeler decides. The candidate set is bounded to promoted storylines, which
  * is a fact about the lifecycle rather than a judgement — a provisional
  * storyline of one is invisible and has nothing to name.
+ *
+ * Ordered by `(created_at, id)`, which is exactly what `after` pages on. That
+ * agreement is the point: a pass over these MUTATES what it reads — a labelled
+ * storyline stops needing a label — so a cursor that disagreed with the sort
+ * would skip rows and repeat others, and the pass would neither terminate nor
+ * cover. Creation order rather than recent-coverage order for the same reason:
+ * coverage moves while the pass runs, and a cursor over a moving key is not a
+ * cursor.
  */
 export async function readLabelCandidates(
   db: Kysely<Database>,
-  query: { limit: number; before?: Date },
+  query: { limit: number; after?: LabelCursor },
 ): Promise<Array<Storyline & { groupCount: number; latestCoverage: Date | null }>> {
   let statement = db
     .selectFrom("storylines as s")
@@ -428,12 +444,15 @@ export async function readLabelCandidates(
     ])
     .where("s.status", "=", "active")
     .where("s.merged_into", "is", null)
-    .orderBy("latest_coverage", "desc")
+    .orderBy("s.created_at", "desc")
     .orderBy("s.id", "desc")
     .limit(query.limit);
 
-  if (query.before) {
-    statement = statement.where("s.created_at", "<", query.before);
+  if (query.after) {
+    const cursor = query.after;
+    statement = statement.where(
+      sql<boolean>`(s.created_at, s.id) < (${cursor.createdAt}, ${cursor.id}::uuid)`,
+    );
   }
 
   const rows = await statement.execute();
@@ -442,6 +461,111 @@ export async function readLabelCandidates(
     groupCount: Number(row.group_count ?? 0),
     latestCoverage: row.latest_coverage ?? null,
   }));
+}
+
+/**
+ * The last group the linker got to, in the order the backfill walks (S5).
+ *
+ * The resume cursor, and it is DERIVED rather than recorded — no checkpoint
+ * table, no progress row to fall out of step with the work. Every group the
+ * linker has touched has a `storyline_groups` row, because birth is the first
+ * thing that happens to it and the seed-own-identity discipline guarantees it;
+ * so "how far did we get" is a question the join table already answers.
+ *
+ * Returns the last such group rather than the first unlinked one, so the caller
+ * resumes AT it and re-runs it. A crash between a group's birth and its bridges
+ * leaves work half-done that only re-running that group completes, and
+ * `linkGroup` is idempotent by design for exactly this.
+ */
+export async function readLastLinkedGroup(
+  db: Kysely<Database>,
+): Promise<{ published: Date; groupId: string } | null> {
+  const { rows } = await sql<{ group_id: string; published: Date }>`
+    select a.group_id, a.group_published as published
+    from storyline_groups sg
+    join lateral (
+      select group_id, group_published from articles
+      where group_id = sg.group_id limit 1
+    ) a on true
+    order by a.group_published desc, a.group_id desc
+    limit 1
+  `.execute(db);
+
+  const row = rows[0];
+  return row ? { published: row.published, groupId: row.group_id } : null;
+}
+
+/**
+ * Delete every v2 storyline row: storylines, their joins, their day slots and
+ * their bridges. The `--restart` half of the backfill.
+ *
+ * TRUNCATE with CASCADE down the FK chain rather than DELETE — this is "build
+ * from scratch", and a full-archive rebuild is the one operation where the
+ * table's whole contents are the thing being replaced. It touches NOTHING on
+ * `articles`: the old `storyline_id` columns are a different model's state,
+ * ignored entirely by v2 (ADR-0011's Rollout) and dropped in S9.
+ */
+export async function resetStorylines(db: Kysely<Database>): Promise<void> {
+  await sql`
+    truncate storylines, storyline_groups, storyline_days, storyline_bridges
+  `.execute(db);
+}
+
+/** What a backfill run reports, and what a later audit re-reads. */
+export interface StorylineStats {
+  storylines: number;
+  /** Holding more than one group: the ones that are REAL (ADR-0011). */
+  promoted: number;
+  /** Merged-away UUIDs still resolving to a survivor. */
+  aliases: number;
+  /** Groups the linker has reached — the backfill's progress. */
+  linkedGroups: number;
+  /** Groups in the biggest storyline: the percolation alarm. */
+  largestStoryline: number;
+  daySlots: number;
+  labelled: number;
+  /** Promoted storylines that were asked and produced no label at all. */
+  unlabelled: number;
+}
+
+/**
+ * The report (S5). One round trip, because every number here is a count over a
+ * table the backfill just wrote and an operator reads them together or not at
+ * all — `largest` above all, which is ADR-0009's 1,179-group swallow expressed
+ * as a number that can be watched.
+ */
+export async function readStorylineStats(db: Kysely<Database>): Promise<StorylineStats> {
+  const { rows } = await sql<Record<string, string>>`
+    select
+      (select count(*) from storylines where merged_into is null)          as storylines,
+      (select count(*) from storylines where merged_into is not null)      as aliases,
+      (select count(*) from storyline_days)                                as day_slots,
+      (select count(distinct group_id) from storyline_groups)              as linked_groups,
+      (select count(*) from storylines
+        where merged_into is null and label is not null)                   as labelled,
+      (select count(*) from storylines
+        where merged_into is null and label is null and label_at is not null) as unlabelled,
+      coalesce((select max(n) from (
+        select count(*) as n from storyline_groups group by storyline_id
+      ) sizes), 0)                                                         as largest,
+      (select count(*) from (
+        select storyline_id from storyline_groups
+        group by storyline_id having count(*) > 1
+      ) promoted)                                                          as promoted
+  `.execute(db);
+
+  const row = rows[0] ?? {};
+  const n = (key: string): number => Number(row[key] ?? 0);
+  return {
+    storylines: n("storylines"),
+    promoted: n("promoted"),
+    aliases: n("aliases"),
+    linkedGroups: n("linked_groups"),
+    largestStoryline: n("largest"),
+    daySlots: n("day_slots"),
+    labelled: n("labelled"),
+    unlabelled: n("unlabelled"),
+  };
 }
 
 /** Which storylines a group belongs to. A group in two is normal, not an error. */
