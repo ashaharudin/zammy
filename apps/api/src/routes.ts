@@ -51,15 +51,28 @@ export async function registerQueryRoutes(
     // one storyline's day slots and nothing else. Handled before
     // canonicalization because there is nothing to canonicalize.
     if (isStorylineView(parsed.data)) {
-      const view = await readStorylineView(deps, {
-        storylineId: parsed.data.storyline!,
-        limit: parsed.data.limit,
-        ...(parsed.data.cursor ? { cursorString: parsed.data.cursor } : {}),
-      });
-      if (view === null) {
-        return reply.status(404).send({ error: { message: "unknown storyline" } });
+      try {
+        const view = await readStorylineView(deps, {
+          storylineId: parsed.data.storyline!,
+          limit: parsed.data.limit,
+          ...(parsed.data.cursor ? { cursorString: parsed.data.cursor } : {}),
+        });
+        if (view === null) {
+          return reply.status(404).send({ error: { message: "unknown storyline" } });
+        }
+        return await reply.send(view);
+      } catch (error) {
+        // The same mapping the search branch gets below. A cursor minted by the
+        // other model reaches THIS branch too — a reader mid-scroll in the view
+        // when the flag flips — and an unmapped throw here is the 500 the
+        // cursor guard exists to prevent.
+        if (error instanceof InvalidCursorError) {
+          return reply.status(400).send({
+            error: { message: "invalid query", fields: { cursor: "unusable cursor" } },
+          });
+        }
+        throw error;
       }
-      return await reply.send(view);
     }
 
     // Validating filters against the cached reference lists catches a bad

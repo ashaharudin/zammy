@@ -229,11 +229,19 @@ export async function buildApp(config: Config): Promise<App> {
     // The sweep next, so the storylines it grows are the ones the label pass
     // then looks at — a membership change and its label in one night, rather
     // than a label that describes yesterday's membership.
+    //
+    // The WHOLE pass rides the flag, not just the sweep: a rollback freezes the
+    // v2 model, and a frozen model must not keep mutating status or spending
+    // Gemini calls on rows no reader can see. The rows keep; the first nightly
+    // pass after the flag returns catches everything up.
     storylines: async () => {
+      if (!config.STORYLINES_V2) return;
       await runDormancyChore(choreDeps);
-      if (config.STORYLINES_V2) {
-        await runLateCandidateChore({ ...choreDeps, linker: deps.config.grouping.linker! });
-      }
+      await runLateCandidateChore({
+        ...choreDeps,
+        linker: deps.config.grouping.linker!,
+        labeler,
+      });
       await runStorylineLabelChore({ ...choreDeps, labeler });
     },
   });

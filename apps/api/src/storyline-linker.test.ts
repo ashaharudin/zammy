@@ -341,6 +341,66 @@ describe("retroactive attachment", () => {
     expect(second.attachedTo).toEqual([]);
     expect(await readGroupStorylines(db, monday.groupId)).toHaveLength(2);
   });
+
+  it("stops at one retroactive arc — further qualifiers stay bridge evidence", async () => {
+    await seedCorpus({ rare: STORY });
+    const monday = await group({ tokens: STORY, publishedAt: `${DAY}T09:00:00Z` });
+    await linkGroup(deps(), monday);
+    await linkGroup(deps(), await group({ tokens: STORY, publishedAt: `${DAY}T10:00:00Z` }));
+    await laterArc();
+    await laterArc();
+
+    // Two later arcs qualify. A next-best rule would hand the group one per
+    // nightly re-offer until it belonged to every qualifier — percolation with
+    // extra steps. A late ARRIVAL attaches to one best arc, so a late OFFER
+    // gets the same and no more; the rest is bridge evidence for a merge.
+    const first = await linkGroup(deps(), monday);
+    const second = await linkGroup(deps(), monday);
+
+    expect(first.attachedTo).toHaveLength(1);
+    expect(second.attachedTo).toEqual([]);
+    expect(await readGroupStorylines(db, monday.groupId)).toHaveLength(2);
+  });
+
+  it("a member's fit for an arc it already joined is not bridge evidence", async () => {
+    await seedCorpus({ rare: STORY });
+    const monday = await group({ tokens: STORY, publishedAt: `${DAY}T09:00:00Z` });
+    await linkGroup(deps(), monday);
+    await linkGroup(deps(), await group({ tokens: STORY, publishedAt: `${DAY}T10:00:00Z` }));
+    const joined = await laterArc();
+    await linkGroup(deps(), monday); // retro-joins `joined`
+    const newcomer = await laterArc();
+
+    const outcome = await linkGroup(deps(), monday);
+
+    // The group's tokens are already IN `joined`'s profile — re-qualifying for
+    // it is the trivial fit `own` is excluded for on the fresh path, and
+    // counting it would let one multi-homed group manufacture K "independent"
+    // bridges night after night until two arcs merged on its say-so alone.
+    expect(outcome.bridged).toEqual([newcomer]);
+    expect(await countBridges(db, { storylineA: joined, storylineB: newcomer })).toBe(0);
+  });
+
+  it("promotes a provisional it retro-attaches to — two groups is real however they arrived", async () => {
+    await seedCorpus({ rare: STORY });
+    const monday = await group({ tokens: STORY, publishedAt: `${DAY}T09:00:00Z` });
+    await linkGroup(deps(), monday);
+    await linkGroup(deps(), await group({ tokens: STORY, publishedAt: `${DAY}T10:00:00Z` }));
+    const lone = await group({ tokens: STORY, publishedAt: `${DAY}T20:00:00Z` });
+    const provisional = await createProvisionalStoryline(db, {
+      groupId: lone.groupId,
+      timeZone: "UTC",
+    });
+
+    const outcome = await linkGroup(deps(), monday);
+
+    // Without the promotion, a provisional grown retroactively would hold two
+    // groups forever while staying invisible to surfacing, labelling, and the
+    // dormancy sweep — no path ever offers it a repair.
+    expect(outcome.attachedTo).toEqual([provisional.id]);
+    expect(outcome.promoted).toEqual([provisional.id]);
+    expect((await readStoryline(db, provisional.id))?.status).toBe("active");
+  });
 });
 
 describe("bridges and merging", () => {

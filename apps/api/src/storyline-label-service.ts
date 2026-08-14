@@ -50,11 +50,19 @@ import type { LinkOutcome } from "./storyline-linker.js";
  * failure. Every model failure is already the labeler's own business (it falls
  * back), and anything else is logged here and dropped.
  *
- * One label per storyline per batch, with `merge` beating `promotion`: a group
- * that promoted a storyline and then merged it into another has made the wider
- * membership the thing to name, and asking twice would spend two calls to write
- * the second answer. `needsLabel` and the drift baseline do the rest of the
- * de-duplication across batches.
+ * One label per storyline per batch, strongest trigger winning (merge >
+ * promotion > drift): a group that promoted a storyline and then merged it into
+ * another has made the wider membership the thing to name, and asking twice
+ * would spend two calls to write the second answer.
+ *
+ * The trigger is what bounds the spend, so it must be honest about what
+ * happened. Only `outcome.promoted` — a provisional actually made real — fires
+ * the unconditional promotion label. A join to an ESTABLISHED arc (`attached`
+ * on the 30th group as much as the 3rd) and a retroactive attach fire `drift`,
+ * which `needsLabel` answers from the labelAt/labelGroupCount baseline: one
+ * cheap read, a model call only when membership has genuinely doubled.
+ * Anything else would scale Gemini spend with attach volume rather than with
+ * promotions — the unbounded mode the header above rules out.
  */
 export async function labelLinkedStorylines(
   deps: {
@@ -64,13 +72,22 @@ export async function labelLinkedStorylines(
   },
   outcomes: readonly LinkOutcome[],
 ): Promise<void> {
+  const rank: Record<LabelTrigger, number> = { drift: 0, promotion: 1, merge: 2 };
   const triggers = new Map<string, LabelTrigger>();
+  const propose = (storylineId: string, trigger: LabelTrigger): void => {
+    const current = triggers.get(storylineId);
+    if (current === undefined || rank[trigger] > rank[current]) {
+      triggers.set(storylineId, trigger);
+    }
+  };
   for (const outcome of outcomes) {
     // A birth is not a promotion: a provisional storyline-of-one is invisible
     // as a storyline, so naming it would spend a model call on something no
     // reader can see.
-    if (outcome.attached) triggers.set(outcome.storylineId, "promotion");
-    for (const merge of outcome.merged) triggers.set(merge.winnerId, "merge");
+    for (const promoted of outcome.promoted) propose(promoted, "promotion");
+    if (outcome.attached) propose(outcome.storylineId, "drift");
+    for (const grown of outcome.attachedTo) propose(grown, "drift");
+    for (const merge of outcome.merged) propose(merge.winnerId, "merge");
   }
 
   for (const [storylineId, trigger] of triggers) {

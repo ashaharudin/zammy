@@ -59,7 +59,7 @@ const deps = (): ChoreDeps => ({
     timeZone: "UTC",
   },
   now: () => NOW,
-  log: { info: () => {} },
+  log: { info: () => {}, warn: () => {} },
 });
 
 let nextArticle = 0;
@@ -211,6 +211,26 @@ describe("the nightly label pass", () => {
     expect(report.model).toBe(1);
     expect((await readStoryline(db, id))?.label).toBe("Hurricane Fausto");
   });
+
+  it("reaches a dormant storyline — going quiet must not strand it unlabelled", async () => {
+    // The nightly job runs dormancy FIRST, so an old promoted-but-unlabelled
+    // storyline is stamped dormant minutes before this pass looks. An
+    // active-only candidate set would skip it forever — and an unlabelled
+    // storyline can never surface, dormant marker or not.
+    const march = await storyline([MARCH, "2026-03-03T09:00:00.000Z"]);
+    await runDormancyChore(deps());
+
+    const report = await runStorylineLabelChore({
+      ...deps(),
+      labeler: labeler(saying("Hurricane Fausto")),
+    });
+
+    expect(report.model).toBe(1);
+    expect(await readStoryline(db, march)).toMatchObject({
+      status: "dormant",
+      label: "Hurricane Fausto",
+    });
+  });
 });
 
 describe("the nightly late-candidate sweep", () => {
@@ -284,5 +304,26 @@ describe("the nightly late-candidate sweep", () => {
     // older than the corpus that would judge it is not a candidate.
     expect(report.offered).toBe(2);
     expect(await readGroupStorylines(db, march)).toEqual([marchStoryline.id]);
+  });
+
+  it("labels what it changed, the way the ingest path labels what IT changed", async () => {
+    // A sweep attach or merge is the same event as a live one; without this,
+    // the identical change keeps a stale label at 4am and gets a fresh one at
+    // noon, for no reason a reader could see.
+    await seedCorpus("2026-08-13");
+    const early = await storyline([YESTERDAY, YESTERDAY]);
+    const later = await storyline([YESTERDAY, YESTERDAY]);
+    const generate = async () => ({ ok: true as const, text: "Hurricane Fausto" });
+
+    const report = await runLateCandidateChore({
+      ...deps(),
+      linker: LINKER,
+      labeler: { generator: { generate }, sampleSize: 10, driftFactor: 2, now: () => NOW },
+    });
+
+    expect(report.attachedTo).toBeGreaterThan(0);
+    // The arc the sweep grew was labelled in the same night's pass.
+    const labels = await Promise.all([readStoryline(db, early), readStoryline(db, later)]);
+    expect(labels.some((row) => row?.label === "Hurricane Fausto")).toBe(true);
   });
 });

@@ -12,8 +12,8 @@ import {
 } from "@zammy/storage";
 import { storyDfDay } from "./story-df.js";
 import { labelPass } from "./storyline-backfill.js";
-import type { LabelerDeps } from "./storyline-label-service.js";
-import { linkGroup, type LinkerConfig } from "./storyline-linker.js";
+import { labelLinkedStorylines, type LabelerDeps } from "./storyline-label-service.js";
+import { linkGroup, type LinkOutcome, type LinkerConfig } from "./storyline-linker.js";
 
 /**
  * Non-upstream chores (ARCHITECTURE 9.1): work with a clock but no quota
@@ -42,7 +42,11 @@ export interface ChoreDeps {
     timeZone: string;
   };
   now: () => Date;
-  log: { info: (obj: object, msg: string) => void };
+  log: {
+    info: (obj: object, msg: string) => void;
+    /** For per-item failures a tally line cannot carry — the err and its id. */
+    warn: (obj: object, msg: string) => void;
+  };
 }
 
 /**
@@ -143,6 +147,14 @@ export async function runDormancyChore(deps: ChoreDeps): Promise<{ dormant: numb
 export async function runLateCandidateChore(
   deps: ChoreDeps & {
     linker: LinkerConfig;
+    /**
+     * When present, what the sweep changed gets labelled the way the ingest
+     * path labels what IT changed: a sweep merge relabels the winner, a
+     * retroactive promotion names the newly-real storyline. Without this, the
+     * identical merge keeps a stale label here and a fresh one on the live
+     * path, for no reason a reader could see.
+     */
+    labeler?: Omit<LabelerDeps, "db">;
     /** Groups per read. Bounds memory, not correctness. */
     batchSize?: number;
     /** Hard ceiling on a night's offers, however wide the window is. */
@@ -156,13 +168,20 @@ export async function runLateCandidateChore(
   );
 
   const tally = { offered: 0, attachedTo: 0, merges: 0, failures: 0 };
+  const changed: LinkOutcome[] = [];
   // The keyset `readLinkableGroups` pages on is `(group_published, group_id)`,
   // so the window's start IS a cursor: group id 0 is below every real id, which
   // makes the first read begin at the window rather than at the archive.
+  // `publishedFrom` pushes the same bound INTO the aggregate, so each batch
+  // scans the fortnight instead of GROUP BY-ing the whole archive.
   let after: { published: Date; groupId: string } = { published: from, groupId: "0" };
 
   for (;;) {
-    const batch = await readLinkableGroups(deps.db, { after, limit: batchSize });
+    const batch = await readLinkableGroups(deps.db, {
+      after,
+      publishedFrom: from,
+      limit: batchSize,
+    });
     if (batch.length === 0) break;
 
     for (const group of batch) {
@@ -171,7 +190,7 @@ export async function runLateCandidateChore(
       after = { published: group.published, groupId: group.groupId };
       try {
         const outcome = await linkGroup(
-          { db: deps.db, config: deps.linker },
+          { db: deps.db, config: deps.linker, log: deps.log },
           {
             groupId: group.groupId,
             memberTokens: group.memberTokens,
@@ -181,12 +200,33 @@ export async function runLateCandidateChore(
         );
         tally.attachedTo += outcome.attachedTo.length;
         tally.merges += outcome.merged.length;
-      } catch {
+        if (outcome.attachedTo.length > 0 || outcome.merged.length > 0) {
+          changed.push(outcome);
+        }
+      } catch (error) {
+        // The tally line says how many; only this line can say WHICH and WHY.
+        // A sweep that reports `failures: 18400` with no err is a regression
+        // that persists for weeks.
         tally.failures += 1;
+        deps.log.warn(
+          { err: error, groupId: group.groupId },
+          "late-candidate sweep: one group's offer failed; it stands where it stood",
+        );
       }
     }
 
     if (tally.offered >= maxGroups || batch.length < batchSize) break;
+  }
+
+  // Label what the sweep changed — awaited, because 3am has no reader waiting
+  // and never-throws is already labelLinkedStorylines' own contract. Only the
+  // outcomes that changed something travel: most offers are no-ops and carry
+  // no trigger anyway.
+  if (deps.labeler && changed.length > 0) {
+    await labelLinkedStorylines(
+      { db: deps.db, labeler: deps.labeler, log: deps.log },
+      changed,
+    );
   }
 
   deps.log.info(

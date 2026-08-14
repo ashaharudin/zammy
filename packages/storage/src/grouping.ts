@@ -482,6 +482,15 @@ export async function readLinkableGroups(
      * last group.
      */
     after?: { published: Date; groupId: string; inclusive?: boolean };
+    /**
+     * Push a window's start INTO the aggregate. The keyset alone starts the
+     * page at the window, but the subquery still aggregates the whole archive
+     * to build rows the WHERE then discards — `group_published` is denormalized
+     * identically onto every member, so filtering members by it never splits a
+     * group, and the fortnight sweep becomes an index-range scan instead of a
+     * nightly full-table GROUP BY.
+     */
+    publishedFrom?: Date;
     limit: number;
   },
 ): Promise<LinkableGroupRow[]> {
@@ -506,6 +515,11 @@ export async function readLinkableGroups(
              -- than one without.
              json_agg(a.story_tokens) as member_tokens
       from articles a
+      where ${
+        query.publishedFrom
+          ? sql`a.group_published >= ${query.publishedFrom}`
+          : sql`true`
+      }
       group by a.group_id
     ) g
     where ${

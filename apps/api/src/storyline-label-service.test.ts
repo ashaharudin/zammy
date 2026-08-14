@@ -169,11 +169,21 @@ describe("the labeler", () => {
       await labelLinkedStorylines(
         { db: harness.deps.db, labeler: deps({ generator: saying("Fort Hood Crash") }) },
         [
-          { groupId: "1", storylineId: promoted, attached: true, bridged: [], merged: [] },
+          {
+            groupId: "1",
+            storylineId: promoted,
+            attached: true,
+            attachedTo: [],
+            promoted: [promoted],
+            bridged: [],
+            merged: [],
+          },
           {
             groupId: "2",
             storylineId: "unused",
             attached: false,
+            attachedTo: [],
+            promoted: [],
             bridged: [],
             merged: [{ winnerId: merged, loserId: "gone" }],
           },
@@ -184,6 +194,37 @@ describe("the labeler", () => {
       expect((await load(merged)).label).toBe("Fort Hood Crash");
     });
 
+    it("a join to an established arc is drift, not promotion — the label holds", async () => {
+      // The 30th group attaching sets `attached` exactly like the 2nd did, and
+      // firing the unconditional promotion trigger on it would relabel a hot
+      // storyline once per ingest batch — model spend scaling with attach
+      // volume, the unbounded mode the labeler's contract rules out. `promoted`
+      // is empty, so the join proposes only drift, and the drift baseline
+      // (membership has not doubled) answers without a model call.
+      const id = await fortHood();
+      await labelStoryline(deps({ generator: saying("Fort Hood Crash") }), {
+        storyline: await load(id),
+        trigger: "promotion",
+      });
+
+      await labelLinkedStorylines(
+        { db: harness.deps.db, labeler: deps({ generator: saying("Renamed By Storm") }) },
+        [
+          {
+            groupId: "3",
+            storylineId: id,
+            attached: true,
+            attachedTo: [],
+            promoted: [],
+            bridged: [],
+            merged: [],
+          },
+        ],
+      );
+
+      expect((await load(id)).label).toBe("Fort Hood Crash");
+    });
+
     it("leaves a plain birth alone — a storyline of one has nothing to name", async () => {
       const born = await createProvisionalStoryline(harness.deps.db, {
         groupId: await article({ title: "Council approves a bridge", published: "2026-03-01T09:00:00.000Z" }),
@@ -192,7 +233,17 @@ describe("the labeler", () => {
 
       await labelLinkedStorylines(
         { db: harness.deps.db, labeler: deps({ generator: saying("Some Label") }) },
-        [{ groupId: "1", storylineId: born.id, attached: false, bridged: [], merged: [] }],
+        [
+          {
+            groupId: "1",
+            storylineId: born.id,
+            attached: false,
+            attachedTo: [],
+            promoted: [],
+            bridged: [],
+            merged: [],
+          },
+        ],
       );
 
       // Invisible as a storyline, so a label would be a model call spent on
@@ -213,7 +264,17 @@ describe("the labeler", () => {
               },
             }),
           },
-          [{ groupId: "1", storylineId: id, attached: true, bridged: [], merged: [] }],
+          [
+            {
+              groupId: "1",
+              storylineId: id,
+              attached: true,
+              attachedTo: [],
+              promoted: [id],
+              bridged: [],
+              merged: [],
+            },
+          ],
         ),
       ).resolves.toBeUndefined();
     });

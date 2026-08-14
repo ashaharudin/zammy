@@ -274,6 +274,16 @@ export async function mergeStorylines(
     if (winner === null || loser === null) return { merged: false, winnerId: winner };
     if (winner === loser) return { merged: false, winnerId: winner };
 
+    // Read before the mutation below erases it: whether the loser was dormant
+    // decides whether this merge wakes the winner (see the wake at the end).
+    const loserStatus = (
+      await trx
+        .selectFrom("storylines")
+        .select("status")
+        .where("id", "=", loser)
+        .executeTakeFirst()
+    )?.status;
+
     // The loser's groups keep their original `attached_at`: when a group joined
     // the story is a fact about the group, not about which of two UUIDs won.
     await sql`
@@ -329,8 +339,13 @@ export async function mergeStorylines(
 
     await refreshProfileTokens(trx, winner);
     await refreshDaySlots(trx, winner, input.timeZone);
-    // The winner just took the loser's whole coverage, which is coverage earned.
-    await wake(trx, winner);
+    // "Active again when it EARNS coverage" (ADR-0011) — and a merge only
+    // earns what the loser brings. A live loser (a provisional birth carrying
+    // today's group, or an active arc) is fresh standing; a DORMANT loser is
+    // not: two quiet March storylines healed by K bridges are still one quiet
+    // March storyline, and waking it would hide the dormant marker for a day
+    // on exactly the stale story the marker exists to explain.
+    if (loserStatus !== "dormant") await wake(trx, winner);
 
     return { merged: true, winnerId: winner };
   });
@@ -474,7 +489,12 @@ export interface LabelCursor {
  * second reader. Storage says which storylines exist and how big they are; the
  * labeler decides. The candidate set is bounded to promoted storylines, which
  * is a fact about the lifecycle rather than a judgement — a provisional
- * storyline of one is invisible and has nothing to name.
+ * storyline of one is invisible and has nothing to name. Promoted means active
+ * OR dormant: a dormant storyline still surfaces (marked), and surfacing
+ * requires a label, so going quiet must never put a storyline beyond the
+ * labeler's reach — the dormancy sweep runs before the label pass, and an
+ * active-only filter here would let one night's ordering strand an unlabelled
+ * storyline permanently.
  *
  * Ordered by `(created_at, id)`, which is exactly what `after` pages on. That
  * agreement is the point: a pass over these MUTATES what it reads — a labelled
@@ -503,7 +523,7 @@ export async function readLabelCandidates(
         .whereRef("sd.storyline_id", "=", "s.id")
         .as("latest_coverage"),
     ])
-    .where("s.status", "=", "active")
+    .where("s.status", "!=", "provisional")
     .where("s.merged_into", "is", null)
     .orderBy("s.created_at", "desc")
     .orderBy("s.id", "desc")
