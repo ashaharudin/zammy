@@ -4,6 +4,7 @@ import { migrateToLatest } from "./migrator.js";
 import * as storylineTables from "./migrations/0007-storyline-tables.js";
 import * as storyTokenDf from "./migrations/0008-story-token-df.js";
 import * as storylineBridges from "./migrations/0009-storyline-bridges.js";
+import * as labelDrift from "./migrations/0010-storyline-label-drift.js";
 import { createTestDatabase, type TestDatabase } from "./test-support.js";
 
 /**
@@ -72,17 +73,32 @@ describe("migrateToLatest", () => {
       return Number(rows[0]?.n ?? 0);
     };
 
-    // Reverse order, as a real rollback runs: `storyline_bridges` (0009)
-    // references `storylines`, so reverting 0007 while 0009 still stands is
-    // not a thing any deploy would do — and Postgres refuses it, which is the
-    // foreign key doing its job.
+    const hasDriftColumn = async () => {
+      const { rows } = await sql<{ n: string }>`
+        select count(*) as n from information_schema.columns
+        where table_schema = 'public' and table_name = 'storylines'
+          and column_name = 'label_group_count'
+      `.execute(harness.db);
+      return Number(rows[0]?.n ?? 0) === 1;
+    };
+
+    // Newest first down, oldest first up, exactly as a rollback and the next
+    // deploy run. Both later migrations hang off 0007's tables — 0009's
+    // `storyline_bridges` by foreign key, 0010 by a column on `storylines` —
+    // so reverting 0007 alone is something no deploy would do: Postgres
+    // refuses the first (the key doing its job) and the second would silently
+    // rebuild `storylines` without a column the ledger still claimed.
+    expect(await hasDriftColumn()).toBe(true);
+    await labelDrift.down(harness.db);
     await storylineBridges.down(harness.db);
     await storylineTables.down(harness.db);
     expect(await hasStorylineTables()).toBe(0);
 
     await storylineTables.up(harness.db);
     await storylineBridges.up(harness.db);
+    await labelDrift.up(harness.db);
     expect(await hasStorylineTables()).toBe(3);
+    expect(await hasDriftColumn()).toBe(true);
   });
 
   it("reverts and re-applies the bridge table cleanly", async () => {

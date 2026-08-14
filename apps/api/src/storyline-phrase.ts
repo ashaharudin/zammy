@@ -51,14 +51,61 @@ export function storylinePhrase(
   if (coverage.length === 0) return null;
 
   const corpus = [headline, ...coverage];
+  return bestBigram(corpus, { candidateTitles: [0], requireShared: true });
+}
 
+/**
+ * The same extractor, FREED FROM THE CONTAINMENT RULE — the storyline labeler's
+ * fallback when Gemini is unavailable, refuses, or breaks its contract
+ * (ADR-0011, "Labels").
+ *
+ * Containment existed to keep a promise that is now dead. ADR-0010 made the
+ * phrase *the query*: clicking it ran a search, so the search had to contain
+ * the slot the reader clicked, so both words had to appear in every article.
+ * Clicking a LABEL opens the storyline by UUID; the words never execute. With
+ * the guarantee goes the yield ceiling it imposed — 9 phrases from 46 eligible
+ * slots — and a fallback that produces nothing for four storylines in five is
+ * not a fallback.
+ *
+ * What is kept is everything that was about QUALITY rather than about the
+ * promise: the verb gate (ADR-0006 — a label that states something is a
+ * headline with its middle removed), the singular fold, and support-weighted
+ * ranking. Candidates now come from every member's title, not one headline's,
+ * because there is no card for this phrase to sit beside; it names the whole
+ * storyline. Title Case on the way out, because this one is display, not a
+ * query.
+ *
+ * It cannot meet the label bar and is not meant to. ADR-0011 measured that:
+ * "police chiefs" names a story adequately and names an EVENT not at all, which
+ * is why the model exists. This is the floor, not the target.
+ */
+export function bigramLabel(articles: readonly PhraseArticle[]): string | null {
+  if (articles.length === 0) return null;
+  const phrase = bestBigram(articles, {
+    candidateTitles: articles.map((_, index) => index),
+    requireShared: false,
+  });
+  return phrase === null ? null : titleCase(phrase);
+}
+
+/**
+ * The extractor both callers share. `candidateTitles` picks which articles'
+ * TITLES may donate a phrase (descriptions never do — they support a phrase,
+ * they do not propose one), and `requireShared` is the containment rule.
+ */
+function bestBigram(
+  corpus: readonly PhraseArticle[],
+  options: { candidateTitles: readonly number[]; requireShared: boolean },
+): string | null {
   // The "every article carries it" test runs over SINGULARIZED tokens, the
   // same fold grouping applies (`chiefs` and `chief` are one word when asking
   // whether two articles are about one thing) — and, decisively, the same fold
   // the seeded attach applies to the keywords when it matches `story_tokens`.
   // Test one way and match the other and the promise above stops holding.
-  const shared = sharedTokens(corpus.map((article) => storyTokens(article.title, article.description)));
-  if (shared.size === 0) return null;
+  const shared = options.requireShared
+    ? sharedTokens(corpus.map((article) => storyTokens(article.title, article.description)))
+    : null;
+  if (shared !== null && shared.size === 0) return null;
 
   const isProperNoun = properNounEvidence(corpus);
   // Adjacency per article, so a phrase can be ranked by how much of the
@@ -70,24 +117,36 @@ export function storylinePhrase(
   ]);
 
   let best: { phrase: string; support: number; position: number } | null = null;
-  const title = sequences[0]![0]!;
-  for (let i = 0; i + 1 < title.length; i += 1) {
-    const first = title[i]!;
-    const second = title[i + 1]!;
-    if (!shared.has(singular(first)) || !shared.has(singular(second))) continue;
-    // `sanction sanctions` folds to one word repeated: a phrase, but not two.
-    if (singular(first) === singular(second)) continue;
-    if (isVerb(first, 0, isProperNoun) || isVerb(second, 1, isProperNoun)) continue;
+  for (const index of options.candidateTitles) {
+    const title = sequences[index]?.[0];
+    if (!title) continue;
+    for (let i = 0; i + 1 < title.length; i += 1) {
+      const first = title[i]!;
+      const second = title[i + 1]!;
+      if (shared !== null && (!shared.has(singular(first)) || !shared.has(singular(second)))) {
+        continue;
+      }
+      // `sanction sanctions` folds to one word repeated: a phrase, but not two.
+      if (singular(first) === singular(second)) continue;
+      if (isVerb(first, 0, isProperNoun) || isVerb(second, 1, isProperNoun)) continue;
 
-    const candidate = {
-      phrase: `${first} ${second}`,
-      support: sequences.filter((texts) => texts.some((text) => hasAdjacent(text, first, second))).length,
-      position: i,
-    };
-    if (best === null || beats(candidate, best)) best = candidate;
+      const candidate = {
+        phrase: `${first} ${second}`,
+        support: sequences.filter((texts) => texts.some((text) => hasAdjacent(text, first, second))).length,
+        position: i,
+      };
+      if (best === null || beats(candidate, best)) best = candidate;
+    }
   }
 
   return best?.phrase ?? null;
+}
+
+/** "fort hood" → "Fort Hood". A label is read, not typed into a search box. */
+function titleCase(phrase: string): string {
+  return phrase.replaceAll(/(^|[\s-])(\p{L})/gu, (_, lead: string, letter: string) =>
+    `${lead}${letter.toUpperCase()}`,
+  );
 }
 
 /**

@@ -197,6 +197,13 @@ export interface StorylinesTable {
   /** When the label was generated — the drift-relabel clock (ADR-0011, Labels). */
   label_at: Timestamp | null;
   /**
+   * Member groups at the moment the label was generated. The other half of the
+   * drift clock, and not derivable: `storyline_groups.attached_at` survives a
+   * merge, so a join older than `label_at` may have reached this storyline long
+   * after it. Null means "no baseline" — the next trigger relabels.
+   */
+  label_group_count: number | null;
+  /**
    * Tokens carried by at least half the member groups: the storyline's own
    * vocabulary, and the GIN surface candidate retrieval overlaps against. The
    * majority rule is the percolation damper — a growing storyline's consensus

@@ -31,6 +31,8 @@ export interface Storyline {
   id: string;
   label: string | null;
   labelAt: Date | null;
+  /** Member groups when the label was made; the drift trigger's baseline. */
+  labelGroupCount: number | null;
   profileTokens: string[];
   status: StorylineStatus;
   /** Non-null means this row is an ALIAS, not a storyline. Resolve before use. */
@@ -185,11 +187,25 @@ export async function setStorylineStatus(
  */
 export async function setStorylineLabel(
   db: Kysely<Database>,
-  input: { storylineId: string; label: string | null; labelAt: Date },
+  input: {
+    storylineId: string;
+    label: string | null;
+    labelAt: Date;
+    /**
+     * Member groups this label describes — the drift baseline. Stamped even
+     * when the label came out null: a storyline the model refused to name is
+     * not owed another attempt until its coverage has doubled either.
+     */
+    labelGroupCount: number;
+  },
 ): Promise<void> {
   await db
     .updateTable("storylines")
-    .set({ label: input.label, label_at: input.labelAt })
+    .set({
+      label: input.label,
+      label_at: input.labelAt,
+      label_group_count: input.labelGroupCount,
+    })
     .where("id", "=", input.storylineId)
     .where("merged_into", "is", null)
     .execute();
@@ -306,6 +322,126 @@ export async function readStoryline(
     .where("id", "=", storylineId)
     .executeTakeFirst();
   return row ? toStoryline(row) : undefined;
+}
+
+/** One member group, as the labeler is shown it: the group's own hero article. */
+export interface StorylineMember {
+  groupId: string;
+  title: string;
+  description: string | null;
+  published: Date;
+}
+
+/** Everything the labeler reads about a storyline before it writes one word. */
+export interface StorylineLabelInput {
+  /** Member groups NOW — the numerator of the drift trigger. */
+  groupCount: number;
+  /**
+   * One article per member group, most recent group first. One per group is the
+   * whole point: a wire story syndicated forty times would otherwise fill every
+   * slot in the prompt with the same headline and the model would name the
+   * syndication rather than the story.
+   */
+  members: StorylineMember[];
+}
+
+/**
+ * Read the labeler's input: the member count, and up to `limit` member groups
+ * represented by the article the timeline would show for them — the group's
+ * earliest, its hero.
+ *
+ * `limit` bounds the PROMPT, not the scan: DISTINCT ON has to see the member
+ * groups' articles to pick one per group. That is a storyline-sized read, run
+ * at storyline events (promotion, merge, drift), never per article.
+ */
+export async function readStorylineLabelInput(
+  db: Kysely<Database>,
+  input: { storylineId: string; limit: number },
+): Promise<StorylineLabelInput> {
+  const target = await resolveIn(db, input.storylineId);
+  if (target === null) return { groupCount: 0, members: [] };
+
+  const counted = await db
+    .selectFrom("storyline_groups")
+    .select(({ fn }) => fn.countAll<string>().as("n"))
+    .where("storyline_id", "=", target)
+    .executeTakeFirstOrThrow();
+
+  const { rows } = await sql<{
+    group_id: string;
+    title: string;
+    description: string | null;
+    published: Date;
+  }>`
+    select * from (
+      select distinct on (sg.group_id)
+             sg.group_id, a.title, a.description, a.published
+      from storyline_groups sg
+      join articles a on a.group_id = sg.group_id
+      where sg.storyline_id = ${target}::uuid
+      order by sg.group_id, a.published asc, a.id asc
+    ) hero
+    order by hero.published desc, hero.group_id desc
+    limit ${input.limit}
+  `.execute(db);
+
+  return {
+    groupCount: Number(counted.n),
+    members: rows.map((row) => ({
+      groupId: row.group_id,
+      title: row.title,
+      description: row.description,
+      published: row.published,
+    })),
+  };
+}
+
+/**
+ * Storylines the labeler may have work for, most recent coverage first, with
+ * the group count each label decision needs.
+ *
+ * Deliberately NOT filtered by "needs a label": whether a stale label has
+ * drifted is a rule, and a rule in a WHERE clause is a rule with no test and no
+ * second reader. Storage says which storylines exist and how big they are; the
+ * labeler decides. The candidate set is bounded to promoted storylines, which
+ * is a fact about the lifecycle rather than a judgement — a provisional
+ * storyline of one is invisible and has nothing to name.
+ */
+export async function readLabelCandidates(
+  db: Kysely<Database>,
+  query: { limit: number; before?: Date },
+): Promise<Array<Storyline & { groupCount: number; latestCoverage: Date | null }>> {
+  let statement = db
+    .selectFrom("storylines as s")
+    .selectAll("s")
+    .select((eb) => [
+      eb
+        .selectFrom("storyline_groups as sg")
+        .select(({ fn }) => fn.countAll<string>().as("n"))
+        .whereRef("sg.storyline_id", "=", "s.id")
+        .as("group_count"),
+      eb
+        .selectFrom("storyline_days as sd")
+        .select(({ fn }) => fn.max<Date>("sd.day_slot_published").as("at"))
+        .whereRef("sd.storyline_id", "=", "s.id")
+        .as("latest_coverage"),
+    ])
+    .where("s.status", "=", "active")
+    .where("s.merged_into", "is", null)
+    .orderBy("latest_coverage", "desc")
+    .orderBy("s.id", "desc")
+    .limit(query.limit);
+
+  if (query.before) {
+    statement = statement.where("s.created_at", "<", query.before);
+  }
+
+  const rows = await statement.execute();
+  return rows.map((row) => ({
+    ...toStoryline(row),
+    groupCount: Number(row.group_count ?? 0),
+    latestCoverage: row.latest_coverage ?? null,
+  }));
 }
 
 /** Which storylines a group belongs to. A group in two is normal, not an error. */
@@ -569,6 +705,7 @@ function toStoryline(row: {
   id: string;
   label: string | null;
   label_at: Date | null;
+  label_group_count: number | null;
   profile_tokens: string[];
   status: StorylineStatus;
   merged_into: string | null;
@@ -578,6 +715,7 @@ function toStoryline(row: {
     id: row.id,
     label: row.label,
     labelAt: row.label_at,
+    labelGroupCount: row.label_group_count,
     profileTokens: row.profile_tokens,
     status: row.status,
     mergedInto: row.merged_into,

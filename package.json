@@ -18,6 +18,7 @@
     "db:migrate": "pnpm --filter @zammy/storage migrate",
     "regroup": "pnpm --filter @zammy/api regroup",
     "story:df": "pnpm --filter @zammy/api story:df",
+    "label:storylines": "pnpm --filter @zammy/api label:storylines",
     "measure:storylines-v2": "pnpm --filter @zammy/api measure:storylines-v2",
     "infra:up": "docker compose up -d postgres redis",
     "infra:down": "docker compose down",

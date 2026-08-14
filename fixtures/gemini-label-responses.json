@@ -1,0 +1,110 @@
+{
+  "_comment": [
+    "generateContent response payloads for the storyline labeler's tests",
+    "(ADR-0011). The tests must never reach the live API, so these stand in for",
+    "it \u2014 but every SHAPE here was confirmed against the real endpoint on",
+    "2026-08-14 while the labeler was first run against it, including the two",
+    "that cost a label in that run: `truncated` (a reasoning model spending its",
+    "whole output budget on thoughts) and the 503. `usageMetadata` is where the",
+    "cost-per-thousand estimate in docs/STORYLINE-LABELS.md comes from."
+  ],
+  "ok": {
+    "candidates": [
+      {
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Fort Hood Crash\n"
+            }
+          ]
+        },
+        "finishReason": "STOP"
+      }
+    ],
+    "usageMetadata": {
+      "promptTokenCount": 812,
+      "candidatesTokenCount": 4,
+      "totalTokenCount": 816
+    }
+  },
+  "chatty": {
+    "candidates": [
+      {
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Sure! A good running-story tag would be: \"Fort Hood Crash\"."
+            }
+          ]
+        },
+        "finishReason": "STOP"
+      }
+    ]
+  },
+  "invented": {
+    "candidates": [
+      {
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Belgrade Derailment"
+            }
+          ]
+        },
+        "finishReason": "STOP"
+      }
+    ]
+  },
+  "blocked": {
+    "promptFeedback": {
+      "blockReason": "SAFETY"
+    }
+  },
+  "truncated": {
+    "candidates": [
+      {
+        "content": {},
+        "finishReason": "MAX_TOKENS",
+        "index": 0
+      }
+    ],
+    "usageMetadata": {
+      "promptTokenCount": 9,
+      "totalTokenCount": 38,
+      "thoughtsTokenCount": 29
+    },
+    "modelVersion": "gemini-3.7-flash"
+  },
+  "overloaded": {
+    "error": {
+      "code": 503,
+      "message": "The model is overloaded. Please try again later.",
+      "status": "UNAVAILABLE"
+    }
+  },
+  "retired_model": {
+    "error": {
+      "code": 404,
+      "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.",
+      "status": "NOT_FOUND"
+    }
+  },
+  "with_year": {
+    "candidates": [
+      {
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Osun Election 2026"
+            }
+          ]
+        },
+        "finishReason": "STOP"
+      }
+    ]
+  }
+}
