@@ -1,9 +1,9 @@
 # S8 verdict — how search surfaces storylines
 
 The prototype round ADR-0011 left open ("Left open: the surfacing UX awaits the
-prototype round"). Three variants, one dev-only route, mock data:
+prototype round"). Four variants, one dev-only route, mock data:
 `apps/web/src/prototype/storylines/`, run with `pnpm prototype:storylines` (or
-`/prototype/storylines?variant=A|B|C` while `pnpm dev:web` runs). The variant
+`/prototype/storylines?variant=A|B|C|D` while `pnpm dev:web` runs). The variant
 code is throwaway and stays on the `claude/s8-implementation-25f41f` branch; this
 note is the part that survives.
 
@@ -12,15 +12,17 @@ test — so what was compared is only the extra layer a *search* adds.
 
 The three cases each variant was judged on, all in the mock corpus:
 
-- `iran` — three matched storylines, one wide, all recent
+- `iran` — three matched storylines, one wide, all recent (and, for the floating
+  variant, the case that decides whether the strip fits on a phone)
 - `fort hood` — two storylines sharing the label "Fort Hood Crash", one of them
   dormant since March: the collision case
 - `∅` / `army` — searches that surface nothing or one thing, i.e. the common case
 
 ## Verdict
 
-**S7 builds A, the top strip.** B is refused. C is recorded as a deferred
-accelerator, not part of S7.
+**S7 builds A, the top strip**, with D's persistence as the one upgrade worth
+trying on top of it. B is refused. C is recorded as a deferred accelerator, not
+part of S7.
 
 ### A — top strip (ships)
 
@@ -99,6 +101,46 @@ have yet (prefix matching over `storylines.profile_tokens` and labels, ranked,
 debounced) and it is orthogonal to everything in S7. **Not in S7's scope**;
 worth a small session of its own once the strip is live and the surfacing query
 from S6 has proved out.
+
+### D — floating bottom strip (added after the first round; the runner-up)
+
+A's cards taken out of the flow and floated at the bottom of the viewport in the
+switcher's own pill shape: label chips with sparkline, article count and the
+dormant marker, a per-search dismiss, and tail clearance so the last slot is
+still reachable underneath.
+
+It fixes A's one real weakness cleanly. The strip is still there forty slots
+down, which is exactly where "follow the story instead of reading the day"
+becomes the thing the reader wants, and the newest headline keeps the top of the
+page. It also keeps the property that decided the round: two "Fort Hood Crash"
+chips sit side by side with their qualifiers, comparable at a glance.
+
+What kept it from winning, both observed:
+
+- **It occludes.** Mid-scroll it permanently covers a slot's worth of the
+  viewport. Tail clearance only rescues the very bottom of the page. A strip
+  that displaces content once, at the top, costs the reader less than one that
+  covers different content forever.
+- **It shrinks the payload, and mobile is where that bites.** In the pill there
+  is no room for the date span, so a chip carries label + count. At 375px with
+  three matches — the `iran` case — the pill shows the "3 storylines" label and
+  one and a half chips; everything else is behind a horizontal scroll, which is
+  the wart A was told to drop. A's cards carry span, counts and days at any
+  width.
+
+So it trades a bounded, one-time cost for an unbounded, recurring one, and pays
+for it in information density.
+
+**The hybrid is the interesting outcome**, and it is cheap: ship A's strip, and
+when it scrolls out of view, demote it into D's pill (an IntersectionObserver on
+the strip toggles the floating version). Full payload where there is room for
+it, persistence where there is not, and nothing covered until the reader has
+already scrolled past the thing that would have been covered. Worth building in
+S7 if the strip proves useful against real data; not a prerequisite.
+
+If the call goes to D alone anyway, the two fixes it needs first are a
+non-scrolling chip set (cap to what fits, drop the rest) and a way back after
+dismissal.
 
 ## Other findings, for S7
 

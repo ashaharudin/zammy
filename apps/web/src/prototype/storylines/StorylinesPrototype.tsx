@@ -10,6 +10,7 @@ import {
 import { VariantA } from "./VariantA.js";
 import { VariantB } from "./VariantB.js";
 import { VariantC } from "./VariantC.js";
+import { VariantD } from "./VariantD.js";
 import type { VariantProps } from "./variant-props.js";
 
 /**
@@ -21,6 +22,7 @@ import type { VariantProps } from "./variant-props.js";
  *   A — top strip of matched-storyline cards above the results
  *   B — storyline as a first-class rail slot at its latest activity
  *   C — command-bar typeahead while the reader is still typing
+ *   D — floating bottom strip, persistent as the reader scrolls
  *
  * Universal gutter labels are the BASELINE in all three (they are settled), so
  * what is under evaluation is only the extra surfacing layer.
@@ -33,6 +35,7 @@ const VARIANTS = [
   { key: "A", name: "Top strip", render: (p: VariantProps) => <VariantA {...p} /> },
   { key: "B", name: "Storyline as rail slot", render: (p: VariantProps) => <VariantB {...p} /> },
   { key: "C", name: "Command-bar typeahead", render: (p: VariantProps) => <VariantC {...p} /> },
+  { key: "D", name: "Floating bottom strip", render: (p: VariantProps) => <VariantD {...p} /> },
 ];
 
 export function StorylinesPrototype() {
