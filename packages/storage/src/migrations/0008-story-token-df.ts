@@ -5,10 +5,9 @@ import { sql, type Kysely } from "kysely";
  * corpus"): document frequency of `story_tokens` over a rolling ~14-day
  * window, which is what the v2 linker means by "rare".
  *
- * `0008`, not `0007`: the storylines schema (S1 of the v2 plan) holds that
- * number and lands independently. The migrator sorts names lexicographically
- * and needs no contiguity — a gap is a merge that has not happened yet, not a
- * broken chain.
+ * Numbered after `0007-storyline-tables`, which it is independent of: the
+ * trailing corpus is derived from `articles` alone and knows nothing about
+ * storylines. S3's linker is where the two meet.
  *
  * **Two tables, not a view over `articles`.** The df of one group's ~30 tokens
  * is asked once per arriving group (~1,200/day), and answering it from

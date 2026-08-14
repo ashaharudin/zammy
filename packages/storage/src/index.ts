@@ -14,4 +14,5 @@ export * from "./topics.js";
 export * from "./retention.js";
 export * from "./trending-terms.js";
 export * from "./grouping.js";
+export * from "./storylines.js";
 export * from "./story-df.js";
