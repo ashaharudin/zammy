@@ -14,6 +14,7 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY packages/shared/package.json           packages/shared/
 COPY packages/config/package.json           packages/config/
 COPY packages/currents-client/package.json  packages/currents-client/
+COPY packages/storage/package.json          packages/storage/
 COPY apps/api/package.json                  apps/api/
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     pnpm install --frozen-lockfile
@@ -40,7 +41,7 @@ RUN pnpm deploy --filter=@zammy/api --prod /deploy
 # proves the thing we care about. This is the check that would have caught both
 # earlier failures — the empty dist and the missing zod.
 RUN cd /deploy \
-    && node --input-type=module -e 'await import("@zammy/config"); await import("@zammy/currents-client"); await import("@zammy/shared");' \
+    && node --input-type=module -e 'await import("@zammy/config"); await import("@zammy/currents-client"); await import("@zammy/shared"); await import("@zammy/storage");' \
     || (echo "deploy tree is not self-contained — workspace imports fail" && exit 1)
 
 # --- runtime ------------------------------------------------------------------
