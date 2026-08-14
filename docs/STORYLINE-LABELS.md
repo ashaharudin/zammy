@@ -72,7 +72,7 @@ differently and a later model may need it.
 
 ## Cost
 
-Measured over 20 real clusters from the archive: **712 input tokens per label**
+Measured over 20 real day-bounded storylines from the archive: **712 input tokens per label**
 (10 member headlines, descriptions trimmed to 200 chars), plus ~4 output tokens
 and — at the default settings — no thinking tokens at all.
 
@@ -89,18 +89,19 @@ The rates are the part most likely to be stale; the token counts are measured
 and will not be. Even a tenfold error in either direction leaves this a
 rounding error, which is the only property the decision actually rests on.
 
-Volume is small by construction. The archive holds 3,437 multi-group clusters
-over 32 days — ~107/day — and that is a generous CEILING for v2 promotions,
-because a v2 storyline persists and is promoted once, where the old day-bounded
-model re-formed a cluster every day. At ~110 labels/day the bill is around
+Volume is small by construction. The archive holds 3,437 multi-group
+day-bounded storylines over 32 days — ~107/day — and that is a generous CEILING
+for v2 promotions, because a v2 storyline persists and is promoted once, where
+the old day-bounded model re-formed its storylines every day. At ~110 labels/day the bill is around
 **$0.02/day**. Labels run at storyline volume; the linker runs at group volume
 (~1,200/day) and is deliberately not a model call (ADR-0011, "Considered and
 refused").
 
 ## What the model produces, measured
 
-20 clusters, live, at the defaults above: **17 model labels, 3 fallbacks, 0
-unnamed.** Against the same clusters the extractor alone produced:
+20 day-bounded storylines, live, at the defaults above: **17 model labels, 3
+fallbacks, 0 unnamed.** Against the same storylines the extractor alone
+produced:
 
 | model | bigram fallback |
 | --- | --- |
@@ -125,14 +126,15 @@ Three qualifications, all honest:
   refused for a digit on a rule ADR-0011 never wrote. Two of the three are
   fixed; the 503 is what the fallback is for.
 - **Garbage in, plausible out.** "Market Trends August" and "Global Weather
-  Events" came from clusters the OLD day-bounded clustering had swallowed —
+  Events" came from day-bounded storylines the OLD model had swallowed —
   68 and 33 unrelated groups. They pass validation ("August" is capitalized
   and grounded) and name nothing. Grounding cannot catch this; a real v2
   storyline, formed err-narrow, is a different input.
 - **One label looked invented and was not.** "Ceuta Migrant Crisis" was
-  produced for a cluster whose newest headline is about Netanyahu — but Ceuta
-  appears in 5 of its 12 headlines, alongside RBI, Rahul Gandhi and Nigel
-  Farage. The model found the plurality story inside a swallowed cluster.
+  produced for a day-bounded storyline whose newest headline is about
+  Netanyahu — but Ceuta appears in 5 of its 12 headlines, alongside RBI, Rahul
+  Gandhi and Nigel Farage. The model found the plurality story inside a
+  swallowed day-bounded storyline.
 
 Casing is not normalized on model output ("Infantino leadership crisis" came
 back part-lowercase). Forcing Title Case would break names that carry their own
@@ -140,7 +142,7 @@ case, and this is presentation that regenerates; left alone deliberately.
 
 ## The fallback floor, measured
 
-With no `GEMINI_API_KEY` the preview labels **30 of 30** clusters from the
+With no `GEMINI_API_KEY` the preview labels **30 of 30** day-bounded storylines from the
 bigram extractor. Freeing it from ADR-0010's containment rule fixed the yield
 problem outright — the old rule produced 9 phrases from 46 eligible slots — but
 yield was never the hard part. A sample of what it produces:
@@ -159,7 +161,7 @@ cannot reach "names the event at a glance", and that gap is the entire
 justification for the model. It is the floor — what stands between an
 unavailable Gemini and a nameless storyline — not the target.
 
-(The clusters above come from the OLD day-bounded clustering, borrowed by
+(The day-bounded storylines above come from the OLD model, borrowed by
 `--preview` as a source of real multi-article coverage because the v2 linker is
 S3 and does not exist yet. Some are visibly swallowed — 76 groups under
 "Executive Order" — which is ADR-0009's measured failure, not the labeler's.)

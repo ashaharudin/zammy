@@ -442,7 +442,7 @@ function toEntry(slot: TimelineSlot): TimelineEntry {
     // alone and then miss the angle pieces the search has to reach.
     storylinePhrase: storylinePhrase(article, moreCoverage),
     // The old model has no storyline to describe: its slots are day-bounded
-    // clusters with no identity a reader could open. `toStorylineEntry` fills
+    // storylines with no identity a reader could open. `toStorylineEntry` fills
     // this in when the flag is on.
     storyline: null,
   };

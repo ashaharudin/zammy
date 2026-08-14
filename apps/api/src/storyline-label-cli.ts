@@ -22,12 +22,12 @@ import { labelStoryline, type LabelOutcome } from "./storyline-label-service.js"
  *
  * `--preview` is a READ-ONLY harness over the dev archive, and it exists
  * because the v2 storylines it would otherwise label do not exist yet — the
- * linker is S3. It borrows the OLD `articles.storyline_id` clustering purely as
+ * linker is S3. It borrows the OLD `articles.storyline_id` day-bounded storylines purely as
  * a source of real multi-article coverage, runs the real selection, prompt,
  * validation and fallback over it, and writes nothing. What it measures is what
  * this session needs measured: what the labels look like on real headlines, and
  * what a thousand of them cost. It is not a backfill and does not pretend to
- * be — ADR-0011 ignores the old clustering entirely — and it goes with the old
+ * be — ADR-0011 ignores the old day-bounded storylines entirely — and it goes with the old
  * columns in S9.
  */
 
@@ -104,7 +104,7 @@ async function runLabeller(): Promise<void> {
 }
 
 /**
- * Read-only over the dev archive's OLD clusters. Same functions, no writes.
+ * Read-only over the dev archive's OLD day-bounded storylines. Same functions, no writes.
  */
 async function runPreview(): Promise<void> {
   const { rows } = await sql<{
@@ -131,8 +131,8 @@ async function runPreview(): Promise<void> {
   `.execute(db);
 
   console.log(
-    `${rows.length} multi-group clusters from the archive (read-only; ` +
-      "the old clustering, borrowed as coverage — see the header)\n",
+    `${rows.length} multi-group day-bounded storylines from the archive (read-only; ` +
+      "the old day-bounded model, borrowed as coverage — see the header)\n",
   );
 
   const results: Array<{ label: string | null; source: string }> = [];
