@@ -5,7 +5,7 @@ import { backfillStorylines } from "./storyline-backfill.js";
 
 /**
  * `pnpm backfill:storylines [--restart] [--labels-only] [--no-labels]
- *  [--relabel] [--max-groups=N] [--max-labels=N] [--label-rate=N] [--batch=N]`
+ *  [--relabel] [--relabel-all] [--max-groups=N] [--max-labels=N] [--label-rate=N] [--batch=N]`
  *
  * The ADR-0011 rollout command (S5): replay the linker over the whole archive
  * chronologically, then label what got promoted.
@@ -40,6 +40,7 @@ const restart = args.includes("--restart");
 const labelsOnly = args.includes("--labels-only");
 const skipLabels = args.includes("--no-labels");
 const relabel = args.includes("--relabel");
+const relabelAll = args.includes("--relabel-all");
 
 const config = loadConfig();
 const db = createDb(config.DATABASE_URL);
@@ -103,6 +104,9 @@ try {
       log: { warn: (obj, msg) => console.warn(msg, JSON.stringify(obj)) },
       labeler: {
         generator,
+        // Recorded on every model-produced label, so a relabel campaign can
+        // tell "already upgraded" from "still on the fallback" and resume.
+        modelId: config.GEMINI_MODEL,
         sampleSize: config.STORYLINE_LABEL_SAMPLE,
         driftFactor: config.STORYLINE_LABEL_DRIFT_FACTOR,
       },
@@ -111,7 +115,8 @@ try {
       restart,
       labelsOnly,
       skipLabels,
-      relabel,
+      relabel: relabel || relabelAll,
+      relabelAll,
       signal: controller.signal,
       ...(num("batch") !== undefined ? { batchSize: num("batch")! } : {}),
       ...(num("max-groups") !== undefined ? { maxGroups: num("max-groups")! } : {}),

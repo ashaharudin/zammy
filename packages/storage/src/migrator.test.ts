@@ -5,6 +5,7 @@ import * as storylineTables from "./migrations/0007-storyline-tables.js";
 import * as storyTokenDf from "./migrations/0008-story-token-df.js";
 import * as storylineBridges from "./migrations/0009-storyline-bridges.js";
 import * as labelDrift from "./migrations/0010-storyline-label-drift.js";
+import * as labelSource from "./migrations/0011-storyline-label-source.js";
 import { createTestDatabase, type TestDatabase } from "./test-support.js";
 
 /**
@@ -89,6 +90,7 @@ describe("migrateToLatest", () => {
     // refuses the first (the key doing its job) and the second would silently
     // rebuild `storylines` without a column the ledger still claimed.
     expect(await hasDriftColumn()).toBe(true);
+    await labelSource.down(harness.db);
     await labelDrift.down(harness.db);
     await storylineBridges.down(harness.db);
     await storylineTables.down(harness.db);
@@ -97,6 +99,7 @@ describe("migrateToLatest", () => {
     await storylineTables.up(harness.db);
     await storylineBridges.up(harness.db);
     await labelDrift.up(harness.db);
+    await labelSource.up(harness.db);
     expect(await hasStorylineTables()).toBe(3);
     expect(await hasDriftColumn()).toBe(true);
   });

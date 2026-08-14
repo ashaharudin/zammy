@@ -204,6 +204,14 @@ export interface StorylinesTable {
    */
   label_group_count: number | null;
   /**
+   * What produced the label: the model id, `bigram` for the extractor, or null
+   * for unknown provenance. The model ID and not an enum, because "is this from
+   * the model configured NOW" is the question a relabel campaign asks, and
+   * upgrading between models is the same operation as upgrading from the
+   * fallback.
+   */
+  label_source: string | null;
+  /**
    * Tokens carried by at least half the member groups: the storyline's own
    * vocabulary, and the GIN surface candidate retrieval overlaps against. The
    * majority rule is the percolation damper — a growing storyline's consensus

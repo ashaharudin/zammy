@@ -40,6 +40,13 @@ export interface LabelerDeps {
   db: Kysely<Database>;
   /** Null with no `GEMINI_API_KEY`: the fallback path becomes the only path. */
   generator: TextGenerator | null;
+  /**
+   * How a model-produced label is recorded — the configured model id. Stored on
+   * the row so a relabel campaign can ask "is this label from the model I have
+   * now", which is what makes such a campaign resumable. Defaults to the
+   * unhelpful-but-honest `"model"` when a caller does not say.
+   */
+  modelId?: string;
   sampleSize: number;
   driftFactor: number;
   now?: () => Date;
@@ -136,6 +143,10 @@ export async function labelStoryline(
     label,
     labelAt: now(),
     labelGroupCount: groupCount,
+    // Provenance, not a category: `bigram` and a model id are both answers to
+    // "would a relabel against the currently-configured model change this".
+    labelSource:
+      source === "model" ? (deps.modelId ?? "model") : source === "bigram" ? "bigram" : null,
   });
 
   return { storylineId: storyline.id, label, source, trigger, modelFailure, groupCount };
