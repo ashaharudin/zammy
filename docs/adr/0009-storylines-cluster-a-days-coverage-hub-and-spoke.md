@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0011
 ---
 
 # Storylines cluster a day's coverage hub-and-spoke, and bridged groups merge

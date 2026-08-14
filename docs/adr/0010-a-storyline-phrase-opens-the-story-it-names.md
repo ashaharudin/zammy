@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0011 (mechanics; the gutter placement survives as the label's home)
 ---
 
 # A storyline phrase opens the story it names
