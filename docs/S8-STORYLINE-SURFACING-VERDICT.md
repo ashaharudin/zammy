@@ -7,10 +7,10 @@ prototype round"). Five variants, one dev-only route, mock data:
 code is throwaway and stays on the `claude/s8-implementation-25f41f` branch; this
 note is the part that survives.
 
-Universal gutter labels were the baseline in all three — settled, not under
+Universal gutter labels were the baseline in all five — settled, not under
 test — so what was compared is only the extra layer a *search* adds.
 
-The three cases each variant was judged on, all in the mock corpus:
+The cases each variant was judged on, all in the mock corpus:
 
 - `iran` — three matched storylines, one wide, all recent (and, for the floating
   variant, the case that decides whether the strip fits on a phone)
@@ -20,17 +20,30 @@ The three cases each variant was judged on, all in the mock corpus:
 
 ## Verdict
 
-**S7 builds E: storyline pills in the command bar, under the date stamp**, size
-carried by a glyph rather than a count. A — the top strip — is the fallback if
-pills prove too thin against real labels. B is refused. C is a deferred
-accelerator, not part of S7. D is superseded by E.
+**E wins: storyline pills in the command bar, under the date stamp**, size
+carried by a glyph rather than a count, the row collapsible from a handle on the
+bar's bottom edge. That is what S7 builds.
+
+The rest, in one line each:
+
+| | | |
+|---|---|---|
+| **E** — pills in the command bar | **ships** | persistent, occludes nothing, closable |
+| A — top strip above the results | fallback | more payload per storyline, but displaces the timeline and only exists at the top of the page |
+| B — storyline as a rail slot | refused | surfaces old matches below the fold, mixes two clocks on one axis |
+| C — command-bar typeahead | deferred | an accelerator, not a surfacing; needs an API S6 does not ship |
+| D — floating bottom strip | superseded | E's persistence without E's occlusion cost |
+
+A stays written down as the fallback because it is the one variant that answers
+"what if pills are too thin against real labels" — not because the decision is
+open. It is not: S7 builds E.
 
 The round ran in two passes: A/B/C first, where A won; then D (floating strip)
 and E (pills in the chrome) were built on the back of it, and E beat both. The
 sections below keep the reasoning in the order it was found, because A's case is
 still the case E has to keep answering.
 
-### E — pills in the command bar (ships)
+### E — pills in the command bar (the winner; S7 builds this)
 
 A row inside the sticky command bar, under the asOf stamp: one pill per surfaced
 storyline, each a size glyph plus the label, plus the date qualifier when two
@@ -99,7 +112,7 @@ Costs accepted:
 - The thinnest payload of any variant: no span, no day count. The collision case
   still resolves, because the date qualifier does that work, not the span line.
 
-### A — top strip (the fallback)
+### A — top strip (won the first pass; now the fallback)
 
 A row of matched-storyline cards above the first day divider: label, date span,
 article/day counts, an activity sparkline, dormant marked.
