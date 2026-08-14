@@ -16,6 +16,11 @@ import {
 import { storyTokens, type StorylineRules } from "./storyline.js";
 import { attachSeededGroups } from "./storyline-service.js";
 import { recordStoryDfForArticles } from "./story-df.js";
+import {
+  linkSeededGroups,
+  type LinkableGroup,
+  type LinkerConfig,
+} from "./storyline-linker.js";
 import type { Metrics } from "./metrics.js";
 
 /**
@@ -39,6 +44,16 @@ export interface GroupingDeps {
     timeZone: string;
     /** The layer above (ADR-0009), switchable independently of grouping. */
     storyline: { enabled: boolean } & StorylineRules;
+    /**
+     * The ADR-0011 linker, behind its own flag and running ALONGSIDE the old
+     * one until the cutover: they write different tables, so both can be on
+     * while the backfill is verified, and neither reads the other's state.
+     *
+     * Optional, and absent means OFF — the v2 write path must never turn
+     * itself on by default, so a caller that has not heard of it yet gets the
+     * behaviour it expects rather than a new table filling up behind it.
+     */
+    linker?: LinkerConfig;
   };
   metrics?: Metrics;
   log?: { warn: (obj: object, msg: string) => void };
@@ -150,6 +165,23 @@ export async function groupCreatedArticles(
     counted,
   );
 
+  // The v2 linker (ADR-0011), on the seeded groups only — an article that
+  // JOINED a group inherited that group's storylines, so only the ones that
+  // SEEDED a group have a decision left to make. It runs after the df
+  // maintenance above deliberately: the arriving group's own tokens belong in
+  // the corpus its rarity is measured against, or a story breaking across a
+  // dozen simultaneous groups would read each of them as unprecedented.
+  if (deps.config.linker) {
+    await linkSeededGroups(
+      {
+        db: deps.db,
+        config: deps.config.linker,
+        ...(deps.log ? { log: deps.log } : {}),
+      },
+      await linkableGroups(deps, seeded),
+    );
+  }
+
   // Storyline attachment runs once per BATCH, not per article: each seeded
   // group needs the day's corpus, and reading it per article was measured
   // blowing the §6.3 sync-fill deadline (ADR-0009). An article that JOINED a
@@ -174,6 +206,47 @@ export async function groupCreatedArticles(
 
   deps.metrics?.articlesGrouped(grouped);
   return grouped;
+}
+
+/**
+ * The seeded groups, as the linker needs to see them: every member's story
+ * tokens, so the group speaks through its MAJORITY vocabulary rather than any
+ * one member's. Read back from storage rather than assembled from the batch —
+ * a group seeded by this batch may already have been joined by a later article
+ * in the same batch, and linking on the seed article alone would compare the
+ * story against one outlet's wording of it.
+ */
+async function linkableGroups(
+  deps: GroupingDeps,
+  seeded: readonly CreatedArticle[],
+): Promise<LinkableGroup[]> {
+  if (!deps.config.linker?.enabled || seeded.length === 0) return [];
+  const rows = await deps.db
+    .selectFrom("articles")
+    .select(["group_id", "story_tokens", "language", "published"])
+    .where(
+      "group_id",
+      "in",
+      seeded.map((article) => article.id),
+    )
+    .execute();
+
+  const byGroup = new Map<string, LinkableGroup & { memberTokens: string[][] }>();
+  for (const row of rows) {
+    const existing = byGroup.get(row.group_id);
+    if (existing) {
+      existing.memberTokens.push(row.story_tokens);
+      if (row.published < existing.published) existing.published = row.published;
+      continue;
+    }
+    byGroup.set(row.group_id, {
+      groupId: row.group_id,
+      memberTokens: [row.story_tokens],
+      language: row.language,
+      published: row.published,
+    });
+  }
+  return [...byGroup.values()];
 }
 
 /**

@@ -137,6 +137,22 @@ export async function buildApp(config: Config): Promise<App> {
           anchorMaxShare: config.STORYLINE_ANCHOR_SHARE,
           massThreshold: config.STORYLINE_MASS_THRESHOLD,
         },
+        linker: {
+          enabled: config.STORYLINES_V2,
+          rules: {
+            anchorMaxShare: config.STORYLINE_ANCHOR_MAX_SHARE,
+            anchorDfFloor: config.STORYLINE_ANCHOR_DF_FLOOR,
+            massThreshold: config.STORYLINE_MASS_THRESHOLD_V2,
+            dormancyDays: config.STORYLINE_DORMANCY_DAYS,
+            dormantStrictness: config.STORYLINE_DORMANT_STRICTNESS,
+          },
+          mergeBridges: config.STORYLINE_MERGE_BRIDGES,
+          storyDf: {
+            windowDays: config.STORYLINE_DF_WINDOW_DAYS,
+            timeZone: config.APP_TIMEZONE,
+          },
+          timeZone: config.APP_TIMEZONE,
+        },
       },
     },
     now: () => new Date(),

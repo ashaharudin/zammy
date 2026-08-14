@@ -37,6 +37,26 @@ try {
           anchorMaxShare: config.STORYLINE_ANCHOR_SHARE,
           massThreshold: config.STORYLINE_MASS_THRESHOLD,
         },
+        // Regroup does not re-run the v2 linker: rebuilding v2 state is the
+        // backfill's job (S5), which replays chronologically from scratch
+        // rather than repairing in place. Disabled explicitly so the CLI
+        // cannot half-link a window as a side effect of re-tokenizing it.
+        linker: {
+          enabled: false,
+          rules: {
+            anchorMaxShare: config.STORYLINE_ANCHOR_MAX_SHARE,
+            anchorDfFloor: config.STORYLINE_ANCHOR_DF_FLOOR,
+            massThreshold: config.STORYLINE_MASS_THRESHOLD_V2,
+            dormancyDays: config.STORYLINE_DORMANCY_DAYS,
+            dormantStrictness: config.STORYLINE_DORMANT_STRICTNESS,
+          },
+          mergeBridges: config.STORYLINE_MERGE_BRIDGES,
+          storyDf: {
+            windowDays: config.STORYLINE_DF_WINDOW_DAYS,
+            timeZone: config.APP_TIMEZONE,
+          },
+          timeZone: config.APP_TIMEZONE,
+        },
       },
       log: { warn: (obj, msg) => console.log(msg, JSON.stringify(obj)) },
     },

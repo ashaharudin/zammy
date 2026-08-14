@@ -235,6 +235,31 @@ export async function mergeStorylines(
     await trx.deleteFrom("storyline_groups").where("storyline_id", "=", loser).execute();
     await trx.deleteFrom("storyline_days").where("storyline_id", "=", loser).execute();
 
+    // Bridge evidence follows the surviving pair. A bridge the loser had with
+    // a third storyline is still evidence — the group qualified for both, and
+    // which UUID won says nothing about that — so it re-points rather than
+    // dying with the alias. The loser's bridges to the WINNER go: a pair that
+    // is now one storyline has nothing left to bridge, and keeping them would
+    // let a healed merge count toward the next one.
+    await sql`
+      insert into storyline_bridges (storyline_lo, storyline_hi, group_id, observed_at)
+      select least(${winner}::uuid, other), greatest(${winner}::uuid, other), group_id, observed_at
+      from (
+        select case when storyline_lo = ${loser}::uuid then storyline_hi else storyline_lo end as other,
+               group_id, observed_at
+        from storyline_bridges
+        where storyline_lo = ${loser}::uuid or storyline_hi = ${loser}::uuid
+      ) moved
+      where other <> ${winner}::uuid
+      on conflict (storyline_lo, storyline_hi, group_id) do nothing
+    `.execute(trx);
+    await trx
+      .deleteFrom("storyline_bridges")
+      .where((eb) =>
+        eb.or([eb("storyline_lo", "=", loser), eb("storyline_hi", "=", loser)]),
+      )
+      .execute();
+
     // Flatten: every alias that pointed at the loser now points at the winner,
     // so resolution stays one hop for everything but a concurrent writer's
     // chain. `resolveStoryline` walks the chain anyway — flattening is for the
@@ -315,6 +340,121 @@ export async function readStorylineDays(
     daySlotPublished: row.day_slot_published,
     leadArticleId: row.lead_article_id,
   }));
+}
+
+/** A retrieval candidate: the facts the linker's decision reads, nothing else. */
+export interface StorylineCandidate {
+  id: string;
+  profileTokens: string[];
+  status: StorylineStatus;
+  /** Its most recent day slot — what dormancy is measured from. */
+  lastCoverage: Date;
+  groupCount: number;
+}
+
+/**
+ * Candidate retrieval (ADR-0011's Linking section): the storylines whose
+ * profile overlaps the arriving group's tokens, by GIN index.
+ *
+ * One index scan over a small table, and the reason the whole-day-in-memory
+ * read dies with the day bound. Aliases are excluded twice over — the partial
+ * index does not contain them and their profiles are emptied on merge —
+ * because attaching to a pointer would strand the group.
+ *
+ * `limit` is a safety valve for a pathological token, not a tuning knob: a
+ * group carrying a word half the archive shares would otherwise make one
+ * decision an unbounded scan. Ordered by recent coverage first so the cut,
+ * when it binds, keeps the storylines a group is most likely to belong to —
+ * degrading to a worse link is this layer's cheap direction, exactly as
+ * grouping's own candidate cap argues (§14.3).
+ */
+export async function readCandidateStorylines(
+  db: Kysely<Database>,
+  input: { tokens: readonly string[]; limit: number },
+): Promise<StorylineCandidate[]> {
+  if (input.tokens.length === 0) return [];
+
+  const { rows } = await sql<{
+    id: string;
+    profile_tokens: string[];
+    status: StorylineStatus;
+    last_coverage: Date | null;
+    group_count: string;
+  }>`
+    select s.id,
+           s.profile_tokens,
+           s.status,
+           (select max(d.day_slot_published) from storyline_days d
+             where d.storyline_id = s.id) as last_coverage,
+           (select count(*) from storyline_groups g
+             where g.storyline_id = s.id) as group_count
+    from storylines s
+    where s.merged_into is null
+      and s.profile_tokens && ${[...input.tokens]}::text[]
+    order by last_coverage desc nulls last, s.id
+    limit ${input.limit}
+  `.execute(db);
+
+  return rows.map((row) => ({
+    id: row.id,
+    profileTokens: row.profile_tokens,
+    status: row.status,
+    // A storyline with no day slots has no member articles yet — brand new,
+    // and `created_at` is not coverage. Treated as covered now, which is what
+    // it is: the arrival that seeded it is what put it here.
+    lastCoverage: row.last_coverage ?? new Date(),
+    groupCount: Number(row.group_count),
+  }));
+}
+
+/**
+ * Record that one group qualified for both storylines of a pair.
+ *
+ * Idempotent by primary key, and that IS the independence rule (ADR-0011): the
+ * same group re-evaluated — by a retry, by the backfill, by a regroup pass —
+ * is one observation however many times it is seen, so `countBridges` counts
+ * distinct groups without having to say so.
+ *
+ * Both ids are alias-resolved first: a bridge to a merged-away UUID describes a
+ * pair that no longer exists, and recording it would keep evidence alive for a
+ * merge that already happened.
+ */
+export async function recordBridge(
+  db: Kysely<Database>,
+  input: { storylineA: string; storylineB: string; groupId: string },
+): Promise<{ recorded: boolean }> {
+  return db.transaction().execute(async (trx) => {
+    const a = await resolveIn(trx, input.storylineA);
+    const b = await resolveIn(trx, input.storylineB);
+    if (a === null || b === null || a === b) return { recorded: false };
+
+    const [lo, hi] = a < b ? [a, b] : [b, a];
+    const inserted = await trx
+      .insertInto("storyline_bridges")
+      .values({ storyline_lo: lo, storyline_hi: hi, group_id: input.groupId })
+      .onConflict((conflict) => conflict.doNothing())
+      .executeTakeFirst();
+
+    return { recorded: Number(inserted.numInsertedOrUpdatedRows ?? 0) > 0 };
+  });
+}
+
+/** How many INDEPENDENT groups bridge this pair — the K in "K bridges merge". */
+export async function countBridges(
+  db: Kysely<Database>,
+  input: { storylineA: string; storylineB: string },
+): Promise<number> {
+  const [lo, hi] =
+    input.storylineA < input.storylineB
+      ? [input.storylineA, input.storylineB]
+      : [input.storylineB, input.storylineA];
+  const row = await db
+    .selectFrom("storyline_bridges")
+    .select((eb) => eb.fn.countAll<string>().as("n"))
+    .where("storyline_lo", "=", lo)
+    .where("storyline_hi", "=", hi)
+    .executeTakeFirst();
+  return Number(row?.n ?? 0);
 }
 
 /**
