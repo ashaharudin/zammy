@@ -5,10 +5,16 @@ import {
   createProvisionalStoryline,
   mergeStorylines,
   promoteStoryline,
+  readGroupStorylines,
   readStoryline,
   setStorylineLabel,
 } from "@zammy/storage";
-import { runDormancyChore, runStorylineLabelChore, type ChoreDeps } from "./chores.js";
+import {
+  runDormancyChore,
+  runLateCandidateChore,
+  runStorylineLabelChore,
+  type ChoreDeps,
+} from "./chores.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
 
 /**
@@ -38,7 +44,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await sql`
-    truncate storylines, storyline_groups, storyline_days, storyline_bridges, articles cascade
+    truncate storylines, storyline_groups, storyline_days, storyline_bridges,
+             story_token_days, story_corpus_days, articles cascade
   `.execute(db);
 });
 
@@ -203,5 +210,79 @@ describe("the nightly label pass", () => {
     // live path is ever going to offer it again.
     expect(report.model).toBe(1);
     expect((await readStoryline(db, id))?.label).toBe("Hurricane Fausto");
+  });
+});
+
+describe("the nightly late-candidate sweep", () => {
+  /**
+   * The thresholds are loosened for a corpus of five articles, as the linker's
+   * own tests loosen theirs: what is under test is which groups the sweep OFFERS
+   * and what one offer does, not the production bar.
+   */
+  const LINKER = {
+    enabled: true,
+    rules: {
+      anchorMaxShare: 0.5,
+      anchorDfFloor: 4,
+      massThreshold: 1,
+      dormancyDays: 90,
+      dormantStrictness: 1.5,
+    },
+    mergeBridges: 2,
+    storyDf: { windowDays: 14, timeZone: "UTC" },
+    timeZone: "UTC",
+  };
+
+  /** A corpus for the day the coverage is on, so rarity means something. */
+  async function seedCorpus(day: string): Promise<void> {
+    await db
+      .insertInto("story_corpus_days")
+      .values({ day, language: "en", articles: 100 })
+      .execute();
+    await db
+      .insertInto("story_token_days")
+      .values(
+        ["fausto", "hawaii"].map((token) => ({ day, language: "en", token, df: 4 })),
+      )
+      .execute();
+  }
+
+  it("pulls a group into a storyline that formed after it", async () => {
+    // The behaviour ADR-0011 promises and nothing delivered: `attachGroup` had
+    // no production caller, and the chronological backfill decides Monday's
+    // group before Wednesday's storyline exists.
+    await seedCorpus("2026-08-13");
+    const early = await storyline([YESTERDAY, YESTERDAY]);
+    const later = await storyline([YESTERDAY, YESTERDAY]);
+    const earlyGroups = await db
+      .selectFrom("storyline_groups")
+      .select("group_id")
+      .where("storyline_id", "=", early)
+      .execute();
+
+    const report = await runLateCandidateChore({ ...deps(), linker: LINKER });
+
+    expect(report.offered).toBe(4);
+    expect(report.attachedTo).toBeGreaterThan(0);
+    // The group kept its home and gained the other arc.
+    const homes = await readGroupStorylines(db, earlyGroups[0]!.group_id);
+    expect(homes).toContain(early);
+    expect(homes).toContain(later);
+  });
+
+  it("offers only the trailing window, so a night's work is bounded", async () => {
+    await seedCorpus("2026-08-13");
+    await seedCorpus("2026-03-02");
+    await storyline([YESTERDAY, YESTERDAY]);
+    const march = await group(MARCH);
+    const marchStoryline = await createProvisionalStoryline(db, { groupId: march, ...TZ });
+
+    const report = await runLateCandidateChore({ ...deps(), linker: LINKER });
+
+    // A full-archive replay every night is the thing this is not: the df window
+    // is the same fortnight the linker measures rarity against, so a candidate
+    // older than the corpus that would judge it is not a candidate.
+    expect(report.offered).toBe(2);
+    expect(await readGroupStorylines(db, march)).toEqual([marchStoryline.id]);
   });
 });

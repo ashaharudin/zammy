@@ -4,6 +4,7 @@ import type { Kysely } from "kysely";
 import {
   markDormantStorylines,
   pruneStoryDf,
+  readLinkableGroups,
   pruneTermSnapshots,
   retentionReport,
   type Database,
@@ -12,6 +13,7 @@ import {
 import { storyDfDay } from "./story-df.js";
 import { labelPass } from "./storyline-backfill.js";
 import type { LabelerDeps } from "./storyline-label-service.js";
+import { linkGroup, type LinkerConfig } from "./storyline-linker.js";
 
 /**
  * Non-upstream chores (ARCHITECTURE 9.1): work with a clock but no quota
@@ -116,6 +118,82 @@ export async function runDormancyChore(deps: ChoreDeps): Promise<{ dormant: numb
     "storyline dormancy sweep (ADR-0011)",
   );
   return { dormant };
+}
+
+/**
+ * The nightly late-candidate sweep — the caller retroactive attachment never had
+ * (ADR-0011: "a Wednesday storyline may pull in Monday's group"; the plan: "an
+ * old group is just a candidate arriving late").
+ *
+ * The linker is offered every group exactly once, when it is born, and a
+ * chronological backfill decides Monday's group before Wednesday's storyline
+ * exists. So something has to OFFER old groups again, and the alternative —
+ * waiting for the next full-archive replay — leaves the live system permanently
+ * missing a behaviour two documents promise.
+ *
+ * Bounded by the trailing df window, which is the natural bound rather than an
+ * arbitrary one: rarity is measured against that fortnight, so a group older than
+ * the corpus that would judge it has no decision left to make here. Every offer
+ * is idempotent (`linkGroup` re-derives rather than re-homes), which is what
+ * makes running this every night cost reads and nothing else.
+ *
+ * Never throws for one group's sake, exactly as the linker and the backfill
+ * don't: a group the sweep could not process is a group standing where it stood.
+ */
+export async function runLateCandidateChore(
+  deps: ChoreDeps & {
+    linker: LinkerConfig;
+    /** Groups per read. Bounds memory, not correctness. */
+    batchSize?: number;
+    /** Hard ceiling on a night's offers, however wide the window is. */
+    maxGroups?: number;
+  },
+): Promise<{ offered: number; attachedTo: number; merges: number; failures: number }> {
+  const batchSize = deps.batchSize ?? 500;
+  const maxGroups = deps.maxGroups ?? 20_000;
+  const from = new Date(
+    deps.now().getTime() - deps.config.storyDfWindowDays * 86_400_000,
+  );
+
+  const tally = { offered: 0, attachedTo: 0, merges: 0, failures: 0 };
+  // The keyset `readLinkableGroups` pages on is `(group_published, group_id)`,
+  // so the window's start IS a cursor: group id 0 is below every real id, which
+  // makes the first read begin at the window rather than at the archive.
+  let after: { published: Date; groupId: string } = { published: from, groupId: "0" };
+
+  for (;;) {
+    const batch = await readLinkableGroups(deps.db, { after, limit: batchSize });
+    if (batch.length === 0) break;
+
+    for (const group of batch) {
+      if (tally.offered >= maxGroups) break;
+      tally.offered += 1;
+      after = { published: group.published, groupId: group.groupId };
+      try {
+        const outcome = await linkGroup(
+          { db: deps.db, config: deps.linker },
+          {
+            groupId: group.groupId,
+            memberTokens: group.memberTokens,
+            language: group.language,
+            published: group.published,
+          },
+        );
+        tally.attachedTo += outcome.attachedTo.length;
+        tally.merges += outcome.merged.length;
+      } catch {
+        tally.failures += 1;
+      }
+    }
+
+    if (tally.offered >= maxGroups || batch.length < batchSize) break;
+  }
+
+  deps.log.info(
+    { ...tally, from: from.toISOString(), windowDays: deps.config.storyDfWindowDays },
+    "late-candidate sweep — retroactive attachment over the trailing window (ADR-0011)",
+  );
+  return tally;
 }
 
 /**

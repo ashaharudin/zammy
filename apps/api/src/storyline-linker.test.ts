@@ -272,6 +272,77 @@ describe("attach and promote", () => {
   });
 });
 
+describe("retroactive attachment", () => {
+  /**
+   * A storyline formed after a group did, which the group belongs in: ADR-0011's
+   * "a Wednesday storyline may pull in Monday's group". Built with the storage
+   * primitives, because what is under test is the SECOND offer of an already-homed
+   * group — the arc it is being pulled into has to exist first, and how it came
+   * to exist is not the subject.
+   */
+  async function laterArc(): Promise<string> {
+    const one = await group({ tokens: STORY, publishedAt: `${DAY}T20:00:00Z` });
+    const two = await group({ tokens: STORY, publishedAt: `${DAY}T21:00:00Z` });
+    const born = await createProvisionalStoryline(db, { groupId: one.groupId, timeZone: "UTC" });
+    await attachGroup(db, { storylineId: born.id, groupId: two.groupId, timeZone: "UTC" });
+    await promoteStoryline(db, { storylineId: born.id });
+    return born.id;
+  }
+
+  it("pulls an already-homed group into an arc it also belongs to", async () => {
+    await seedCorpus({ rare: STORY });
+    const monday = await group({ tokens: STORY, publishedAt: `${DAY}T09:00:00Z` });
+    const born = await linkGroup(deps(), monday);
+    await linkGroup(deps(), await group({ tokens: STORY, publishedAt: `${DAY}T10:00:00Z` }));
+    const later = await laterArc();
+
+    // Monday's group, offered again — the sweep's whole job.
+    const outcome = await linkGroup(deps(), monday);
+
+    expect(outcome.attachedTo).toEqual([later]);
+    // BOTH arcs, which is the duplication ADR-0011 accepts: this is an
+    // ADDITIONAL membership, not a move.
+    expect((await readGroupStorylines(db, monday.groupId)).sort()).toEqual(
+      [born.storylineId, later].sort(),
+    );
+  });
+
+  it("never re-homes, and never merges the two arcs on one group's say-so", async () => {
+    await seedCorpus({ rare: STORY });
+    const monday = await group({ tokens: STORY, publishedAt: `${DAY}T09:00:00Z` });
+    const born = await linkGroup(deps(), monday);
+    const tuesday = await group({ tokens: STORY, publishedAt: `${DAY}T10:00:00Z` });
+    await linkGroup(deps(), tuesday);
+    const later = await laterArc();
+
+    await linkGroup(deps(), monday);
+
+    // Absorbing a REAL storyline into another because one of its members would
+    // also fit there is a merge with no bridge evidence — the percolation K
+    // exists to prevent.
+    expect(await resolveStoryline(db, born.storylineId)).toBe(born.storylineId);
+    expect(await resolveStoryline(db, later)).toBe(later);
+    expect((await readGroupStorylines(db, tuesday.groupId))).toEqual([born.storylineId]);
+  });
+
+  it("is idempotent — a group offered twice more joins nothing twice", async () => {
+    await seedCorpus({ rare: STORY });
+    const monday = await group({ tokens: STORY, publishedAt: `${DAY}T09:00:00Z` });
+    await linkGroup(deps(), monday);
+    await linkGroup(deps(), await group({ tokens: STORY, publishedAt: `${DAY}T10:00:00Z` }));
+    await laterArc();
+
+    const first = await linkGroup(deps(), monday);
+    const second = await linkGroup(deps(), monday);
+
+    // A nightly sweep re-offers the same fortnight every night; the second
+    // night must cost reads and change nothing.
+    expect(first.attachedTo).toHaveLength(1);
+    expect(second.attachedTo).toEqual([]);
+    expect(await readGroupStorylines(db, monday.groupId)).toHaveLength(2);
+  });
+});
+
 describe("bridges and merging", () => {
   // Two storylines that share nothing with each other, and a group that
   // qualifies for both.

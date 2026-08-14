@@ -1,5 +1,6 @@
 import type { Kysely } from "kysely";
 import {
+  attachGroup,
   countBridges,
   createProvisionalStoryline,
   mergeStorylines,
@@ -43,7 +44,10 @@ import {
  *
  * Retroactive attachment rides this exact path — an old group is a candidate
  * arriving late, and nothing here reads the clock except dormancy, which reads
- * the storyline's last coverage rather than "now" against a creation date.
+ * the storyline's last coverage rather than "now" against a creation date. What
+ * makes it happen at all is step 4 running for an ALREADY-HOMED group too: it
+ * keeps its home and gains the arc, which is the one case `attachGroup` exists
+ * for. The nightly late-candidate sweep is what offers old groups again.
  *
  * Never throws. A linking failure must not fail the read that triggered the
  * ingest, for the reason grouping never throws: the articles are stored and
@@ -91,6 +95,16 @@ export interface LinkOutcome {
   storylineId: string;
   /** True when the group joined an existing storyline rather than seeding one. */
   attached: boolean;
+  /**
+   * Arcs an ALREADY-HOMED group joined on this offer: retroactive attachment
+   * (ADR-0011 — "a Wednesday storyline may pull in Monday's group").
+   *
+   * Separate from `attached`, which is about the group finding its home. This is
+   * the group gaining an additional membership without leaving the first, and it
+   * is a fact about the storylines that GREW rather than about where the group
+   * lives — which is why the ids are here rather than replacing `storylineId`.
+   */
+  attachedTo: string[];
   /** Storylines this group also qualified for — bridge evidence. */
   bridged: string[];
   /** Pairs this arrival's bridge pushed over K. */
@@ -158,6 +172,7 @@ export async function linkGroup(
     groupId: group.groupId,
     storylineId: own,
     attached: false,
+    attachedTo: [],
     bridged: [],
     merged: [],
   };
@@ -209,13 +224,37 @@ export async function linkGroup(
   // bridge evidence at all, which is exactly the percolation K exists to
   // prevent — the first version of this did that, and the replay test caught
   // it. Pulling an already-homed group into an ADDITIONAL arc is retroactive
-  // attachment, which the backfill drives (S5) by replaying from scratch.
+  // attachment, and it happens right here — see below.
   const ownGroups = await deps.db
     .selectFrom("storyline_groups")
     .select((eb) => eb.fn.countAll<string>().as("n"))
     .where("storyline_id", "=", own)
     .executeTakeFirst();
   if (Number(ownGroups?.n ?? 0) > 1) {
+    // RETROACTIVE ATTACHMENT (ADR-0011: "a Wednesday storyline may pull in
+    // Monday's group"; the plan: "an old group is just a candidate arriving
+    // late"). The group has a home and keeps it; what it gains is a second arc
+    // it independently qualifies for, which is the duplication ADR-0011 accepts
+    // and the case `attachGroup` was built for.
+    //
+    // The BEST qualifier only, and only one per offer: a group that clears the
+    // bar for four storylines is bridge evidence about those four (recorded
+    // below), not a member of all of them — joining every qualifier is
+    // percolation with extra steps.
+    const already = new Set(existing);
+    const arc = qualified.find((q) => !already.has(q.candidate.id));
+    if (arc) {
+      const { attached } = await attachGroup(deps.db, {
+        storylineId: arc.candidate.id,
+        groupId: group.groupId,
+        ...zoned,
+      });
+      // Idempotent by construction — a nightly sweep re-offers the same
+      // fortnight every night — so a replay reports nothing rather than
+      // reporting the same attach again.
+      if (attached) outcome.attachedTo.push(arc.candidate.id);
+    }
+
     outcome.bridged = qualified.map((q) => q.candidate.id);
     await recordBridgesAmong(deps, qualified, group.groupId, outcome);
     return outcome;

@@ -14,6 +14,7 @@ import { IngestQueue } from "./ingest-queue.js";
 import {
   ChoreQueue,
   runDormancyChore,
+  runLateCandidateChore,
   runRetentionChore,
   runStorylineLabelChore,
   type ChoreDeps,
@@ -223,10 +224,16 @@ export async function buildApp(config: Config): Promise<App> {
   const chores = new ChoreQueue(config.REDIS_URL);
   chores.startConsumer({
     retention: () => runRetentionChore(choreDeps),
-    // Dormancy first, then the labels: a storyline the sweep just marked quiet
-    // is not a candidate the label pass should spend a call on.
+    // Order matters, and it is the order of what each pass reads. Dormancy
+    // first, so the late sweep judges candidates at the bar their quiet earns.
+    // The sweep next, so the storylines it grows are the ones the label pass
+    // then looks at — a membership change and its label in one night, rather
+    // than a label that describes yesterday's membership.
     storylines: async () => {
       await runDormancyChore(choreDeps);
+      if (config.STORYLINES_V2) {
+        await runLateCandidateChore({ ...choreDeps, linker: deps.config.grouping.linker! });
+      }
       await runStorylineLabelChore({ ...choreDeps, labeler });
     },
   });
