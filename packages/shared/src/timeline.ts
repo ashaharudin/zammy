@@ -6,8 +6,18 @@ export const DEFAULT_PAGE_LIMIT = 25;
 export const MAX_PAGE_LIMIT = 100;
 
 /** Query parameters accepted by `GET /api/v1/timeline` (ARCHITECTURE 6.1). */
+/** A storyline UUID, which is what `?storyline=` means under STORYLINES_V2. */
+export const STORYLINE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export const TimelineQuery = z.object({
-  q: z.string().trim().min(1).max(MAX_KEYWORDS_LENGTH),
+  /**
+   * Optional ONLY in the storyline view (ADR-0011): clicking a label opens the
+   * timeline filtered to a UUID with the search box empty, so there are no
+   * keywords to send. Every other request must carry one — see the refinement
+   * below, which is what keeps `q`-less requests from becoming a way to page
+   * the whole archive.
+   */
+  q: z.string().trim().min(1).max(MAX_KEYWORDS_LENGTH).optional(),
   language: z.string().min(2).max(8).optional(),
   country: z.string().min(2).max(8).optional(),
   category: z.string().min(1).max(40).optional(),
@@ -25,15 +35,32 @@ export const TimelineQuery = z.object({
    * carry every keyword, so it can add provenance to a topic but never
    * membership the keywords do not support.
    */
-  storyline: z.string().regex(/^\d+$/).max(20).optional(),
+  storyline: z.string().trim().min(1).max(64).optional(),
   /**
    * A CEILING, not a promise. One upstream call is 20 raw sightings, which after
    * collapsing can be as few as 6 articles — so a short page is normal. Distinguish
    * "still arriving" from "that's all" via `meta.ingest`, never via item count.
    */
   limit: z.coerce.number().int().min(1).max(MAX_PAGE_LIMIT).default(DEFAULT_PAGE_LIMIT),
-});
+})
+  .refine((query) => query.q !== undefined || isStorylineView(query), {
+    path: ["q"],
+    message: "q is required unless the request is a storyline view (?storyline=<uuid>)",
+  });
 export type TimelineQuery = z.infer<typeof TimelineQuery>;
+
+/**
+ * Is this the STORYLINE VIEW — the timeline filtered to one storyline by UUID
+ * (ADR-0011) — rather than the ADR-0010 bigint seed it replaces?
+ *
+ * The two share a parameter name deliberately: the seed retires with the flag
+ * flip, and until then the shape of the value is what says which one a caller
+ * meant. A UUID cannot be a v1 hub group id, so there is no ambiguity to
+ * resolve.
+ */
+export function isStorylineView(query: { storyline?: string | undefined }): boolean {
+  return query.storyline !== undefined && STORYLINE_UUID.test(query.storyline);
+}
 
 export const ServedFrom = z.enum(["cache", "store", "upstream"]);
 export type ServedFrom = z.infer<typeof ServedFrom>;
@@ -92,9 +119,41 @@ export type TopicSummary = z.infer<typeof TopicSummary>;
  * different pieces, same story, and the disclosure renders them as their own
  * section.
  */
+/**
+ * The storyline a slot belongs to, when it is a REAL one (ADR-0011).
+ *
+ * Null for a provisional storyline-of-one, which is most slots and renders as
+ * the plain article slot it always was — "invisible as a storyline" is the
+ * lifecycle's own wording, and a null here is what carries it to the browser
+ * without the front end having to know the word "provisional".
+ */
+export const StorylineRef = z.object({
+  /** The label, or null: a promoted storyline whose generation failed renders
+   * label-less rather than not at all (ADR-0011, Labels). */
+  label: z.string().nullable(),
+  /**
+   * The storyline's whole date span, first covered day to last. Labels are
+   * deliberately non-unique, so when two same-label storylines are on screen
+   * together the span is what tells them apart ("Fort Hood Crash · Mar 2026").
+   * Sent always; the front end decides when a collision makes it worth showing.
+   */
+  from: z.iso.datetime(),
+  to: z.iso.datetime(),
+});
+export type StorylineRef = z.infer<typeof StorylineRef>;
+
+/** A surfaced storyline: a ref plus the UUID the storyline view opens by. */
+export const SurfacedStoryline = StorylineRef.extend({ id: z.string().min(1) });
+export type SurfacedStoryline = z.infer<typeof SurfacedStoryline>;
+
 export const TimelineEntry = z.object({
-  /** Stable per storyline; the id half of this page's cursor. */
-  storylineId: z.string().regex(/^\d+$/),
+  /**
+   * The slot's identity and the id half of this page's cursor: a hub group's
+   * bigint under the old model, a storyline UUID under STORYLINES_V2. NOT
+   * unique per slot in v2 — a storyline appears once per day it has coverage,
+   * so a renderer keying on this alone would collide across days.
+   */
+  storylineId: z.string().min(1),
   /**
    * The storyline's earliest published, NOT the representative's.
    *
@@ -130,11 +189,22 @@ export const TimelineEntry = z.object({
    * the search it opens a superset of this slot rather than a guess.
    */
   storylinePhrase: z.string().nullable(),
+  /** Non-null exactly when this slot's storyline has been promoted. */
+  storyline: StorylineRef.nullable(),
 });
 export type TimelineEntry = z.infer<typeof TimelineEntry>;
 
 export const TimelinePage = z.object({
   topic: TopicSummary,
+  /**
+   * Storylines this SEARCH surfaced — matched when the query's keywords are a
+   * subset of a storyline's profile tokens (ADR-0011, Search and navigation).
+   *
+   * Surfaced, never filtered: a search is never limited to a storyline, so
+   * these sit beside the results rather than narrowing them. Empty under the
+   * old model and for the storyline view, which is already about one.
+   */
+  storylines: z.array(SurfacedStoryline).default([]),
   /** Slots, not articles: `limit` counts these (§7.3 keyset over groups). */
   items: z.array(TimelineEntry),
   page: z.object({

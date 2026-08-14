@@ -1,9 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { TimelineQuery, TrendingQuery } from "@zammy/shared";
+import { isStorylineView, TimelineQuery, TrendingQuery } from "@zammy/shared";
 import { countTopicArticles, readCoverage, readTopic } from "@zammy/storage";
 import { canonicalize, type ReferenceCodes } from "./canonical.js";
 import {
   InvalidCursorError,
+  readStorylineView,
   readTimeline,
   type TimelineDeps,
 } from "./timeline-service.js";
@@ -45,12 +46,30 @@ export async function registerQueryRoutes(
       return reply.status(400).send({ error: { message: "invalid query", fields } });
     }
 
+    // The STORYLINE VIEW (ADR-0011): a UUID with an empty search box. It has no
+    // keywords, so it has no topic, no coverage and no fill — it is a read of
+    // one storyline's day slots and nothing else. Handled before
+    // canonicalization because there is nothing to canonicalize.
+    if (isStorylineView(parsed.data)) {
+      const view = await readStorylineView(deps, {
+        storylineId: parsed.data.storyline!,
+        limit: parsed.data.limit,
+        ...(parsed.data.cursor ? { cursorString: parsed.data.cursor } : {}),
+      });
+      if (view === null) {
+        return reply.status(404).send({ error: { message: "unknown storyline" } });
+      }
+      return await reply.send(view);
+    }
+
     // Validating filters against the cached reference lists catches a bad
     // language locally instead of spending a quota token to learn it (§6.2).
     const reference = await loadReference(deps);
     const canonical = canonicalize(
       {
-        q: parsed.data.q,
+        // Non-null past the storyline-view branch: the schema's refinement
+        // makes `q` optional only for that case.
+        q: parsed.data.q!,
         language: parsed.data.language,
         country: parsed.data.country,
         category: parsed.data.category,

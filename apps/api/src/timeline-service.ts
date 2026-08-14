@@ -1,6 +1,11 @@
 import type { Kysely } from "kysely";
 import type { Redis } from "ioredis";
-import { decodeCursor, encodeCursor, type TimelineEntry } from "@zammy/shared";
+import {
+  decodeCursor,
+  encodeCursor,
+  type SurfacedStoryline,
+  type TimelineEntry,
+} from "@zammy/shared";
 import {
   CurrentsQuotaError,
   type CallPriority,
@@ -8,14 +13,18 @@ import {
 } from "@zammy/currents-client";
 import {
   attachStorylineToTopic,
+  findSurfacedStorylines,
   ingestSightings,
   readCoverage,
+  readStorylineTimelinePage,
   readTimelinePage,
+  resolveStoryline,
   readTopic,
   recordCoverage,
   upsertTopic,
   type Database,
   type SlotMember,
+  type StorylineSlot,
   type TimelineSlot,
 } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
@@ -69,6 +78,13 @@ export interface TimelineDeps {
     /** §14.3: write-time article grouping (and its storyline layer, ADR-0009),
      * and the day both draw candidates from. */
     grouping: GroupingDeps["config"];
+    /**
+     * ADR-0011's read path: the timeline pages over `storyline_days` instead of
+     * the denormalized columns on `articles`. Off until the backfill has run
+     * and been verified — the two models are written independently, so the flag
+     * only ever selects which one is READ.
+     */
+    storylinesV2: boolean;
   };
   now: () => Date;
   metrics?: Metrics;
@@ -84,6 +100,8 @@ export interface TimelineReadResult {
     keywords: string[];
     coverage: { from: string; to: string } | null;
   };
+  /** Storylines this search surfaced (ADR-0011). Empty under the old model. */
+  storylines: SurfacedStoryline[];
   items: TimelineEntry[];
   page: { nextCursor: string | null; hasMore: boolean };
   meta: {
@@ -154,6 +172,7 @@ async function planAndRead(
     query.window,
     request.cursorString ?? null,
     request.limit,
+    deps.config.storylinesV2 ? "v2" : "v1",
   );
 
   // ADR-0010 — a seeded arrival, before the cache is consulted. A page cached
@@ -278,13 +297,37 @@ async function planAndRead(
 
   // §6.3 step 6 — ALWAYS answer from Postgres, never from the raw upstream
   // response, which is neither deduplicated nor ordered across sliced calls.
-  const stored = await readTimelinePage(deps.db, {
-    fingerprint: query.fingerprint,
-    from: query.window.from,
-    to: query.window.to,
-    ...(cursor ? { cursor } : {}),
-    limit: request.limit,
-  });
+  // §6.3 step 6 reads from the model the flag selects. Everything above this
+  // line — coverage, planning, quota, the fill — is about what is STORED and is
+  // identical either way; only the shape of a slot differs (ADR-0011).
+  const v2 = deps.config.storylinesV2;
+  const stored = v2
+    ? await readStorylineTimelinePage(deps.db, {
+        fingerprint: query.fingerprint,
+        from: query.window.from,
+        to: query.window.to,
+        ...(cursor ? { cursor } : {}),
+        limit: request.limit,
+        timeZone: deps.config.grouping.timeZone,
+      })
+    : await readTimelinePage(deps.db, {
+        fingerprint: query.fingerprint,
+        from: query.window.from,
+        to: query.window.to,
+        ...(cursor ? { cursor } : {}),
+        limit: request.limit,
+      });
+
+  // Storylines this SEARCH surfaces, beside the results rather than narrowing
+  // them (ADR-0011). Keywords are folded the way `story_tokens` and therefore
+  // `profile_tokens` were, or a search for "storms" would miss a profile that
+  // says "storm".
+  const surfaced = v2
+    ? await findSurfacedStorylines(deps.db, {
+        tokens: query.keywords.map(singular),
+        limit: SURFACED_STORYLINE_LIMIT,
+      })
+    : [];
 
   const pendingJobs = await deps.queue.pendingCount(query.fingerprint);
   const state: "complete" | "in_progress" =
@@ -303,7 +346,15 @@ async function planAndRead(
           ? { from: first.from.toISOString(), to: last.to.toISOString() }
           : null,
     },
-    items: stored.items.map(toEntry),
+    items: stored.items.map((slot) =>
+      "dayKey" in slot ? toStorylineEntry(slot) : toEntry(slot),
+    ),
+    storylines: surfaced.map((storyline) => ({
+      id: storyline.id,
+      label: storyline.label,
+      from: storyline.spanFrom,
+      to: storyline.spanTo,
+    })),
     page: {
       nextCursor: stored.nextCursor ? encodeCursor(stored.nextCursor) : null,
       hasMore: stored.hasMore,
@@ -389,6 +440,116 @@ function toEntry(slot: TimelineSlot): TimelineEntry {
     // whose near-identical copies would let a phrase qualify on syndication
     // alone and then miss the angle pieces the search has to reach.
     storylinePhrase: storylinePhrase(article, moreCoverage),
+    // The old model has no storyline to describe: its slots are day-bounded
+    // clusters with no identity a reader could open. `toStorylineEntry` fills
+    // this in when the flag is on.
+    storyline: null,
+  };
+}
+
+/**
+ * The STORYLINE VIEW (ADR-0011): the timeline filtered to one storyline,
+ * alias-resolving, with the label echoed back.
+ *
+ * It replaces ADR-0010's `?storyline=<bigint>` seeding, and the replacement is
+ * a simplification rather than a translation. The seed had to enroll articles
+ * into a topic because the phrase it came from WAS a search, and the superset
+ * guarantee made that enrolment load-bearing. A UUID is not a search: nothing
+ * needs enrolling, no keywords need gating, and the read is a plain page of one
+ * storyline's day slots. `attachStorylineToTopic` and its token gate retire
+ * with the flag.
+ *
+ * Returns null for a UUID this database has never held — a stale link, which
+ * the route turns into a 404. A MERGED one resolves to its survivor instead
+ * and serves that: nothing holding a storyline UUID may dangle, which is the
+ * whole reason the loser's row survives as an alias.
+ */
+export async function readStorylineView(
+  deps: TimelineDeps,
+  request: { storylineId: string; limit: number; cursorString?: string },
+): Promise<TimelineReadResult | null> {
+  const now = deps.now();
+  const cursor = request.cursorString ? decodeCursor(request.cursorString) : null;
+  if (request.cursorString && !cursor) {
+    throw new InvalidCursorError(`unusable cursor: ${request.cursorString.slice(0, 40)}`);
+  }
+
+  const resolved = await resolveStoryline(deps.db, request.storylineId);
+  if (resolved === null) return null;
+
+  const stored = await readStorylineTimelinePage(deps.db, {
+    fingerprint: null,
+    storylineId: resolved,
+    ...(cursor ? { cursor } : {}),
+    limit: request.limit,
+    timeZone: deps.config.grouping.timeZone,
+  });
+
+  const first = stored.items[0];
+  return {
+    // No topic: the view is not a search, and inventing a fingerprint for it
+    // would put a keyword-less row in `topics` that nothing could ever hit
+    // again. Coverage is null for the same reason — nothing was fetched FOR
+    // this view; its articles were fetched for the searches that found them.
+    topic: { fingerprint: EMPTY_FINGERPRINT, keywords: [], coverage: null },
+    storylines: first
+      ? [{ id: resolved, label: first.label, from: first.spanFrom, to: first.spanTo }]
+      : [],
+    items: stored.items.map(toStorylineEntry),
+    page: {
+      nextCursor: stored.nextCursor ? encodeCursor(stored.nextCursor) : null,
+      hasMore: stored.hasMore,
+    },
+    meta: {
+      servedFrom: "store",
+      asOf: now.toISOString(),
+      stale: false,
+      degraded: null,
+      // Nothing is being fetched for a storyline view, so it is never
+      // "in_progress": what it shows is what is stored, whole.
+      ingest: { state: "complete", pendingJobs: 0 },
+    },
+  };
+}
+
+/** The all-zero fingerprint: the storyline view has no topic (§6.2). */
+const EMPTY_FINGERPRINT = "0".repeat(64);
+
+/**
+ * How many storylines a search may surface. A strip, not a second timeline —
+ * S8's verdict — and a search whose keywords are a subset of two hundred
+ * profiles has told us nothing worth rendering.
+ */
+const SURFACED_STORYLINE_LIMIT = 8;
+
+/**
+ * A storyline-DAY → the slot the browser renders (ADR-0011).
+ *
+ * Deliberately the same shape and the same choices as `toEntry` above: the lead
+ * group is the slot's most-syndicated, the headline is chosen from it by source
+ * authority among the members that matched this search, and the split the
+ * disclosure renders falls out of group membership. What changes is only which
+ * members are in the slot — one storyline's coverage on ONE day, rather than a
+ * day-bounded storyline's whole membership — and the storyline metadata riding
+ * alongside it.
+ *
+ * A PROVISIONAL storyline gets `storyline: null`: it is invisible as a
+ * storyline, and its slot is the ordinary article slot (ADR-0011's Lifecycle).
+ * That is the whole of what the front end needs to know to render it as it
+ * always did.
+ */
+function toStorylineEntry(slot: StorylineSlot): TimelineEntry {
+  const base = toEntry({
+    id: slot.storylineId,
+    published: slot.published,
+    members: slot.members,
+  });
+  return {
+    ...base,
+    storyline:
+      slot.status === "provisional"
+        ? null
+        : { label: slot.label, from: slot.spanFrom, to: slot.spanTo },
   };
 }
 

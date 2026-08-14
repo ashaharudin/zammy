@@ -36,21 +36,33 @@ export function freshnessTier(windowEnd: Date, now: Date): "hot" | "recent" | "h
  *   3 — the second section renamed `coverage` → `moreCoverage`: the bare word
  *       already names fetched time spans (CONTEXT.md)
  *   4 — entries carry `storylinePhrase` (ADR-0010)
+ *   5 — entries carry `storyline` (UUID slots, label, span) and pages carry
+ *       `storylines`; `storylineId` widens from a bigint to a UUID under
+ *       STORYLINES_V2 (ADR-0011)
+ *
+ * The bump stops a page cached by an older BUILD reaching a client parsing with
+ * the new schema. It cannot stop the two MODELS colliding — both write shape 5,
+ * so a page cached while STORYLINES_V2 was on would be served to a v1 read for
+ * up to the historical tier's 24h after the flag went off. The model therefore
+ * rides in the key too (`pageCacheKey`'s `model`), which is what makes the flag
+ * safe to flip in both directions rather than one.
  */
-const PAGE_SHAPE_VERSION = 4;
+const PAGE_SHAPE_VERSION = 5;
 
-/** page:v<shape>:<fingerprint>:<windowHash>:<cursor>:<limit> (§7.1). */
+/** page:v<shape>:<model>:<fingerprint>:<windowHash>:<cursor>:<limit> (§7.1). */
 export function pageCacheKey(
   fingerprint: string,
   window: { from: Date; to: Date },
   cursor: string | null,
   limit: number,
+  /** Which storyline model produced it — the flag, as a key segment. */
+  model: "v1" | "v2" = "v1",
 ): string {
   const windowHash = createHash("sha256")
     .update(`${window.from.getTime()}-${window.to.getTime()}`)
     .digest("hex")
     .slice(0, 16);
-  return `page:v${PAGE_SHAPE_VERSION}:${fingerprint}:${windowHash}:${cursor ?? "first"}:${limit}`;
+  return `page:v${PAGE_SHAPE_VERSION}:${model}:${fingerprint}:${windowHash}:${cursor ?? "first"}:${limit}`;
 }
 
 export async function readCachedPage<T>(redis: Redis, key: string): Promise<T | null> {

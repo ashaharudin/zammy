@@ -35,6 +35,7 @@ const entry = (id: string, published: string, headlinePublished = published): Ti
   related: [],
   moreCoverage: [],
   storylinePhrase: null,
+  storyline: null,
 });
 
 describe("hasLaterCoverage", () => {
