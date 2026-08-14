@@ -39,6 +39,8 @@ export function freshnessTier(windowEnd: Date, now: Date): "hot" | "recent" | "h
  *   5 — entries carry `storyline` (UUID slots, label, span) and pages carry
  *       `storylines`; `storylineId` widens from a bigint to a UUID under
  *       STORYLINES_V2 (ADR-0011)
+ *   6 — surfaced storylines carry `size`: whole-life article count, rendered
+ *       as the pill's bucket glyph with the exact figure in its title (S8)
  *
  * The bump stops a page cached by an older BUILD reaching a client parsing with
  * the new schema. It cannot stop the two MODELS colliding — both write shape 5,
