@@ -1,21 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import type { TimelinePage } from "@zammy/shared";
 import type { Reference, TopicQuery } from "./api.js";
+import { FilterChipRow, useFilterDefaults } from "./FilterChipRow.js";
 import { MONO } from "./theme.js";
+import { upstreamHealthRecord } from "./upstreamHealth.js";
 
 /**
- * The persistent chrome once a topic is open: prompt + query + the language
- * picker, and underneath a terse meta row that renders the response's
- * freshness honestly (§8.1) — count, coverage, asOf/servedFrom, stale and
- * degraded states. The count line is aria-live so screen readers hear the
- * timeline grow during progressive fill.
+ * The persistent chrome once a topic is open: prompt + query, and underneath a
+ * meta row carrying the response's asOf stamp (§8.1) followed by the topic's
+ * filter chips — location, language, category.
+ *
+ * The chips replaced a flag icon and a servedFrom/degraded/stale readout. The
+ * icon said less than a word does, and the freshness readout was operational
+ * detail standing where the reader's own filters belong; degraded state is
+ * logged now (see upstreamHealth) rather than shown.
  *
  * Ingest progress is deliberately not here: the timeline owns that state and
- * says it in motion (see IngestBeacon/IngestGhosts). A second, textual copy in
- * the chrome duplicated it and pushed servedFrom off the row while it showed.
+ * says it in motion (see IngestBeacon/IngestGhosts).
  *
- * Country and category filters were dropped from the UI (2026-08-10) — the
- * API still accepts them, and shared links carrying them keep working.
+ * Country and category filters, dropped from the UI on 2026-08-10, are back as
+ * chips; shared links carrying them have kept working throughout.
  */
 export function CommandBar({
   topic,
@@ -28,7 +32,7 @@ export function CommandBar({
   /** The newest response — the authority on meta. */
   page: TimelinePage | undefined;
   reference: Reference | undefined;
-  onSearch: (topic: TopicQuery) => void;
+  onSearch: (topic: TopicQuery, options?: { replace?: boolean }) => void;
   onClear: () => void;
 }) {
   const [q, setQ] = useState(topic.q);
@@ -39,14 +43,11 @@ export function CommandBar({
     setQ(topic.q);
   }, [topic]);
 
-  const submit = (language: string | undefined) => {
-    if (!q.trim()) return;
-    // Filters carry over; the storyline seed does not. It is provenance for
-    // one phrase click (ADR-0010), and spreading it into whatever the reader
-    // types next would keep enrolling that slot in unrelated topics.
-    const { storyline: _seed, ...carried } = topic;
-    onSearch({ ...carried, q: q.trim(), language });
-  };
+  useUpstreamHealthLog(page);
+  // The reader's own browser, on a topic whose URL states no filters (§8.1).
+  useFilterDefaults(topic, reference, "browser", (filters) =>
+    onSearch({ ...topic, ...filters }, { replace: true }),
+  );
 
   return (
     <header
@@ -62,7 +63,13 @@ export function CommandBar({
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          submit(topic.language);
+          // Filters carry over; the storyline seed does not. It is provenance
+          // for one phrase click (ADR-0010), and spreading it into whatever
+          // the reader types next would keep enrolling that slot in unrelated
+          // topics. The filter chips below DO keep it: they narrow this same
+          // topic rather than starting another.
+          const { storyline: _seed, ...carried } = topic;
+          if (q.trim()) onSearch({ ...carried, q: q.trim() });
         }}
         style={{
           maxWidth: "var(--page-max)",
@@ -104,43 +111,54 @@ export function CommandBar({
             background: "transparent",
           }}
         />
-        <LanguagePicker
-          value={topic.language}
-          languages={reference?.languages ?? {}}
-          onSelect={(code) => submit(code)}
-        />
       </form>
       <div
         style={{
           maxWidth: "var(--page-max)",
           margin: "0 auto",
           display: "flex",
-          justifyContent: "space-between",
-          alignItems: "baseline",
-          gap: "1rem",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "0.4rem",
           padding: "0 1rem 0.5rem",
           fontFamily: MONO,
           fontSize: "0.75rem",
           color: "var(--fg-faint)",
         }}
       >
-        <span>
-          {page ? <AsOf iso={page.meta.asOf} /> : "searching…"}
-        </span>
-        <span>
-          {page?.meta.degraded && (
-            <span style={{ color: "var(--amber)", marginRight: "0.75rem" }}>
-              degraded: {page.meta.degraded}
-            </span>
-          )}
-          {page?.meta.stale && (
-            <span style={{ color: "var(--amber)", marginRight: "0.75rem" }}>stale</span>
-          )}
-          {page?.meta.servedFrom}
-        </span>
+        <span>{page ? <AsOf iso={page.meta.asOf} /> : "searching…"}</span>
+        <FilterChipRow
+          filters={topic}
+          reference={reference}
+          onChange={(filters) => onSearch({ ...topic, ...filters })}
+        />
       </div>
     </header>
   );
+}
+
+/**
+ * §11's degraded and stale states, logged instead of shown. console is the
+ * transport until the app has a real one; the record is already the shape a
+ * transport would ship, so adopting one is a change of sink, not of caller.
+ */
+function useUpstreamHealthLog(page: TimelinePage | undefined) {
+  const lastLogged = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!page) return;
+    const record = upstreamHealthRecord(page.meta);
+    if (!record) {
+      lastLogged.current = null;
+      return;
+    }
+    // Progressive fill re-renders this bar on every page; one line per distinct
+    // state, not one per response.
+    const key = `${record.degraded}:${record.stale}:${record.servedFrom}`;
+    if (lastLogged.current === key) return;
+    lastLogged.current = key;
+    console.warn("[zammy]", record);
+  }, [page]);
 }
 
 /** The response's asOf freshness stamp: day, date, time, timezone (§8.1). */
@@ -156,163 +174,5 @@ function AsOf({ iso }: { iso: string }) {
         timeZoneName: "short",
       }).format(new Date(iso))}
     </time>
-  );
-}
-
-/**
- * Representative flag per upstream language code. A language is not a country,
- * so these are conventional picks, not statements; unknown codes get 🌐.
- */
-const LANGUAGE_FLAGS: Record<string, string> = {
-  ar: "🇸🇦",
-  zh: "🇨🇳",
-  nl: "🇳🇱",
-  en: "🇬🇧",
-  fi: "🇫🇮",
-  fr: "🇫🇷",
-  de: "🇩🇪",
-  hi: "🇮🇳",
-  it: "🇮🇹",
-  ja: "🇯🇵",
-  ko: "🇰🇷",
-  msa: "🇲🇾",
-  pt: "🇵🇹",
-  ru: "🇷🇺",
-  es: "🇪🇸",
-  vi: "🇻🇳",
-  da: "🇩🇰",
-  cs: "🇨🇿",
-  el: "🇬🇷",
-  hu: "🇭🇺",
-  sr: "🇷🇸",
-  th: "🇹🇭",
-  tr: "🇹🇷",
-};
-
-const ANY_LANGUAGE = "🌐";
-
-function flagFor(code: string | undefined): string {
-  if (!code) return ANY_LANGUAGE;
-  return LANGUAGE_FLAGS[code] ?? ANY_LANGUAGE;
-}
-
-/**
- * Flag-icon trigger with a flag + name listbox. Picking an entry re-runs the
- * search immediately — a filter icon that waits for a second Enter reads as
- * broken. A custom popover rather than a native <select> because the closed
- * control must render as just the flag.
- */
-function LanguagePicker({
-  value,
-  languages,
-  onSelect,
-}: {
-  value: string | undefined;
-  /** Display name → code, from /api/v1/reference. */
-  languages: Record<string, string>;
-  onSelect: (code: string | undefined) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const container = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: MouseEvent) => {
-      if (!container.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("mousedown", onPointerDown);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("mousedown", onPointerDown);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
-
-  const entries: { code: string | undefined; flag: string; label: string }[] = [
-    { code: undefined, flag: ANY_LANGUAGE, label: "any language" },
-    ...Object.entries(languages).map(([name, code]) => ({
-      code,
-      flag: flagFor(code),
-      label: name,
-    })),
-  ];
-
-  return (
-    <div ref={container} style={{ position: "relative" }}>
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label={`Language filter: ${value ?? "any"}`}
-        title="Language"
-        style={{
-          border: "1px solid var(--border)",
-          borderRadius: "999px",
-          background: "var(--chip-bg)",
-          cursor: "pointer",
-          fontSize: "1rem",
-          lineHeight: 1,
-          padding: "0.25rem 0.45rem",
-        }}
-      >
-        {flagFor(value)}
-      </button>
-      {open && (
-        <ul
-          role="listbox"
-          aria-label="Language"
-          style={{
-            position: "absolute",
-            right: 0,
-            top: "calc(100% + 0.35rem)",
-            margin: 0,
-            padding: "0.25rem",
-            listStyle: "none",
-            background: "var(--surface)",
-            border: "1px solid var(--border)",
-            borderRadius: "8px",
-            boxShadow: "var(--shadow)",
-            maxHeight: "60vh",
-            overflowY: "auto",
-            minWidth: "12rem",
-            zIndex: 20,
-          }}
-        >
-          {entries.map((entry) => (
-            <li key={entry.code ?? "*"}>
-              <button
-                type="button"
-                role="option"
-                aria-selected={entry.code === value}
-                onClick={() => {
-                  setOpen(false);
-                  onSelect(entry.code);
-                }}
-                style={{
-                  display: "flex",
-                  gap: "0.5rem",
-                  alignItems: "center",
-                  width: "100%",
-                  border: "none",
-                  background: entry.code === value ? "var(--chip-bg)" : "none",
-                  borderRadius: "6px",
-                  cursor: "pointer",
-                  padding: "0.3rem 0.5rem",
-                  fontSize: "0.85rem",
-                  textAlign: "left",
-                }}
-              >
-                <span aria-hidden="true">{entry.flag}</span>
-                {entry.label}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
   );
 }

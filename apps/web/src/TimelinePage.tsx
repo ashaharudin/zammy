@@ -25,7 +25,7 @@ export function TimelinePage({
   onClear,
 }: {
   topic: TopicQuery;
-  onSearch: (topic: TopicQuery) => void;
+  onSearch: (topic: TopicQuery, options?: { replace?: boolean }) => void;
   onClear: () => void;
 }) {
   const timeline = useTimeline(topic);
