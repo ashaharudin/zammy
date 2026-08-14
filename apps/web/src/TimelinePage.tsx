@@ -66,14 +66,6 @@ export function TimelinePage({
 
         {latest && (
           <Rail
-            // The reader's filters travel with the phrase — a chip opened from
-            // a Spanish timeline must not silently switch them to English —
-            // but the storyline they came from does not: it is provenance for
-            // THIS click, and carrying it into the next search would keep
-            // seeding a topic the reader has since left (ADR-0010).
-            onOpenStoryline={(phrase, storylineId) =>
-              onSearch({ ...topic, q: phrase, storyline: storylineId })
-            }
             // ADR-0011: the label's words are never executed as a search —
             // labels are non-unique, so only the UUID identifies the story.
             // The reader's filters do NOT travel: the view is not a search,
@@ -167,7 +159,6 @@ function Rail({
   items,
   newCount,
   onReveal,
-  onOpenStoryline,
   onOpenStorylineView,
   qualifiers,
   ingesting,
@@ -181,7 +172,6 @@ function Rail({
   items: TimelineEntry[];
   newCount: number;
   onReveal: () => void;
-  onOpenStoryline: (phrase: string, storylineId: string) => void;
   onOpenStorylineView: (storylineId: string) => void;
   /** storyline id → the date that separates it from its namesakes on screen. */
   qualifiers: Map<string, string>;
@@ -275,7 +265,6 @@ function Rail({
                   // the rail and React would reuse one card for several days.
                   key={`${entry.storylineId}:${entry.published}`}
                   entry={entry}
-                  onOpenStoryline={onOpenStoryline}
                   onOpenStorylineView={onOpenStorylineView}
                   qualifiers={qualifiers}
                 />
@@ -357,12 +346,10 @@ function LoadOlder({ loading, onLoadOlder }: { loading: boolean; onLoadOlder: ()
  */
 function GroupCard({
   entry,
-  onOpenStoryline,
   onOpenStorylineView,
   qualifiers,
 }: {
   entry: TimelineEntry;
-  onOpenStoryline: (phrase: string, storylineId: string) => void;
   onOpenStorylineView: (storylineId: string) => void;
   /** storyline id → the date that separates it from its namesakes on screen. */
   qualifiers: Map<string, string>;
@@ -380,25 +367,18 @@ function GroupCard({
       head={
         <div style={{ maxWidth: "640px" }}>
           {/*
-            The gutter holds ONE thing. Under ADR-0011 that is the storyline's
-            label, on every slot of a labelled storyline — universal, where the
-            phrase appeared only on slots with wider coverage, because a label
-            is an identity rather than a lucky bigram. The phrase remains the
-            fallback for as long as the old model can be read (S9 removes it).
+            The gutter holds the storyline's label, on every slot of a labelled
+            storyline — universal, where ADR-0010's phrase appeared only on
+            slots with wider coverage, because a label is an identity rather
+            than a lucky bigram. An unlabelled storyline leaves the gutter
+            empty, which is what "invisible as a storyline" looks like.
           */}
-          {entry.storyline?.label ? (
+          {entry.storyline?.label && (
             <StorylineLabel
               label={entry.storyline.label}
               qualifier={qualifiers.get(entry.storylineId) ?? null}
               onOpen={() => onOpenStorylineView(entry.storylineId)}
             />
-          ) : (
-            entry.storylinePhrase && (
-              <StorylinePhrase
-                phrase={entry.storylinePhrase}
-                onOpen={() => onOpenStoryline(entry.storylinePhrase!, entry.storylineId)}
-              />
-            )
           )}
           <ArticleCard
             article={entry.article}
@@ -503,53 +483,6 @@ function StorylineLabel({
         // ignore it without effort.
         <span style={{ display: "block", opacity: 0.65 }}>{qualifier}</span>
       )}
-    </button>
-  );
-}
-
-/**
- * The storyline phrase, in the gutter on the far side of the spine: two words
- * the whole slot shares, and a search for the story they name (ADR-0010).
- *
- * It sits LEFT of the rail on purpose. The right-hand column is the reader's
- * present — this headline, its copies, its coverage — while the phrase is a
- * way OUT of it, into the same story wherever else it was reported. Putting it
- * across the spine says that in layout rather than in a label, and it keeps
- * the card's own row of controls ("more", "N related") uncrowded.
- *
- * Right-aligned, so the phrases of consecutive slots line up against the rail
- * however long each one is, and wrapping rather than truncating: a bigram
- * breaks into two lines on a narrow screen, where truncation would leave a
- * clickable "poli…" that names nothing.
- */
-function StorylinePhrase({ phrase, onOpen }: { phrase: string; onOpen: () => void }) {
-  return (
-    <button
-      onClick={onOpen}
-      // The visible text is two bare words; what it DOES is a search, and a
-      // screen reader gets no layout to infer that from.
-      aria-label={`Search for ${phrase}`}
-      style={{
-        position: "absolute",
-        left: `calc(-1 * ${RAIL_INSET})`,
-        width: `calc(${RAIL_GUTTER} - ${GUTTER_GAP})`,
-        top: "50%",
-        transform: "translateY(-50%)",
-        border: "none",
-        background: "none",
-        padding: 0,
-        textAlign: "right",
-        color: "var(--fg-faint)",
-        fontFamily: MONO,
-        fontSize: "0.7rem",
-        lineHeight: 1.25,
-        cursor: "pointer",
-        // A phrase long enough to overflow its gutter breaks mid-word rather
-        // than painting over the spine.
-        overflowWrap: "anywhere",
-      }}
-    >
-      {phrase}
     </button>
   );
 }

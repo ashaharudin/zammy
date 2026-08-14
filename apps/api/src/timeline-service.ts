@@ -14,21 +14,18 @@ import {
   type CurrentsClient,
 } from "@zammy/currents-client";
 import {
-  attachStorylineToTopic,
   findSurfacedStorylines,
   ingestSightings,
   readCoverage,
   readStorylineArticleCount,
   readStorylineTimelinePage,
-  readTimelinePage,
+  type StorylineSlotMember,
   resolveStoryline,
   readTopic,
   recordCoverage,
   upsertTopic,
   type Database,
-  type SlotMember,
   type StorylineSlot,
-  type TimelineSlot,
 } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
 import { sliceSpan, subtractCoverage, type Span } from "./coverage-gaps.js";
@@ -50,7 +47,6 @@ import {
 } from "./grouping-service.js";
 import { chooseRepresentative } from "./source-authority.js";
 import { singular } from "./grouping.js";
-import { storylinePhrase } from "./storyline-phrase.js";
 
 /**
  * The query planner (ARCHITECTURE 6.3) — how a page gets filled, or ideally
@@ -81,13 +77,6 @@ export interface TimelineDeps {
     /** §14.3: write-time article grouping (and its storyline layer, ADR-0009),
      * and the day both draw candidates from. */
     grouping: GroupingDeps["config"];
-    /**
-     * ADR-0011's read path: the timeline pages over `storyline_days` instead of
-     * the denormalized columns on `articles`. Off until the backfill has run
-     * and been verified — the two models are written independently, so the flag
-     * only ever selects which one is READ.
-     */
-    storylinesV2: boolean;
   };
   now: () => Date;
   /**
@@ -142,13 +131,15 @@ export class InvalidCursorError extends Error {
  * well-formed for the other model. The reader loses their place and starts the
  * page again, which is the whole cost.
  */
-function takeCursor(
-  cursorString: string | undefined,
-  generation: "v1" | "v2",
-): Cursor | null {
+function takeCursor(cursorString: string | undefined): Cursor | null {
   if (cursorString === undefined) return null;
   const cursor = decodeCursor(cursorString);
-  if (!cursor || cursorGeneration(cursor) !== generation) {
+  // Only v2 cursors exist now. The generation check survives the cutover on
+  // purpose: a cursor minted before it carries a bigint slot id, and feeding
+  // that to a UUID comparison is a 500 rather than an empty page. A reader
+  // holding one gets a 400 and a fresh first page, which is the right answer —
+  // the slots it named are not there any more.
+  if (!cursor || cursorGeneration(cursor) !== "v2") {
     throw new InvalidCursorError(`unusable cursor: ${cursorString.slice(0, 40)}`);
   }
   return cursor;
@@ -168,9 +159,6 @@ export async function readTimeline(
 export interface ReadRequest {
   limit: number;
   cursorString?: string;
-  /** ADR-0010: a storyline the reader arrived from, whose matching articles
-   * this topic is seeded with before the page is planned. */
-  seedStorylineId?: string;
 }
 
 async function planAndRead(
@@ -180,65 +168,37 @@ async function planAndRead(
 ): Promise<TimelineReadResult> {
   const now = deps.now();
 
-  const cursor = takeCursor(
-    request.cursorString,
-    deps.config.storylinesV2 ? "v2" : "v1",
-  );
-
-  // The topic exists (and counts a hit) from the first request onward, so
-  // deferred jobs enqueued below can always recover the search parameters.
-  // Unconditional, and ahead of the cache, only when a seed has to land: the
-  // attach has a foreign key into `topics`, so the row must exist first.
-  let topicUpserted = false;
-  const upsert = async () => {
-    if (topicUpserted) return;
-    topicUpserted = true;
-    await upsertTopic(deps.db, {
-      fingerprint: query.fingerprint,
-      keywords: query.keywords,
-      language: query.language,
-      country: query.country,
-      category: query.category,
-    });
-  };
+  const cursor = takeCursor(request.cursorString);
 
   // §6.3 step 1 — page cache. A hit costs nothing and touches nothing.
+  //
+  // Consulted before anything is written, which it could not be while ADR-0010's
+  // seed existed: a seeded arrival had to enroll articles first, or it would be
+  // served a page cached a moment before its own enrolment. The storyline view
+  // replaced the seed with a UUID (ADR-0011), nothing is enrolled by reading,
+  // and the cache is back to being the first step.
   const cacheKey = pageCacheKey(
     query.fingerprint,
     query.window,
     request.cursorString ?? null,
     request.limit,
-    deps.config.storylinesV2 ? "v2" : "v1",
   );
 
-  // ADR-0010 — a seeded arrival, before the cache is consulted. A page cached
-  // a moment ago cannot contain articles this request is about to enroll, and
-  // serving it would break the one promise the phrase chip makes: that the
-  // slot it came from is in the results. Seeding that inserts NOTHING (the
-  // ordinary case once the topic knows the storyline) leaves the cache path
-  // exactly as it was.
-  let seeded = 0;
-  if (request.seedStorylineId !== undefined) {
-    await upsert();
-    seeded = await attachStorylineToTopic(deps.db, {
-      fingerprint: query.fingerprint,
-      storylineId: request.seedStorylineId,
-      // The keywords as `story_tokens` would have them: the phrase is derived
-      // under the same fold, so a storyline's own articles always pass.
-      tokens: query.keywords.map(singular),
-      language: query.language,
-    });
+  const cached = await readCachedPage<TimelineReadResult>(deps.redis, cacheKey);
+  deps.metrics?.pageCacheRead(freshnessTier(query.window.to, now), cached ? "hit" : "miss");
+  if (cached) {
+    return { ...cached, meta: { ...cached.meta, servedFrom: "cache" } };
   }
 
-  if (seeded === 0) {
-    const cached = await readCachedPage<TimelineReadResult>(deps.redis, cacheKey);
-    deps.metrics?.pageCacheRead(freshnessTier(query.window.to, now), cached ? "hit" : "miss");
-    if (cached) {
-      return { ...cached, meta: { ...cached.meta, servedFrom: "cache" } };
-    }
-  }
-
-  await upsert();
+  // The topic exists (and counts a hit) from the first request onward, so
+  // deferred jobs enqueued below can always recover the search parameters.
+  await upsertTopic(deps.db, {
+    fingerprint: query.fingerprint,
+    keywords: query.keywords,
+    language: query.language,
+    country: query.country,
+    category: query.category,
+  });
 
   // §6.3 steps 2–3 — is the window covered? If not, where exactly isn't it?
   // Gaps are pre-sliced to the per-call range ceiling (7 days, observed
@@ -333,37 +293,25 @@ async function planAndRead(
 
   // §6.3 step 6 — ALWAYS answer from Postgres, never from the raw upstream
   // response, which is neither deduplicated nor ordered across sliced calls.
-  // §6.3 step 6 reads from the model the flag selects. Everything above this
-  // line — coverage, planning, quota, the fill — is about what is STORED and is
-  // identical either way; only the shape of a slot differs (ADR-0011).
-  const v2 = deps.config.storylinesV2;
-  const stored = v2
-    ? await readStorylineTimelinePage(deps.db, {
-        fingerprint: query.fingerprint,
-        from: query.window.from,
-        to: query.window.to,
-        ...(cursor ? { cursor } : {}),
-        limit: request.limit,
-        timeZone: deps.config.grouping.timeZone,
-      })
-    : await readTimelinePage(deps.db, {
-        fingerprint: query.fingerprint,
-        from: query.window.from,
-        to: query.window.to,
-        ...(cursor ? { cursor } : {}),
-        limit: request.limit,
-      });
+  // §6.3 step 6 — ALWAYS answer from Postgres, never from the raw upstream
+  // response, which is neither deduplicated nor ordered across sliced calls.
+  const stored = await readStorylineTimelinePage(deps.db, {
+    fingerprint: query.fingerprint,
+    from: query.window.from,
+    to: query.window.to,
+    ...(cursor ? { cursor } : {}),
+    limit: request.limit,
+    timeZone: deps.config.grouping.timeZone,
+  });
 
   // Storylines this SEARCH surfaces, beside the results rather than narrowing
   // them (ADR-0011). Keywords are folded the way `story_tokens` and therefore
   // `profile_tokens` were, or a search for "storms" would miss a profile that
   // says "storm".
-  const surfaced = v2
-    ? await findSurfacedStorylines(deps.db, {
-        tokens: query.keywords.map(singular),
-        limit: SURFACED_STORYLINE_LIMIT,
-      })
-    : [];
+  const surfaced = await findSurfacedStorylines(deps.db, {
+    tokens: query.keywords.map(singular),
+    limit: SURFACED_STORYLINE_LIMIT,
+  });
 
   const pendingJobs = await deps.queue.pendingCount(query.fingerprint);
   const state: "complete" | "in_progress" =
@@ -382,9 +330,7 @@ async function planAndRead(
           ? { from: first.from.toISOString(), to: last.to.toISOString() }
           : null,
     },
-    items: stored.items.map((slot) =>
-      "dayKey" in slot ? toStorylineEntry(slot) : toEntry(slot),
-    ),
+    items: stored.items.map(toStorylineEntry),
     storylines: surfaced.map((storyline) => ({
       id: storyline.id,
       label: storyline.label,
@@ -438,8 +384,12 @@ async function planAndRead(
  * The slot's position is not chosen here and never changes with the
  * headline: `published` is the storyline's (§7.3).
  */
-function toEntry(slot: TimelineSlot): TimelineEntry {
-  const byGroup = new Map<string, SlotMember[]>();
+function toEntry(slot: {
+  id: string;
+  published: string;
+  members: StorylineSlotMember[];
+}): TimelineEntry {
+  const byGroup = new Map<string, StorylineSlotMember[]>();
   for (const member of slot.members) {
     const list = byGroup.get(member.groupId);
     if (list) list.push(member);
@@ -448,7 +398,7 @@ function toEntry(slot: TimelineSlot): TimelineEntry {
 
   // Largest group leads; ties break earliest-published then lowest id, so a
   // replayed read reaches the same slot (§7.4's replay discipline, again).
-  let lead: { groupId: string; members: SlotMember[] } | null = null;
+  let lead: { groupId: string; members: StorylineSlotMember[] } | null = null;
   for (const [groupId, members] of byGroup) {
     if (!lead || leadBeats({ groupId, members }, lead)) lead = { groupId, members };
   }
@@ -471,13 +421,6 @@ function toEntry(slot: TimelineSlot): TimelineEntry {
       .map((member) => member.article)
       .filter((member) => member.id !== article.id),
     moreCoverage,
-    // Only where the day produced coverage AROUND the story (ADR-0010): a
-    // slot of one story, however many outlets ran it, is an article rather
-    // than a topic, and a phrase beside every slot would be furniture.
-    // Derived over the headline and the wider coverage — NOT over `related`,
-    // whose near-identical copies would let a phrase qualify on syndication
-    // alone and then miss the angle pieces the search has to reach.
-    storylinePhrase: storylinePhrase(article, moreCoverage),
     // The old model has no storyline to describe: its slots are day-bounded
     // storylines with no identity a reader could open. `toStorylineEntry` fills
     // this in when the flag is on.
@@ -494,8 +437,8 @@ function toEntry(slot: TimelineSlot): TimelineEntry {
  * into a topic because the phrase it came from WAS a search, and the superset
  * guarantee made that enrolment load-bearing. A UUID is not a search: nothing
  * needs enrolling, no keywords need gating, and the read is a plain page of one
- * storyline's day slots. `attachStorylineToTopic` and its token gate retire
- * with the flag.
+ * storyline's day slots. `attachStorylineToTopic` and its token gate went with
+ * the cutover.
  *
  * Returns null for a UUID this database has never held — a stale link, which
  * the route turns into a 404. A MERGED one resolves to its survivor instead
@@ -507,9 +450,7 @@ export async function readStorylineView(
   request: { storylineId: string; limit: number; cursorString?: string },
 ): Promise<TimelineReadResult | null> {
   const now = deps.now();
-  // The view pages `storyline_days` whatever the flag says, so its cursors are
-  // v2 by construction — a v1 one reaching it is a cursor from somewhere else.
-  const cursor = takeCursor(request.cursorString, "v2");
+  const cursor = takeCursor(request.cursorString);
 
   const resolved = await resolveStoryline(deps.db, request.storylineId);
   if (resolved === null) return null;
@@ -610,8 +551,8 @@ function toStorylineEntry(slot: StorylineSlot): TimelineEntry {
 }
 
 function leadBeats(
-  candidate: { groupId: string; members: SlotMember[] },
-  incumbent: { groupId: string; members: SlotMember[] },
+  candidate: { groupId: string; members: StorylineSlotMember[] },
+  incumbent: { groupId: string; members: StorylineSlotMember[] },
 ): boolean {
   if (candidate.members.length !== incumbent.members.length) {
     return candidate.members.length > incumbent.members.length;
@@ -622,7 +563,7 @@ function leadBeats(
   return BigInt(candidate.groupId) < BigInt(incumbent.groupId);
 }
 
-function earliest(members: readonly SlotMember[]): number {
+function earliest(members: readonly StorylineSlotMember[]): number {
   let min = Number.POSITIVE_INFINITY;
   for (const member of members) {
     const t = Date.parse(member.article.published);

@@ -6,7 +6,7 @@ export const DEFAULT_PAGE_LIMIT = 25;
 export const MAX_PAGE_LIMIT = 100;
 
 /** Query parameters accepted by `GET /api/v1/timeline` (ARCHITECTURE 6.1). */
-/** A storyline UUID, which is what `?storyline=` means under STORYLINES_V2. */
+/** A storyline UUID: the only thing `?storyline=` accepts (ADR-0011). */
 export const STORYLINE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const TimelineQuery = z.object({
@@ -26,16 +26,16 @@ export const TimelineQuery = z.object({
   /** Opaque keyset cursor from a previous response. */
   cursor: z.string().max(512).optional(),
   /**
-   * A storyline whose articles this topic should be SEEDED with (ADR-0010) —
-   * what a `storylinePhrase` chip sends when it opens the story it names.
+   * The STORYLINE VIEW's subject: a UUID, and the timeline is filtered to it
+   * (ADR-0011). It carries no keywords — the view's search box is empty — so
+   * it is a sibling of `q` rather than a filter, and typing replaces it.
    *
-   * Deliberately absent from the fingerprint: it says where the reader came
-   * from, never what they searched for, so the same phrase reached from a
-   * chip and from the search box is one topic. It admits only articles that
-   * carry every keyword, so it can add provenance to a topic but never
-   * membership the keywords do not support.
+   * It once also accepted a bigint, ADR-0010's seed, which enrolled a
+   * day-bounded storyline's articles into the topic. That model is gone
+   * (migration 0012) and so is the seed; anything that is not a UUID is now
+   * rejected rather than quietly meaning something else.
    */
-  storyline: z.string().trim().min(1).max(64).optional(),
+  storyline: z.string().trim().regex(STORYLINE_UUID, "must be a storyline UUID").optional(),
   /**
    * A CEILING, not a promise. One upstream call is 20 raw sightings, which after
    * collapsing can be as few as 6 articles — so a short page is normal. Distinguish
@@ -51,12 +51,10 @@ export type TimelineQuery = z.infer<typeof TimelineQuery>;
 
 /**
  * Is this the STORYLINE VIEW — the timeline filtered to one storyline by UUID
- * (ADR-0011) — rather than the ADR-0010 bigint seed it replaces?
+ * (ADR-0011)?
  *
- * The two share a parameter name deliberately: the seed retires with the flag
- * flip, and until then the shape of the value is what says which one a caller
- * meant. A UUID cannot be a v1 hub group id, so there is no ambiguity to
- * resolve.
+ * The schema now admits nothing else in `storyline`, so this is a presence
+ * check with a shape check kept for callers that build a query by hand.
  */
 export function isStorylineView(query: { storyline?: string | undefined }): boolean {
   return query.storyline !== undefined && STORYLINE_UUID.test(query.storyline);
@@ -172,10 +170,9 @@ export type SurfacedStoryline = z.infer<typeof SurfacedStoryline>;
 
 export const TimelineEntry = z.object({
   /**
-   * The slot's identity and the id half of this page's cursor: a hub group's
-   * bigint under the old model, a storyline UUID under STORYLINES_V2. NOT
-   * unique per slot in v2 — a storyline appears once per day it has coverage,
-   * so a renderer keying on this alone would collide across days.
+   * The slot's identity and the id half of this page's cursor: a storyline
+   * UUID. NOT unique per slot — a storyline appears once per day it has
+   * coverage — so a renderer keying on this alone would collide across days.
    */
   storylineId: z.string().min(1),
   /**
@@ -203,16 +200,6 @@ export const TimelineEntry = z.object({
    * the fetched time spans), and one word with two meanings is the confusion
    * the language doc exists to prevent. */
   moreCoverage: z.array(Article),
-  /**
-   * Two words the whole slot shares, offered as a search for the story itself
-   * (ADR-0010). Null for a slot with no `moreCoverage` — one article is not a
-   * story with a name yet — and null when the coverage shares no two adjacent
-   * words the headline also uses.
-   *
-   * Both words appear in every article the slot shows, which is what makes
-   * the search it opens a superset of this slot rather than a guess.
-   */
-  storylinePhrase: z.string().nullable(),
   /** Non-null exactly when this slot's storyline has been promoted. */
   storyline: StorylineRef.nullable(),
 });

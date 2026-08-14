@@ -35,11 +35,38 @@ const WINDOW = {
 };
 const TZ = { timeZone: "UTC" };
 
+/** The shipped grouping config with the linker disabled. */
+function linkerOff(_now: Date): TestHarness["deps"]["config"]["grouping"] {
+  return {
+    enabled: true,
+    threshold: 0.5,
+    timeZone: "UTC",
+    linker: {
+      enabled: false,
+      rules: {
+        anchorMaxShare: 0.002,
+        anchorDfFloor: 10,
+        massThreshold: 20,
+        dormancyDays: 90,
+        dormantStrictness: 1.5,
+      },
+      mergeBridges: 2,
+      storyDf: { windowDays: 14, timeZone: "UTC" },
+      timeZone: "UTC",
+    },
+  };
+}
+
 let harness: TestHarness;
 let db: TestHarness["deps"]["db"];
 
 beforeAll(async () => {
-  harness = await createTestHarness({ storylinesV2: true }, NOW);
+  // The LINKER off: this suite builds storyline membership by hand, because
+  // what is under test is the READ, and a membership arranged deliberately is
+  // one whose expected page can be written down. With the linker on it would
+  // also seed its own provisional storyline per group, and every slot would
+  // arrive twice — once from each.
+  harness = await createTestHarness({ grouping: linkerOff(NOW) }, NOW);
   db = harness.deps.db;
 });
 
@@ -514,26 +541,19 @@ describe("surfacing storylines beside a search", () => {
   });
 });
 
-describe("the flag", () => {
-  it("serves the old model's slots when it is off", async () => {
-    const off = await createTestHarness({ storylinesV2: false }, NOW);
-    try {
-      const fingerprint = randomBytes(32).toString("hex");
-      await upsertTopic(off.deps.db, { fingerprint, keywords: ["storm"], language: "en" });
-      const ingested = await ingestSightings(off.deps.db, {
-        fingerprint,
-        sightings: [
-          sighting({ domain: "a.example", title: "Fausto nears Hawaii", published: MONDAY }),
-        ],
-      });
-      await groupCreatedArticles(
-        { db: off.deps.db, config: off.deps.config.grouping },
-        ingested.createdArticles,
-      );
-      await recordCoverage(off.deps.db, fingerprint, WINDOW);
+describe("after the cutover", () => {
+  it("refuses a cursor minted before it, rather than casting a bigint to a UUID", async () => {
+    // A reader mid-scroll across the deploy holds a cursor whose id half is a
+    // hub group's bigint. The slots it named are gone; what must not happen is
+    // that id reaching a UUID comparison. They get a 400 and a fresh first
+    // page, which is the honest answer.
+    const fingerprint = randomBytes(32).toString("hex");
+    await upsertTopic(db, { fingerprint, keywords: ["storm"], language: "en" });
+    await recordCoverage(db, fingerprint, WINDOW);
 
-      const result = await readTimeline(
-        off.deps,
+    await expect(
+      readTimeline(
+        harness.deps,
         {
           fingerprint,
           keywords: ["storm"],
@@ -542,53 +562,11 @@ describe("the flag", () => {
           category: null,
           window: { ...WINDOW },
         },
-        { limit: 25 },
-      );
-
-      // The old model has no storyline rows at all, and still serves: its
-      // slots come from the denormalized columns, which S9 drops and not
-      // before.
-      expect(result.items).toHaveLength(1);
-      expect(result.items[0]!.storyline).toBeNull();
-      expect(result.storylines).toEqual([]);
-      expect(/^\d+$/.test(result.items[0]!.storylineId)).toBe(true);
-    } finally {
-      await off.teardown();
-    }
-  });
-
-  it("refuses a v2 cursor when it goes back off, rather than casting a UUID to a bigint", async () => {
-    // The other direction, and the one a rollback produces: the reader's cursor
-    // holds a storyline UUID and the old keyset compares it against a bigint.
-    // A flag flip either way costs a reader their place, never a 500.
-    const off = await createTestHarness({ storylinesV2: false }, NOW);
-    try {
-      const fingerprint = randomBytes(32).toString("hex");
-      await upsertTopic(off.deps.db, { fingerprint, keywords: ["storm"], language: "en" });
-      await recordCoverage(off.deps.db, fingerprint, WINDOW);
-
-      await expect(
-        readTimeline(
-          off.deps,
-          {
-            fingerprint,
-            keywords: ["storm"],
-            language: "en",
-            country: null,
-            category: null,
-            window: { ...WINDOW },
-          },
-          {
-            limit: 5,
-            cursorString: encodeCursor({
-              published: MONDAY,
-              articleId: "00000000-0000-4000-8000-000000000001",
-            }),
-          },
-        ),
-      ).rejects.toThrow(/unusable cursor/);
-    } finally {
-      await off.teardown();
-    }
+        {
+          limit: 5,
+          cursorString: encodeCursor({ published: MONDAY, articleId: "123456" }),
+        },
+      ),
+    ).rejects.toThrow(/unusable cursor/);
   });
 });

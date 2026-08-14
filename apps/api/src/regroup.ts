@@ -12,7 +12,6 @@ import { zonedDayBounds, zonedDayKey } from "./app-day.js";
 import { groupArticle, type GroupingDeps } from "./grouping-service.js";
 import { headlineFigures, headlineTokens, rankedMatches, TOKENIZER_VERSION } from "./grouping.js";
 import { storyTokens } from "./storyline.js";
-import { rebuildDayStorylines } from "./storyline-service.js";
 
 /**
  * Bring stored grouping state up to the current rules (ADR-0005, ADR-0009).
@@ -30,13 +29,19 @@ import { rebuildDayStorylines } from "./storyline-service.js";
  *     proves the split should not exist. This is what heals splits that
  *     locked in before merging existed, which pass 2 cannot touch (its
  *     subjects are singletons; these are not);
- *  4. **rebuild storylines** per day and language, biggest-group-first — the
- *     canonical clustering that live attachment order-dependence heals into.
+ * Storylines are NOT rebuilt here, and that is the cutover's doing: the
+ * day-clustered pass this used to run had a canonical answer it could
+ * recompute from one day's groups, and ADR-0011's linker does not — it is
+ * order-dependent over the whole archive, so its canonical answer is a
+ * chronological replay. `pnpm backfill:storylines` is that replay. What this
+ * command still owes the storyline layer is the group layer it reads: passes
+ * 1–3 change which groups exist, and the backfill is what makes storylines
+ * agree with them again.
  *
- * Passes 2–4 move rows under live cursors, which is why this is an operator
+ * Passes 2–3 move rows under live cursors, which is why this is an operator
  * command over a bounded window rather than a background chore — the blast
  * radius is chosen deliberately, once, by someone who knows what they are
- * re-deriving (ADR-0005's posture, unchanged by the new passes).
+ * re-deriving (ADR-0005's posture, unchanged).
  */
 
 export interface RegroupOptions {
@@ -58,8 +63,6 @@ export interface RegroupResult {
   regrouped: number;
   /** Groups merged away on bridge evidence (ADR-0009). */
   merged: number;
-  /** Groups whose storyline changed in the rebuild (ADR-0009). */
-  reclustered: number;
 }
 
 /** Same bound, same reasoning as the ingest path's candidate read. */
@@ -78,7 +81,6 @@ export async function regroup(
     retokenized: 0,
     regrouped: 0,
     merged: 0,
-    reclustered: 0,
   };
 
   for (;;) {
@@ -126,28 +128,6 @@ export async function regroup(
   // membership is re-read per article because earlier merges change it.
   for (const article of window) {
     result.merged += await mergeBridges(deps, article);
-  }
-
-  // Pass 4 — canonical storyline clustering, per day-language bucket.
-  const buckets = new Map<string, { day: string; language: string | null }>();
-  for (const article of window) {
-    const day = zonedDayKey(article.published, deps.config.timeZone);
-    buckets.set(`${day}|${article.language ?? "∅"}`, { day, language: article.language });
-  }
-  for (const bucket of buckets.values()) {
-    const bounds = zonedDayBounds(bucket.day, deps.config.timeZone);
-    result.reclustered += await rebuildDayStorylines(
-      {
-        db: deps.db,
-        config: {
-          enabled: deps.config.enabled && deps.config.storyline.enabled,
-          rules: deps.config.storyline,
-          timeZone: deps.config.timeZone,
-        },
-        ...(deps.log ? { log: deps.log } : {}),
-      },
-      { from: bounds.from, to: bounds.to, language: bucket.language },
-    );
   }
 
   return result;
@@ -217,7 +197,11 @@ async function mergeBridges(
 
   for (const loser of losers) {
     if (merged >= 10) break;
-    const outcome = await mergeGroups(deps.db, { winnerGroupId: winner, loserGroupId: loser });
+    const outcome = await mergeGroups(deps.db, {
+      winnerGroupId: winner,
+      loserGroupId: loser,
+      timeZone: deps.config.timeZone,
+    });
     if (outcome.merged) merged += 1;
   }
   return merged;

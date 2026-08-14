@@ -179,13 +179,28 @@ describe("grouping, end to end", () => {
   it("is switchable off, and then every article is its own slot", async () => {
     // §14.3 left "whether to build it at all" open. Shipping it with a way
     // back means the answer can still be no in production, without a
-    // migration: the rows are untouched either way.
+    // migration: the rows are untouched either way, and every article pages as
+    // its own storyline-of-one.
     const query = await seed({
       grouping: {
         enabled: false,
         threshold: 0.5,
         timeZone: "UTC",
-        storyline: { enabled: true, anchorMaxShare: 0.05, massThreshold: 8 },
+        // Linking still runs: it is what births the storyline every slot is,
+        // and turning MATCHING off must not empty the timeline (migration 0012).
+        linker: {
+          enabled: true,
+          rules: {
+            anchorMaxShare: 0.002,
+            anchorDfFloor: 10,
+            massThreshold: 20,
+            dormancyDays: 90,
+            dormantStrictness: 1.5,
+          },
+          mergeBridges: 2,
+          storyDf: { windowDays: 14, timeZone: "UTC" },
+          timeZone: "UTC",
+        },
       },
     });
 
@@ -319,112 +334,6 @@ describe("two poles of one story, healed by a bridge (ADR-0009)", () => {
   });
 });
 
-describe("a day's coverage clusters into one storyline slot (ADR-0009)", () => {
-  /**
-   * The measured defaults assume a real day's corpus (hundreds of articles);
-   * a test database holds a dozen, where day-relative rarity prices every
-   * shared token near zero. The rules are config for exactly this reason —
-   * the MECHANISM under test is attachment and the related/coverage split,
-   * not the production thresholds, which ADR-0009 pins from live measurement.
-   */
-  const STORYLINE_RULES = { enabled: true, anchorMaxShare: 0.5, massThreshold: 2 };
-
-  it("attaches an angle piece that names the story only in its description", async () => {
-    harness = await createTestHarness(
-      {
-        grouping: { enabled: true, threshold: 0.5, timeZone: "UTC", storyline: STORYLINE_RULES },
-      },
-      NOW,
-    );
-    const fingerprint = randomBytes(32).toString("hex");
-    await upsertTopic(harness.deps.db, { fingerprint, keywords: ["bridge"], language: "en" });
-
-    const ingestOne = async (s: Sighting) => {
-      const ingested = await ingestSightings(harness.deps.db, { fingerprint, sightings: [s] });
-      await groupCreatedArticles(
-        { db: harness.deps.db, config: harness.deps.config.grouping },
-        ingested.createdArticles,
-      );
-    };
-
-    // Ten unrelated fillers make the day corpus big enough for rarity to
-    // mean something, the same reason the pure tests pad their corpora.
-    // Mutually distinct wording — two fillers sharing a token pair would
-    // group, and the tokenizer drops digits, so numbered variants of one
-    // sentence would all collapse into a single slot.
-    const fillers = [
-      "Volcano erupts near coastal village",
-      "Chess prodigy wins continental crown",
-      "Rare orchid blooms in botanical garden",
-      "Ferry operators trim winter schedule",
-      "Museum unveils dinosaur exhibit",
-      "Startup launches solar backpack",
-      "Poet laureate publishes memoir",
-      "Vineyard reports record harvest",
-      "Zoo welcomes panda cubs",
-      "Marathon organisers reroute finish",
-    ];
-    for (const [i, title] of fillers.entries()) {
-      await ingestOne(
-        sighting({
-          domain: `filler${i}.example`,
-          title,
-          published: `2026-08-11T07:${String(10 + i)}:00.000Z`,
-          path: `/filler-${i}`,
-        }),
-      );
-    }
-
-    // The syndicated core: three outlets, one wording family → one group.
-    for (const [i, domain] of ["wireone.example", "wiretwo.example", "bbc.co.uk"].entries()) {
-      await ingestOne({
-        ...sighting({
-          domain,
-          title: "Champlain bridge closure strands commuters",
-          published: `2026-08-11T09:0${i}:00.000Z`,
-          path: "/champlain",
-        }),
-        description: "Traffic chaos as the Champlain bridge shuts for emergency repairs",
-      });
-    }
-
-    // The angle piece: its headline never names the story; its description
-    // does. This is the "search on summary" case the feature exists for.
-    await ingestOne({
-      ...sighting({
-        domain: "angle.example",
-        title: "Commuters furious over sudden shutdown",
-        published: "2026-08-11T11:00:00.000Z",
-        path: "/angle",
-      }),
-      description: "The Champlain bridge closure has stranded thousands of commuters",
-    });
-
-    await recordCoverage(harness.deps.db, fingerprint, WINDOW);
-    const result = await readTimeline(
-      harness.deps,
-      {
-        fingerprint,
-        keywords: ["bridge"],
-        language: "en",
-        country: null,
-        category: null,
-        window: { ...WINDOW },
-      },
-      { limit: 25 },
-    );
-
-    const slot = result.items.find((item) => item.moreCoverage.length > 0);
-    expect(slot).toBeDefined();
-    // The lead group's copies are "same story"; the angle piece is coverage.
-    expect(slot!.related).toHaveLength(2);
-    expect(slot!.moreCoverage.map((article) => article.sourceDomain)).toEqual(["angle.example"]);
-    // The headline still comes from the lead group's tier-1 member.
-    expect(slot!.article.sourceDomain).toBe("bbc.co.uk");
-    // And the fillers still stand alone: eleven slots on the page, not one.
-    expect(result.items).toHaveLength(11);
-  });
-});
 
 describe("an article that arrived before its story's coverage", () => {
   /**

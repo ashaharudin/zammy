@@ -10,7 +10,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "regroup": "tsc -b && node --env-file-if-exists=../../.env dist/regroup-cli.js",
-    "measure:storylines": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-measure-cli.js",
     "story:df": "tsc -b && node --env-file-if-exists=../../.env dist/story-df-cli.js",
     "label:storylines": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-label-cli.js",
     "backfill:storylines": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-backfill-cli.js",

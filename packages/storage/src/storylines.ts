@@ -848,6 +848,98 @@ async function wake(db: Kysely<Database>, storylineId: string): Promise<void> {
 }
 
 /**
+ * Follow a GROUP merge into the storyline layer: the loser group ceases to
+ * exist, so every storyline naming it names the winner instead.
+ *
+ * Runs inside the caller's transaction, and is not a decision — no judgement is
+ * made about what belongs with what. The winner simply IS the loser now.
+ *
+ * The dedup at the end is the part that is easy to miss. Two groups each had
+ * their own provisional storyline-of-one; after the re-point both hold the same
+ * single group, which is two slots for one piece of coverage. A storyline whose
+ * only group is already held elsewhere holds nothing of its own, so it becomes
+ * an ALIAS of the storyline that does — the same treatment a bridged merge
+ * gives a loser, and for the same reason: a UUID someone is holding must keep
+ * resolving.
+ */
+export async function absorbMergedGroup(
+  db: Kysely<Database>,
+  input: { winnerGroupId: string; loserGroupId: string; timeZone: string },
+): Promise<void> {
+  const affected = await db
+    .selectFrom("storyline_groups")
+    .select("storyline_id")
+    .where("group_id", "=", input.loserGroupId)
+    .execute();
+  if (affected.length === 0) return;
+
+  await sql`
+    insert into storyline_groups (storyline_id, group_id, attached_at)
+    select storyline_id, ${input.winnerGroupId}::bigint, attached_at
+    from storyline_groups where group_id = ${input.loserGroupId}::bigint
+    on conflict (storyline_id, group_id) do nothing
+  `.execute(db);
+  await db.deleteFrom("storyline_groups").where("group_id", "=", input.loserGroupId).execute();
+
+  for (const { storyline_id } of affected) {
+    // Redundant? Its only group is the winner, and some other live storyline
+    // already holds the winner. Prefer the one with more groups as survivor,
+    // then the older id, so a replay resolves the same way.
+    const { rows: survivors } = await sql<{ id: string }>`
+      with mine as (
+        select group_id from storyline_groups where storyline_id = ${storyline_id}::uuid
+      )
+      select s.id
+      from storylines s
+      join storyline_groups g on g.storyline_id = s.id
+      where s.id <> ${storyline_id}::uuid
+        and s.merged_into is null
+        and g.group_id = ${input.winnerGroupId}::bigint
+        and (select count(*) from mine) = 1
+        and (select min(group_id) from mine) = ${input.winnerGroupId}::bigint
+      group by s.id
+      order by count(*) desc, s.id asc
+      limit 1
+    `.execute(db);
+
+    const survivor = survivors[0]?.id;
+    if (survivor === undefined) {
+      await refreshStorylineDerivations(db, storyline_id, input.timeZone);
+      continue;
+    }
+
+    await db.deleteFrom("storyline_groups").where("storyline_id", "=", storyline_id).execute();
+    await db.deleteFrom("storyline_days").where("storyline_id", "=", storyline_id).execute();
+    await db
+      .updateTable("storylines")
+      .set({ merged_into: survivor, profile_tokens: [] })
+      .where("id", "=", storyline_id)
+      .execute();
+    await db
+      .updateTable("storylines")
+      .set({ merged_into: survivor })
+      .where("merged_into", "=", storyline_id)
+      .execute();
+    await refreshStorylineDerivations(db, survivor, input.timeZone);
+  }
+}
+
+/**
+ * Both derivations, for one storyline. Exported so the GROUP layer can call it
+ * after a merge re-points membership — the two derivations are computed over
+ * member groups' articles, so a change to which groups exist invalidates them
+ * exactly as a change to which groups are members would.
+ */
+export async function refreshStorylineDerivations(
+  db: Kysely<Database>,
+  storylineId: string,
+  timeZone: string,
+): Promise<void> {
+  await refreshProfileTokens(db, storylineId);
+  await refreshDaySlots(db, storylineId, timeZone);
+}
+
+/**
  * Re-derive the profile: every token carried by at least half the member groups.
  *
  * Group-level support, not article-level, and that is the whole point — it is the

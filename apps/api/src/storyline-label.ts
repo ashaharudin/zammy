@@ -1,6 +1,6 @@
 import { singular } from "./grouping.js";
 import { storyTokens } from "./storyline.js";
-import { bigramLabel } from "./storyline-phrase.js";
+import { bigramLabel } from "./bigram-label.js";
 
 /**
  * The storyline LABEL, decided (ADR-0011, "Labels").

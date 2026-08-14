@@ -193,21 +193,6 @@ describe("the backfill", () => {
     expect(stats.daySlots).toBe(3);
   });
 
-  it("ignores the old model's storyline_id entirely", async () => {
-    // ADR-0011 supersedes ADR-0009 whole. The archive carries the old columns
-    // until S9 drops them, and a backfill that read them would inherit the
-    // day-bounded clustering it exists to replace.
-    await seedArchive();
-    await sql`update articles set storyline_id = (select min(id) from articles)`.execute(db);
-
-    await backfillStorylines(deps(), { skipLabels: true });
-
-    const stats = await readStorylineStats(db);
-    // Two storylines, not the one the old column claims.
-    expect(stats.promoted).toBe(2);
-    expect(stats.largestStoryline).toBe(5);
-  });
-
   it("stamps dormancy at the end of the run, so a replay of old history is not all active", async () => {
     // A fresh replay of a five-month archive would otherwise leave every
     // storyline it built marked `active` until the first nightly sweep fires —
