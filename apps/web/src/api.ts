@@ -13,6 +13,12 @@ export interface TopicQuery {
   language?: string;
   country?: string;
   category?: string;
+  /**
+   * The storyline a `storylinePhrase` chip was clicked on (ADR-0010). Not part
+   * of what is being searched — it seeds the topic with the slot the reader
+   * came from, and the API refuses anything in it that lacks every keyword.
+   */
+  storyline?: string;
 }
 
 export const Reference = z.object({
@@ -64,6 +70,10 @@ export async function fetchTimeline(
   if (topic.language) params.set("language", topic.language);
   if (topic.country) params.set("country", topic.country);
   if (topic.category) params.set("category", topic.category);
+  // Sent on every page of the topic, not only the first: the attach is
+  // idempotent, and a reader who lands deep in a shared link still expects
+  // the storyline that link names to be in the results.
+  if (topic.storyline) params.set("storyline", topic.storyline);
   if (cursor) params.set("cursor", cursor);
 
   const response = await fetch(`/api/v1/timeline?${params}`, { signal });

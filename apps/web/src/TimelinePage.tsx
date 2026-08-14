@@ -47,7 +47,7 @@ export function TimelinePage({
         onSearch={onSearch}
         onClear={onClear}
       />
-      <main style={{ maxWidth: "760px", margin: "0 auto", padding: "1.5rem 1rem 3rem" }}>
+      <main style={{ maxWidth: "var(--page-max)", margin: "0 auto", padding: "1.5rem 1rem 3rem" }}>
         {timeline.isPending && <SkeletonRail />}
 
         {timeline.isError && (
@@ -56,6 +56,14 @@ export function TimelinePage({
 
         {latest && (
           <Rail
+            // The reader's filters travel with the phrase — a chip opened from
+            // a Spanish timeline must not silently switch them to English —
+            // but the storyline they came from does not: it is provenance for
+            // THIS click, and carrying it into the next search would keep
+            // seeding a topic the reader has since left (ADR-0010).
+            onOpenStoryline={(phrase, storylineId) =>
+              onSearch({ ...topic, q: phrase, storyline: storylineId })
+            }
             items={visible}
             newCount={newCount}
             onReveal={reveal}
@@ -116,10 +124,18 @@ function useHeldNewItems(items: TimelineEntry[], topicKey: string) {
  * already shifted, so each subtracts that inset plus its own half-width.
  * Derive from these rather than hand-tuning offsets: the glyphs sat 0.9px off
  * the spine when the two were picked independently.
+ *
+ * The two positions are CSS custom properties (index.css) rather than literals
+ * because the gutter they are derived from responds to viewport width, which
+ * only a media query can do. Everything here still reads as arithmetic on
+ * them, so the derivation is unchanged — it just happens in `calc`.
  */
-const RAIL_CENTER = "0.7rem";
+const RAIL_CENTER = "var(--rail-center)";
 const RAIL_WIDTH = "3px";
-const RAIL_INSET = "2.5rem";
+const RAIL_INSET = "var(--rail-inset)";
+/** Room to the LEFT of the spine, and the gap that keeps a chip off it. */
+const RAIL_GUTTER = "var(--rail-gutter)";
+const GUTTER_GAP = "0.3rem";
 
 /** Left offset that centres a marker of the given width on RAIL_CENTER. */
 function markerLeft(width: string) {
@@ -130,6 +146,7 @@ function Rail({
   items,
   newCount,
   onReveal,
+  onOpenStoryline,
   ingesting,
   pendingJobs,
   terminal,
@@ -141,6 +158,7 @@ function Rail({
   items: TimelineEntry[];
   newCount: number;
   onReveal: () => void;
+  onOpenStoryline: (phrase: string, storylineId: string) => void;
   ingesting: boolean;
   pendingJobs: number;
   terminal: boolean;
@@ -224,7 +242,13 @@ function Rail({
               </h2>
             </RailEntry>
             {!dayCollapsed &&
-              day.items.map((entry) => <GroupCard key={entry.storylineId} entry={entry} />)}
+              day.items.map((entry) => (
+                <GroupCard
+                  key={entry.storylineId}
+                  entry={entry}
+                  onOpenStoryline={onOpenStoryline}
+                />
+              ))}
           </section>
         );
       })}
@@ -295,8 +319,18 @@ function LoadOlder({ loading, onLoadOlder }: { loading: boolean; onLoadOlder: ()
  * sits at its earliest published, and a card showing "3 hours ago" beneath
  * rows from five hours ago reads as a bug. Later coverage surfaces as an
  * "updated" stamp instead, the same treatment §8.1 gives a re-emitted article.
+ *
+ * A slot with wider coverage also carries its storyline phrase, hanging in the
+ * gutter on the far side of the spine (ADR-0010): the day's story has a name,
+ * and the name is a search.
  */
-function GroupCard({ entry }: { entry: TimelineEntry }) {
+function GroupCard({
+  entry,
+  onOpenStoryline,
+}: {
+  entry: TimelineEntry;
+  onOpenStoryline: (phrase: string, storylineId: string) => void;
+}) {
   const [showRelated, setShowRelated] = useState(false);
   const updated = hasLaterCoverage(entry);
   const total = entry.related.length + entry.moreCoverage.length;
@@ -309,6 +343,12 @@ function GroupCard({ entry }: { entry: TimelineEntry }) {
       // to the middle of an expanded slot would no longer point at anything.
       head={
         <div style={{ maxWidth: "640px" }}>
+          {entry.storylinePhrase && (
+            <StorylinePhrase
+              phrase={entry.storylinePhrase}
+              onOpen={() => onOpenStoryline(entry.storylinePhrase!, entry.storylineId)}
+            />
+          )}
           <ArticleCard
             article={entry.article}
             published={entry.published}
@@ -355,6 +395,53 @@ function GroupCard({ entry }: { entry: TimelineEntry }) {
         </div>
       )}
     </RailEntry>
+  );
+}
+
+/**
+ * The storyline phrase, in the gutter on the far side of the spine: two words
+ * the whole slot shares, and a search for the story they name (ADR-0010).
+ *
+ * It sits LEFT of the rail on purpose. The right-hand column is the reader's
+ * present — this headline, its copies, its coverage — while the phrase is a
+ * way OUT of it, into the same story wherever else it was reported. Putting it
+ * across the spine says that in layout rather than in a label, and it keeps
+ * the card's own row of controls ("more", "N related") uncrowded.
+ *
+ * Right-aligned, so the phrases of consecutive slots line up against the rail
+ * however long each one is, and wrapping rather than truncating: a bigram
+ * breaks into two lines on a narrow screen, where truncation would leave a
+ * clickable "poli…" that names nothing.
+ */
+function StorylinePhrase({ phrase, onOpen }: { phrase: string; onOpen: () => void }) {
+  return (
+    <button
+      onClick={onOpen}
+      // The visible text is two bare words; what it DOES is a search, and a
+      // screen reader gets no layout to infer that from.
+      aria-label={`Search for ${phrase}`}
+      style={{
+        position: "absolute",
+        left: `calc(-1 * ${RAIL_INSET})`,
+        width: `calc(${RAIL_GUTTER} - ${GUTTER_GAP})`,
+        top: "50%",
+        transform: "translateY(-50%)",
+        border: "none",
+        background: "none",
+        padding: 0,
+        textAlign: "right",
+        color: "var(--fg-faint)",
+        fontFamily: MONO,
+        fontSize: "0.7rem",
+        lineHeight: 1.25,
+        cursor: "pointer",
+        // A phrase long enough to overflow its gutter breaks mid-word rather
+        // than painting over the spine.
+        overflowWrap: "anywhere",
+      }}
+    >
+      {phrase}
+    </button>
   );
 }
 
@@ -560,7 +647,17 @@ function ArticleCard({
       >
         {article.title}
       </a>
-      <div style={{ marginTop: "0.25rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
+      {/* Wraps: the rail's gutter narrows the card on a phone, and a meta row
+          that cannot wrap clips its own "more" control off the right edge. */}
+      <div
+        style={{
+          marginTop: "0.25rem",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "0.25rem 0.5rem",
+          alignItems: "center",
+        }}
+      >
         <small style={{ fontSize: "0.7rem", color: "var(--fg-faint)", fontVariantNumeric: "tabular-nums" }}>
           <time dateTime={published}>{timeLabel(published)}</time>
         </small>

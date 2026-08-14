@@ -41,7 +41,11 @@ export function CommandBar({
 
   const submit = (language: string | undefined) => {
     if (!q.trim()) return;
-    onSearch({ ...topic, q: q.trim(), language });
+    // Filters carry over; the storyline seed does not. It is provenance for
+    // one phrase click (ADR-0010), and spreading it into whatever the reader
+    // types next would keep enrolling that slot in unrelated topics.
+    const { storyline: _seed, ...carried } = topic;
+    onSearch({ ...carried, q: q.trim(), language });
   };
 
   return (
@@ -61,7 +65,7 @@ export function CommandBar({
           submit(topic.language);
         }}
         style={{
-          maxWidth: "760px",
+          maxWidth: "var(--page-max)",
           margin: "0 auto",
           display: "flex",
           alignItems: "center",
@@ -108,7 +112,7 @@ export function CommandBar({
       </form>
       <div
         style={{
-          maxWidth: "760px",
+          maxWidth: "var(--page-max)",
           margin: "0 auto",
           display: "flex",
           justifyContent: "space-between",

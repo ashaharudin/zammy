@@ -10,7 +10,14 @@ import { TimelinePage } from "./TimelinePage.js";
  * searches are shareable and back/forward works. React state is only ever a
  * mirror of location.search; every transition goes through the history API.
  */
-const PARAM_KEYS = { language: "lang", country: "country", category: "category" } as const;
+const PARAM_KEYS = {
+  language: "lang",
+  country: "country",
+  category: "category",
+  /** ADR-0010's seed, in the URL so a shared phrase link seeds for its
+   * recipient too — it is provenance, and provenance travels with the link. */
+  storyline: "storyline",
+} as const;
 
 function topicFromLocation(): TopicQuery | null {
   const params = new URLSearchParams(window.location.search);
@@ -21,6 +28,7 @@ function topicFromLocation(): TopicQuery | null {
     language: params.get(PARAM_KEYS.language) ?? undefined,
     country: params.get(PARAM_KEYS.country) ?? undefined,
     category: params.get(PARAM_KEYS.category) ?? undefined,
+    storyline: params.get(PARAM_KEYS.storyline) ?? undefined,
   };
 }
 
@@ -30,6 +38,7 @@ function searchFor(topic: TopicQuery | null): string {
   if (topic.language) params.set(PARAM_KEYS.language, topic.language);
   if (topic.country) params.set(PARAM_KEYS.country, topic.country);
   if (topic.category) params.set(PARAM_KEYS.category, topic.category);
+  if (topic.storyline) params.set(PARAM_KEYS.storyline, topic.storyline);
   return `?${params}`;
 }
 

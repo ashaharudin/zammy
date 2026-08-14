@@ -162,6 +162,55 @@ export async function readTimelinePage(
   };
 }
 
+/**
+ * Enroll one storyline's articles in a topic (ADR-0010) — how a
+ * `storylinePhrase` chip hands the story it names to the topic it opens,
+ * so the search that phrase promises contains the slot it came from.
+ *
+ * §7.6 refuses a local search path, and this is not one: it resolves no
+ * keywords and finds no articles. The caller names ONE storyline it is already
+ * showing, and `tokens` is a GATE on that storyline rather than a query —
+ * every keyword of the topic, folded the way `story_tokens` was folded, must
+ * be present in the article. Without that gate `?q=bananas&storyline=…` would
+ * be an open door onto any topic's membership; with it, the worst a crafted
+ * link can do is enroll articles that do contain every word the user searched.
+ *
+ * Returns how many rows it INSERTED — zero means the topic already held them,
+ * which is what lets a caller know whether a cached page can still be trusted.
+ */
+export async function attachStorylineToTopic(
+  db: Kysely<Database>,
+  params: {
+    fingerprint: string;
+    storylineId: string;
+    tokens: readonly string[];
+    /** The topic's language filter, or null for "all languages". Enforced
+     * because it is part of what the topic IS, and an article whose language
+     * is known and different never belonged in it. A null on the ARTICLE is
+     * upstream not saying, which the ordinary fill enrolls too. */
+    language: string | null;
+  },
+): Promise<number> {
+  // A storyline id reaches here from a query string. It is a bigint column, so
+  // anything else is a 500 waiting to happen rather than an empty result.
+  if (!/^\d+$/.test(params.storylineId)) return 0;
+  // An empty gate would enroll the storyline wholesale, which is the one thing
+  // the gate exists to prevent.
+  if (params.tokens.length === 0) return 0;
+
+  const result = await sql`
+    insert into topic_articles (fingerprint, article_id)
+    select ${hexToBytea(params.fingerprint)}, a.id
+    from articles a
+    where a.storyline_id = ${params.storylineId}::bigint
+      and a.story_tokens @> ${[...params.tokens]}::text[]
+      and (${params.language}::text is null or a.language is null or a.language = ${params.language})
+    on conflict (fingerprint, article_id) do nothing
+  `.execute(db);
+
+  return Number(result.numAffectedRows ?? 0n);
+}
+
 type ArticleRow = Selectable<ArticlesTable>;
 
 /**

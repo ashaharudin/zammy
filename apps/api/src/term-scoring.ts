@@ -227,9 +227,13 @@ function splitTokens(text: string): string[] {
  * least once mid-sentence and NEVER seen lowercase. Conservative by
  * construction: a name that only ever opens sentences fails the test and
  * waits for a corpus that uses it mid-sentence.
+ *
+ * Exported, and typed to the two fields it actually reads, because the
+ * storyline phrase (`storyline-phrase.ts`) runs the verb gate below over a
+ * corpus of one slot's members — the same evidence, a much smaller corpus.
  */
-function properNounEvidence(
-  corpus: readonly CorpusArticle[],
+export function properNounEvidence(
+  corpus: readonly { title: string; description: string | null }[],
 ): (term: string) => boolean {
   const capitalizedMidSentence = new Set<string>();
   const seenLowercase = new Set<string>();
@@ -276,7 +280,7 @@ function properNounEvidence(
  *    modifier — "armed forces", "planned parenthood", "displaced families" —
  *    whereas nothing follows a name as a participle except a predicate.
  */
-function isVerb(
+export function isVerb(
   word: string,
   index: number,
   isProperNoun: (term: string) => boolean,

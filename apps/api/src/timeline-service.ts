@@ -7,6 +7,7 @@ import {
   type CurrentsClient,
 } from "@zammy/currents-client";
 import {
+  attachStorylineToTopic,
   ingestSightings,
   readCoverage,
   readTimelinePage,
@@ -36,6 +37,8 @@ import {
   type GroupingDeps,
 } from "./grouping-service.js";
 import { chooseRepresentative } from "./source-authority.js";
+import { singular } from "./grouping.js";
+import { storylinePhrase } from "./storyline-phrase.js";
 
 /**
  * The query planner (ARCHITECTURE 6.3) — how a page gets filled, or ideally
@@ -100,48 +103,87 @@ export class InvalidCursorError extends Error {
 export async function readTimeline(
   deps: TimelineDeps,
   query: CanonicalQuery,
-  page: { limit: number; cursorString?: string },
+  request: ReadRequest,
 ): Promise<TimelineReadResult> {
   const startedAt = Date.now();
-  const result = await planAndRead(deps, query, page);
+  const result = await planAndRead(deps, query, request);
   deps.metrics?.timelineRead(result.meta.servedFrom, (Date.now() - startedAt) / 1000);
   return result;
+}
+
+export interface ReadRequest {
+  limit: number;
+  cursorString?: string;
+  /** ADR-0010: a storyline the reader arrived from, whose matching articles
+   * this topic is seeded with before the page is planned. */
+  seedStorylineId?: string;
 }
 
 async function planAndRead(
   deps: TimelineDeps,
   query: CanonicalQuery,
-  page: { limit: number; cursorString?: string },
+  request: ReadRequest,
 ): Promise<TimelineReadResult> {
   const now = deps.now();
 
-  const cursor = page.cursorString ? decodeCursor(page.cursorString) : null;
-  if (page.cursorString && !cursor) {
-    throw new InvalidCursorError(`unusable cursor: ${page.cursorString.slice(0, 40)}`);
+  const cursor = request.cursorString ? decodeCursor(request.cursorString) : null;
+  if (request.cursorString && !cursor) {
+    throw new InvalidCursorError(`unusable cursor: ${request.cursorString.slice(0, 40)}`);
   }
+
+  // The topic exists (and counts a hit) from the first request onward, so
+  // deferred jobs enqueued below can always recover the search parameters.
+  // Unconditional, and ahead of the cache, only when a seed has to land: the
+  // attach has a foreign key into `topics`, so the row must exist first.
+  let topicUpserted = false;
+  const upsert = async () => {
+    if (topicUpserted) return;
+    topicUpserted = true;
+    await upsertTopic(deps.db, {
+      fingerprint: query.fingerprint,
+      keywords: query.keywords,
+      language: query.language,
+      country: query.country,
+      category: query.category,
+    });
+  };
 
   // §6.3 step 1 — page cache. A hit costs nothing and touches nothing.
   const cacheKey = pageCacheKey(
     query.fingerprint,
     query.window,
-    page.cursorString ?? null,
-    page.limit,
+    request.cursorString ?? null,
+    request.limit,
   );
-  const cached = await readCachedPage<TimelineReadResult>(deps.redis, cacheKey);
-  deps.metrics?.pageCacheRead(freshnessTier(query.window.to, now), cached ? "hit" : "miss");
-  if (cached) {
-    return { ...cached, meta: { ...cached.meta, servedFrom: "cache" } };
+
+  // ADR-0010 — a seeded arrival, before the cache is consulted. A page cached
+  // a moment ago cannot contain articles this request is about to enroll, and
+  // serving it would break the one promise the phrase chip makes: that the
+  // slot it came from is in the results. Seeding that inserts NOTHING (the
+  // ordinary case once the topic knows the storyline) leaves the cache path
+  // exactly as it was.
+  let seeded = 0;
+  if (request.seedStorylineId !== undefined) {
+    await upsert();
+    seeded = await attachStorylineToTopic(deps.db, {
+      fingerprint: query.fingerprint,
+      storylineId: request.seedStorylineId,
+      // The keywords as `story_tokens` would have them: the phrase is derived
+      // under the same fold, so a storyline's own articles always pass.
+      tokens: query.keywords.map(singular),
+      language: query.language,
+    });
   }
 
-  // The topic exists (and counts a hit) from the first request onward, so
-  // deferred jobs enqueued below can always recover the search parameters.
-  await upsertTopic(deps.db, {
-    fingerprint: query.fingerprint,
-    keywords: query.keywords,
-    language: query.language,
-    country: query.country,
-    category: query.category,
-  });
+  if (seeded === 0) {
+    const cached = await readCachedPage<TimelineReadResult>(deps.redis, cacheKey);
+    deps.metrics?.pageCacheRead(freshnessTier(query.window.to, now), cached ? "hit" : "miss");
+    if (cached) {
+      return { ...cached, meta: { ...cached.meta, servedFrom: "cache" } };
+    }
+  }
+
+  await upsert();
 
   // §6.3 steps 2–3 — is the window covered? If not, where exactly isn't it?
   // Gaps are pre-sliced to the per-call range ceiling (7 days, observed
@@ -241,7 +283,7 @@ async function planAndRead(
     from: query.window.from,
     to: query.window.to,
     ...(cursor ? { cursor } : {}),
-    limit: page.limit,
+    limit: request.limit,
   });
 
   const pendingJobs = await deps.queue.pendingCount(query.fingerprint);
@@ -324,6 +366,10 @@ function toEntry(slot: TimelineSlot): TimelineEntry {
   const leadMembers = lead?.members ?? [];
 
   const article = chooseRepresentative(leadMembers.map((member) => member.article));
+  const moreCoverage = slot.members
+    .filter((member) => member.groupId !== lead?.groupId)
+    .map((member) => member.article);
+
   return {
     storylineId: slot.id,
     published: slot.published,
@@ -335,9 +381,14 @@ function toEntry(slot: TimelineSlot): TimelineEntry {
     related: leadMembers
       .map((member) => member.article)
       .filter((member) => member.id !== article.id),
-    moreCoverage: slot.members
-      .filter((member) => member.groupId !== lead?.groupId)
-      .map((member) => member.article),
+    moreCoverage,
+    // Only where the day produced coverage AROUND the story (ADR-0010): a
+    // slot of one story, however many outlets ran it, is an article rather
+    // than a topic, and a phrase beside every slot would be furniture.
+    // Derived over the headline and the wider coverage — NOT over `related`,
+    // whose near-identical copies would let a phrase qualify on syndication
+    // alone and then miss the angle pieces the search has to reach.
+    storylinePhrase: storylinePhrase(article, moreCoverage),
   };
 }
 

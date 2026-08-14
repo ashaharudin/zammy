@@ -79,3 +79,11 @@ _Avoid_: hash, key, topic id
 The time spans for which a topic's articles have actually been fetched. Coverage is what
 separates "nothing was published then" from "we never asked".
 _Avoid_: history, range, window
+
+**Storyline phrase**:
+Two words a storyline's whole coverage shares, shown beside that slot and clickable as a search
+for the story. Not a term: a term is ranked against a day's corpus to earn a place in the cloud
+and must name something proper, while a phrase is already anchored by the slot it sits on and
+only has to be true of it — both its words appear in every article the slot shows, which is what
+lets the click promise those articles back.
+_Avoid_: term, keyword, label, tag
