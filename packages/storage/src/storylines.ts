@@ -33,6 +33,8 @@ export interface Storyline {
   labelAt: Date | null;
   /** Member groups when the label was made; the drift trigger's baseline. */
   labelGroupCount: number | null;
+  /** What produced it: a model id, `bigram`, or null for unknown provenance. */
+  labelSource: string | null;
   profileTokens: string[];
   status: StorylineStatus;
   /** Non-null means this row is an ALIAS, not a storyline. Resolve before use. */
@@ -197,6 +199,12 @@ export async function setStorylineLabel(
      * not owed another attempt until its coverage has doubled either.
      */
     labelGroupCount: number;
+    /**
+     * What produced it — a model id, `bigram`, or null. This is what makes a
+     * relabel campaign resumable: without it, "has this already been upgraded"
+     * is unanswerable and `--relabel` has to redo everything on every run.
+     */
+    labelSource: string | null;
   },
 ): Promise<void> {
   await db
@@ -205,6 +213,7 @@ export async function setStorylineLabel(
       label: input.label,
       label_at: input.labelAt,
       label_group_count: input.labelGroupCount,
+      label_source: input.labelSource,
     })
     .where("id", "=", input.storylineId)
     .where("merged_into", "is", null)
@@ -830,6 +839,7 @@ function toStoryline(row: {
   label: string | null;
   label_at: Date | null;
   label_group_count: number | null;
+  label_source: string | null;
   profile_tokens: string[];
   status: StorylineStatus;
   merged_into: string | null;
@@ -840,6 +850,7 @@ function toStoryline(row: {
     label: row.label,
     labelAt: row.label_at,
     labelGroupCount: row.label_group_count,
+    labelSource: row.label_source,
     profileTokens: row.profile_tokens,
     status: row.status,
     mergedInto: row.merged_into,

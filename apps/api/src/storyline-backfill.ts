@@ -60,16 +60,27 @@ export interface BackfillOptions {
   /** Ceiling on how many storylines the label pass will touch. */
   maxLabels?: number;
   /**
-   * Relabel every promoted storyline, ignoring the drift check.
+   * Relabel storylines the CONFIGURED MODEL did not name, ignoring the drift
+   * check.
    *
    * The drift rule exists to stop the labeler re-naming what it has already
    * named, and it is right to — but it makes "the model config changed" an
    * unsayable thing: a run that switched from the bigram fallback to a real
-   * model would skip every storyline it had already fallen back on. This is
-   * how an operator says it. It spends a model call per promoted storyline, so
-   * it is a flag and not a default.
+   * model would skip every storyline it had already fallen back on.
+   *
+   * It skips by PROVENANCE (`label_source`), not by the drift clock, and that
+   * is what makes the campaign resumable. The first version of this ignored
+   * every skip condition, so a five-hour relabel that died at hour four started
+   * over from the top and spent the whole bill again. A campaign long enough to
+   * need resume was the only one that did not have it.
+   *
+   * `relabelAll` is the escape hatch for "re-name everything regardless",
+   * which is a different and much rarer intent — a prompt change rather than a
+   * model change.
    */
   relabel?: boolean;
+  /** Ignore provenance too: re-name every promoted storyline, every run. */
+  relabelAll?: boolean;
   /** Progress callback — the CLI prints, the tests count. */
   onProgress?: (progress: BackfillProgress) => void;
   /** Cooperative cancellation, so a long run stops at a clean group boundary. */
@@ -272,6 +283,30 @@ async function label(
   let after: LabelCursor | undefined;
   let attempted = 0;
 
+  const forcing = options.relabel === true || options.relabelAll === true;
+  /** The model whose labels count as already-done for this campaign. */
+  const target = labeler.generator ? (labeler.modelId ?? "model") : "bigram";
+
+  const shouldLabel = (storyline: {
+    labelAt: Date | null;
+    labelGroupCount: number | null;
+    labelSource: string | null;
+    groupCount: number;
+  }): boolean => {
+    // "Re-name everything" — a prompt change, not a model change.
+    if (options.relabelAll) return true;
+    // A relabel campaign: everything the configured model has not named. The
+    // provenance check is the resume, so an interrupted campaign picks up where
+    // it stopped instead of re-spending its bill from the top.
+    if (options.relabel) return storyline.labelSource !== target;
+    // The ordinary pass: the drift clock decides.
+    return needsLabel(storyline, {
+      groupCount: storyline.groupCount,
+      trigger: "drift",
+      driftFactor: labeler.driftFactor,
+    });
+  };
+
   for (;;) {
     if (options.signal?.aborted) break;
 
@@ -285,14 +320,7 @@ async function label(
       if (options.signal?.aborted) break;
       if (options.maxLabels !== undefined && attempted >= options.maxLabels) break;
 
-      if (
-        !options.relabel &&
-        !needsLabel(storyline, {
-          groupCount: storyline.groupCount,
-          trigger: "drift",
-          driftFactor: labeler.driftFactor,
-        })
-      ) {
+      if (!shouldLabel(storyline)) {
         tally.skipped += 1;
         continue;
       }
@@ -302,7 +330,7 @@ async function label(
 
       const outcome = await labelStoryline(
         { db, ...labeler },
-        { storyline, trigger: options.relabel ? "promotion" : "drift" },
+        { storyline, trigger: forcing ? "promotion" : "drift" },
       );
       if (outcome.source === "model") tally.model += 1;
       else if (outcome.source === "bigram") tally.bigram += 1;

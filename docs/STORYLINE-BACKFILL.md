@@ -166,14 +166,31 @@ pnpm backfill:storylines --labels-only --relabel   # re-name everything
 pnpm backfill:storylines --label-rate=30    # model calls per minute
 ```
 
-`--restart` is the only flag that discards state. `--relabel` ignores the drift
-check, which is how an operator says "the model config changed" — without it a
-storyline the fallback already named is skipped for ever, since `needsLabel`
-correctly refuses to re-name what is already named. The label pass is
+`--restart` is the only flag that discards state.
+
+`--relabel` is how an operator says "the model config changed": it relabels
+every storyline the **configured model** did not name, judged by
+`storylines.label_source` (migration 0011), which holds the model id, the string
+`bigram`, or null for unknown provenance. Skipping by provenance rather than by
+the drift clock is what makes the campaign RESUMABLE — the first version
+ignored every skip condition, so a five-and-a-half-hour relabel that died at
+hour four started over from the top and spent the whole bill again. A campaign
+long enough to need resume was the only one that did not have it. `--relabel-all`
+is the escape hatch for a PROMPT change, where every label is stale however it
+was produced.
+
+Provenance is also queryable, which the run reports alone never were:
+
+```sql
+select label_source, count(*) from storylines
+where merged_into is null and label is not null group by 1;
+```
+
+The label pass is
 rate-limited by wall-clock spacing because a full archive is precisely when an
 API's per-minute ceiling is met — 3,000 promoted storylines is 3,000 calls —
-and it is resumable for free, since `needsLabel` reads the row and skips a
-storyline whose label is current.
+and both the ordinary pass and a relabel campaign are resumable — the first via
+the drift clock, the second via provenance.
 
 ### It refuses to run against an empty trailing corpus
 

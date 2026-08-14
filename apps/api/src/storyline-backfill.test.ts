@@ -336,6 +336,7 @@ describe("the backfill", () => {
 
     const labeler = (gen: { generate: (r: GenerateRequest) => Promise<GenerateResult> } | null) => ({
       generator: gen,
+      modelId: "test-flash",
       sampleSize: 10,
       driftFactor: 2,
     });
@@ -438,6 +439,108 @@ describe("the backfill", () => {
 
       expect(gen.calls).toBe(2);
       expect(report.labelled.model).toBe(2);
+      expect(report.labelled.skipped).toBe(0);
+    });
+
+    it("records what produced each label", async () => {
+      await seedArchive();
+      await backfillStorylines(
+        { ...deps(), labeler: labeler(generator()) },
+        { sleep: async () => {} },
+      );
+
+      const { rows } = await sql<{ label_source: string | null; n: string }>`
+        select label_source, count(*) as n from storylines
+        where merged_into is null and label is not null group by 1
+      `.execute(db);
+      expect(rows).toEqual([{ label_source: "test-flash", n: "2" }]);
+    });
+
+    it("resumes a relabel campaign instead of re-spending it", async () => {
+      // THE BUG this column exists for. `--relabel` used to ignore every skip
+      // condition, so a five-hour campaign that died at hour four started over
+      // from the top and paid the whole bill again — the one flag long enough
+      // to need resume was the only one without it.
+      await seedArchive();
+      await backfillStorylines(
+        { ...deps(), labeler: labeler(null) },
+        { sleep: async () => {} },
+      );
+
+      // Campaign, interrupted after one storyline.
+      const first = generator();
+      await backfillStorylines(
+        { ...deps(), labeler: labeler(first) },
+        { labelsOnly: true, relabel: true, maxLabels: 1, sleep: async () => {} },
+      );
+      expect(first.calls).toBe(1);
+
+      // Resumed: it asks the model about the ONE storyline still on the
+      // fallback, not about both.
+      const second = generator();
+      const report = await backfillStorylines(
+        { ...deps(), labeler: labeler(second) },
+        { labelsOnly: true, relabel: true, sleep: async () => {} },
+      );
+
+      expect(second.calls).toBe(1);
+      expect(report.labelled.model).toBe(1);
+      expect(report.labelled.skipped).toBe(1);
+    });
+
+    it("does nothing on a relabel campaign that already finished", async () => {
+      await seedArchive();
+      await backfillStorylines(
+        { ...deps(), labeler: labeler(generator()) },
+        { labelsOnly: false, relabel: true, sleep: async () => {} },
+      );
+
+      const again = generator();
+      const report = await backfillStorylines(
+        { ...deps(), labeler: labeler(again) },
+        { labelsOnly: true, relabel: true, sleep: async () => {} },
+      );
+
+      expect(again.calls).toBe(0);
+      expect(report.labelled.skipped).toBe(2);
+    });
+
+    it("relabels model labels too when the configured model changes", async () => {
+      // Upgrading from one model to a better one is the same operation as
+      // upgrading from the fallback, which is why provenance is the model ID
+      // and not a `model | bigram` enum.
+      await seedArchive();
+      await backfillStorylines(
+        { ...deps(), labeler: labeler(generator()) },
+        { relabel: true, sleep: async () => {} },
+      );
+
+      const newer = generator();
+      const report = await backfillStorylines(
+        { ...deps(), labeler: { ...labeler(newer), modelId: "test-flash-2" } },
+        { labelsOnly: true, relabel: true, sleep: async () => {} },
+      );
+
+      expect(newer.calls).toBe(2);
+      expect(report.labelled.skipped).toBe(0);
+    });
+
+    it("re-names everything under --relabel-all, provenance regardless", async () => {
+      // The rarer intent: a PROMPT change, where every label is stale however
+      // it was produced.
+      await seedArchive();
+      await backfillStorylines(
+        { ...deps(), labeler: labeler(generator()) },
+        { relabel: true, sleep: async () => {} },
+      );
+
+      const again = generator();
+      const report = await backfillStorylines(
+        { ...deps(), labeler: labeler(again) },
+        { labelsOnly: true, relabelAll: true, sleep: async () => {} },
+      );
+
+      expect(again.calls).toBe(2);
       expect(report.labelled.skipped).toBe(0);
     });
 
