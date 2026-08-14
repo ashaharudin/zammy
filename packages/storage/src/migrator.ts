@@ -6,6 +6,7 @@ import * as articleGroups from "./migrations/0003-article-groups.js";
 import * as tokenVersion from "./migrations/0004-token-version.js";
 import * as rollingTerms from "./migrations/0005-rolling-terms.js";
 import * as storylines from "./migrations/0006-storylines.js";
+import * as storyTokenDf from "./migrations/0008-story-token-df.js";
 
 /**
  * Migrations as a static record rather than a directory scan: the file provider
@@ -20,6 +21,9 @@ const migrations: Record<string, Migration> = {
   "0004-token-version": tokenVersion,
   "0005-rolling-terms": rollingTerms,
   "0006-storylines": storylines,
+  // 0007 is the storylines-v2 schema (S1), landing on its own branch. The
+  // provider is a record, not a sequence — a gap runs fine and closes on merge.
+  "0008-story-token-df": storyTokenDf,
 };
 
 /**

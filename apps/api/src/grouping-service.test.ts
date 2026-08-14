@@ -4,6 +4,7 @@ import { deriveDedupKey, type Sighting } from "@zammy/currents-client";
 import { ingestSightings, recordCoverage, upsertTopic } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
 import { groupCreatedArticles } from "./grouping-service.js";
+import { readTrailingCorpus } from "./story-df.js";
 import { readTimeline } from "./timeline-service.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
 
@@ -192,6 +193,59 @@ describe("grouping, end to end", () => {
 
     expect(result.items).toHaveLength(4);
     expect(result.items.every((item) => item.related.length === 0)).toBe(true);
+  });
+});
+
+describe("the trailing corpus rides the ingest path (ADR-0011)", () => {
+  it("counts every ingested article once, per distinct token", async () => {
+    await seed();
+
+    const corpus = await readTrailingCorpus(
+      { db: harness.deps.db, config: { windowDays: 14, timeZone: "UTC" } },
+      { language: "en", now: NOW, tokens: ["bank", "rate", "ferry", "storm"] },
+    );
+
+    // Four articles ingested, four counted — the denominator every share is
+    // measured against.
+    expect(corpus.size).toBe(4);
+    // Three of them are the same rate story; one is the ferry. This IS the
+    // rarity signal: "ferry" names one story here, "rate" is what three
+    // outlets have in common.
+    expect(corpus.df.get("rate")).toBe(3);
+    expect(corpus.df.get("bank")).toBe(3);
+    expect(corpus.df.get("ferry")).toBe(1);
+    expect(corpus.df.get("storm")).toBe(1);
+  });
+
+  it("counts the day the article was published, not the day it was ingested", async () => {
+    await seed();
+
+    // The window that has rolled past 2026-08-11 sees none of it, which is
+    // what makes "trailing" mean anything.
+    const rolled = await readTrailingCorpus(
+      { db: harness.deps.db, config: { windowDays: 14, timeZone: "UTC" } },
+      { language: "en", now: new Date("2026-09-01T12:00:00.000Z"), tokens: ["rate"] },
+    );
+    expect(rolled.size).toBe(0);
+    expect(rolled.df.has("rate")).toBe(false);
+  });
+
+  it("is maintained even with the storyline layer off — the window must be warm", async () => {
+    await seed({
+      grouping: {
+        enabled: true,
+        threshold: 0.5,
+        timeZone: "UTC",
+        storyline: { enabled: false, anchorMaxShare: 0.05, massThreshold: 8 },
+      },
+    });
+
+    const corpus = await readTrailingCorpus(
+      { db: harness.deps.db, config: { windowDays: 14, timeZone: "UTC" } },
+      { language: "en", now: NOW, tokens: ["rate"] },
+    );
+    expect(corpus.size).toBe(4);
+    expect(corpus.df.get("rate")).toBe(3);
   });
 });
 

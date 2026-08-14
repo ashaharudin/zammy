@@ -169,6 +169,8 @@ export async function buildApp(config: Config): Promise<App> {
         config: {
           retentionDays: config.RETENTION_DAYS,
           baselineWindowDays: config.BASELINE_WINDOW_DAYS,
+          storyDfWindowDays: config.STORYLINE_DF_WINDOW_DAYS,
+          timeZone: config.APP_TIMEZONE,
         },
         now: () => new Date(),
         log: app.log,

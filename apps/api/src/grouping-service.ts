@@ -15,6 +15,7 @@ import {
 } from "./grouping.js";
 import { storyTokens, type StorylineRules } from "./storyline.js";
 import { attachSeededGroups } from "./storyline-service.js";
+import { recordStoryDfForArticles } from "./story-df.js";
 import type { Metrics } from "./metrics.js";
 
 /**
@@ -108,10 +109,29 @@ export async function groupCreatedArticles(
 
   let grouped = 0;
   const seeded: CreatedArticle[] = [];
+  const counted: {
+    published: Date;
+    language: string | null;
+    storyTokens: readonly string[];
+  }[] = [];
   for (const article of created) {
     try {
       if ((await groupArticle(deps, article)) !== null) grouped += 1;
       else seeded.push(article);
+      // Only after the decision was recorded: `groupArticle` is what writes
+      // `story_tokens`, and counting an article whose tokens never landed
+      // would put the aggregate and its source out of step in the one
+      // direction a rebuild cannot explain.
+      counted.push({
+        published: article.published,
+        language: article.language,
+        // Re-derived rather than threaded out of `groupArticle`: the same pure
+        // function over the same strings gives the same list by construction,
+        // and it costs a MEASURED 22.9µs per article against the several DB
+        // round-trips the decision already spends — cheaper than widening a
+        // decision function's return type to carry a counter's input.
+        storyTokens: storyTokens(article.title, article.description),
+      });
     } catch (error) {
       deps.log?.warn(
         { err: error, articleId: article.id },
@@ -119,6 +139,16 @@ export async function groupCreatedArticles(
       );
     }
   }
+
+  // The trailing corpus the v2 linker measures rarity against (ADR-0011),
+  // maintained here because this is where `story_tokens` are written. One
+  // batched statement pair, and unconditional on the storyline flag: the
+  // window must be WARM when the linker starts asking, and a fortnight is
+  // exactly how long a cold one takes to become useful.
+  await recordStoryDfForArticles(
+    { db: deps.db, config: { timeZone: deps.config.timeZone }, ...(deps.log ? { log: deps.log } : {}) },
+    counted,
+  );
 
   // Storyline attachment runs once per BATCH, not per article: each seeded
   // group needs the day's corpus, and reading it per article was measured

@@ -178,6 +178,27 @@ export interface TermBaselineTable {
   updated_at: Timestamp;
 }
 
+/**
+ * Per-day document frequency of `story_tokens` — the trailing corpus the v2
+ * linker measures rarity against (ADR-0011). Counted per ARTICLE, bucketed by
+ * the APP_TIMEZONE day so the window can roll; `language` is '' when the
+ * article declares none. Derived from `articles` and rebuildable from it.
+ */
+export interface StoryTokenDaysTable {
+  /** YYYY-MM-DD, text so the driver cannot reinterpret it as a local Date. */
+  day: string;
+  language: string;
+  token: string;
+  df: number;
+}
+
+/** The denominator to `story_token_days`: articles per day-language bucket. */
+export interface StoryCorpusDaysTable {
+  day: string;
+  language: string;
+  articles: number;
+}
+
 export interface Database {
   sightings: SightingsTable;
   articles: ArticlesTable;
@@ -188,6 +209,8 @@ export interface Database {
   trending_terms: TrendingTermsTable;
   term_snapshots: TermSnapshotsTable;
   term_baseline: TermBaselineTable;
+  story_token_days: StoryTokenDaysTable;
+  story_corpus_days: StoryCorpusDaysTable;
 }
 
 /**
