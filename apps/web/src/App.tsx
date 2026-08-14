@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import type { TopicQuery } from "./api.js";
+import type { TopicFilters } from "./api.js";
 import { Hero } from "./Hero.js";
+import { parseRoute, routeSearch, type Route } from "./route.js";
 import { TimelinePage } from "./TimelinePage.js";
 
 /**
@@ -9,51 +10,50 @@ import { TimelinePage } from "./TimelinePage.js";
  * Query state lives in the URL (§8.2) — `/?q=climate+policy&lang=en` — so
  * searches are shareable and back/forward works. React state is only ever a
  * mirror of location.search; every transition goes through the history API.
+ *
+ * The filters are part of that state even with no keywords: the hero sets them
+ * before there is a topic, a search adopts whatever is set, and clearing back
+ * to the hero keeps them, so a reader states "Malay, sports" once.
  */
-const PARAM_KEYS = { language: "lang", country: "country", category: "category" } as const;
-
-function topicFromLocation(): TopicQuery | null {
-  const params = new URLSearchParams(window.location.search);
-  const q = params.get("q")?.trim();
-  if (!q) return null;
-  return {
-    q,
-    language: params.get(PARAM_KEYS.language) ?? undefined,
-    country: params.get(PARAM_KEYS.country) ?? undefined,
-    category: params.get(PARAM_KEYS.category) ?? undefined,
-  };
-}
-
-function searchFor(topic: TopicQuery | null): string {
-  if (!topic) return "";
-  const params = new URLSearchParams({ q: topic.q });
-  if (topic.language) params.set(PARAM_KEYS.language, topic.language);
-  if (topic.country) params.set(PARAM_KEYS.country, topic.country);
-  if (topic.category) params.set(PARAM_KEYS.category, topic.category);
-  return `?${params}`;
-}
-
 export function App() {
-  const [topic, setTopic] = useState<TopicQuery | null>(topicFromLocation);
+  const [route, setRoute] = useState<Route>(() => parseRoute(window.location.search));
 
   useEffect(() => {
-    const onPopState = () => setTopic(topicFromLocation());
+    const onPopState = () => setRoute(parseRoute(window.location.search));
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
   // `replace` is for a transition the reader did not make — the detected
-  // filter defaults land on the topic they just opened, and a history entry
+  // filter defaults land on whatever they are looking at, and a history entry
   // for that would make Back appear to do nothing.
-  const navigate = useCallback((next: TopicQuery | null, options?: { replace?: boolean }) => {
-    const url = `${window.location.pathname}${searchFor(next)}`;
+  const navigate = useCallback((next: Route, options?: { replace?: boolean }) => {
+    const url = `${window.location.pathname}${routeSearch(next)}`;
     if (options?.replace) window.history.replaceState(null, "", url);
     else window.history.pushState(null, "", url);
-    setTopic(next);
+    setRoute(next);
   }, []);
 
-  if (topic === null) {
-    return <Hero onSearch={(q) => navigate({ q })} />;
+  const setFilters = useCallback(
+    (filters: TopicFilters) => navigate({ q: null, filters }, { replace: true }),
+    [navigate],
+  );
+
+  if (route.q === null) {
+    return (
+      <Hero
+        filters={route.filters}
+        onFilters={setFilters}
+        onSearch={(q) => navigate({ q, filters: route.filters })}
+      />
+    );
   }
-  return <TimelinePage topic={topic} onSearch={navigate} onClear={() => navigate(null)} />;
+
+  return (
+    <TimelinePage
+      topic={{ q: route.q, ...route.filters }}
+      onSearch={({ q, ...filters }, options) => navigate({ q, filters }, options)}
+      onClear={() => navigate({ q: null, filters: route.filters })}
+    />
+  );
 }

@@ -56,11 +56,23 @@ function rankColors(terms: readonly TrendingTerm[]): Map<string, string> {
   );
 }
 
-export function useTrending() {
+/**
+ * One cloud per language (§10.1): terms are ranked inside a language's own
+ * corpus, so the language is part of the query key, not a filter applied after.
+ */
+export function useTrending(language: string) {
   const pollsUsed = useRef(0);
+  // Per language, as useTimeline counts per topic: a budget carried over from
+  // the cloud the reader was just looking at would strand the next language on
+  // its first in_progress response — no polls left, so the cloud it is warming
+  // never arrives and "gathering the latest news…" never resolves.
+  useEffect(() => {
+    pollsUsed.current = 0;
+  }, [language]);
+
   return useQuery({
-    queryKey: ["trending"],
-    queryFn: ({ signal }) => fetchTrending(signal),
+    queryKey: ["trending", language],
+    queryFn: ({ signal }) => fetchTrending(language, signal),
     staleTime: 5 * 60 * 1000,
     retry: 1,
     refetchInterval: (query) => {
@@ -118,8 +130,15 @@ function seededRandom(seed: string): () => number {
   };
 }
 
-export function TrendingCloud({ onSearch }: { onSearch: (q: string) => void }) {
-  const trending = useTrending();
+export function TrendingCloud({
+  language,
+  onSearch,
+}: {
+  /** The cloud's language, already made concrete (see cloudLanguage). */
+  language: string;
+  onSearch: (q: string) => void;
+}) {
+  const trending = useTrending(language);
   const [asList, setAsList] = useState(false);
   const [placed, setPlaced] = useState<PlacedWord[]>([]);
   const sectionRef = useRef<HTMLElement | null>(null);
@@ -217,7 +236,17 @@ export function TrendingCloud({ onSearch }: { onSearch: (q: string) => void }) {
           color: "var(--fg-faint)",
         }}
       >
-        <span>{warming ? "gathering the latest news…" : ""}</span>
+        {/* A language upstream barely covers can finish its sample with
+            nothing to show. Saying so is the honest end state — the reader
+            still has the search box, and silence over an empty board reads as
+            a cloud that failed to draw. */}
+        <span>
+          {warming
+            ? "gathering the latest news…"
+            : data !== undefined && terms.length === 0
+              ? "nothing trending in this language yet"
+              : ""}
+        </span>
         {terms.length > 0 && (
           <button
             onClick={() => setAsList(!asList)}

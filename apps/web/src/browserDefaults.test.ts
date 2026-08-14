@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Reference } from "./api.js";
-import { defaultCountry, defaultLanguage, defaultedTopic } from "./browserDefaults.js";
+import { defaultCountry, defaultLanguage, defaultedFilters } from "./browserDefaults.js";
 
 /**
  * What the command bar's filter chips start on before the user picks anything
@@ -48,8 +48,8 @@ describe("defaultCountry", () => {
     expect(defaultCountry({ locales: ["en-CA"], timeZone: "Asia/Tokyo" }, REGIONS)).toBe("CA");
   });
 
-  it("says Worldwide rather than guess at a country upstream does not cover", () => {
-    // Worldwide is undefined, not a code: it is the ABSENCE of a country
+  it("says any country rather than guess at one upstream does not cover", () => {
+    // "any country" is undefined, not a code: it is the ABSENCE of a country
     // filter, which is what a reader upstream has no bureau for should get.
     expect(defaultCountry({ locales: ["is-IS"], timeZone: "Atlantic/Reykjavik" }, REGIONS)).toBe(
       undefined,
@@ -65,10 +65,10 @@ describe("defaultCountry", () => {
 });
 
 /**
- * Which of those readings a topic actually adopts. The rules differ per filter
+ * Which of those readings a set of filters actually adopts. The rules differ per filter
  * because only one of them can say "I chose no filter": language has the code
  * `all`, while an absent country is silent about whether the reader picked
- * Worldwide or never picked at all.
+ * "any country" or never picked at all.
  */
 const REFERENCE: Reference = {
   languages: LANGUAGES,
@@ -78,29 +78,35 @@ const REFERENCE: Reference = {
 
 const CANADIAN = { locales: ["en-CA"], timeZone: "America/Edmonton" };
 
-describe("defaultedTopic", () => {
-  it("fills both filters on a topic that states none", () => {
-    expect(defaultedTopic({ q: "wildfires" }, CANADIAN, REFERENCE)).toEqual({
-      q: "wildfires",
+describe("defaultedFilters", () => {
+  it("fills both filters when a topic states none", () => {
+    expect(defaultedFilters({}, CANADIAN, REFERENCE, "browser")).toEqual({
       language: "en",
       country: "CA",
     });
   });
 
-  it("leaves a chosen Worldwide alone rather than re-detecting it on reload", () => {
-    // Picking Worldwide drops the country param, so the only thing separating
+  it("takes the browser's language on the timeline, and English on the hero", () => {
+    // The hero is a cloud built from English coverage, so it speaks English
+    // whatever the browser prefers; a topic already open follows the reader.
+    const french = { locales: ["fr-CA"], timeZone: "America/Montreal" };
+
+    expect(defaultedFilters({}, french, REFERENCE, "browser").language).toBe("fr");
+    expect(defaultedFilters({}, french, REFERENCE, "english").language).toBe("en");
+  });
+
+  it("leaves a chosen any-country alone rather than re-detecting it on reload", () => {
+    // Picking "any country" drops the param, so the only thing separating
     // it from a never-filtered topic is that the reader's other picks are on
     // the URL beside it. Re-detecting here would quietly localize a topic the
     // reader had deliberately opened up — and a shared link with it.
-    expect(defaultedTopic({ q: "wildfires", language: "en" }, CANADIAN, REFERENCE)).toEqual({
-      q: "wildfires",
+    expect(defaultedFilters({ language: "en" }, CANADIAN, REFERENCE, "browser")).toEqual({
       language: "en",
     });
   });
 
   it("keeps an explicit any-language, which the country filter has no way to say", () => {
-    expect(defaultedTopic({ q: "wildfires", language: "all" }, CANADIAN, REFERENCE)).toEqual({
-      q: "wildfires",
+    expect(defaultedFilters({ language: "all" }, CANADIAN, REFERENCE, "browser")).toEqual({
       language: "all",
     });
   });
@@ -109,8 +115,7 @@ describe("defaultedTopic", () => {
     // A hand-typed or older link can carry a country but no language; the API
     // would apply its own default language to that, so leaving the chip
     // reading "any language" over a filtered timeline would misreport it.
-    expect(defaultedTopic({ q: "wildfires", country: "JP" }, CANADIAN, REFERENCE)).toEqual({
-      q: "wildfires",
+    expect(defaultedFilters({ country: "JP" }, CANADIAN, REFERENCE, "browser")).toEqual({
       language: "en",
       country: "JP",
     });
