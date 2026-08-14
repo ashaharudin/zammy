@@ -3,6 +3,7 @@ import { sql } from "kysely";
 import { migrateToLatest } from "./migrator.js";
 import * as storylineTables from "./migrations/0007-storyline-tables.js";
 import * as storyTokenDf from "./migrations/0008-story-token-df.js";
+import * as labelDrift from "./migrations/0010-storyline-label-drift.js";
 import { createTestDatabase, type TestDatabase } from "./test-support.js";
 
 /**
@@ -70,11 +71,28 @@ describe("migrateToLatest", () => {
       return Number(rows[0]?.n ?? 0);
     };
 
+    const hasDriftColumn = async () => {
+      const { rows } = await sql<{ n: string }>`
+        select count(*) as n from information_schema.columns
+        where table_schema = 'public' and table_name = 'storylines'
+          and column_name = 'label_group_count'
+      `.execute(harness.db);
+      return Number(rows[0]?.n ?? 0) === 1;
+    };
+
+    // Reverted newest-first and re-applied oldest-first, as a rollback runs.
+    // 0010 hangs a column off 0007's table, so reverting 0007 alone would
+    // rebuild `storylines` WITHOUT that column while the ledger still claimed
+    // it — a database that passes this test and fails the next deploy.
+    expect(await hasDriftColumn()).toBe(true);
+    await labelDrift.down(harness.db);
     await storylineTables.down(harness.db);
     expect(await hasStorylineTables()).toBe(0);
 
     await storylineTables.up(harness.db);
+    await labelDrift.up(harness.db);
     expect(await hasStorylineTables()).toBe(3);
+    expect(await hasDriftColumn()).toBe(true);
   });
 
   it("reverts and re-applies the trailing-corpus tables cleanly", async () => {

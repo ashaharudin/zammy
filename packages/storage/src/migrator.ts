@@ -8,6 +8,7 @@ import * as rollingTerms from "./migrations/0005-rolling-terms.js";
 import * as storylines from "./migrations/0006-storylines.js";
 import * as storylineTables from "./migrations/0007-storyline-tables.js";
 import * as storyTokenDf from "./migrations/0008-story-token-df.js";
+import * as labelDrift from "./migrations/0010-storyline-label-drift.js";
 
 /**
  * Migrations as a static record rather than a directory scan: the file provider
@@ -24,6 +25,7 @@ const migrations: Record<string, Migration> = {
   "0006-storylines": storylines,
   "0007-storyline-tables": storylineTables,
   "0008-story-token-df": storyTokenDf,
+  "0010-storyline-label-drift": labelDrift,
 };
 
 /**

@@ -129,6 +129,73 @@ const EnvSchema = z
      */
     STORYLINE_DF_WINDOW_DAYS: z.coerce.number().int().min(1).max(90).default(14),
 
+    // --- storyline labels (ADR-0011, "Labels") ---
+    /**
+     * The repo's first external model dependency, and deliberately optional:
+     * with no key the labeler falls back to the bigram extractor and, failing
+     * that, leaves the storyline label-less — which renders. Nothing upstream of
+     * the label blocks on it, so an unconfigured or down Gemini costs label
+     * quality and nothing else.
+     */
+    GEMINI_API_KEY: z.string().trim().optional(),
+    GEMINI_BASE_URL: z.url().default("https://generativelanguage.googleapis.com/v1beta"),
+    /**
+     * FLASH TIER, per ADR-0011 — the model id is a knob because the tier is what
+     * the decision rests on, not this version string. Labels run at storyline
+     * volume (births, merges and drifts, not articles), and every call has a
+     * deterministic fallback, so the cheapest tier that can read ten headlines
+     * is the right one.
+     *
+     * Pinned rather than floating (`gemini-flash-latest` exists): the same
+     * coverage should name the same story on a replay, and an alias that
+     * changes underneath us changes labels with no commit to point at.
+     *
+     * Not `gemini-2.5-flash`, which the live API refuses for new keys — "no
+     * longer available to new users", measured 2026-08-14 — while still listing
+     * it under `/models`. A model id that appears in the catalogue and 404s on
+     * use is exactly why this is config and not a constant.
+     *
+     * LITE, and measured: naming a storyline is not a reasoning task. Asked to
+     * name the Fort Hood crash, `gemini-3.1-flash-lite` returns the same label
+     * as `gemini-3.7-flash` while spending ZERO thinking tokens, where 3.7
+     * spends ~300 — and thinking tokens bill as output. See
+     * docs/STORYLINE-LABELS.md for the comparison over the dev archive.
+     */
+    GEMINI_MODEL: NonEmpty.default("gemini-3.1-flash-lite"),
+    /**
+     * How much the model may think before answering, for the families that
+     * reason by default. EMPTY — omit the field — is the default because the
+     * measured answer is that thinking buys nothing here and costs everything:
+     * see `gemini.ts`. Set it (`low` is the floor 3.x flash accepts) only if a
+     * chosen model needs it.
+     */
+    GEMINI_THINKING_LEVEL: z.string().trim().default(""),
+    /**
+     * Per-call deadline. Labelling is never on a reader's path — it runs after
+     * a promotion or merge has already been written — so a slow call should be
+     * abandoned to the fallback rather than waited on.
+     *
+     * 20s, not the 8s this started at: measured over 20 live labels on
+     * 2026-08-14, flash-lite averaged ~8s per call end to end and one label was
+     * lost to the deadline outright. Generous is free here (nothing waits on
+     * it) and a timeout costs a label.
+     */
+    GEMINI_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(20_000),
+    /**
+     * Relabel when membership has multiplied by this since the label was made
+     * (ADR-0011's drift trigger, "membership doubled"). A label describes the
+     * coverage it was shown; at twice the groups it is describing a minority of
+     * the story. Below 2 this would relabel on ordinary growth and turn a
+     * storyline-volume cost into a group-volume one.
+     */
+    STORYLINE_LABEL_DRIFT_FACTOR: z.coerce.number().min(2).default(2),
+    /**
+     * How many member headlines the label is generated from. ~10 per ADR-0011:
+     * enough for the model to see what the story IS rather than what its latest
+     * turn was, and few enough that the prompt stays a flash-tier call.
+     */
+    STORYLINE_LABEL_SAMPLE: z.coerce.number().int().min(2).max(40).default(10),
+
     /**
      * Applied when a search omits language. Omitting it upstream returns every
      * language mixed together, so "all" must be an explicit choice (§6.1).
@@ -279,10 +346,11 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
  * The key must never appear in output (ARCHITECTURE 5.5).
  */
 export function redactConfig(config: Config): Record<string, unknown> {
-  const { CURRENTS_API_KEY, DATABASE_URL, REDIS_URL, ...rest } = config;
+  const { CURRENTS_API_KEY, GEMINI_API_KEY, DATABASE_URL, REDIS_URL, ...rest } = config;
   return {
     ...rest,
     CURRENTS_API_KEY: CURRENTS_API_KEY ? "[redacted]" : null,
+    GEMINI_API_KEY: GEMINI_API_KEY ? "[redacted]" : null,
     DATABASE_URL: redactUrlCredentials(DATABASE_URL),
     REDIS_URL: redactUrlCredentials(REDIS_URL),
   };
