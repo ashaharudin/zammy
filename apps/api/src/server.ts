@@ -128,6 +128,7 @@ export async function buildApp(config: Config): Promise<App> {
       lookbackDays: config.CURRENTS_MAX_LOOKBACK_DAYS,
       minSegmentMs: MIN_SEGMENT_MS,
       perTopicDailyCallCap: config.PER_TOPIC_DAILY_CALL_CAP,
+      storylinesV2: config.STORYLINES_V2,
       grouping: {
         enabled: config.GROUPING_ENABLED,
         threshold: config.GROUPING_SIMILARITY_THRESHOLD,

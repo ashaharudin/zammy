@@ -83,6 +83,9 @@ export async function createTestHarness(
       // Non-binding by default: the recorded fixture is denser than a real
       // topic, and only the §9.4 tests are ABOUT the cap.
       perTopicDailyCallCap: 10_000,
+      // The v2 READ path off by default, as it ships: a test that passes only
+      // with it enabled has not tested what runs (ADR-0011's rollout).
+      storylinesV2: false,
       // Grouping and storylines ON by default, as they ship (§14.3,
       // ADR-0009) — a planner test that passes only with the feature
       // disabled has not tested the planner. Storyline rules are the

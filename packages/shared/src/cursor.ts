@@ -18,9 +18,21 @@ export interface Cursor {
    * The seed article's id, which is the group's id. Named for the article
    * because that is what it is and what makes it stable; the field predates
    * grouping and renaming it would break every cursor in flight.
+   *
+   * Under STORYLINES_V2 it holds a storyline UUID instead: the keyset axis
+   * becomes `(day_slot_published, storyline_id)` and the id half is whatever
+   * identifies a slot in the generation that minted the cursor (ADR-0011). The
+   * name stays wrong in the same useful way it already was.
    */
   articleId: string;
 }
+
+/**
+ * A bigint id (v1 slots) or a UUID (v2 storylines). Anything else is a
+ * malformed cursor: both halves reach SQL as a typed comparison, so a value
+ * that is neither would be a 500 rather than an empty page.
+ */
+const SLOT_ID = /^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
 const SEPARATOR = "|";
 
@@ -46,7 +58,7 @@ export function decodeCursor(encoded: string): Cursor | null {
   const published = decoded.slice(0, separatorAt);
   const articleId = decoded.slice(separatorAt + 1);
 
-  if (!/^\d+$/.test(articleId)) return null;
+  if (!SLOT_ID.test(articleId)) return null;
   if (Number.isNaN(Date.parse(published))) return null;
 
   return { published, articleId };

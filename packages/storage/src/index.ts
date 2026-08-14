@@ -16,3 +16,4 @@ export * from "./trending-terms.js";
 export * from "./grouping.js";
 export * from "./storylines.js";
 export * from "./story-df.js";
+export * from "./storyline-timeline.js";
