@@ -192,7 +192,7 @@ export type StorylineStatus = "provisional" | "active" | "dormant";
  */
 export interface StorylinesTable {
   id: Generated<string>;
-  /** 2–3 words naming the event; null until promotion, and null is renderable. */
+  /** 2–5 words naming the event; null until promotion, and null is renderable. */
   label: string | null;
   /** When the label was generated — the drift-relabel clock (ADR-0011, Labels). */
   label_at: Timestamp | null;

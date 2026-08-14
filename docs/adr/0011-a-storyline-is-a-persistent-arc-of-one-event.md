@@ -227,3 +227,25 @@ prevention; prevention over cure.
   fixed.
 - **Trailing-corpus df infrastructure** may converge with `term_baseline` or
   stand alone; an implementation question, not a design one.
+
+## Amended 2026-08-14: the label contract widens to two to five words
+
+**The word count above is superseded. The contract is now 2–5 words**; every
+other clause — must contain a proper noun, names the event or situation and not
+just the entity, no punctuation — stands unchanged, as does grounding as the
+mechanical stand-in for the proper-noun clause.
+
+Two or three words was the tighter reading of "readable at a glance", and it
+buys tightness at the cost of the clause the contract actually cares about:
+"Fort Hood Crash" fits, but "Fort Hood Helicopter Crash Investigation" is the
+same story once it has moved on, and at three words the model's only way to
+keep the proper noun is to drop what happened — which is precisely the failure
+the event-not-entity clause exists to prevent. The ceiling was doing the
+opposite of its job on the arcs long enough to matter.
+
+Five is where a label stops reading as a running-story tag and starts reading
+as a headline, so the ceiling moves rather than opens. The floor of two is
+untouched: one word is an entity, never an event.
+
+`validateLabel` and the prompt in `storyline-label.ts` carry the new range; the
+prompt half remains free to iterate, and the contract half is now 2–5.

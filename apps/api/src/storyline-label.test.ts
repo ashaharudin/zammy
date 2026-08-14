@@ -13,7 +13,7 @@ import {
  * point of putting the judgement here is that "may we use what came back" is
  * answerable offline, on recorded text, for ever.
  *
- * The contract under test is ADR-0011's fixed half: 2–3 words, contains a
+ * The contract under test is ADR-0011's fixed half: 2–5 words, contains a
  * proper noun, no punctuation. The unfixed half — "names the event, not just
  * the entity" — is deliberately unenforced, and one test below says so out
  * loud rather than leaving the gap to be discovered as a bug.
@@ -108,7 +108,7 @@ describe("buildLabelPrompt", () => {
   it("states the whole contract and nothing about our schema", () => {
     const prompt = buildLabelPrompt(CRASH);
 
-    expect(prompt).toContain("2 or 3 words");
+    expect(prompt).toContain("Between 2 and 5 words");
     expect(prompt).toContain("proper noun");
     expect(prompt).toContain("No punctuation");
     expect(prompt).toContain("Helicopter crashes at Fort Hood during training exercise");
@@ -128,9 +128,12 @@ describe("buildLabelPrompt", () => {
 });
 
 describe("validateLabel", () => {
-  it("accepts a two- or three-word name grounded in the coverage", () => {
+  it("accepts a two- to five-word name grounded in the coverage", () => {
     expect(validateLabel("Fort Hood Crash", CRASH)).toBe("Fort Hood Crash");
     expect(validateLabel("Fort Hood", CRASH)).toBe("Fort Hood");
+    expect(validateLabel("Fort Hood Helicopter Crash Investigation", CRASH)).toBe(
+      "Fort Hood Helicopter Crash Investigation",
+    );
   });
 
   it("cleans the wrapping a model puts around an answer", () => {
@@ -141,7 +144,7 @@ describe("validateLabel", () => {
 
   it("refuses a label of the wrong length", () => {
     expect(validateLabel("Fort", CRASH)).toBeNull();
-    expect(validateLabel("The Fort Hood Helicopter Crash", CRASH)).toBeNull();
+    expect(validateLabel("The Fort Hood Helicopter Crash Investigation Opens", CRASH)).toBeNull();
   });
 
   it("refuses a sentence, which is what a chatty model returns", () => {

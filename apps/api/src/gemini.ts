@@ -5,7 +5,7 @@ import { z } from "zod";
  * (ADR-0011, "Labels").
  *
  * It is deliberately tiny, and the size is the argument. The one thing we ask a
- * model to do is name a storyline in two or three words; anything larger here
+ * model to do is name a storyline in a handful of words; anything larger here
  * would be scope this product has not decided it wants, and every call already
  * has a deterministic fallback, so the client's job is to answer or get out of
  * the way quickly.
