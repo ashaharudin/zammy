@@ -11,7 +11,14 @@ import { createDb } from "@zammy/storage";
 import { registerHealthRoutes } from "./health.js";
 import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
 import { IngestQueue } from "./ingest-queue.js";
-import { ChoreQueue, runDormancyChore, runRetentionChore, type ChoreDeps } from "./chores.js";
+import {
+  ChoreQueue,
+  runDormancyChore,
+  runRetentionChore,
+  runStorylineLabelChore,
+  type ChoreDeps,
+} from "./chores.js";
+import { createGeminiClient } from "./gemini.js";
 import { Metrics, registerMetricsRoute } from "./metrics.js";
 import { processSegmentJob, type TimelineDeps } from "./timeline-service.js";
 import { processSampleJob, type TrendingDeps } from "./trending-service.js";
@@ -116,12 +123,34 @@ export async function buildApp(config: Config): Promise<App> {
   // of a task, so no separate deployable is needed (§4.1).
   const db = createDb(pool);
   const queue = new IngestQueue(config.REDIS_URL);
+
+  // The labeler, built once (ADR-0011's Labels). No key is a supported
+  // configuration and not a degraded one: the generator is null, the bigram
+  // extractor becomes the only path, and it renders. What is NOT supported is a
+  // storyline that gets no label until an operator remembers to run the CLI,
+  // which is what this wiring ends.
+  const labeler = {
+    generator: config.GEMINI_API_KEY
+      ? createGeminiClient({
+          apiKey: config.GEMINI_API_KEY,
+          model: config.GEMINI_MODEL,
+          baseUrl: config.GEMINI_BASE_URL,
+          thinkingLevel: config.GEMINI_THINKING_LEVEL,
+          timeoutMs: config.GEMINI_TIMEOUT_MS,
+        })
+      : null,
+    sampleSize: config.STORYLINE_LABEL_SAMPLE,
+    driftFactor: config.STORYLINE_LABEL_DRIFT_FACTOR,
+    logger: app.log,
+  };
+
   const deps: TimelineDeps = {
     db,
     redis,
     currents,
     queue,
     metrics,
+    labeler,
     config: {
       syncFillDeadlineMs: config.SYNC_FILL_DEADLINE_MS,
       maxSyncUpstreamCalls: config.MAX_SYNC_UPSTREAM_CALLS,
@@ -194,7 +223,12 @@ export async function buildApp(config: Config): Promise<App> {
   const chores = new ChoreQueue(config.REDIS_URL);
   chores.startConsumer({
     retention: () => runRetentionChore(choreDeps),
-    storylines: () => runDormancyChore(choreDeps),
+    // Dormancy first, then the labels: a storyline the sweep just marked quiet
+    // is not a candidate the label pass should spend a call on.
+    storylines: async () => {
+      await runDormancyChore(choreDeps);
+      await runStorylineLabelChore({ ...choreDeps, labeler });
+    },
   });
   await chores.scheduleNightlyRetention();
   await chores.scheduleNightlyStorylines();

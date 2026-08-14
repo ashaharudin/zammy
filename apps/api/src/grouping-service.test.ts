@@ -502,3 +502,114 @@ describe("an article that arrived before its story's coverage", () => {
     expect(slot.article.sourceDomain).toBe("bbc.co.uk");
   });
 });
+
+describe("labels arrive without an operator (ADR-0011)", () => {
+  /**
+   * The v2 linker's thresholds assume a real fortnight's corpus; a test database
+   * holds a dozen articles, where every shared token is rare and no mass reaches
+   * 20. Loosened here for the same reason the ADR-0009 attachment tests loosen
+   * theirs — what is under test is the WIRING, that a promotion on the live path
+   * reaches the labeler at all, not the production thresholds the sweep pins.
+   */
+  const LINKER = {
+    enabled: true,
+    rules: {
+      anchorMaxShare: 0.5,
+      anchorDfFloor: 4,
+      massThreshold: 2,
+      dormancyDays: 90,
+      dormantStrictness: 1.5,
+    },
+    mergeBridges: 2,
+    storyDf: { windowDays: 14, timeZone: "UTC" },
+    timeZone: "UTC",
+  };
+
+  it("labels a storyline the ingest path just promoted, with no CLI run", async () => {
+    harness = await createTestHarness(
+      {
+        storylinesV2: true,
+        grouping: {
+          enabled: true,
+          threshold: 0.5,
+          timeZone: "UTC",
+          storyline: { enabled: false, anchorMaxShare: 0.05, massThreshold: 8 },
+          linker: LINKER,
+        },
+      },
+      NOW,
+    );
+    const fingerprint = randomBytes(32).toString("hex");
+    await upsertTopic(harness.deps.db, { fingerprint, keywords: ["bridge"], language: "en" });
+
+    // The tail is fire-and-forget in production; a test has to be able to wait
+    // for it, so it hands the promise over instead of dropping it.
+    const tails: Promise<void>[] = [];
+    const ingestOne = async (s: Sighting) => {
+      const ingested = await ingestSightings(harness.deps.db, { fingerprint, sightings: [s] });
+      await groupCreatedArticles(
+        {
+          db: harness.deps.db,
+          config: harness.deps.config.grouping,
+          labeler: {
+            generator: {
+              generate: async () => ({ ok: true as const, text: "Champlain Bridge Closure" }),
+            },
+            sampleSize: 10,
+            driftFactor: 2,
+          },
+          labelTail: (task) => tails.push(task),
+        },
+        ingested.createdArticles,
+      );
+    };
+
+    // A corpus for rarity to mean anything, then one story in two groups: the
+    // syndicated core, and an angle piece that names it only in its
+    // description. The second group is what promotes the storyline.
+    for (const [i, title] of [
+      "Volcano erupts near coastal village",
+      "Chess prodigy wins continental crown",
+      "Rare orchid blooms in botanical garden",
+      "Ferry operators trim winter schedule",
+      "Museum unveils dinosaur exhibit",
+    ].entries()) {
+      await ingestOne(
+        sighting({
+          domain: `filler${i}.example`,
+          title,
+          published: `2026-08-11T07:${String(10 + i)}:00.000Z`,
+          path: `/filler-${i}`,
+        }),
+      );
+    }
+    await ingestOne({
+      ...sighting({
+        domain: "wireone.example",
+        title: "Champlain bridge closure strands commuters",
+        published: "2026-08-11T09:00:00.000Z",
+        path: "/champlain",
+      }),
+      description: "Traffic chaos as the Champlain bridge shuts for emergency repairs",
+    });
+    await ingestOne({
+      ...sighting({
+        domain: "angle.example",
+        title: "Commuters furious over sudden shutdown",
+        published: "2026-08-11T11:00:00.000Z",
+        path: "/angle",
+      }),
+      description: "The Champlain bridge closure has stranded thousands of commuters",
+    });
+    await Promise.all(tails);
+
+    const labels = await harness.deps.db
+      .selectFrom("storylines")
+      .select(["label", "status"])
+      .where("label", "is not", null)
+      .execute();
+    // Before this, a promoted storyline stayed nameless until an operator ran
+    // `pnpm label:storylines` — the pills row read "unlabelled storyline".
+    expect(labels).toEqual([{ label: "Champlain Bridge Closure", status: "active" }]);
+  });
+});

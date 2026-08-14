@@ -141,7 +141,7 @@ export async function backfillStorylines(
 
   if (!options.skipLabels && deps.labeler) {
     const startedAt = Date.now();
-    report.labelled = await label(deps.db, deps.labeler, options, sleep);
+    report.labelled = await labelPass(deps.db, deps.labeler, options, sleep);
     report.labelMs = Date.now() - startedAt;
   }
 
@@ -263,8 +263,13 @@ async function link(
  * per-minute ceiling is met. The limit is wall-clock spacing rather than a
  * token bucket — the simplest thing that cannot burst, for a pass with no
  * deadline.
+ *
+ * Exported because the nightly drift chore IS this pass, bounded: same
+ * candidates, same drift rule, same spacing (ADR-0011's third trigger). A second
+ * copy of the loop would be a second place for the cursor discipline to go
+ * wrong, and the cursor discipline is the part that is easy to get wrong.
  */
-async function label(
+export async function labelPass(
   db: Kysely<Database>,
   labeler: Omit<LabelerDeps, "db">,
   options: BackfillOptions,

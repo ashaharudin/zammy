@@ -90,6 +90,12 @@ export interface TimelineDeps {
     storylinesV2: boolean;
   };
   now: () => Date;
+  /**
+   * The labeler the write path's promotion and merge triggers fire (ADR-0011).
+   * Absent means no live labelling: `server.ts` builds it when a Gemini key is
+   * configured, and the bigram fallback carries it when one is not.
+   */
+  labeler?: GroupingDeps["labeler"];
   metrics?: Metrics;
   log?: {
     warn: (obj: object, msg: string) => void;

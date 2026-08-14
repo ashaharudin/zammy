@@ -10,6 +10,8 @@ import {
   type RetentionReport,
 } from "@zammy/storage";
 import { storyDfDay } from "./story-df.js";
+import { labelPass } from "./storyline-backfill.js";
+import type { LabelerDeps } from "./storyline-label-service.js";
 
 /**
  * Non-upstream chores (ARCHITECTURE 9.1): work with a clock but no quota
@@ -114,6 +116,44 @@ export async function runDormancyChore(deps: ChoreDeps): Promise<{ dormant: numb
     "storyline dormancy sweep (ADR-0011)",
   );
   return { dormant };
+}
+
+/**
+ * The nightly label pass — ADR-0011's DRIFT trigger, and the live tail's repair
+ * crew (S4: "label generation fires at promotion, on merge, and on drift").
+ *
+ * Drift is not an event: nothing happens at the moment a storyline's membership
+ * has doubled since it was named, so the only way to notice is to ask the rows.
+ * A nightly pass over the promoted candidates is that question, and it doubles as
+ * the repair for anything the live tail missed — a crash between the linker and
+ * the labeler, a deploy, a run of 503s. `pnpm label:storylines` stays as the
+ * manual override; this is the same pass on a schedule.
+ *
+ * Bounded on purpose. The pass is the one thing here that spends money per call,
+ * so a night gets a ceiling and a per-minute spacing rather than "everything
+ * that needs it, as fast as the API allows".
+ */
+export async function runStorylineLabelChore(
+  deps: ChoreDeps & {
+    labeler: Omit<LabelerDeps, "db">;
+    /** Ceiling on storylines one night will relabel. */
+    maxLabels?: number;
+    /** Model calls per minute. Only the model is paced; the fallback is CPU. */
+    labelRatePerMinute?: number;
+    sleep?: (ms: number) => Promise<void>;
+  },
+): Promise<{ model: number; bigram: number; none: number; skipped: number }> {
+  const labelled = await labelPass(
+    deps.db,
+    deps.labeler,
+    {
+      maxLabels: deps.maxLabels ?? 500,
+      labelRatePerMinute: deps.labelRatePerMinute ?? 60,
+    },
+    deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
+  );
+  deps.log.info({ labelled }, "storyline label pass — the drift trigger (ADR-0011)");
+  return labelled;
 }
 
 export class ChoreQueue {

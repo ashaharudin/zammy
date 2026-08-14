@@ -6,8 +6,9 @@ import {
   mergeStorylines,
   promoteStoryline,
   readStoryline,
+  setStorylineLabel,
 } from "@zammy/storage";
-import { runDormancyChore, type ChoreDeps } from "./chores.js";
+import { runDormancyChore, runStorylineLabelChore, type ChoreDeps } from "./chores.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
 
 /**
@@ -65,7 +66,7 @@ async function group(publishedAt: string): Promise<string> {
       published, latest_seen, sighting_count, story_tokens
     ) values (
       decode(${String(nextArticle).padStart(64, "0")}, 'hex'),
-      ${`https://example.test/${nextArticle}`}, ${`Headline ${nextArticle}`}, null,
+      ${`https://example.test/${nextArticle}`}, 'Hurricane Fausto nears Hawaii', null,
       'en', '{}', '{}', ${publishedAt}, ${publishedAt}, 1, '{fausto,hawaii}'
     ) returning id
   `.execute(db);
@@ -126,5 +127,81 @@ describe("the nightly dormancy sweep", () => {
     expect((await readStoryline(db, provisional.id))?.status).toBe("provisional");
     expect((await readStoryline(db, loser.id))?.status).toBe("active");
     expect((await readStoryline(db, winner))?.status).toBe("dormant");
+  });
+});
+
+describe("the nightly label pass", () => {
+  /** A generator that answers whatever the test says, and counts the asks. */
+  function saying(text: string) {
+    const asks: number[] = [];
+    return {
+      calls: () => asks.length,
+      generate: async () => {
+        asks.push(1);
+        return { ok: true as const, text };
+      },
+    };
+  }
+
+  const labeler = (generator: { generate: () => Promise<{ ok: true; text: string }> }) => ({
+    generator,
+    sampleSize: 10,
+    driftFactor: 2,
+    now: () => NOW,
+  });
+
+  it("refreshes a label whose storyline has doubled since it was written", async () => {
+    // The drift trigger (ADR-0011), which is a question asked of the row rather
+    // than an event — so it belongs to a pass, and until now the only pass was
+    // an operator typing `pnpm label:storylines`.
+    const id = await storyline([YESTERDAY, YESTERDAY]);
+    await setStorylineLabel(db, {
+      storylineId: id,
+      label: "Fausto Hawaii",
+      labelAt: new Date("2026-08-01T00:00:00.000Z"),
+      labelGroupCount: 2,
+    });
+    for (const day of [YESTERDAY, YESTERDAY]) {
+      await attachGroup(db, { storylineId: id, groupId: await group(day), ...TZ });
+    }
+
+    const generator = saying("Hurricane Fausto");
+    const report = await runStorylineLabelChore({ ...deps(), labeler: labeler(generator) });
+
+    expect(report.model).toBe(1);
+    expect((await readStoryline(db, id))?.label).toBe("Hurricane Fausto");
+  });
+
+  it("spends nothing on storylines whose labels still describe them", async () => {
+    const id = await storyline([YESTERDAY, YESTERDAY]);
+    await setStorylineLabel(db, {
+      storylineId: id,
+      label: "Fausto Hawaii",
+      labelAt: new Date("2026-08-01T00:00:00.000Z"),
+      labelGroupCount: 2,
+    });
+
+    const generator = saying("Hurricane Fausto");
+    const report = await runStorylineLabelChore({ ...deps(), labeler: labeler(generator) });
+
+    // A nightly pass that re-asked for every promoted storyline would turn a
+    // storyline-volume cost into a nightly one.
+    expect(generator.calls()).toBe(0);
+    expect(report.skipped).toBe(1);
+    expect((await readStoryline(db, id))?.label).toBe("Fausto Hawaii");
+  });
+
+  it("names what the live tail never reached — a crash, a deploy, a 503", async () => {
+    const id = await storyline([YESTERDAY, YESTERDAY]);
+
+    const report = await runStorylineLabelChore({
+      ...deps(),
+      labeler: labeler(saying("Hurricane Fausto")),
+    });
+
+    // It doubles as the repair pass: promoted, label-less, and nothing on the
+    // live path is ever going to offer it again.
+    expect(report.model).toBe(1);
+    expect((await readStoryline(db, id))?.label).toBe("Hurricane Fausto");
   });
 });

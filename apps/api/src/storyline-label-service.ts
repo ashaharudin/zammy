@@ -1,5 +1,6 @@
 import type { Kysely } from "kysely";
 import {
+  readStoryline,
   readStorylineLabelInput,
   setStorylineLabel,
   type Database,
@@ -14,17 +15,18 @@ import {
   validateLabel,
   type LabelTrigger,
 } from "./storyline-label.js";
+import type { LinkOutcome } from "./storyline-linker.js";
 
 /**
  * The labeler's service half (ADR-0011): read the members, ask the model, check
  * the answer, fall back, write.
  *
- * Where it fires is the other half of the design, and it is deliberately NOT
- * wired into the linker here — the linker is S3 and does not exist yet. What
- * this exposes is the shape the linker and the backfill will both call:
- * `labelStoryline(deps, { storylineId, trigger })`, with the trigger naming
- * which of ADR-0011's three moments this is. `promotion` and `merge` are events
- * the caller has just written; `drift` is a question this asks of the row.
+ * Where it fires is the other half of the design, and all three of ADR-0011's
+ * moments now have a caller. `promotion` and `merge` are events the caller has
+ * just written, and they arrive here through `labelLinkedStorylines` below — the
+ * tail the ingest path starts and does not wait for. `drift` is a question
+ * asked of the row rather than an event, so it belongs to a pass over
+ * candidates: the nightly chore, and the operator's `pnpm label:storylines`.
  *
  * Two properties hold at every exit:
  *
@@ -35,6 +37,57 @@ import {
  *    null. Otherwise an unnameable storyline is re-asked on every pass forever,
  *    which turns a storyline-volume cost into an unbounded one.
  */
+
+/**
+ * Label what a batch of link outcomes just made real (ADR-0011: "fires at
+ * promotion, on merge, and on drift" — the first two).
+ *
+ * Deliberately OFF the latency path. The linker runs inside the §6.3 sync-fill
+ * deadline and a label averages ~8s against a 20s timeout, so the ingest hands
+ * this the outcomes and walks away: the caller starts it and does not await it.
+ * That is only safe because it never throws — a rejected promise nobody awaits
+ * is an unhandled rejection, which is a process-level event for a cosmetic
+ * failure. Every model failure is already the labeler's own business (it falls
+ * back), and anything else is logged here and dropped.
+ *
+ * One label per storyline per batch, with `merge` beating `promotion`: a group
+ * that promoted a storyline and then merged it into another has made the wider
+ * membership the thing to name, and asking twice would spend two calls to write
+ * the second answer. `needsLabel` and the drift baseline do the rest of the
+ * de-duplication across batches.
+ */
+export async function labelLinkedStorylines(
+  deps: {
+    db: Kysely<Database>;
+    labeler: Omit<LabelerDeps, "db">;
+    log?: { warn: (obj: object, msg: string) => void };
+  },
+  outcomes: readonly LinkOutcome[],
+): Promise<void> {
+  const triggers = new Map<string, LabelTrigger>();
+  for (const outcome of outcomes) {
+    // A birth is not a promotion: a provisional storyline-of-one is invisible
+    // as a storyline, so naming it would spend a model call on something no
+    // reader can see.
+    if (outcome.attached) triggers.set(outcome.storylineId, "promotion");
+    for (const merge of outcome.merged) triggers.set(merge.winnerId, "merge");
+  }
+
+  for (const [storylineId, trigger] of triggers) {
+    try {
+      const storyline = await readStoryline(deps.db, storylineId);
+      // Gone or merged away since the batch: whatever absorbed it will be
+      // labelled under its own outcome.
+      if (!storyline || storyline.mergedInto !== null) continue;
+      await labelStoryline({ db: deps.db, ...deps.labeler }, { storyline, trigger });
+    } catch (error) {
+      deps.log?.warn(
+        { err: error, storylineId, trigger },
+        "storyline labelling failed after linking; the nightly pass will retry it",
+      );
+    }
+  }
+}
 
 export interface LabelerDeps {
   db: Kysely<Database>;
