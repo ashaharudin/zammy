@@ -93,7 +93,7 @@ attachment volume (52% of groups attach at 16, 41% at 20).
 HK exchange filings and a Central Asian wire's regional column series. Both are
 syndication artefacts rather than linking failures, both are visible in the
 sweep, and neither approaches the percolation alarm. Recorded, not fixed; S4's
-labeler will make them conspicuous, since neither can be named in 2–3 words.
+labeler will make them conspicuous, since neither can be named in a few words.
 
 ## K, the bridge count
 

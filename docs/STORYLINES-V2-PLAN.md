@@ -106,7 +106,7 @@ session's commit message or a docs note — no number ships unmeasured.
 `packages/config` (server-only, per ADR-0004's boundary). Label generation
 fires at promotion, on merge, and on drift (membership doubled since last
 label). Input: up to ~10 representative member headlines + descriptions,
-recent-weighted. Prompt contract (the fixed part): 2–3 words, must contain a
+recent-weighted. Prompt contract (the fixed part): 2–5 words, must contain a
 proper noun, names the event or situation not just the entity, no punctuation.
 Validate the response against the contract; on violation, failure, or
 unavailability fall back to the existing bigram extractor

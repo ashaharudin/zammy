@@ -89,7 +89,7 @@ export function selectLabelMembers<T extends LabelMember>(
 }
 
 /**
- * The prompt. The CONTRACT half — 2–3 words, a proper noun, the event not just
+ * The prompt. The CONTRACT half — 2–5 words, a proper noun, the event not just
  * the entity, no punctuation — is fixed by ADR-0011 and mirrored exactly by
  * `validateLabel` below; the wording around it is expected to iterate on live
  * output.
@@ -114,7 +114,7 @@ export function buildLabelPrompt(members: readonly LabelMember[]): string {
     coverage,
     "",
     "Rules:",
-    "- Exactly 2 or 3 words.",
+    "- Between 2 and 5 words.",
     "- Must contain a proper noun (a place, person, organisation or country).",
     "- Name the EVENT or SITUATION, not just who is involved:",
     '  "Fort Hood Crash", not "Fort Hood"; "Trump Iran War", not "Donald Trump".',
@@ -172,7 +172,7 @@ export function validateLabel(
   }
 
   const words = label.split(" ");
-  if (words.length < 2 || words.length > 3) return null;
+  if (words.length < 2 || words.length > 5) return null;
 
   const vocabulary = new Set(
     members.flatMap((member) => storyTokens(member.title, member.description)),
