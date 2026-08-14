@@ -92,6 +92,22 @@ export async function createTestHarness(
         threshold: 0.5,
         timeZone: "UTC",
         storyline: { enabled: true, anchorMaxShare: 0.05, massThreshold: 8 },
+        // The v2 linker OFF by default, as it ships (ADR-0011): it stays
+        // behind its flag until the backfill is verified, so a test that
+        // passes only with it enabled has not tested what runs.
+        linker: {
+          enabled: false,
+          rules: {
+            anchorMaxShare: 0.002,
+            anchorDfFloor: 10,
+            massThreshold: 20,
+            dormancyDays: 90,
+            dormantStrictness: 1.5,
+          },
+          mergeBridges: 2,
+          storyDf: { windowDays: 14, timeZone: "UTC" },
+          timeZone: "UTC",
+        },
       },
       ...configOverrides,
     },

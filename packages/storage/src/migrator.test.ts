@@ -3,6 +3,7 @@ import { sql } from "kysely";
 import { migrateToLatest } from "./migrator.js";
 import * as storylineTables from "./migrations/0007-storyline-tables.js";
 import * as storyTokenDf from "./migrations/0008-story-token-df.js";
+import * as storylineBridges from "./migrations/0009-storyline-bridges.js";
 import { createTestDatabase, type TestDatabase } from "./test-support.js";
 
 /**
@@ -50,6 +51,7 @@ describe("migrateToLatest", () => {
       "storyline_days",
       "story_token_days",
       "story_corpus_days",
+      "storyline_bridges",
     ]) {
       expect(tables).toContain(expected);
     }
@@ -70,11 +72,33 @@ describe("migrateToLatest", () => {
       return Number(rows[0]?.n ?? 0);
     };
 
+    // Reverse order, as a real rollback runs: `storyline_bridges` (0009)
+    // references `storylines`, so reverting 0007 while 0009 still stands is
+    // not a thing any deploy would do — and Postgres refuses it, which is the
+    // foreign key doing its job.
+    await storylineBridges.down(harness.db);
     await storylineTables.down(harness.db);
     expect(await hasStorylineTables()).toBe(0);
 
     await storylineTables.up(harness.db);
+    await storylineBridges.up(harness.db);
     expect(await hasStorylineTables()).toBe(3);
+  });
+
+  it("reverts and re-applies the bridge table cleanly", async () => {
+    const hasBridges = async () => {
+      const { rows } = await sql<{ n: string }>`
+        select count(*) as n from information_schema.tables
+        where table_schema = 'public' and table_name = 'storyline_bridges'
+      `.execute(harness.db);
+      return Number(rows[0]?.n ?? 0);
+    };
+
+    await storylineBridges.down(harness.db);
+    expect(await hasBridges()).toBe(0);
+
+    await storylineBridges.up(harness.db);
+    expect(await hasBridges()).toBe(1);
   });
 
   it("reverts and re-applies the trailing-corpus tables cleanly", async () => {
