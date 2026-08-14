@@ -1,18 +1,45 @@
 import { useState } from "react";
+import type { TopicFilters } from "./api.js";
+import { cloudLanguage } from "./cloudLanguage.js";
+import { FilterChipRow, useFilterDefaults } from "./FilterChipRow.js";
 import { MONO } from "./theme.js";
 import { TrendingCloud, useTrending } from "./TrendingCloud.js";
 import { searchPlaceholder } from "./searchPlaceholder.js";
+import { useReference } from "./useTimeline.js";
 
 /**
  * The empty state: the rolling 24-hour wordcloud with the command-bar prompt scaled up
  * and centered beneath it (ARCHITECTURE 10) — the landing page is never
  * blank, and the cloud gives users something to click before they know what
  * to type (§9.3 cold start).
+ *
+ * The same filter chips the open-topic bar carries sit under the prompt, set
+ * before there is anything to search and carried into whatever the reader then
+ * searches (§8.2, route.ts). They are not decoration here: the cloud is built
+ * per language, so the language chip redraws it.
+ *
+ * That chip starts on English rather than the browser's language, unlike the
+ * timeline's: the hero's job is to show the day's news to someone who has not
+ * asked for anything yet, and English is the corpus upstream covers deeply
+ * enough to fill a cloud.
  */
-export function Hero({ onSearch }: { onSearch: (q: string) => void }) {
+export function Hero({
+  filters,
+  onFilters,
+  onSearch,
+}: {
+  filters: TopicFilters;
+  /** A chip pick, which the URL holds until a search adopts it. */
+  onFilters: (filters: TopicFilters) => void;
+  onSearch: (q: string) => void;
+}) {
   const [q, setQ] = useState("");
+  const reference = useReference();
+  const language = cloudLanguage(filters.language);
   // Same query key as the cloud below, so this costs no extra request.
-  const trending = useTrending();
+  const trending = useTrending(language);
+
+  useFilterDefaults(filters, reference.data, "english", onFilters);
 
   return (
     <main
@@ -26,7 +53,7 @@ export function Hero({ onSearch }: { onSearch: (q: string) => void }) {
         padding: "3rem 1rem",
       }}
     >
-      <TrendingCloud onSearch={onSearch} />
+      <TrendingCloud language={language} onSearch={onSearch} />
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -88,6 +115,24 @@ export function Hero({ onSearch }: { onSearch: (q: string) => void }) {
           </button>
         </div>
       </form>
+      <div
+        style={{
+          width: "100%",
+          maxWidth: "640px",
+          // Aligned under the input rather than the prompt: the chips narrow
+          // what the box above them will search.
+          marginTop: "-1.75rem",
+          paddingLeft: "6.5rem",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "0.4rem",
+          fontFamily: MONO,
+          fontSize: "0.75rem",
+          color: "var(--fg-faint)",
+        }}
+      >
+        <FilterChipRow filters={filters} reference={reference.data} onChange={onFilters} />
+      </div>
     </main>
   );
 }

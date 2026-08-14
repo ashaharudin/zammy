@@ -20,7 +20,7 @@ const REFERENCE: Reference = {
 describe("filterChips", () => {
   it("states location, language and category in that order", () => {
     const chips = filterChips(
-      { q: "wildfires", country: "CA", language: "en", category: "sports" },
+      { country: "CA", language: "en", category: "sports" },
       REFERENCE,
     );
 
@@ -28,13 +28,13 @@ describe("filterChips", () => {
   });
 
   it("names the unfiltered state rather than leaving a chip blank", () => {
-    const chips = filterChips({ q: "wildfires", language: "en" }, REFERENCE);
+    const chips = filterChips({ language: "en" }, REFERENCE);
 
-    expect(chips.map((chip) => chip.label)).toEqual(["Worldwide", "en", "any category"]);
+    expect(chips.map((chip) => chip.label)).toEqual(["any country", "en", "any category"]);
   });
 
   it("reads an explicit any-language as words, not as the code 'all'", () => {
-    const [, language] = filterChips({ q: "wildfires", language: "all" }, REFERENCE);
+    const [, language] = filterChips({ language: "all" }, REFERENCE);
 
     expect(language?.label).toBe("any language");
   });
@@ -42,18 +42,18 @@ describe("filterChips", () => {
   it("shows a code the reference has no name for rather than dropping it", () => {
     // A shared link can carry a country the cached reference list has since
     // stopped naming; the filter is still in force, so the chip must say so.
-    const [location] = filterChips({ q: "wildfires", country: "ZW" }, REFERENCE);
+    const [location] = filterChips({ country: "ZW" }, REFERENCE);
 
     expect(location?.label).toBe("ZW");
   });
 
   it("opens each chip on the unfiltered choice, then what the reference offers", () => {
-    const [location, language, category] = filterChips({ q: "wildfires" }, REFERENCE);
+    const [location, language, category] = filterChips({}, REFERENCE);
 
     // Names in the list, codes on the wire — including the language list, whose
     // chip reads "en" but whose options have to be readable to pick from.
     expect(location?.options).toEqual([
-      { code: undefined, label: "Worldwide" },
+      { code: undefined, label: "any country" },
       { code: "CA", label: "Canada" },
       { code: "US", label: "United State" },
     ]);

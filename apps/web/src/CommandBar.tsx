@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { TimelinePage } from "@zammy/shared";
 import type { Reference, TopicQuery } from "./api.js";
-import { defaultedTopic } from "./browserDefaults.js";
-import { filterChips, type Chip, type ChipOption } from "./filterChips.js";
+import { FilterChipRow, useFilterDefaults } from "./FilterChipRow.js";
 import { MONO } from "./theme.js";
 import { upstreamHealthRecord } from "./upstreamHealth.js";
 
@@ -45,7 +44,10 @@ export function CommandBar({
   }, [topic]);
 
   useUpstreamHealthLog(page);
-  useBrowserDefaults(topic, reference, onSearch);
+  // The reader's own browser, on a topic whose URL states no filters (§8.1).
+  useFilterDefaults(topic, reference, "browser", (filters) =>
+    onSearch({ ...topic, ...filters }, { replace: true }),
+  );
 
   return (
     <header
@@ -119,13 +121,11 @@ export function CommandBar({
         }}
       >
         <span>{page ? <AsOf iso={page.meta.asOf} /> : "searching…"}</span>
-        {filterChips(topic, reference).map((chip) => (
-          <FilterChip
-            key={chip.kind}
-            chip={chip}
-            onSelect={(code) => onSearch({ ...topic, [chip.kind]: code })}
-          />
-        ))}
+        <FilterChipRow
+          filters={topic}
+          reference={reference}
+          onChange={(filters) => onSearch({ ...topic, ...filters })}
+        />
       </div>
     </header>
   );
@@ -155,37 +155,6 @@ function useUpstreamHealthLog(page: TimelinePage | undefined) {
   }, [page]);
 }
 
-/**
- * The starting filters for a topic that names none: the browser's own country
- * and language, falling back to Worldwide and English (§8.1, defaultedTopic).
- *
- * Only once the reference list has arrived — a detected code upstream does not
- * carry would be rejected. Applied as a real search rather than a display-only
- * default, because a chip reading "Canada" over an unfiltered timeline would
- * be a lie; replace, not push, because the reader did not ask to go here.
- */
-function useBrowserDefaults(
-  topic: TopicQuery,
-  reference: Reference | undefined,
-  onSearch: (topic: TopicQuery, options?: { replace?: boolean }) => void,
-) {
-  useEffect(() => {
-    if (!reference) return;
-    const next = defaultedTopic(topic, readBrowser(), reference);
-    if (next.language !== topic.language || next.country !== topic.country) {
-      onSearch(next, { replace: true });
-    }
-  }, [topic, reference, onSearch]);
-}
-
-/** The one place that reads the browser's own settings. */
-function readBrowser(): { locales: readonly string[]; timeZone: string | undefined } {
-  return {
-    locales: navigator.languages?.length ? navigator.languages : [navigator.language],
-    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-  };
-}
-
 /** The response's asOf freshness stamp: day, date, time, timezone (§8.1). */
 function AsOf({ iso }: { iso: string }) {
   return (
@@ -199,136 +168,5 @@ function AsOf({ iso }: { iso: string }) {
         timeZoneName: "short",
       }).format(new Date(iso))}
     </time>
-  );
-}
-
-/**
- * One filter as a word plus the list it can be changed to. Picking an entry
- * re-runs the search immediately — a filter that waits for a second Enter
- * reads as broken. A custom popover rather than a native <select> so the
- * closed control reads as part of the meta line rather than as a form field.
- */
-function FilterChip({
-  chip,
-  onSelect,
-}: {
-  chip: Chip;
-  onSelect: (code: string | undefined) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const container = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: MouseEvent) => {
-      if (!container.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("mousedown", onPointerDown);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("mousedown", onPointerDown);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
-
-  return (
-    <div ref={container} style={{ position: "relative" }}>
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label={`${CHIP_LABELS[chip.kind]}: ${chip.label}`}
-        style={{
-          border: "1px solid var(--border)",
-          borderRadius: "999px",
-          background: "var(--chip-bg)",
-          color: "inherit",
-          cursor: "pointer",
-          font: "inherit",
-          lineHeight: 1.3,
-          padding: "0.05rem 0.5rem",
-        }}
-      >
-        {chip.label}
-      </button>
-      {open && (
-        <ul
-          role="listbox"
-          aria-label={CHIP_LABELS[chip.kind]}
-          style={{
-            position: "absolute",
-            left: 0,
-            top: "calc(100% + 0.35rem)",
-            margin: 0,
-            padding: "0.25rem",
-            listStyle: "none",
-            background: "var(--surface)",
-            border: "1px solid var(--border)",
-            borderRadius: "8px",
-            boxShadow: "var(--shadow)",
-            maxHeight: "60vh",
-            overflowY: "auto",
-            minWidth: "12rem",
-            zIndex: 20,
-          }}
-        >
-          {chip.options.map((option) => (
-            <Option
-              key={option.code ?? "*"}
-              option={option}
-              selected={option.code === chip.code}
-              onSelect={() => {
-                setOpen(false);
-                onSelect(option.code);
-              }}
-            />
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-const CHIP_LABELS: Record<Chip["kind"], string> = {
-  country: "Location",
-  language: "Language",
-  category: "Category",
-};
-
-function Option({
-  option,
-  selected,
-  onSelect,
-}: {
-  option: ChipOption;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <li>
-      <button
-        type="button"
-        role="option"
-        aria-selected={selected}
-        onClick={onSelect}
-        style={{
-          display: "block",
-          width: "100%",
-          border: "none",
-          background: selected ? "var(--chip-bg)" : "none",
-          borderRadius: "6px",
-          cursor: "pointer",
-          padding: "0.3rem 0.5rem",
-          fontSize: "0.85rem",
-          textAlign: "left",
-        }}
-      >
-        {option.label}
-      </button>
-    </li>
   );
 }

@@ -1,4 +1,4 @@
-import type { Reference, TopicQuery } from "./api.js";
+import type { Reference, TopicFilters } from "./api.js";
 
 /**
  * The filter defaults the command bar starts on, read from the browser (§8.1).
@@ -21,11 +21,14 @@ export function defaultLanguage(
     const code = locale.split("-")[0]?.toLowerCase();
     if (code && offered.has(code)) return code;
   }
-  return "en";
+  return ENGLISH;
 }
 
+/** The fallback everywhere: upstream's largest corpus by far. */
+export const ENGLISH = "en";
+
 /**
- * The location chip's starting code, or undefined for Worldwide — the honest
+ * The location chip's starting code, or undefined for any country — the honest
  * answer when the browser's readings name nowhere upstream covers.
  *
  * A browser cannot see its own IP, so "where is this reader" is answered from
@@ -46,25 +49,40 @@ export function defaultCountry(
 }
 
 /**
- * The topic to actually search, once the browser's own settings have filled in
- * what the URL left unsaid.
- *
- * The two filters take different rules, because only one of them can state
- * "no filter": language has `all` (ANY_LANGUAGE), so an absent language is
- * always an unanswered question and defaulting it can never overrule a reader.
- * An absent country is ambiguous — picked Worldwide, or never picked — so the
- * country default applies only to a topic that states no filters at all, which
- * is what arriving from the hero or a bare `?q=` link looks like.
+ * Where the language default comes from. The timeline follows the reader's own
+ * browser; the hero is fixed to English, because the cloud beneath its chips is
+ * built from English coverage and would go thin the moment it followed a
+ * browser upstream barely covers.
  */
-export function defaultedTopic(
-  topic: TopicQuery,
+export type LanguagePolicy = "browser" | "english";
+
+/**
+ * The filters to actually search with, once the browser's own settings have
+ * filled in what the URL left unsaid.
+ *
+ * The two take different rules, because only one of them can state "no
+ * filter": language has `all` (ANY_LANGUAGE), so an absent language is always
+ * an unanswered question and defaulting it can never overrule a reader. An
+ * absent country is ambiguous — the reader chose "any country", or chose
+ * nothing — so the
+ * country default applies only where no filter is stated at all, which is what
+ * a first visit or a bare `?q=` link looks like.
+ */
+export function defaultedFilters(
+  filters: TopicFilters,
   browser: { locales: readonly string[]; timeZone: string | undefined },
   reference: Reference,
-): TopicQuery {
+  language: LanguagePolicy,
+): TopicFilters {
   const untouched =
-    topic.language === undefined && topic.country === undefined && topic.category === undefined;
-  const next = { ...topic };
-  if (next.language === undefined) next.language = defaultLanguage(browser.locales, reference.languages);
+    filters.language === undefined &&
+    filters.country === undefined &&
+    filters.category === undefined;
+  const next = { ...filters };
+  if (next.language === undefined) {
+    next.language =
+      language === "english" ? ENGLISH : defaultLanguage(browser.locales, reference.languages);
+  }
   if (untouched) next.country = defaultCountry(browser, reference.regions);
   return next;
 }
@@ -72,7 +90,7 @@ export function defaultedTopic(
 /**
  * Principal IANA zones per country upstream covers, deliberately partial: it
  * exists to place the common reader, and a zone it does not carry lands on
- * Worldwide, which is a correct answer rather than a wrong guess.
+ * any country, which is a correct answer rather than a wrong guess.
  */
 const ZONES_BY_COUNTRY: Record<string, string[]> = {
   AE: ["Asia/Dubai"],

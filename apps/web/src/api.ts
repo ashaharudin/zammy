@@ -7,12 +7,20 @@ import { TimelinePage, TrendingResponse } from "@zammy/shared";
  * fails loudly here instead of rendering garbage.
  */
 
-/** What the user is searching for. Filters use upstream codes, never names (§2). */
-export interface TopicQuery {
-  q: string;
+/**
+ * What narrows a search. Codes, never names (§2). Held apart from the keywords
+ * because filters outlive them: the hero carries them before there is a topic,
+ * and clearing a topic keeps them (see route.ts).
+ */
+export interface TopicFilters {
   language?: string;
   country?: string;
   category?: string;
+}
+
+/** What the user is searching for. */
+export interface TopicQuery extends TopicFilters {
+  q: string;
 }
 
 export const Reference = z.object({
@@ -71,8 +79,13 @@ export async function fetchTimeline(
   return TimelinePage.parse(await response.json());
 }
 
-export async function fetchTrending(signal: AbortSignal): Promise<TrendingResponse> {
-  const response = await fetch("/api/v1/trending", { signal });
+export async function fetchTrending(
+  language: string,
+  signal: AbortSignal,
+): Promise<TrendingResponse> {
+  const response = await fetch(`/api/v1/trending?language=${encodeURIComponent(language)}`, {
+    signal,
+  });
   if (!response.ok) await throwApiError(response);
   return TrendingResponse.parse(await response.json());
 }

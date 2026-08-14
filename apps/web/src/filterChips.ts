@@ -1,4 +1,4 @@
-import type { Reference, TopicQuery } from "./api.js";
+import type { Reference, TopicFilters } from "./api.js";
 
 /**
  * The command bar's filter chips (§8.1): the topic's location, language and
@@ -12,7 +12,7 @@ import type { Reference, TopicQuery } from "./api.js";
 export type ChipKind = "country" | "language" | "category";
 
 export interface ChipOption {
-  /** undefined is the unfiltered choice: Worldwide, any language, any category. */
+  /** undefined is the unfiltered choice: any country, any language, any category. */
   code: string | undefined;
   label: string;
 }
@@ -25,16 +25,16 @@ export interface Chip {
   options: ChipOption[];
 }
 
-export function filterChips(topic: TopicQuery, reference: Reference | undefined): Chip[] {
+export function filterChips(topic: TopicFilters, reference: Reference | undefined): Chip[] {
   const regions = reference?.regions ?? {};
   const nameByCode = new Map(Object.entries(regions).map(([name, code]) => [code, name]));
 
   return [
     {
       kind: "country",
-      label: topic.country ? (nameByCode.get(topic.country) ?? topic.country) : "Worldwide",
+      label: topic.country ? (nameByCode.get(topic.country) ?? topic.country) : ANY_COUNTRY,
       code: topic.country,
-      options: named("Worldwide", regions),
+      options: named(ANY_COUNTRY, regions),
     },
     {
       kind: "language",
@@ -57,6 +57,13 @@ export function filterChips(topic: TopicQuery, reference: Reference | undefined)
     },
   ];
 }
+
+/**
+ * The unfiltered location. Worded like its neighbours rather than as a place
+ * ("Worldwide"), so the three chips read as one set of controls: the reader is
+ * choosing not to narrow, three times over.
+ */
+const ANY_COUNTRY = "any country";
 
 /**
  * The code that asks for no language filter at all. Unlike an absent param it
