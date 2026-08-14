@@ -89,6 +89,14 @@ interface Fixture {
   profileTokens: string[];
   status: "active" | "dormant";
   days: { day: string; articles: MockArticle[] }[];
+  /**
+   * Coverage the mock does not enumerate. The rail only needs a few headlines
+   * per day to be judged, but a storyline's SIZE is what the coverage glyph
+   * encodes — and a corpus where everything holds nine articles would never
+   * exercise more than its first bucket. Real spans in the dev archive run from
+   * a handful to several hundred.
+   */
+  unlisted?: number;
 }
 
 const FIXTURES: Fixture[] = [
@@ -97,6 +105,7 @@ const FIXTURES: Fixture[] = [
     label: "Fort Hood Crash",
     profileTokens: ["fort", "hood", "crash", "blackhawk", "helicopter", "army"],
     status: "active",
+    unlisted: 15,
     days: [
       {
         day: "aug-13",
@@ -173,6 +182,7 @@ const FIXTURES: Fixture[] = [
     label: "Trump Iran War",
     profileTokens: ["trump", "iran", "strikes", "tehran", "war", "pentagon"],
     status: "active",
+    unlisted: 131,
     days: [
       {
         day: "aug-13",
@@ -223,6 +233,7 @@ const FIXTURES: Fixture[] = [
     label: "Hormuz Tanker Seizure",
     profileTokens: ["hormuz", "tanker", "seizure", "iran", "strait", "shipping"],
     status: "active",
+    unlisted: 58,
     days: [
       {
         day: "aug-13",
@@ -252,6 +263,7 @@ const FIXTURES: Fixture[] = [
     label: "Iran Sanctions Vote",
     profileTokens: ["iran", "sanctions", "vote", "senate", "bill"],
     status: "active",
+    unlisted: 4,
     days: [
       {
         day: "aug-12",
@@ -294,6 +306,24 @@ const SINGLETONS: { day: string; article: MockArticle }[] = [
   { day: "aug-09", article: article("aug-09", 8, "Fuel prices climb ahead of holiday travel", "npr.org") },
 ];
 
+/**
+ * Coverage size as one glyph. Four buckets, because the question a reader asks
+ * of a surfaced storyline is "how big is this?", not "how many exactly?" — and
+ * a bucket survives the count still moving while they look at it.
+ */
+export const COVERAGE_BUCKETS = [
+  // ▂ rather than ▁ for the first bucket: at 0.8rem the one-eighth block
+  // renders as an underscore and reads as a typo, not as a quantity.
+  { max: 10, glyph: "▂", label: "1–10 articles" },
+  { max: 50, glyph: "▄", label: "11–50 articles" },
+  { max: 100, glyph: "▆", label: "51–100 articles" },
+  { max: Infinity, glyph: "█", label: "101+ articles" },
+] as const;
+
+export function coverageBucket(articleCount: number) {
+  return COVERAGE_BUCKETS.find((bucket) => articleCount <= bucket.max)!;
+}
+
 export const STORYLINES: MockStoryline[] = FIXTURES.map((fixture) => {
   const all = fixture.days.flatMap((day) => day.articles);
   const times = all.map((a) => a.published).sort();
@@ -304,7 +334,7 @@ export const STORYLINES: MockStoryline[] = FIXTURES.map((fixture) => {
     status: fixture.status,
     span: { from: times[0]!, to: times.at(-1)! },
     groupCount: fixture.days.reduce((n, day) => n + Math.max(1, day.articles.length - 1), 0),
-    articleCount: all.length,
+    articleCount: all.length + (fixture.unlisted ?? 0),
     activity: fixture.days.map((day) => ({
       day: day.day,
       articles: day.articles.length,

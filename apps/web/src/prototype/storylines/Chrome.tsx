@@ -22,6 +22,7 @@ export function CommandBar({
   onQueryChange,
   onDismissView,
   dropdown,
+  pills,
 }: {
   query: string;
   /** The storyline being viewed: label as a dismissible chip, box empty. */
@@ -30,6 +31,8 @@ export function CommandBar({
   onDismissView: () => void;
   /** Variant C's typeahead. Rendered under the input, inside the sticky bar. */
   dropdown?: React.ReactNode;
+  /** Variant E's storyline pills, on the meta row beside the date stamp. */
+  pills?: React.ReactNode;
 }) {
   return (
     <header
@@ -97,16 +100,35 @@ export function CommandBar({
         style={{
           maxWidth: "var(--page-max)",
           margin: "0 auto",
+          display: "flex",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "0.4rem",
           padding: "0 1rem 0.5rem",
           fontFamily: MONO,
           fontSize: "0.75rem",
           color: "var(--fg-faint)",
         }}
       >
-        {viewing
-          ? `storyline · ${spanLabel(viewing.span)} · ${viewing.articleCount} articles`
-          : "Thursday, Aug 13 06:00 UTC"}
+        <span>
+          {viewing
+            ? `storyline · ${spanLabel(viewing.span)} · ${viewing.articleCount} articles`
+            : "Thursday, Aug 13 06:00 UTC"}
+        </span>
       </div>
+      {/* Its own row UNDER the date stamp, still inside the sticky bar, so the
+          pills travel with the chrome rather than with the results. */}
+      {pills && (
+        <div
+          style={{
+            maxWidth: "var(--page-max)",
+            margin: "0 auto",
+            padding: "0 1rem 0.55rem",
+          }}
+        >
+          {pills}
+        </div>
+      )}
     </header>
   );
 }

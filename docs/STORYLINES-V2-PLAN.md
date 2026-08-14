@@ -180,7 +180,7 @@ from S8.
 storyline duplication all verified in the browser preview against backfilled
 dev data.
 
-The surfacing variant is settled: the top strip, per
+The surfacing variant is settled: storyline pills in the command bar, per
 [S8's verdict](S8-STORYLINE-SURFACING-VERDICT.md), which also carries three
 smaller findings S7 should fold in (no gutter label inside the storyline view,
 the per-slot collision qualifier, dormancy shown on surfaced storylines).
@@ -202,12 +202,13 @@ variant (or combination) S7 builds, and why.
 
 **Done**: the variants live on branch `claude/s8-implementation-25f41f`
 (`apps/web/src/prototype/storylines/`, `pnpm prototype:storylines`) — the three
-above plus D, a floating bottom strip added after the first round. The verdict is
+above plus D (floating bottom strip) and E (pills in the command bar), added
+after the first pass. The verdict is
 [S8-STORYLINE-SURFACING-VERDICT.md](S8-STORYLINE-SURFACING-VERDICT.md):
-**S7 builds A, the top strip**, with D's persistence as an optional upgrade
-(demote the strip into a floating pill once it scrolls away); B (storyline as a
-rail slot) is refused; C (command-bar typeahead) is deferred to its own session,
-out of S7's scope.
+**S7 builds E — storyline pills under the date in the command bar, size as a
+glyph rather than a count**; A (top strip) is the fallback if pills prove too
+thin; D is superseded by E; B (storyline as a rail slot) is refused; C
+(command-bar typeahead) is deferred to its own session, out of S7's scope.
 
 ## S9 — Cutover and cleanup
 

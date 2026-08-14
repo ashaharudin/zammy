@@ -1,9 +1,9 @@
 # S8 verdict — how search surfaces storylines
 
 The prototype round ADR-0011 left open ("Left open: the surfacing UX awaits the
-prototype round"). Four variants, one dev-only route, mock data:
+prototype round"). Five variants, one dev-only route, mock data:
 `apps/web/src/prototype/storylines/`, run with `pnpm prototype:storylines` (or
-`/prototype/storylines?variant=A|B|C|D` while `pnpm dev:web` runs). The variant
+`/prototype/storylines?variant=A|B|C|D|E` while `pnpm dev:web` runs). The variant
 code is throwaway and stays on the `claude/s8-implementation-25f41f` branch; this
 note is the part that survives.
 
@@ -20,16 +20,68 @@ The three cases each variant was judged on, all in the mock corpus:
 
 ## Verdict
 
-**S7 builds A, the top strip**, with D's persistence as the one upgrade worth
-trying on top of it. B is refused. C is recorded as a deferred accelerator, not
-part of S7.
+**S7 builds E: storyline pills in the command bar, under the date stamp**, size
+carried by a glyph rather than a count. A — the top strip — is the fallback if
+pills prove too thin against real labels. B is refused. C is a deferred
+accelerator, not part of S7. D is superseded by E.
 
-### A — top strip (ships)
+The round ran in two passes: A/B/C first, where A won; then D (floating strip)
+and E (pills in the chrome) were built on the back of it, and E beat both. The
+sections below keep the reasoning in the order it was found, because A's case is
+still the case E has to keep answering.
+
+### E — pills in the command bar (ships)
+
+A row inside the sticky command bar, under the asOf stamp: one pill per surfaced
+storyline, each a size glyph plus the label, plus the date qualifier when two
+labels collide. No counts, no spans, no sparkline.
+
+It takes D's persistence and pays none of D's costs. The bar is already sticky,
+so the pills are reachable at any scroll depth — the property that made D worth
+building — but they occlude nothing, because the space is the chrome's own.
+Measured on the `iran` case: the bar grows from 66px to 96px when a search
+surfaces three storylines, and the pills wrap to a second row at 375px rather
+than hiding matches behind a horizontal scroll, which is the wart both A and D
+carry.
+
+It also sits where the model says it belongs. ADR-0011 makes search and
+storylines separate axes; a surfacing treatment in the *chrome* is that
+separation drawn in layout, while a strip inside the results reads as part of
+the result set.
+
+Size as a glyph earns its place. The question a reader asks of a surfaced
+storyline is "how big is this", not "how many exactly", and a bucket survives the
+count moving while they look at it. Buckets: ▂ 1–10, ▄ 11–50, ▆ 51–100, █ 101+.
+Two findings from building it, both load-bearing:
+
+- **▁ is not usable** for the first bucket. At 0.8rem the one-eighth block
+  renders as an underscore and reads as a typo. The ramp starts at ▂.
+- **The bar needs a track.** Drawn alone, the ramp only reads comparatively —
+  two pills side by side say which is bigger, one pill says nothing. Drawing
+  each glyph over a faint full-height █ gives it a visible maximum, and a lone
+  pill becomes legible. This is the difference between the glyph working and the
+  glyph being decoration.
+
+The exact count still exists for anyone who needs it: it is in the pill's
+`aria-label` and `title`, where it costs no width.
+
+Costs accepted:
+
+- The bar is sticky, so every row added to it is subtracted from the timeline on
+  every screen. 30px desktop, ~56px on a phone when the pills wrap.
+- The bar's height differs between searches that surface and searches that do
+  not, so the rail's start position moves between searches. Acceptable —
+  it moves at query time, never under a reading user — but S7 should check it
+  does not fight the sticky offset.
+- The thinnest payload of any variant: no span, no day count. The collision case
+  still resolves, because the date qualifier does that work, not the span line.
+
+### A — top strip (the fallback)
 
 A row of matched-storyline cards above the first day divider: label, date span,
 article/day counts, an activity sparkline, dormant marked.
 
-It won on the case the other two cannot do at all: **comparison**. Two
+It won the first pass on the case B and C cannot do at all: **comparison**. Two
 storylines called "Fort Hood Crash" are only separable when they are adjacent —
 side by side, "Fort Hood Crash · Aug 2026, 9 articles, 3 days" against "Fort
 Hood Crash · Mar 2026, 2 articles, 1 day · dormant" answers "which one do I
@@ -41,7 +93,13 @@ the strip is the answer to "what stories are your words about", and it is
 positionally stable regardless of how old the matched storylines' latest
 coverage is.
 
-Costs accepted, and what S7 should do about them:
+What it keeps over E, and why it stays the fallback: the cards have room for the
+span, the day count and the activity sparkline, and the "N storylines about
+'iran'" framing states what the row *is*. If real labels turn out to need that
+context — or if pills at three matches read as chrome noise rather than as an
+answer — this is what S7 falls back to.
+
+Costs, and what S7 would do about them:
 
 - It displaces the newest headline by roughly one card height. Real, and the
   price of an answer above its evidence. Keep the strip to one row; **no
@@ -102,7 +160,7 @@ debounced) and it is orthogonal to everything in S7. **Not in S7's scope**;
 worth a small session of its own once the strip is live and the surfacing query
 from S6 has proved out.
 
-### D — floating bottom strip (added after the first round; the runner-up)
+### D — floating bottom strip (superseded by E)
 
 A's cards taken out of the flow and floated at the bottom of the viewport in the
 switcher's own pill shape: label chips with sparkline, article count and the
@@ -131,16 +189,12 @@ What kept it from winning, both observed:
 So it trades a bounded, one-time cost for an unbounded, recurring one, and pays
 for it in information density.
 
-**The hybrid is the interesting outcome**, and it is cheap: ship A's strip, and
-when it scrolls out of view, demote it into D's pill (an IntersectionObserver on
-the strip toggles the floating version). Full payload where there is room for
-it, persistence where there is not, and nothing covered until the reader has
-already scrolled past the thing that would have been covered. Worth building in
-S7 if the strip proves useful against real data; not a prerequisite.
-
-If the call goes to D alone anyway, the two fixes it needs first are a
-non-scrolling chip set (cap to what fits, drop the rest) and a way back after
-dismissal.
+**D's idea survives; its position does not.** What D was really buying was
+persistence — the pills still being there deep in the rail — and E buys the same
+thing from the sticky bar, which the page already pays for. Once E existed there
+was nothing D did better, so the scroll-demotion hybrid this section originally
+proposed is dropped: it was a way to bolt persistence onto A, and E has it by
+construction.
 
 ## Other findings, for S7
 
@@ -157,3 +211,11 @@ dismissal.
 - The strip's counts ("9 articles · 3 days") did more work than the sparkline.
   If the S6 payload makes the per-day activity expensive, drop the sparkline
   before dropping the counts.
+- **What E needs from S6's surfacing payload is small**: storyline UUID, label,
+  article count (for the bucket), status, and the span — the span only for the
+  collision qualifier, so `to` alone would do. No per-day activity array, which
+  is the one expensive field the strip variants wanted.
+- Bucket boundaries (10 / 50 / 100) are eyeballed, not measured. Once S5's
+  backfill has run, check the distribution of storyline article counts in the
+  dev archive: if nine storylines in ten land in one bucket, the ramp is
+  decoration and the boundaries should move.

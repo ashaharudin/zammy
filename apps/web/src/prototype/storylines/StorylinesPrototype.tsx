@@ -11,10 +11,11 @@ import { VariantA } from "./VariantA.js";
 import { VariantB } from "./VariantB.js";
 import { VariantC } from "./VariantC.js";
 import { VariantD } from "./VariantD.js";
+import { VariantE } from "./VariantE.js";
 import type { VariantProps } from "./variant-props.js";
 
 /**
- * PROTOTYPE (S8) — three variants of how a search SURFACES storylines, on one
+ * PROTOTYPE (S8) — five variants of how a search SURFACES storylines, on one
  * dev-only route, switchable via `?variant=`. Mock data only; no production
  * wiring, and nothing here is meant to be merged (ADR-0011 "Left open: the
  * surfacing UX awaits the prototype round").
@@ -23,8 +24,9 @@ import type { VariantProps } from "./variant-props.js";
  *   B — storyline as a first-class rail slot at its latest activity
  *   C — command-bar typeahead while the reader is still typing
  *   D — floating bottom strip, persistent as the reader scrolls
+ *   E — pills under the date in the command bar, size as a glyph
  *
- * Universal gutter labels are the BASELINE in all three (they are settled), so
+ * Universal gutter labels are the BASELINE in all of them (they are settled), so
  * what is under evaluation is only the extra surfacing layer.
  *
  * Run: `pnpm prototype:storylines`, or open
@@ -36,6 +38,7 @@ const VARIANTS = [
   { key: "B", name: "Storyline as rail slot", render: (p: VariantProps) => <VariantB {...p} /> },
   { key: "C", name: "Command-bar typeahead", render: (p: VariantProps) => <VariantC {...p} /> },
   { key: "D", name: "Floating bottom strip", render: (p: VariantProps) => <VariantD {...p} /> },
+  { key: "E", name: "Pills in the command bar", render: (p: VariantProps) => <VariantE {...p} /> },
 ];
 
 export function StorylinesPrototype() {
