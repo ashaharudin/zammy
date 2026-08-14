@@ -81,6 +81,21 @@ export function visibleStorylines(
 }
 
 /**
+ * What a pill says in words rather than in glyphs: the exact article count, and
+ * "dormant" when the storyline has fallen quiet (ADR-0011's Lifecycle).
+ *
+ * Both facts live in the pill's `title` and `aria-label`, where they cost no
+ * width — the glyph answers "how big" at a glance and the muted treatment
+ * answers "still running", and this is where a reader who wants the actual
+ * numbers finds them. Dormancy is a fact about the STORY, so it is stated
+ * plainly and not converted into a date the reader has to subtract from today.
+ */
+export function pillDetail(storyline: { size: number; dormant: boolean }): string {
+  const exact = `${storyline.size} article${storyline.size === 1 ? "" : "s"}`;
+  return storyline.dormant ? `${exact} · dormant` : exact;
+}
+
+/**
  * The size bucket a surfaced storyline's pill draws (S8's verdict): 1–10,
  * 11–50, 51–100, 101+, as 1–4 of four squares.
  *

@@ -11,7 +11,7 @@ import { createDb } from "@zammy/storage";
 import { registerHealthRoutes } from "./health.js";
 import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
 import { IngestQueue } from "./ingest-queue.js";
-import { ChoreQueue, runRetentionChore } from "./chores.js";
+import { ChoreQueue, runDormancyChore, runRetentionChore, type ChoreDeps } from "./chores.js";
 import { Metrics, registerMetricsRoute } from "./metrics.js";
 import { processSegmentJob, type TimelineDeps } from "./timeline-service.js";
 import { processSampleJob, type TrendingDeps } from "./trending-service.js";
@@ -177,23 +177,27 @@ export async function buildApp(config: Config): Promise<App> {
   await registerQueryRoutes(app, { deps, defaultLanguage: config.DEFAULT_LANGUAGE });
   registerTrendingRoute(app, { deps: trendingDeps });
 
-  // Nightly retention report (§7.5) — the one chore with a clock (§9.1).
+  // Nightly chores (§9.1): the retention report (§7.5), and the storyline
+  // lifecycle pass that keeps `status` honest (ADR-0011).
+  const choreDeps: ChoreDeps = {
+    db,
+    config: {
+      retentionDays: config.RETENTION_DAYS,
+      baselineWindowDays: config.BASELINE_WINDOW_DAYS,
+      storyDfWindowDays: config.STORYLINE_DF_WINDOW_DAYS,
+      storylineDormancyDays: config.STORYLINE_DORMANCY_DAYS,
+      timeZone: config.APP_TIMEZONE,
+    },
+    now: () => new Date(),
+    log: app.log,
+  };
   const chores = new ChoreQueue(config.REDIS_URL);
   chores.startConsumer({
-    retention: () =>
-      runRetentionChore({
-        db,
-        config: {
-          retentionDays: config.RETENTION_DAYS,
-          baselineWindowDays: config.BASELINE_WINDOW_DAYS,
-          storyDfWindowDays: config.STORYLINE_DF_WINDOW_DAYS,
-          timeZone: config.APP_TIMEZONE,
-        },
-        now: () => new Date(),
-        log: app.log,
-      }),
+    retention: () => runRetentionChore(choreDeps),
+    storylines: () => runDormancyChore(choreDeps),
   });
   await chores.scheduleNightlyRetention();
+  await chores.scheduleNightlyStorylines();
 
   app.log.info({ config: redactConfig(config) }, "configuration loaded");
 

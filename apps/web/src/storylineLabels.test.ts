@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SurfacedStoryline, TimelineEntry } from "@zammy/shared";
 import {
+  pillDetail,
   sizeBucket,
   SIZE_STEPS,
   storylineQualifier,
@@ -23,6 +24,7 @@ const surfaced = (id: string, label: string | null, size = 5): SurfacedStoryline
   id,
   label,
   size,
+  dormant: false,
   from: "2026-03-02T00:00:00.000Z",
   to: "2026-03-04T00:00:00.000Z",
 });
@@ -109,6 +111,17 @@ describe("storylineQualifier", () => {
   it("names the month the storyline began", () => {
     expect(storylineQualifier("2026-03-02T00:00:00.000Z")).toMatch(/Mar|March/);
     expect(storylineQualifier("2026-03-02T00:00:00.000Z")).toMatch(/2026/);
+  });
+});
+
+describe("pillDetail", () => {
+  it("gives the exact count, and says dormant when the story has fallen quiet", () => {
+    expect(pillDetail({ size: 12, dormant: false })).toBe("12 articles");
+    // S8: the marker is what explains a five-month-old match instantly. It
+    // rides beside the count rather than replacing it — a reader who opens the
+    // title wants both facts.
+    expect(pillDetail({ size: 12, dormant: true })).toBe("12 articles · dormant");
+    expect(pillDetail({ size: 1, dormant: false })).toBe("1 article");
   });
 });
 

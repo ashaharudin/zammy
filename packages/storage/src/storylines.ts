@@ -125,7 +125,9 @@ export async function attachGroup(
     await refreshProfileTokens(trx, target);
     await refreshDaySlots(trx, target, input.timeZone);
 
-    return { attached: Number(inserted.numInsertedOrUpdatedRows ?? 0) > 0 };
+    const attached = Number(inserted.numInsertedOrUpdatedRows ?? 0) > 0;
+    if (attached) await wake(trx, target);
+    return { attached };
   });
 }
 
@@ -177,6 +179,39 @@ export async function setStorylineStatus(
     .where("id", "=", input.storylineId)
     .where("merged_into", "is", null)
     .execute();
+}
+
+/**
+ * Mark every active storyline whose latest coverage is older than `before`
+ * dormant, and report how many. The read side's half of ADR-0011's dormancy.
+ *
+ * Derived, not judged: the caller supplies the cutoff — the linker's own
+ * `STORYLINE_DORMANCY_DAYS`, so the column and the gate that reads it agree —
+ * and this only asks the day slots what they say. Measured from the LATEST
+ * covered day, because that is what dormancy means: an arc that began in March
+ * and ran until yesterday is not quiet, it is long.
+ *
+ * Aliases and provisionals are skipped for the reason `setStorylineStatus`
+ * skips them — a pointer has no lifecycle, and a storyline-of-one is a timeline
+ * slot rather than a story that can fall quiet. A storyline with no day slots at
+ * all is skipped too: there is no coverage to measure its silence from.
+ */
+export async function markDormantStorylines(
+  db: Kysely<Database>,
+  input: { before: Date },
+): Promise<number> {
+  const result = await sql<{ id: string }>`
+    update storylines s
+       set status = 'dormant'
+     where s.status = 'active'
+       and s.merged_into is null
+       and (
+         select max(d.day_slot_published) from storyline_days d
+          where d.storyline_id = s.id
+       ) < ${input.before}
+    returning s.id
+  `.execute(db);
+  return result.rows.length;
 }
 
 /**
@@ -294,6 +329,8 @@ export async function mergeStorylines(
 
     await refreshProfileTokens(trx, winner);
     await refreshDaySlots(trx, winner, input.timeZone);
+    // The winner just took the loser's whole coverage, which is coverage earned.
+    await wake(trx, winner);
 
     return { merged: true, winnerId: winner };
   });
@@ -759,6 +796,26 @@ async function resolveIn(db: Kysely<Database>, storylineId: string): Promise<str
     select id from chain order by depth desc limit 1
   `.execute(db);
   return rows[0]?.id ?? null;
+}
+
+/**
+ * A dormant storyline has earned coverage: mark it active again (ADR-0011,
+ * "active again when it earns coverage").
+ *
+ * On the write that added the coverage rather than on the nightly sweep, because
+ * the sweep runs at 3am and a reader arriving at noon would otherwise be told a
+ * story that grew an hour ago is five months quiet. Only `dormant` rows move: a
+ * provisional storyline is promoted by the LINKER, which is where the group count
+ * that justifies it was read, and inferring promotion here is exactly what
+ * `attachGroup` refuses to do.
+ */
+async function wake(db: Kysely<Database>, storylineId: string): Promise<void> {
+  await db
+    .updateTable("storylines")
+    .set({ status: "active" })
+    .where("id", "=", storylineId)
+    .where("status", "=", "dormant")
+    .execute();
 }
 
 /**

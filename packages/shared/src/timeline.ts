@@ -155,6 +155,18 @@ export const SurfacedStoryline = StorylineRef.extend({
    * costs nothing here and the pill puts it in its `title`.
    */
   size: z.int().min(0),
+  /**
+   * Quiet for longer than the dormancy window (ADR-0011) — the one bit the pill
+   * needs to say so.
+   *
+   * A dormant storyline is still surfaced: it is a real story that has fallen
+   * quiet, and quiet is a thing to tell the reader rather than a reason to hide
+   * a match. S8's round found the marker load-bearing — without it a
+   * five-month-old story appearing beside today's news reads as a bug. A
+   * boolean and not the status string: `provisional` never surfaces at all, so
+   * the only distinction left on the wire is running or quiet.
+   */
+  dormant: z.boolean(),
 });
 export type SurfacedStoryline = z.infer<typeof SurfacedStoryline>;
 

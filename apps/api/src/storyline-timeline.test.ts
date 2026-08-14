@@ -11,6 +11,7 @@ import {
   promoteStoryline,
   recordCoverage,
   setStorylineLabel,
+  setStorylineStatus,
   upsertTopic,
 } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
@@ -462,6 +463,39 @@ describe("surfacing storylines beside a search", () => {
       { limit: 25 },
     );
     expect(partial.storylines).toEqual([]);
+  });
+
+  it("says which surfaced storylines are dormant", async () => {
+    // S8's verdict: the marker "explained the March match instantly — without
+    // it the reader wonders why a five-month-old story is being offered".
+    const query = await seed([
+      sighting({ domain: "a.example", title: "Hurricane Fausto nears Hawaii", published: MONDAY }),
+      sighting({
+        domain: "b.example",
+        title: "Hurricane Fausto weakens west of Hawaii",
+        published: TUESDAY,
+      }),
+    ]);
+    const storyline = await storylineOf(await groupIds(), "Hurricane Fausto");
+
+    const active = await readTimeline(
+      harness.deps,
+      { ...query, keywords: ["hurricane"] },
+      { limit: 25 },
+    );
+    expect(active.storylines[0]).toMatchObject({ id: storyline, dormant: false });
+
+    await setStorylineStatus(db, { storylineId: storyline, status: "dormant" });
+    await dropCachedPages(query.fingerprint);
+    const dormant = await readTimeline(
+      harness.deps,
+      { ...query, keywords: ["hurricane"] },
+      { limit: 25 },
+    );
+
+    // Still offered — a dormant storyline is a real story that has fallen
+    // quiet, and quiet is a thing to say rather than a reason to hide it.
+    expect(dormant.storylines[0]).toMatchObject({ id: storyline, dormant: true });
   });
 
   it("never surfaces a provisional storyline — it is a slot, not a story", async () => {

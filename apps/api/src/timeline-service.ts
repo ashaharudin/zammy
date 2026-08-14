@@ -385,6 +385,7 @@ async function planAndRead(
       from: storyline.spanFrom,
       to: storyline.spanTo,
       size: storyline.size,
+      dormant: storyline.status === "dormant",
     })),
     page: {
       nextCursor: stored.nextCursor ? encodeCursor(stored.nextCursor) : null,
@@ -533,6 +534,7 @@ export async function readStorylineView(
             from: first.spanFrom,
             to: first.spanTo,
             size,
+            dormant: first.status === "dormant",
           },
         ]
       : [],

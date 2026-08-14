@@ -1,8 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { sql } from "kysely";
 import {
+  attachGroup,
   countBridges,
+  createProvisionalStoryline,
+  promoteStoryline,
   readGroupStorylines,
+  setStorylineStatus,
   readStoryline,
   readStorylineDays,
   recordStoryDf,
@@ -217,6 +221,31 @@ describe("attach and promote", () => {
     const outcome = await linkGroup(deps(), second);
 
     expect(outcome.attached).toBe(false);
+  });
+
+  it("wakes a dormant storyline the moment it earns coverage", async () => {
+    // ADR-0011: "active again when it earns coverage" — earns, not "is swept
+    // over at 3am". A dormant storyline that takes a group at noon must read as
+    // active to the noon reader, so reactivation belongs to the write path and
+    // the nightly sweep only ever marks quiet.
+    await seedCorpus({ rare: STORY });
+    const march = await group({ tokens: STORY, publishedAt: "2026-03-02T09:00:00Z" });
+    const born = await createProvisionalStoryline(db, { groupId: march.groupId, timeZone: "UTC" });
+    await attachGroup(db, {
+      storylineId: born.id,
+      groupId: (await group({ tokens: STORY, publishedAt: "2026-03-03T09:00:00Z" })).groupId,
+      timeZone: "UTC",
+    });
+    await promoteStoryline(db, { storylineId: born.id });
+    await setStorylineStatus(db, { storylineId: born.id, status: "dormant" });
+
+    const outcome = await linkGroup(deps(), await group({ tokens: STORY }));
+
+    // Five months quiet, and it still cleared the dormant bar — which is the
+    // point of keeping dormant storylines matchable at all.
+    expect(outcome.storylineId).toBe(born.id);
+    expect(outcome.attached).toBe(true);
+    expect((await readStoryline(db, born.id))?.status).toBe("active");
   });
 
   it("takes one day slot per day the storyline has coverage", async () => {

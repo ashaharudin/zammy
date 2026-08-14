@@ -157,6 +157,9 @@ try {
     `  largest storyline ${stats.largestStoryline} groups  ${pct(stats.largestStoryline, stats.linkedGroups)} of the corpus`,
   );
   console.log(`  day slots         ${stats.daySlots}`);
+  // A replay of old history builds storylines that are already quiet; the run
+  // stamps them so nothing reads five months of silence as live (ADR-0011).
+  console.log(`  marked dormant    ${report.dormant}`);
   console.log(
     `\n  labels            ${stats.labelled} of ${stats.promoted} promoted ` +
       `(${pct(stats.labelled, stats.promoted)})` +

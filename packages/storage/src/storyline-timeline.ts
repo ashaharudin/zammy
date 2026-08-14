@@ -216,7 +216,14 @@ export async function findSurfacedStorylines(
   db: Kysely<Database>,
   input: { tokens: readonly string[]; limit: number },
 ): Promise<
-  { id: string; label: string | null; spanFrom: string; spanTo: string; size: number }[]
+  {
+    id: string;
+    label: string | null;
+    spanFrom: string;
+    spanTo: string;
+    size: number;
+    status: StorylineStatus;
+  }[]
 > {
   if (input.tokens.length === 0) return [];
 
@@ -226,11 +233,12 @@ export async function findSurfacedStorylines(
   const { rows } = await sql<{
     id: string;
     label: string | null;
+    status: StorylineStatus;
     span_from: Date;
     span_to: Date;
     size: string;
   }>`
-    select s.id, s.label,
+    select s.id, s.label, s.status,
            min(d.day_slot_published) as span_from,
            max(d.day_slot_published) as span_to,
            (select count(*) from storyline_groups sg
@@ -242,7 +250,7 @@ export async function findSurfacedStorylines(
       and s.status <> 'provisional'
       and s.label is not null
       and s.profile_tokens @> ${[...input.tokens]}::text[]
-    group by s.id, s.label
+    group by s.id, s.label, s.status
     order by max(d.day_slot_published) desc, s.id
     limit ${input.limit}
   `.execute(db);
@@ -250,6 +258,7 @@ export async function findSurfacedStorylines(
   return rows.map((row) => ({
     id: row.id,
     label: row.label,
+    status: row.status,
     spanFrom: row.span_from.toISOString(),
     spanTo: row.span_to.toISOString(),
     size: Number(row.size),

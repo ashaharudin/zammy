@@ -2,6 +2,7 @@ import { Queue, Worker } from "bullmq";
 import { Redis } from "ioredis";
 import type { Kysely } from "kysely";
 import {
+  markDormantStorylines,
   pruneStoryDf,
   pruneTermSnapshots,
   retentionReport,
@@ -30,6 +31,10 @@ export interface ChoreDeps {
     retentionDays: number;
     baselineWindowDays: number;
     storyDfWindowDays: number;
+    /** ADR-0011's ~90: days without coverage after which a storyline is quiet.
+     * The same knob the linker's gate reads, so the column cannot disagree
+     * with the bar. */
+    storylineDormancyDays: number;
     timeZone: string;
   };
   now: () => Date;
@@ -84,6 +89,33 @@ export async function runRetentionChore(deps: ChoreDeps): Promise<RetentionRepor
   return report;
 }
 
+/**
+ * The nightly dormancy sweep (ADR-0011, "Lifecycle"): make the status column say
+ * what the linker already computes.
+ *
+ * The linker measures dormancy dynamically, from a candidate's last coverage,
+ * and that is right for a linking decision — it must be true of the storyline at
+ * the moment the question is asked. The COLUMN is the READ side's
+ * representation of the same fact, and a nightly pass is enough for it: what
+ * reads it is a pill in a search result, where "quiet since March" is the whole
+ * message and a few hours of lag cannot change it.
+ *
+ * Reactivation is deliberately NOT here. A dormant storyline that takes a group
+ * at noon must not stay marked until 3am, so the write path flips it back
+ * (`attachGroup`, `mergeStorylines`) — this sweep only ever marks quiet.
+ */
+export async function runDormancyChore(deps: ChoreDeps): Promise<{ dormant: number }> {
+  const before = new Date(
+    deps.now().getTime() - deps.config.storylineDormancyDays * 86_400_000,
+  );
+  const dormant = await markDormantStorylines(deps.db, { before });
+  deps.log.info(
+    { dormant, before: before.toISOString(), dormancyDays: deps.config.storylineDormancyDays },
+    "storyline dormancy sweep (ADR-0011)",
+  );
+  return { dormant };
+}
+
 export class ChoreQueue {
   private readonly queue: Queue;
   private worker: Worker | null = null;
@@ -106,12 +138,25 @@ export class ChoreQueue {
     );
   }
 
-  startConsumer(handlers: { retention: () => Promise<unknown> }): void {
+  /** The storyline lifecycle pass: dormancy, and the labels that drifted. */
+  async scheduleNightlyStorylines(cron = "0 4 * * *"): Promise<void> {
+    await this.queue.upsertJobScheduler(
+      "storylines-nightly",
+      { pattern: cron },
+      { name: "storylines" },
+    );
+  }
+
+  startConsumer(handlers: {
+    retention: () => Promise<unknown>;
+    storylines?: () => Promise<unknown>;
+  }): void {
     if (this.worker) throw new Error("chore consumer already started");
     this.worker = new Worker(
       this.queueName,
       async (job) => {
         if (job.name === "retention") await handlers.retention();
+        if (job.name === "storylines") await handlers.storylines?.();
       },
       { connection: new Redis(this.redisUrl, { maxRetriesPerRequest: null }) },
     );
