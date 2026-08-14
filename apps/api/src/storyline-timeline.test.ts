@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { sql } from "kysely";
 import { deriveDedupKey, type Sighting } from "@zammy/currents-client";
+import { encodeCursor } from "@zammy/shared";
 import {
   attachGroup,
   createProvisionalStoryline,
@@ -305,6 +306,22 @@ describe("cursor totality under the new keyset", () => {
       }),
     ).rejects.toThrow(/unusable cursor/);
   });
+
+  it("refuses a v1 cursor rather than casting a bigint to a UUID", async () => {
+    // The flag flipped ON under a reader mid-scroll: their cursor's id half is
+    // a hub group's bigint, and the v2 keyset compares it against a UUID. A
+    // 400 is the honest answer — the cursor names a slot in a model this
+    // request is not serving — where the cast is a 500.
+    const query = await seed([
+      sighting({ domain: "a.example", title: "Something happened today", published: MONDAY }),
+    ]);
+    await expect(
+      readTimeline(harness.deps, query, {
+        limit: 5,
+        cursorString: encodeCursor({ published: MONDAY, articleId: "1234567890" }),
+      }),
+    ).rejects.toThrow(/unusable cursor/);
+  });
 });
 
 describe("the storyline view", () => {
@@ -380,6 +397,32 @@ describe("the storyline view", () => {
 
     expect(days).toHaveLength(5);
     expect(new Set(days).size).toBe(5);
+  });
+
+  it("reports the storyline's whole-life size on every page, not the page's own", async () => {
+    // The wire contract says size is "articles in the storyline, over its whole
+    // life" — a fact about the story. Summing the page would make it a fact
+    // about the scroll position: five articles on page one, two on page two.
+    await seed(
+      Array.from({ length: 5 }, (_, i) =>
+        sighting({
+          domain: `d${i}.example`,
+          title: `Fausto update number ${i}`,
+          published: `2026-08-1${i}T09:00:00.000Z`,
+        }),
+      ),
+    );
+    const storyline = await storylineOf(await groupIds(), "Hurricane Fausto");
+
+    const first = await readStorylineView(harness.deps, { storylineId: storyline, limit: 2 });
+    const second = await readStorylineView(harness.deps, {
+      storylineId: storyline,
+      limit: 2,
+      cursorString: first!.page.nextCursor!,
+    });
+
+    expect(first!.storylines[0]!.size).toBe(5);
+    expect(second!.storylines[0]!.size).toBe(5);
   });
 });
 
@@ -475,6 +518,41 @@ describe("the flag", () => {
       expect(result.items[0]!.storyline).toBeNull();
       expect(result.storylines).toEqual([]);
       expect(/^\d+$/.test(result.items[0]!.storylineId)).toBe(true);
+    } finally {
+      await off.teardown();
+    }
+  });
+
+  it("refuses a v2 cursor when it goes back off, rather than casting a UUID to a bigint", async () => {
+    // The other direction, and the one a rollback produces: the reader's cursor
+    // holds a storyline UUID and the old keyset compares it against a bigint.
+    // A flag flip either way costs a reader their place, never a 500.
+    const off = await createTestHarness({ storylinesV2: false }, NOW);
+    try {
+      const fingerprint = randomBytes(32).toString("hex");
+      await upsertTopic(off.deps.db, { fingerprint, keywords: ["storm"], language: "en" });
+      await recordCoverage(off.deps.db, fingerprint, WINDOW);
+
+      await expect(
+        readTimeline(
+          off.deps,
+          {
+            fingerprint,
+            keywords: ["storm"],
+            language: "en",
+            country: null,
+            category: null,
+            window: { ...WINDOW },
+          },
+          {
+            limit: 5,
+            cursorString: encodeCursor({
+              published: MONDAY,
+              articleId: "00000000-0000-4000-8000-000000000001",
+            }),
+          },
+        ),
+      ).rejects.toThrow(/unusable cursor/);
     } finally {
       await off.teardown();
     }

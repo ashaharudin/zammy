@@ -311,6 +311,30 @@ export async function resolveStoryline(
   return resolveIn(db, storylineId);
 }
 
+/**
+ * Articles in a storyline, over its whole life — the same count
+ * `findSurfacedStorylines` reports beside a search, for the one caller that
+ * knows a single storyline rather than a matched set.
+ *
+ * Whole-life rather than per-page, because that is what the wire contract says a
+ * size IS: the storyline view pages by day, and a storyline longer than one page
+ * would otherwise report a different size at every scroll position. Member
+ * ARTICLES, not groups, and not scoped to any topic: a storyline's size is a
+ * fact about the story rather than about the words that found it.
+ */
+export async function readStorylineArticleCount(
+  db: Kysely<Database>,
+  storylineId: string,
+): Promise<number> {
+  const row = await db
+    .selectFrom("storyline_groups as sg")
+    .innerJoin("articles as a", "a.group_id", "sg.group_id")
+    .select((eb) => eb.fn.countAll<string>().as("n"))
+    .where("sg.storyline_id", "=", storylineId)
+    .executeTakeFirst();
+  return Number(row?.n ?? 0);
+}
+
 /** Read a storyline by id, WITHOUT resolving aliases — callers see the raw row. */
 export async function readStoryline(
   db: Kysely<Database>,
