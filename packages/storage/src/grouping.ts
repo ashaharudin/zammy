@@ -449,6 +449,92 @@ export async function readStorylineDay(
   }));
 }
 
+/** One whole group, as the v2 linker consumes it (ADR-0011). */
+export interface LinkableGroupRow {
+  groupId: string;
+  /** Every member's `story_tokens` — the group's profile is their majority. */
+  memberTokens: string[][];
+  language: string | null;
+  /** MIN(published) over the group: when this coverage happened. */
+  published: Date;
+}
+
+/**
+ * Groups in publication order, keyset-paged — the backfill's input (S5).
+ *
+ * Chronological because the linker is order-dependent and replay order is the
+ * canonical order (ADR-0011's Rollout). Keyset rather than OFFSET for the
+ * reason §7.3 gives: the backfill writes as it reads, and an offset over a
+ * table being written to skips rows.
+ *
+ * The keyset is `(group_published, group_id)`, which is denormalized onto every
+ * member and already indexed — so paging the whole archive by group costs the
+ * same index scan the timeline pays.
+ */
+export async function readLinkableGroups(
+  db: Kysely<Database>,
+  query: {
+    /**
+     * Where to continue from. `inclusive` returns the cursor row ITSELF, which
+     * is what resuming an interrupted run wants — the last group it reached may
+     * have been half-processed, and only re-running it finishes the job. Paging
+     * within a run wants the opposite, or every batch redoes its predecessor's
+     * last group.
+     */
+    after?: { published: Date; groupId: string; inclusive?: boolean };
+    limit: number;
+  },
+): Promise<LinkableGroupRow[]> {
+  const { rows } = await sql<{
+    group_id: string;
+    language: string | null;
+    published: Date;
+    member_tokens: string[][];
+  }>`
+    select g.group_id,
+           g.language,
+           g.published,
+           g.member_tokens
+    from (
+      select a.group_id,
+             min(a.group_published) as published,
+             min(a.language) as language,
+             -- json_agg, not array_agg: Postgres cannot build a 2-D array from
+             -- rows whose arrays differ in length ("cannot accumulate arrays of
+             -- different dimensionality"), and member articles differ in length
+             -- constantly — a headline with a description carries more tokens
+             -- than one without.
+             json_agg(a.story_tokens) as member_tokens
+      from articles a
+      group by a.group_id
+    ) g
+    where ${
+      query.after
+        ? query.after.inclusive
+          ? sql`(g.published, g.group_id) >= (${query.after.published}, ${query.after.groupId}::bigint)`
+          : sql`(g.published, g.group_id) >  (${query.after.published}, ${query.after.groupId}::bigint)`
+        : sql`true`
+    }
+    order by g.published asc, g.group_id asc
+    limit ${query.limit}
+  `.execute(db);
+
+  return rows.map((row) => ({
+    groupId: row.group_id,
+    memberTokens: row.member_tokens,
+    language: row.language,
+    published: row.published,
+  }));
+}
+
+/** How many groups the archive holds — the backfill's denominator. */
+export async function countGroups(db: Kysely<Database>): Promise<number> {
+  const { rows } = await sql<{ n: string }>`
+    select count(distinct group_id) as n from articles
+  `.execute(db);
+  return Number(rows[0]?.n ?? 0);
+}
+
 /** How many articles are still behind the current tokenizer. */
 export async function countStaleTokenArticles(
   db: Kysely<Database>,
