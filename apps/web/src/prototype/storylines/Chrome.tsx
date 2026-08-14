@@ -23,6 +23,9 @@ export function CommandBar({
   onDismissView,
   dropdown,
   pills,
+  pillsExpanded = true,
+  onTogglePills,
+  pillsCollapsedLabel,
 }: {
   query: string;
   /** The storyline being viewed: label as a dismissible chip, box empty. */
@@ -31,8 +34,13 @@ export function CommandBar({
   onDismissView: () => void;
   /** Variant C's typeahead. Rendered under the input, inside the sticky bar. */
   dropdown?: React.ReactNode;
-  /** Variant E's storyline pills, on the meta row beside the date stamp. */
+  /** Variant E's storyline pills, on their own row under the date stamp. */
   pills?: React.ReactNode;
+  /** Whether that row is showing. The handle bar below it does the toggling. */
+  pillsExpanded?: boolean;
+  onTogglePills?: () => void;
+  /** What the handle says while the row is hidden, e.g. "3 storylines". */
+  pillsCollapsedLabel?: string;
 }) {
   return (
     <header
@@ -118,16 +126,51 @@ export function CommandBar({
       </div>
       {/* Its own row UNDER the date stamp, still inside the sticky bar, so the
           pills travel with the chrome rather than with the results. */}
-      {pills && (
+      {pills && pillsExpanded && (
         <div
           style={{
             maxWidth: "var(--page-max)",
             margin: "0 auto",
-            padding: "0 1rem 0.55rem",
+            padding: "0 1rem 0.5rem",
           }}
         >
           {pills}
         </div>
+      )}
+      {/* The handle: a full-bleed hairline across the bar's foot with a caret
+          on it. It is the bar's own bottom edge doing double duty, so the
+          control costs no row of its own — and it stays put whether the pills
+          are showing or not, which is what makes re-opening them findable. */}
+      {pills && onTogglePills && (
+        <button
+          onClick={onTogglePills}
+          aria-expanded={pillsExpanded}
+          aria-label={pillsExpanded ? "Hide matching storylines" : "Show matching storylines"}
+          style={{
+            display: "block",
+            width: "100%",
+            border: "none",
+            borderTop: "1px solid var(--border)",
+            background: "none",
+            color: "var(--fg-faint)",
+            cursor: "pointer",
+            padding: 0,
+            height: "0.9rem",
+            lineHeight: "0.9rem",
+            fontSize: "0.6rem",
+          }}
+        >
+          {/* Expanded, the caret alone: the pills above it say what it hides.
+              Collapsed, the caret needs to say what is behind it, or the row
+              the reader closed becomes a row they cannot find again. */}
+          {pillsExpanded ? (
+            "▲"
+          ) : (
+            <span style={{ fontFamily: MONO, letterSpacing: "0.04em" }}>
+              ▼ {pillsCollapsedLabel}
+            </span>
+          )}
+        </button>
       )}
     </header>
   );

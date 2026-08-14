@@ -307,17 +307,21 @@ const SINGLETONS: { day: string; article: MockArticle }[] = [
 ];
 
 /**
- * Coverage size as one glyph. Four buckets, because the question a reader asks
- * of a surfaced storyline is "how big is this?", not "how many exactly?" — and
- * a bucket survives the count still moving while they look at it.
+ * Coverage size as one glyph: a 2×2 block of 4px squares, one filled per step.
+ * Four buckets, because the question a reader asks of a surfaced storyline is
+ * "how big is this?", not "how many exactly?" — and a bucket survives the count
+ * still moving while they look at it.
+ *
+ * Drawn rather than typed. The block-element characters this started as (▂▄▆█)
+ * needed a faint track behind them to be legible alone, sat on the text
+ * baseline rather than the pill's optical centre, and are at the mercy of
+ * whichever mono font the reader has.
  */
 export const COVERAGE_BUCKETS = [
-  // ▂ rather than ▁ for the first bucket: at 0.8rem the one-eighth block
-  // renders as an underscore and reads as a typo, not as a quantity.
-  { max: 10, glyph: "▂", label: "1–10 articles" },
-  { max: 50, glyph: "▄", label: "11–50 articles" },
-  { max: 100, glyph: "▆", label: "51–100 articles" },
-  { max: Infinity, glyph: "█", label: "101+ articles" },
+  { max: 10, filled: 1, label: "1–10 articles" },
+  { max: 50, filled: 2, label: "11–50 articles" },
+  { max: 100, filled: 3, label: "51–100 articles" },
+  { max: Infinity, filled: 4, label: "101+ articles" },
 ] as const;
 
 export function coverageBucket(articleCount: number) {

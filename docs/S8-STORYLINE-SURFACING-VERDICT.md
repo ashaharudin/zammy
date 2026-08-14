@@ -34,7 +34,8 @@ still the case E has to keep answering.
 
 A row inside the sticky command bar, under the asOf stamp: one pill per surfaced
 storyline, each a size glyph plus the label, plus the date qualifier when two
-labels collide. No counts, no spans, no sparkline.
+labels collide. No counts, no spans, no sparkline. The bar's bottom edge is a
+handle — a hairline with a caret on it — that hides and restores the row.
 
 It takes D's persistence and pays none of D's costs. The bar is already sticky,
 so the pills are reachable at any scroll depth — the property that made D worth
@@ -51,24 +52,42 @@ the result set.
 
 Size as a glyph earns its place. The question a reader asks of a surfaced
 storyline is "how big is this", not "how many exactly", and a bucket survives the
-count moving while they look at it. Buckets: ▂ 1–10, ▄ 11–50, ▆ 51–100, █ 101+.
-Two findings from building it, both load-bearing:
+count moving while they look at it. Buckets: 1–10, 11–50, 51–100, 101+, drawn as
+a 2×2 block of 4px squares with one square coloured per step, bottom row first —
+a container filling rather than a bar growing.
 
-- **▁ is not usable** for the first bucket. At 0.8rem the one-eighth block
-  renders as an underscore and reads as a typo. The ramp starts at ▂.
-- **The bar needs a track.** Drawn alone, the ramp only reads comparatively —
-  two pills side by side say which is bigger, one pill says nothing. Drawing
-  each glyph over a faint full-height █ gives it a visible maximum, and a lone
-  pill becomes legible. This is the difference between the glyph working and the
-  glyph being decoration.
+The unfilled squares stay drawn at low opacity, and that is the load-bearing
+part: they are the visible maximum, so one pill on its own reads as "one of
+four" instead of needing a neighbour to be compared against.
+
+It reached that shape via block-element characters (▂▄▆█), which are recorded
+here because the reasons they lost apply to any typographic ramp: ▁ renders as
+an underscore at 0.8rem and reads as a typo; the ramp needed a faint █ painted
+behind it to have a maximum at all; the glyphs sit on the text baseline rather
+than the pill's optical centre; and the shape is at the mercy of whichever mono
+font the reader has. Four divs have none of those problems.
 
 The exact count still exists for anyone who needs it: it is in the pill's
 `aria-label` and `title`, where it costs no width.
 
+**The handle.** The pills row is closable — the hairline at the foot of the
+command bar carries a caret, and collapsing takes the sticky bar back to its
+pre-storylines height. Two decisions worth keeping in S7:
+
+- The handle is the bar's own bottom edge, so the control costs no row of its
+  own, and it stays put in both states — which is what makes a closed row
+  findable again.
+- Collapsed, the caret names what it hides ("▼ 3 storylines"). Expanded it is a
+  bare caret; the pills above it are their own explanation.
+- The collapsed state persists across searches. A reader who closed the row is
+  saying "not what I am here for", and re-opening it on the next query would be
+  the nag D's dismissal was.
+
 Costs accepted:
 
 - The bar is sticky, so every row added to it is subtracted from the timeline on
-  every screen. 30px desktop, ~56px on a phone when the pills wrap.
+  every screen. 30px desktop, ~56px on a phone when the pills wrap — recoverable
+  by the reader via the handle, which is why the handle is not optional.
 - The bar's height differs between searches that surface and searches that do
   not, so the rail's start position moves between searches. Acceptable —
   it moves at query time, never under a reading user — but S7 should check it

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { MONO } from "../../theme.js";
 import { CommandBar, Page } from "./Chrome.js";
 import { Rail } from "./Rail.js";
@@ -32,6 +33,11 @@ export function VariantE({
   onOpenStoryline,
   onDismissView,
 }: VariantProps) {
+  // Sticky chrome the reader can shrink. Held across searches on purpose: a
+  // reader who has hidden the pills is saying "not what I am here for", and
+  // re-offering them on the next query would be the same nag D's dismissal was.
+  const [expanded, setExpanded] = useState(true);
+
   const collides = new Set(
     surfaced
       .map((s) => s.label)
@@ -64,6 +70,9 @@ export function VariantE({
         onQueryChange={onQueryChange}
         onDismissView={onDismissView}
         pills={pills}
+        pillsExpanded={expanded}
+        onTogglePills={() => setExpanded(!expanded)}
+        pillsCollapsedLabel={`${surfaced.length} storyline${surfaced.length === 1 ? "" : "s"}`}
       />
       <Page>
         <Rail
@@ -72,6 +81,44 @@ export function VariantE({
         />
       </Page>
     </>
+  );
+}
+
+/**
+ * Coverage size: four 4px squares in a 2×2 block, filled bottom row first, then
+ * the top — a container filling up rather than a bar growing sideways.
+ *
+ * The unfilled squares stay drawn, faintly. That is the whole trick: they are
+ * the maximum, so one pill on its own still says "one of four" instead of
+ * needing a neighbour to be compared against.
+ */
+function CoverageGlyph({ filled }: { filled: number }) {
+  // Fill order within the 2×2 grid, which lays out top-left, top-right,
+  // bottom-left, bottom-right.
+  const order = [2, 3, 0, 1];
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: "grid",
+        gridTemplateColumns: "4px 4px",
+        gridTemplateRows: "4px 4px",
+        gap: "1px",
+        flexShrink: 0,
+      }}
+    >
+      {[0, 1, 2, 3].map((cell) => (
+        <span
+          key={cell}
+          style={{
+            width: "4px",
+            height: "4px",
+            background: "var(--fg-muted)",
+            opacity: order.indexOf(cell) < filled ? 1 : 0.2,
+          }}
+        />
+      ))}
+    </span>
   );
 }
 
@@ -108,25 +155,7 @@ function StorylinePill({
         opacity: storyline.status === "dormant" ? 0.7 : 1,
       }}
     >
-      {/* The bar is drawn against a faint full-height track. Without it the
-          ramp only reads comparatively — two pills side by side say which is
-          bigger, a lone pill says nothing, because a low bar and a tall one are
-          only distinguishable against a known maximum. */}
-      <span
-        aria-hidden="true"
-        style={{
-          position: "relative",
-          display: "inline-block",
-          width: "0.6rem",
-          fontFamily: MONO,
-          fontSize: "0.8rem",
-          lineHeight: 1,
-          color: "var(--fg-muted)",
-        }}
-      >
-        <span style={{ position: "absolute", inset: 0, opacity: 0.18 }}>█</span>
-        <span style={{ position: "relative" }}>{bucket.glyph}</span>
-      </span>
+      <CoverageGlyph filled={bucket.filled} />
       <span style={{ fontSize: "0.8rem", fontWeight: 600 }}>{storyline.label}</span>
       {qualifier && (
         <span style={{ fontFamily: MONO, fontSize: "0.65rem", color: "var(--fg-faint)" }}>
