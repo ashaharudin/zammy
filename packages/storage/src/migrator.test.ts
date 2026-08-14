@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sql } from "kysely";
 import { migrateToLatest } from "./migrator.js";
 import * as storylineTables from "./migrations/0007-storyline-tables.js";
+import * as storyTokenDf from "./migrations/0008-story-token-df.js";
 import { createTestDatabase, type TestDatabase } from "./test-support.js";
 
 /**
@@ -47,6 +48,8 @@ describe("migrateToLatest", () => {
       "storylines",
       "storyline_groups",
       "storyline_days",
+      "story_token_days",
+      "story_corpus_days",
     ]) {
       expect(tables).toContain(expected);
     }
@@ -72,6 +75,26 @@ describe("migrateToLatest", () => {
 
     await storylineTables.up(harness.db);
     expect(await hasStorylineTables()).toBe(3);
+  });
+
+  it("reverts and re-applies the trailing-corpus tables cleanly", async () => {
+    // Same check, same reason, for the df aggregate (ADR-0011). Its `down`
+    // drops derived rows only — the corpus is rebuildable from `articles`, so
+    // a rollback here costs a `--rebuild`, never history.
+    const hasStoryDfTables = async () => {
+      const { rows } = await sql<{ n: string }>`
+        select count(*) as n from information_schema.tables
+        where table_schema = 'public'
+          and table_name in ('story_token_days', 'story_corpus_days')
+      `.execute(harness.db);
+      return Number(rows[0]?.n ?? 0);
+    };
+
+    await storyTokenDf.down(harness.db);
+    expect(await hasStoryDfTables()).toBe(0);
+
+    await storyTokenDf.up(harness.db);
+    expect(await hasStoryDfTables()).toBe(2);
   });
 
   it("is a no-op the second time", async () => {

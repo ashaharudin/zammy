@@ -116,6 +116,18 @@ const EnvSchema = z
      * merge corrupts the slot itself.
      */
     STORYLINE_MASS_THRESHOLD: z.coerce.number().min(0).default(8),
+    /**
+     * How many days of articles the storyline linker measures rarity against
+     * (ADR-0011). A storyline is unbounded in time, so day-relative rarity
+     * cannot serve it: the same token would be rare on Monday and common on
+     * Wednesday, and whether Monday's group joins would depend on which day
+     * it is asked. Fourteen is the starting knob ADR-0011 names, not a
+     * commitment — S3's sweep is what pins it.
+     *
+     * Also what the nightly prune keeps, plus a day of slack, exactly as
+     * BASELINE_WINDOW_DAYS is for `term_snapshots`.
+     */
+    STORYLINE_DF_WINDOW_DAYS: z.coerce.number().int().min(1).max(90).default(14),
 
     /**
      * Applied when a search omits language. Omitting it upstream returns every

@@ -2,11 +2,13 @@ import { Queue, Worker } from "bullmq";
 import { Redis } from "ioredis";
 import type { Kysely } from "kysely";
 import {
+  pruneStoryDf,
   pruneTermSnapshots,
   retentionReport,
   type Database,
   type RetentionReport,
 } from "@zammy/storage";
+import { storyDfDay } from "./story-df.js";
 
 /**
  * Non-upstream chores (ARCHITECTURE 9.1): work with a clock but no quota
@@ -24,7 +26,12 @@ const TOPIC_IDLE_DAYS = 30;
 
 export interface ChoreDeps {
   db: Kysely<Database>;
-  config: { retentionDays: number; baselineWindowDays: number };
+  config: {
+    retentionDays: number;
+    baselineWindowDays: number;
+    storyDfWindowDays: number;
+    timeZone: string;
+  };
   now: () => Date;
   log: { info: (obj: object, msg: string) => void };
 }
@@ -56,6 +63,22 @@ export async function runRetentionChore(deps: ChoreDeps): Promise<RetentionRepor
   deps.log.info(
     { prunedSnapshots, cutoff: cutoff.toISOString() },
     "pruned term_snapshots past the baseline window (§10.4)",
+  );
+
+  // Same argument, same slack, for the storyline linker's trailing corpus
+  // (ADR-0011): day buckets the rolling window can no longer reach are
+  // derived rows nothing will read again. The cutoff is a DAY KEY, so a
+  // bucket leaves only once the whole local day is out of reach.
+  const dfCutoff = storyDfDay(
+    new Date(
+      deps.now().getTime() - (deps.config.storyDfWindowDays + 1) * 86_400_000,
+    ),
+    { timeZone: deps.config.timeZone },
+  );
+  const prunedStoryDf = await pruneStoryDf(deps.db, { before: dfCutoff });
+  deps.log.info(
+    { prunedStoryDf, cutoff: dfCutoff },
+    "pruned story_token_days past the trailing-corpus window (ADR-0011)",
   );
 
   return report;
