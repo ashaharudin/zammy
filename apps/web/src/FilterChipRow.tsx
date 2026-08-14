@@ -46,13 +46,14 @@ export function FilterChipRow({
  * reader did not ask to go here.
  */
 export function useFilterDefaults(
-  filters: TopicFilters,
+  /** null disables defaulting — for a view that has no filters to default. */
+  filters: TopicFilters | null,
   reference: Reference | undefined,
   language: LanguagePolicy,
   onApply: (filters: TopicFilters) => void,
 ) {
   useEffect(() => {
-    if (!reference) return;
+    if (!reference || !filters) return;
     const next = defaultedFilters(filters, readBrowser(), reference, language);
     if (next.language !== filters.language || next.country !== filters.country) onApply(next);
   }, [filters, reference, language, onApply]);

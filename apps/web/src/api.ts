@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { TimelinePage, TrendingResponse } from "@zammy/shared";
+import { isStorylineView, TimelinePage, TrendingResponse } from "@zammy/shared";
 
 /**
  * The browser's half of the wire contract (ARCHITECTURE 6.1). Responses are
@@ -18,7 +18,10 @@ export interface TopicFilters {
   category?: string;
 }
 
-/** What the user is searching for. */
+/**
+ * What the user is searching for. `q` is empty in the STORYLINE VIEW, which is
+ * opened by clicking a label rather than by typing (ADR-0011).
+ */
 export interface TopicQuery extends TopicFilters {
   q: string;
   /**
@@ -76,6 +79,16 @@ export async function fetchTimeline(
   cursor: string | undefined,
   signal: AbortSignal,
 ): Promise<TimelinePage> {
+  // The storyline view sends the UUID and nothing else: it is not a search, so
+  // it carries no keywords and no filters to narrow them with.
+  if (isStorylineView(topic)) {
+    const viewParams = new URLSearchParams({ storyline: topic.storyline! });
+    if (cursor) viewParams.set("cursor", cursor);
+    const viewResponse = await fetch(`/api/v1/timeline?${viewParams}`, { signal });
+    if (!viewResponse.ok) await throwApiError(viewResponse);
+    return TimelinePage.parse(await viewResponse.json());
+  }
+
   const params = new URLSearchParams({ q: topic.q });
   if (topic.language) params.set("language", topic.language);
   if (topic.country) params.set("country", topic.country);

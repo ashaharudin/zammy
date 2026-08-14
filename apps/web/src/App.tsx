@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { STORYLINE_UUID } from "@zammy/shared";
 import type { TopicFilters } from "./api.js";
 import { Hero } from "./Hero.js";
 import { parseRoute, routeSearch, type Route } from "./route.js";
@@ -63,7 +64,11 @@ function TopicApp() {
     [navigate],
   );
 
-  if (route.q === null) {
+  // The storyline view has no keywords — it is opened by clicking a label, and
+  // its search box is empty (ADR-0011). So "no q" no longer means "the hero".
+  const storylineView = route.storyline !== undefined && STORYLINE_UUID.test(route.storyline);
+
+  if (route.q === null && !storylineView) {
     return (
       <Hero
         filters={route.filters}
@@ -75,12 +80,16 @@ function TopicApp() {
 
   return (
     <TimelinePage
-      topic={{ q: route.q, ...route.filters, ...(route.storyline ? { storyline: route.storyline } : {}) }}
+      topic={{
+        q: route.q ?? "",
+        ...route.filters,
+        ...(route.storyline ? { storyline: route.storyline } : {}),
+      }}
       // `storyline` splits off from the filters here rather than riding with
       // them: the filters survive the transition, the seed belongs to the
       // topic it opened (ADR-0010) and only travels when a caller passes it.
       onSearch={({ q, storyline, ...filters }, options) =>
-        navigate({ q, filters, ...(storyline ? { storyline } : {}) }, options)
+        navigate({ q: q || null, filters, ...(storyline ? { storyline } : {}) }, options)
       }
       onClear={() => navigate({ q: null, filters: route.filters })}
     />

@@ -354,6 +354,7 @@ async function planAndRead(
       label: storyline.label,
       from: storyline.spanFrom,
       to: storyline.spanTo,
+      size: storyline.size,
     })),
     page: {
       nextCursor: stored.nextCursor ? encodeCursor(stored.nextCursor) : null,
@@ -493,7 +494,15 @@ export async function readStorylineView(
     // this view; its articles were fetched for the searches that found them.
     topic: { fingerprint: EMPTY_FINGERPRINT, keywords: [], coverage: null },
     storylines: first
-      ? [{ id: resolved, label: first.label, from: first.spanFrom, to: first.spanTo }]
+      ? [
+          {
+            id: resolved,
+            label: first.label,
+            from: first.spanFrom,
+            to: first.spanTo,
+            size: stored.items.reduce((n, item) => n + item.members.length, 0),
+          },
+        ]
       : [],
     items: stored.items.map(toStorylineEntry),
     page: {
@@ -516,9 +525,16 @@ export async function readStorylineView(
 const EMPTY_FINGERPRINT = "0".repeat(64);
 
 /**
- * How many storylines a search may surface. A strip, not a second timeline —
- * S8's verdict — and a search whose keywords are a subset of two hundred
- * profiles has told us nothing worth rendering.
+ * How many storylines a search may surface. A row of pills, not a second
+ * timeline — S8's verdict — and a search whose keywords are a subset of two
+ * hundred profiles has told us nothing worth rendering.
+ *
+ * MEASURED IN THE BROWSER, and worth knowing before this is raised: S8 sized
+ * the pills row's cost at "~56px on a phone when the pills wrap", against three
+ * matched storylines. Eight wrap to five rows at 375px — roughly a third of the
+ * viewport. The handle recovers all of it and the collapsed state persists, which
+ * is the mitigation the verdict already required; but eight is the point where
+ * the row stops being chrome and starts being a screen.
  */
 const SURFACED_STORYLINE_LIMIT = 8;
 
