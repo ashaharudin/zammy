@@ -11,7 +11,15 @@ import { createDb } from "@zammy/storage";
 import { registerHealthRoutes } from "./health.js";
 import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
 import { IngestQueue } from "./ingest-queue.js";
-import { ChoreQueue, runRetentionChore } from "./chores.js";
+import {
+  ChoreQueue,
+  runDormancyChore,
+  runLateCandidateChore,
+  runRetentionChore,
+  runStorylineLabelChore,
+  type ChoreDeps,
+} from "./chores.js";
+import { createGeminiClient } from "./gemini.js";
 import { Metrics, registerMetricsRoute } from "./metrics.js";
 import { processSegmentJob, type TimelineDeps } from "./timeline-service.js";
 import { processSampleJob, type TrendingDeps } from "./trending-service.js";
@@ -116,12 +124,34 @@ export async function buildApp(config: Config): Promise<App> {
   // of a task, so no separate deployable is needed (§4.1).
   const db = createDb(pool);
   const queue = new IngestQueue(config.REDIS_URL);
+
+  // The labeler, built once (ADR-0011's Labels). No key is a supported
+  // configuration and not a degraded one: the generator is null, the bigram
+  // extractor becomes the only path, and it renders. What is NOT supported is a
+  // storyline that gets no label until an operator remembers to run the CLI,
+  // which is what this wiring ends.
+  const labeler = {
+    generator: config.GEMINI_API_KEY
+      ? createGeminiClient({
+          apiKey: config.GEMINI_API_KEY,
+          model: config.GEMINI_MODEL,
+          baseUrl: config.GEMINI_BASE_URL,
+          thinkingLevel: config.GEMINI_THINKING_LEVEL,
+          timeoutMs: config.GEMINI_TIMEOUT_MS,
+        })
+      : null,
+    sampleSize: config.STORYLINE_LABEL_SAMPLE,
+    driftFactor: config.STORYLINE_LABEL_DRIFT_FACTOR,
+    logger: app.log,
+  };
+
   const deps: TimelineDeps = {
     db,
     redis,
     currents,
     queue,
     metrics,
+    labeler,
     config: {
       syncFillDeadlineMs: config.SYNC_FILL_DEADLINE_MS,
       maxSyncUpstreamCalls: config.MAX_SYNC_UPSTREAM_CALLS,
@@ -177,23 +207,46 @@ export async function buildApp(config: Config): Promise<App> {
   await registerQueryRoutes(app, { deps, defaultLanguage: config.DEFAULT_LANGUAGE });
   registerTrendingRoute(app, { deps: trendingDeps });
 
-  // Nightly retention report (§7.5) — the one chore with a clock (§9.1).
+  // Nightly chores (§9.1): the retention report (§7.5), and the storyline
+  // lifecycle pass that keeps `status` honest (ADR-0011).
+  const choreDeps: ChoreDeps = {
+    db,
+    config: {
+      retentionDays: config.RETENTION_DAYS,
+      baselineWindowDays: config.BASELINE_WINDOW_DAYS,
+      storyDfWindowDays: config.STORYLINE_DF_WINDOW_DAYS,
+      storylineDormancyDays: config.STORYLINE_DORMANCY_DAYS,
+      timeZone: config.APP_TIMEZONE,
+    },
+    now: () => new Date(),
+    log: app.log,
+  };
   const chores = new ChoreQueue(config.REDIS_URL);
   chores.startConsumer({
-    retention: () =>
-      runRetentionChore({
-        db,
-        config: {
-          retentionDays: config.RETENTION_DAYS,
-          baselineWindowDays: config.BASELINE_WINDOW_DAYS,
-          storyDfWindowDays: config.STORYLINE_DF_WINDOW_DAYS,
-          timeZone: config.APP_TIMEZONE,
-        },
-        now: () => new Date(),
-        log: app.log,
-      }),
+    retention: () => runRetentionChore(choreDeps),
+    // Order matters, and it is the order of what each pass reads. Dormancy
+    // first, so the late sweep judges candidates at the bar their quiet earns.
+    // The sweep next, so the storylines it grows are the ones the label pass
+    // then looks at — a membership change and its label in one night, rather
+    // than a label that describes yesterday's membership.
+    //
+    // The WHOLE pass rides the flag, not just the sweep: a rollback freezes the
+    // v2 model, and a frozen model must not keep mutating status or spending
+    // Gemini calls on rows no reader can see. The rows keep; the first nightly
+    // pass after the flag returns catches everything up.
+    storylines: async () => {
+      if (!config.STORYLINES_V2) return;
+      await runDormancyChore(choreDeps);
+      await runLateCandidateChore({
+        ...choreDeps,
+        linker: deps.config.grouping.linker!,
+        labeler,
+      });
+      await runStorylineLabelChore({ ...choreDeps, labeler });
+    },
   });
   await chores.scheduleNightlyRetention();
+  await chores.scheduleNightlyStorylines();
 
   app.log.info({ config: redactConfig(config) }, "configuration loaded");
 

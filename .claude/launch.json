@@ -7,6 +7,18 @@
       "runtimeArgs": ["dev:web"],
       "port": 5173,
       "autoPort": true
+    },
+    {
+      "name": "api-b",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["PORT=3100", "pnpm", "--filter", "@zammy/api", "start"],
+      "port": 3100
+    },
+    {
+      "name": "web-b",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["PORT=5273", "VITE_API_ORIGIN=http://localhost:3100", "pnpm", "dev:web"],
+      "port": 5273
     }
   ]
 }

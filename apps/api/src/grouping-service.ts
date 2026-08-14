@@ -21,6 +21,7 @@ import {
   type LinkableGroup,
   type LinkerConfig,
 } from "./storyline-linker.js";
+import { labelLinkedStorylines, type LabelerDeps } from "./storyline-label-service.js";
 import type { Metrics } from "./metrics.js";
 
 /**
@@ -55,6 +56,19 @@ export interface GroupingDeps {
      */
     linker?: LinkerConfig;
   };
+  /**
+   * The labeler, for the promotion and merge triggers (ADR-0011). Absent means
+   * no live labelling — the nightly pass and the CLI still name what the linker
+   * built, so this being unset costs freshness rather than labels.
+   */
+  labeler?: Omit<LabelerDeps, "db">;
+  /**
+   * Where the label tail goes. Labelling runs AFTER the batch, off the §6.3
+   * sync-fill deadline a reader is waiting on, so the default is to start it and
+   * walk away. A caller that needs to know when it finished — a test, or a
+   * script that exits — hands in something that keeps the promise.
+   */
+  labelTail?: (task: Promise<void>) => void;
   metrics?: Metrics;
   log?: { warn: (obj: object, msg: string) => void };
 }
@@ -71,12 +85,14 @@ export interface GroupingDeps {
 export function groupingDepsFor(deps: {
   db: Kysely<Database>;
   config: { grouping: GroupingDeps["config"] };
+  labeler?: Omit<LabelerDeps, "db">;
   metrics?: Metrics;
   log?: { warn: (obj: object, msg: string) => void };
 }): GroupingDeps {
   return {
     db: deps.db,
     config: deps.config.grouping,
+    ...(deps.labeler ? { labeler: deps.labeler } : {}),
     ...(deps.metrics ? { metrics: deps.metrics } : {}),
     ...(deps.log ? { log: deps.log } : {}),
   };
@@ -172,7 +188,7 @@ export async function groupCreatedArticles(
   // the corpus its rarity is measured against, or a story breaking across a
   // dozen simultaneous groups would read each of them as unprecedented.
   if (deps.config.linker) {
-    await linkSeededGroups(
+    const outcomes = await linkSeededGroups(
       {
         db: deps.db,
         config: deps.config.linker,
@@ -180,6 +196,23 @@ export async function groupCreatedArticles(
       },
       await linkableGroups(deps, seeded),
     );
+
+    // The promotion and merge triggers (ADR-0011), and the one thing they must
+    // not be is awaited: a label averages ~8s against a 20s timeout, and the
+    // linker above runs inside the §6.3 deadline a reader is waiting on. The
+    // tail never throws, which is what makes starting-and-dropping it safe.
+    if (deps.labeler && outcomes.length > 0) {
+      const tail = labelLinkedStorylines(
+        {
+          db: deps.db,
+          labeler: deps.labeler,
+          ...(deps.log ? { log: deps.log } : {}),
+        },
+        outcomes,
+      );
+      if (deps.labelTail) deps.labelTail(tail);
+      else void tail;
+    }
   }
 
   // Storyline attachment runs once per BATCH, not per article: each seeded

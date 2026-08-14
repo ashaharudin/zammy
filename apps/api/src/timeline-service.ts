@@ -1,8 +1,10 @@
 import type { Kysely } from "kysely";
 import type { Redis } from "ioredis";
 import {
+  cursorGeneration,
   decodeCursor,
   encodeCursor,
+  type Cursor,
   type SurfacedStoryline,
   type TimelineEntry,
 } from "@zammy/shared";
@@ -16,6 +18,7 @@ import {
   findSurfacedStorylines,
   ingestSightings,
   readCoverage,
+  readStorylineArticleCount,
   readStorylineTimelinePage,
   readTimelinePage,
   resolveStoryline,
@@ -87,6 +90,12 @@ export interface TimelineDeps {
     storylinesV2: boolean;
   };
   now: () => Date;
+  /**
+   * The labeler the write path's promotion and merge triggers fire (ADR-0011).
+   * Absent means no live labelling: `server.ts` builds it when a Gemini key is
+   * configured, and the bigram fallback carries it when one is not.
+   */
+  labeler?: GroupingDeps["labeler"];
   metrics?: Metrics;
   log?: {
     warn: (obj: object, msg: string) => void;
@@ -118,6 +127,33 @@ export class InvalidCursorError extends Error {
   override readonly name = "InvalidCursorError";
 }
 
+/**
+ * Decode a cursor, and refuse one minted by the model this request is not
+ * serving.
+ *
+ * The flag selects which model is READ, and it flips under readers who are
+ * mid-scroll: their next request carries a cursor whose id half belongs to the
+ * other generation — a bigint reaching `::uuid`, or a UUID reaching `::bigint`
+ * — and Postgres answers a cast error, which is a 500 for something that is
+ * plainly a bad request. Both directions, because the flag flips both ways.
+ *
+ * This is the layer that knows the flag, which is why the check lives here
+ * rather than in `decodeCursor`: the cursor is well-formed, it is only
+ * well-formed for the other model. The reader loses their place and starts the
+ * page again, which is the whole cost.
+ */
+function takeCursor(
+  cursorString: string | undefined,
+  generation: "v1" | "v2",
+): Cursor | null {
+  if (cursorString === undefined) return null;
+  const cursor = decodeCursor(cursorString);
+  if (!cursor || cursorGeneration(cursor) !== generation) {
+    throw new InvalidCursorError(`unusable cursor: ${cursorString.slice(0, 40)}`);
+  }
+  return cursor;
+}
+
 export async function readTimeline(
   deps: TimelineDeps,
   query: CanonicalQuery,
@@ -144,10 +180,10 @@ async function planAndRead(
 ): Promise<TimelineReadResult> {
   const now = deps.now();
 
-  const cursor = request.cursorString ? decodeCursor(request.cursorString) : null;
-  if (request.cursorString && !cursor) {
-    throw new InvalidCursorError(`unusable cursor: ${request.cursorString.slice(0, 40)}`);
-  }
+  const cursor = takeCursor(
+    request.cursorString,
+    deps.config.storylinesV2 ? "v2" : "v1",
+  );
 
   // The topic exists (and counts a hit) from the first request onward, so
   // deferred jobs enqueued below can always recover the search parameters.
@@ -355,6 +391,7 @@ async function planAndRead(
       from: storyline.spanFrom,
       to: storyline.spanTo,
       size: storyline.size,
+      dormant: storyline.status === "dormant",
     })),
     page: {
       nextCursor: stored.nextCursor ? encodeCursor(stored.nextCursor) : null,
@@ -470,10 +507,9 @@ export async function readStorylineView(
   request: { storylineId: string; limit: number; cursorString?: string },
 ): Promise<TimelineReadResult | null> {
   const now = deps.now();
-  const cursor = request.cursorString ? decodeCursor(request.cursorString) : null;
-  if (request.cursorString && !cursor) {
-    throw new InvalidCursorError(`unusable cursor: ${request.cursorString.slice(0, 40)}`);
-  }
+  // The view pages `storyline_days` whatever the flag says, so its cursors are
+  // v2 by construction — a v1 one reaching it is a cursor from somewhere else.
+  const cursor = takeCursor(request.cursorString, "v2");
 
   const resolved = await resolveStoryline(deps.db, request.storylineId);
   if (resolved === null) return null;
@@ -487,6 +523,9 @@ export async function readStorylineView(
   });
 
   const first = stored.items[0];
+  // Whole-life, so page two says what page one said (the wire contract's own
+  // wording). One extra count for a read that is already three statements deep.
+  const size = first ? await readStorylineArticleCount(deps.db, resolved) : 0;
   return {
     // No topic: the view is not a search, and inventing a fingerprint for it
     // would put a keyword-less row in `topics` that nothing could ever hit
@@ -500,7 +539,8 @@ export async function readStorylineView(
             label: first.label,
             from: first.spanFrom,
             to: first.spanTo,
-            size: stored.items.reduce((n, item) => n + item.members.length, 0),
+            size,
+            dormant: first.status === "dormant",
           },
         ]
       : [],

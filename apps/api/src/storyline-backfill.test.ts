@@ -83,14 +83,20 @@ async function article(input: {
 }
 
 /** The same corpus shape the linker's own tests use: ceiling 32, floor 20. */
-async function seedCorpus(input: { rare?: string[]; common?: string[] }): Promise<void> {
+async function seedCorpus(input: {
+  rare?: string[];
+  common?: string[];
+  /** The day the corpus covers; the trailing window is read relative to it. */
+  day?: string;
+}): Promise<void> {
+  const day = input.day ?? DAY;
   await db
     .insertInto("story_corpus_days")
-    .values({ day: DAY, language: "en", articles: 16_000 })
+    .values({ day, language: "en", articles: 16_000 })
     .execute();
   const rows = [
-    ...(input.rare ?? []).map((token) => ({ day: DAY, language: "en", token, df: 20 })),
-    ...(input.common ?? []).map((token) => ({ day: DAY, language: "en", token, df: 2_000 })),
+    ...(input.rare ?? []).map((token) => ({ day, language: "en", token, df: 20 })),
+    ...(input.common ?? []).map((token) => ({ day, language: "en", token, df: 2_000 })),
   ];
   if (rows.length > 0) await db.insertInto("story_token_days").values(rows).execute();
 }
@@ -200,6 +206,30 @@ describe("the backfill", () => {
     // Two storylines, not the one the old column claims.
     expect(stats.promoted).toBe(2);
     expect(stats.largestStoryline).toBe(5);
+  });
+
+  it("stamps dormancy at the end of the run, so a replay of old history is not all active", async () => {
+    // A fresh replay of a five-month archive would otherwise leave every
+    // storyline it built marked `active` until the first nightly sweep fires —
+    // for hours, and for the whole first day if the backfill runs after 3am.
+    const MARCH = "2026-03-02";
+    await seedCorpus({ rare: STORY, day: MARCH });
+    for (let i = 0; i < 3; i += 1) {
+      await article({ tokens: STORY, publishedAt: `${MARCH}T09:0${i}:00Z` });
+    }
+
+    const report = await backfillStorylines(deps(), {
+      skipLabels: true,
+      now: () => new Date("2026-08-14T03:00:00.000Z"),
+    });
+
+    expect(report.dormant).toBe(1);
+    const live = await db
+      .selectFrom("storylines")
+      .select("status")
+      .where("merged_into", "is", null)
+      .execute();
+    expect(live.map((row) => row.status)).toEqual(["dormant"]);
   });
 
   describe("resuming", () => {

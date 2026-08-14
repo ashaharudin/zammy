@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
-import { TimelinePage, TrendingResponse } from "@zammy/shared";
+import { encodeCursor, TimelinePage, TrendingResponse } from "@zammy/shared";
 import { canonicalize } from "./canonical.js";
 import { registerMetricsRoute } from "./metrics.js";
 import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
@@ -127,6 +127,28 @@ describe("GET /api/v1/timeline", () => {
 
     // Pre-flight validation exists so a bad request never reaches upstream (§6.2).
     expect(harness.counting.searchCalls).toBe(calls);
+  });
+
+  it("400s a stale-generation cursor on the storyline view, never a 500", async () => {
+    // A reader mid-scroll in the view when the flag flips holds a v1 (bigint)
+    // cursor. The view's cursor guard throws InvalidCursorError BEFORE the
+    // storyline is even resolved, and this branch must map it to the same 400
+    // the search branch gets — an unmapped throw here is the 500 the guard
+    // exists to prevent.
+    await setup();
+    const v1Cursor = encodeCursor({
+      published: "2026-08-05T00:00:00.000Z",
+      articleId: "12345",
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `${TIMELINE}?storyline=1b671a64-40d5-491e-99b0-da01ff1f3341&cursor=${encodeURIComponent(v1Cursor)}&limit=3`,
+    });
+
+    expect(response.statusCode).toBe(400);
+    const body = response.json() as { error: { fields?: Record<string, string> } };
+    expect(body.error.fields?.cursor).toBeDefined();
   });
 });
 

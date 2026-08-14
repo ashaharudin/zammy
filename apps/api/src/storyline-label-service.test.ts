@@ -8,7 +8,11 @@ import {
   readStoryline,
 } from "@zammy/storage";
 import { createGeminiClient, type GenerateRequest, type GenerateResult } from "./gemini.js";
-import { labelStoryline, type LabelerDeps } from "./storyline-label-service.js";
+import {
+  labelLinkedStorylines,
+  labelStoryline,
+  type LabelerDeps,
+} from "./storyline-label-service.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
 
 /**
@@ -60,7 +64,7 @@ function saying(text: string) {
   };
 }
 
-describe("labelStoryline", () => {
+describe("the labeler", () => {
   let harness: TestHarness;
   let counter = 0;
 
@@ -148,6 +152,132 @@ describe("labelStoryline", () => {
 
   afterAll(async () => {
     await harness.teardown();
+  });
+
+  /**
+   * The live tail (ADR-0011's "fires at promotion, on merge, and on drift").
+   *
+   * What is under test is the WALK, not the labeling: which of a batch's link
+   * outcomes deserve a label, under which trigger, and that a labeler having a
+   * bad day cannot reach the ingest that spawned it.
+   */
+  describe("labelLinkedStorylines", () => {
+    it("labels what a batch promoted and relabels what it merged", async () => {
+      const promoted = await fortHood();
+      const merged = await fortHood();
+
+      await labelLinkedStorylines(
+        { db: harness.deps.db, labeler: deps({ generator: saying("Fort Hood Crash") }) },
+        [
+          {
+            groupId: "1",
+            storylineId: promoted,
+            attached: true,
+            attachedTo: [],
+            promoted: [promoted],
+            bridged: [],
+            merged: [],
+          },
+          {
+            groupId: "2",
+            storylineId: "unused",
+            attached: false,
+            attachedTo: [],
+            promoted: [],
+            bridged: [],
+            merged: [{ winnerId: merged, loserId: "gone" }],
+          },
+        ],
+      );
+
+      expect((await load(promoted)).label).toBe("Fort Hood Crash");
+      expect((await load(merged)).label).toBe("Fort Hood Crash");
+    });
+
+    it("a join to an established arc is drift, not promotion — the label holds", async () => {
+      // The 30th group attaching sets `attached` exactly like the 2nd did, and
+      // firing the unconditional promotion trigger on it would relabel a hot
+      // storyline once per ingest batch — model spend scaling with attach
+      // volume, the unbounded mode the labeler's contract rules out. `promoted`
+      // is empty, so the join proposes only drift, and the drift baseline
+      // (membership has not doubled) answers without a model call.
+      const id = await fortHood();
+      await labelStoryline(deps({ generator: saying("Fort Hood Crash") }), {
+        storyline: await load(id),
+        trigger: "promotion",
+      });
+
+      await labelLinkedStorylines(
+        { db: harness.deps.db, labeler: deps({ generator: saying("Renamed By Storm") }) },
+        [
+          {
+            groupId: "3",
+            storylineId: id,
+            attached: true,
+            attachedTo: [],
+            promoted: [],
+            bridged: [],
+            merged: [],
+          },
+        ],
+      );
+
+      expect((await load(id)).label).toBe("Fort Hood Crash");
+    });
+
+    it("leaves a plain birth alone — a storyline of one has nothing to name", async () => {
+      const born = await createProvisionalStoryline(harness.deps.db, {
+        groupId: await article({ title: "Council approves a bridge", published: "2026-03-01T09:00:00.000Z" }),
+        timeZone: ZONE,
+      });
+
+      await labelLinkedStorylines(
+        { db: harness.deps.db, labeler: deps({ generator: saying("Some Label") }) },
+        [
+          {
+            groupId: "1",
+            storylineId: born.id,
+            attached: false,
+            attachedTo: [],
+            promoted: [],
+            bridged: [],
+            merged: [],
+          },
+        ],
+      );
+
+      // Invisible as a storyline, so a label would be a model call spent on
+      // something no reader can ever see.
+      expect((await load(born.id)).label).toBeNull();
+    });
+
+    it("never throws — the ingest that spawned it is already done", async () => {
+      const id = await fortHood();
+
+      await expect(
+        labelLinkedStorylines(
+          {
+            db: harness.deps.db,
+            labeler: deps({
+              generator: {
+                generate: () => Promise.reject(new Error("model on fire")),
+              },
+            }),
+          },
+          [
+            {
+              groupId: "1",
+              storylineId: id,
+              attached: true,
+              attachedTo: [],
+              promoted: [id],
+              bridged: [],
+              merged: [],
+            },
+          ],
+        ),
+      ).resolves.toBeUndefined();
+    });
   });
 
   it("labels a promoted storyline from the model, and stamps the baseline", async () => {

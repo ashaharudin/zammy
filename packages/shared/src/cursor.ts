@@ -32,9 +32,28 @@ export interface Cursor {
  * malformed cursor: both halves reach SQL as a typed comparison, so a value
  * that is neither would be a 500 rather than an empty page.
  */
-const SLOT_ID = /^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+const V1_SLOT_ID = /^\d+$/;
+const V2_SLOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isSlotId(id: string): boolean {
+  return V1_SLOT_ID.test(id) || V2_SLOT_ID.test(id);
+}
 
 const SEPARATOR = "|";
+
+/**
+ * Which generation minted this cursor: `v1` for a hub group's bigint, `v2` for
+ * a storyline UUID.
+ *
+ * The two halves of a keyset reach SQL as TYPED comparisons — `::bigint` in the
+ * old read, `::uuid` in the new one — so a cursor from the wrong generation is
+ * a cast error rather than an empty page. The layer that knows which model is
+ * being served checks this and answers 400; both regexes live beside the decode
+ * gate above so the three cannot drift apart.
+ */
+export function cursorGeneration(cursor: Cursor): "v1" | "v2" {
+  return V1_SLOT_ID.test(cursor.articleId) ? "v1" : "v2";
+}
 
 export function encodeCursor(cursor: Cursor): string {
   return Buffer.from(
@@ -58,7 +77,7 @@ export function decodeCursor(encoded: string): Cursor | null {
   const published = decoded.slice(0, separatorAt);
   const articleId = decoded.slice(separatorAt + 1);
 
-  if (!SLOT_ID.test(articleId)) return null;
+  if (!isSlotId(articleId)) return null;
   if (Number.isNaN(Date.parse(published))) return null;
 
   return { published, articleId };

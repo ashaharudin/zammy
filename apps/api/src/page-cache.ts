@@ -41,6 +41,9 @@ export function freshnessTier(windowEnd: Date, now: Date): "hot" | "recent" | "h
  *       STORYLINES_V2 (ADR-0011)
  *   6 — surfaced storylines carry `size`: whole-life article count, rendered
  *       as the pill's bucket glyph with the exact figure in its title (S8)
+ *   7 — surfaced storylines carry `dormant`: the pill says when a match has
+ *       been quiet since March rather than leaving the reader to wonder (S8's
+ *       verdict, ADR-0011's Lifecycle)
  *
  * The bump stops a page cached by an older BUILD reaching a client parsing with
  * the new schema. It cannot stop the two MODELS colliding — both write shape 5,
@@ -49,7 +52,7 @@ export function freshnessTier(windowEnd: Date, now: Date): "hot" | "recent" | "h
  * rides in the key too (`pageCacheKey`'s `model`), which is what makes the flag
  * safe to flip in both directions rather than one.
  */
-const PAGE_SHAPE_VERSION = 6;
+const PAGE_SHAPE_VERSION = 7;
 
 /** page:v<shape>:<model>:<fingerprint>:<windowHash>:<cursor>:<limit> (§7.1). */
 export function pageCacheKey(

@@ -1,5 +1,6 @@
 import type { Kysely } from "kysely";
 import {
+  attachGroup,
   countBridges,
   createProvisionalStoryline,
   mergeStorylines,
@@ -43,7 +44,10 @@ import {
  *
  * Retroactive attachment rides this exact path — an old group is a candidate
  * arriving late, and nothing here reads the clock except dormancy, which reads
- * the storyline's last coverage rather than "now" against a creation date.
+ * the storyline's last coverage rather than "now" against a creation date. What
+ * makes it happen at all is step 4 running for an ALREADY-HOMED group too: it
+ * keeps its home and gains the arc, which is the one case `attachGroup` exists
+ * for. The nightly late-candidate sweep is what offers old groups again.
  *
  * Never throws. A linking failure must not fail the read that triggered the
  * ingest, for the reason grouping never throws: the articles are stored and
@@ -91,6 +95,24 @@ export interface LinkOutcome {
   storylineId: string;
   /** True when the group joined an existing storyline rather than seeding one. */
   attached: boolean;
+  /**
+   * Arcs an ALREADY-HOMED group joined on this offer: retroactive attachment
+   * (ADR-0011 — "a Wednesday storyline may pull in Monday's group").
+   *
+   * Separate from `attached`, which is about the group finding its home. This is
+   * the group gaining an additional membership without leaving the first, and it
+   * is a fact about the storylines that GREW rather than about where the group
+   * lives — which is why the ids are here rather than replacing `storylineId`.
+   */
+  attachedTo: string[];
+  /**
+   * Storylines this offer made REAL — provisional until this group's arrival
+   * gave them a second group. The labeler's promotion trigger fires on exactly
+   * these; `attached` alone cannot carry it, because the 30th group joining an
+   * established arc sets `attached` too, and firing a promotion label on every
+   * join is model spend scaling with attach volume rather than with promotions.
+   */
+  promoted: string[];
   /** Storylines this group also qualified for — bridge evidence. */
   bridged: string[];
   /** Pairs this arrival's bridge pushed over K. */
@@ -158,6 +180,8 @@ export async function linkGroup(
     groupId: group.groupId,
     storylineId: own,
     attached: false,
+    attachedTo: [],
+    promoted: [],
     bridged: [],
     merged: [],
   };
@@ -209,15 +233,60 @@ export async function linkGroup(
   // bridge evidence at all, which is exactly the percolation K exists to
   // prevent — the first version of this did that, and the replay test caught
   // it. Pulling an already-homed group into an ADDITIONAL arc is retroactive
-  // attachment, which the backfill drives (S5) by replaying from scratch.
+  // attachment, and it happens right here — see below.
   const ownGroups = await deps.db
     .selectFrom("storyline_groups")
     .select((eb) => eb.fn.countAll<string>().as("n"))
     .where("storyline_id", "=", own)
     .executeTakeFirst();
   if (Number(ownGroups?.n ?? 0) > 1) {
-    outcome.bridged = qualified.map((q) => q.candidate.id);
-    await recordBridgesAmong(deps, qualified, group.groupId, outcome);
+    // RETROACTIVE ATTACHMENT (ADR-0011: "a Wednesday storyline may pull in
+    // Monday's group"; the plan: "an old group is just a candidate arriving
+    // late"). The group has a home and keeps it; what it gains is a second arc
+    // it independently qualifies for, which is the duplication ADR-0011 accepts
+    // and the case `attachGroup` was built for.
+    //
+    // ONE retroactive arc, ever — the home it has, plus the best arc that
+    // formed after it. That is what "a candidate arriving late" means: a late
+    // arrival on the fresh path attaches to exactly one best arc, so the
+    // late-offered group gets the same and no more. A group that keeps
+    // qualifying for further storylines is bridge evidence about THOSE
+    // (recorded below), and the design's answer to multi-fit is a merge —
+    // a nightly sweep re-offering the same fortnight would otherwise walk a
+    // four-qualifier group into all four arcs in four nights, which is
+    // percolation with extra steps.
+    const already = new Set(existing);
+    const arc = existing.length === 1
+      ? qualified.find((q) => !already.has(q.candidate.id))
+      : undefined;
+    if (arc) {
+      const { attached } = await attachGroup(deps.db, {
+        storylineId: arc.candidate.id,
+        groupId: group.groupId,
+        ...zoned,
+      });
+      if (attached) {
+        outcome.attachedTo.push(arc.candidate.id);
+        // This attach may be the arc's SECOND group — the fact that makes a
+        // storyline real. The fresh path observes promotion where the group
+        // count was read, and so does this one; without it a provisional that
+        // grew retroactively would stay invisible to surfacing, labelling, and
+        // the dormancy sweep forever.
+        if (arc.candidate.groupCount === 1) {
+          await promoteStoryline(deps.db, { storylineId: arc.candidate.id });
+          outcome.promoted.push(arc.candidate.id);
+        }
+      }
+    }
+
+    // Bridge evidence only from arcs the group is NOT a member of. A member's
+    // qualification for its own arc is the trivial fit `own` is excluded for on
+    // the fresh path — its tokens are already in that profile — and counting it
+    // would let one multi-homed group manufacture K "independent" bridges by
+    // re-qualifying for itself night after night.
+    const evidence = qualified.filter((q) => !already.has(q.candidate.id));
+    outcome.bridged = evidence.map((q) => q.candidate.id);
+    await recordBridgesAmong(deps, evidence, group.groupId, outcome);
     return outcome;
   }
 
@@ -240,9 +309,13 @@ export async function linkGroup(
 
   // Real now: a second group attached. Observed here rather than inferred by
   // storage, because a backfill attaches in an order where the promoting
-  // arrival is not always the second row written.
+  // arrival is not always the second row written. `promoted` is recorded only
+  // when the winner WAS a provisional-of-one — that is the moment a storyline
+  // becomes visible and earns its promotion label; the 30th join re-runs the
+  // idempotent status write but is not a promotion to announce.
   if (absorbed.merged) {
     await promoteStoryline(deps.db, { storylineId: outcome.storylineId });
+    if (best.candidate.groupCount === 1) outcome.promoted.push(outcome.storylineId);
   }
 
   // Bridges among the qualifiers — a group that fits two established arcs is

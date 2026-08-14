@@ -1,6 +1,7 @@
 import type { Kysely } from "kysely";
 import {
   countGroups,
+  markDormantStorylines,
   readLabelCandidates,
   readLastLinkedGroup,
   readLinkableGroups,
@@ -86,6 +87,8 @@ export interface BackfillOptions {
   /** Cooperative cancellation, so a long run stops at a clean group boundary. */
   signal?: AbortSignal;
   sleep?: (ms: number) => Promise<void>;
+  /** The wall clock the closing dormancy stamp measures silence against. */
+  now?: () => Date;
 }
 
 export interface BackfillProgress {
@@ -105,6 +108,8 @@ export interface BackfillReport {
   merges: number;
   /** Groups the linker refused to process; the run continues past them. */
   failures: number;
+  /** Storylines the closing stamp marked dormant (ADR-0011's Lifecycle). */
+  dormant: number;
   labelled: { model: number; bigram: number; none: number; skipped: number };
   stats: StorylineStats;
   /** Wall clock, split so a slow half is visible as the slow half. */
@@ -131,6 +136,7 @@ export async function backfillStorylines(
     attached: 0,
     merges: 0,
     failures: 0,
+    dormant: 0,
     labelled: { model: 0, bigram: 0, none: 0, skipped: 0 },
     stats: await readStorylineStats(deps.db),
     linkMs: 0,
@@ -146,9 +152,19 @@ export async function backfillStorylines(
 
   if (!options.skipLabels && deps.labeler) {
     const startedAt = Date.now();
-    report.labelled = await label(deps.db, deps.labeler, options, sleep);
+    report.labelled = await labelPass(deps.db, deps.labeler, options, sleep);
     report.labelMs = Date.now() - startedAt;
   }
+
+  // The closing stamp: a replay builds storylines whose coverage ended months
+  // ago, and every one of them is written `active` on the way in. The nightly
+  // sweep would fix that at 3am; a fresh archive must not read as five months of
+  // live stories until then. Same knob the linker's own gate uses, so the column
+  // and the bar cannot disagree the moment the backfill finishes.
+  const now = options.now ?? (() => new Date());
+  report.dormant = await markDormantStorylines(deps.db, {
+    before: new Date(now().getTime() - deps.config.rules.dormancyDays * 86_400_000),
+  });
 
   report.stats = await readStorylineStats(deps.db);
   return report;
@@ -258,8 +274,13 @@ async function link(
  * per-minute ceiling is met. The limit is wall-clock spacing rather than a
  * token bucket — the simplest thing that cannot burst, for a pass with no
  * deadline.
+ *
+ * Exported because the nightly drift chore IS this pass, bounded: same
+ * candidates, same drift rule, same spacing (ADR-0011's third trigger). A second
+ * copy of the loop would be a second place for the cursor discipline to go
+ * wrong, and the cursor discipline is the part that is easy to get wrong.
  */
-async function label(
+export async function labelPass(
   db: Kysely<Database>,
   labeler: Omit<LabelerDeps, "db">,
   options: BackfillOptions,

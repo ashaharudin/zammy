@@ -328,6 +328,38 @@ describe("storylines in storage", () => {
       expect(await profile(winner.id)).toEqual(["reef", "survey"]);
     });
 
+    it("wakes a dormant winner for a live loser, and not for a dormant one", async () => {
+      // "Active again when it EARNS coverage" (ADR-0011): a fresh birth merging
+      // in is coverage earned; two quiet arcs healed by K bridges earn nothing,
+      // and waking would hide the dormant marker on exactly the stale story it
+      // exists to explain.
+      const dormantStoryline = async (tokens: string[]): Promise<string> => {
+        const groupId = await group("2026-03-02T09:00:00.000Z", tokens);
+        const born = await createProvisionalStoryline(harness.db, { groupId, timeZone: ZONE });
+        await promoteStoryline(harness.db, { storylineId: born.id });
+        await setStorylineStatus(harness.db, { storylineId: born.id, status: "dormant" });
+        return born.id;
+      };
+
+      const wokenBy = await group("2026-08-11T09:00:00.000Z", ["glacier", "melt"]);
+      const birth = await createProvisionalStoryline(harness.db, {
+        groupId: wokenBy,
+        timeZone: ZONE,
+      });
+      const woken = await dormantStoryline(["glacier", "retreat"]);
+      await mergeStorylines(harness.db, { winnerId: woken, loserId: birth.id, timeZone: ZONE });
+      expect((await readStoryline(harness.db, woken))?.status).toBe("active");
+
+      const stillQuiet = await dormantStoryline(["aquifer", "survey"]);
+      const quietLoser = await dormantStoryline(["aquifer", "levels"]);
+      await mergeStorylines(harness.db, {
+        winnerId: stillQuiet,
+        loserId: quietLoser,
+        timeZone: ZONE,
+      });
+      expect((await readStoryline(harness.db, stillQuiet))?.status).toBe("dormant");
+    });
+
     it("resolves a chain of aliases to the surviving storyline", async () => {
       // A reader's open URL holds the UUID it was given. Two merges later that
       // UUID must still open the story it named, however long the chain.

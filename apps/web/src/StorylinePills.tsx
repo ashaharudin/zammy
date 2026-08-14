@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { SurfacedStoryline } from "@zammy/shared";
 import { MONO } from "./theme.js";
-import { sizeBucket, SIZE_STEPS } from "./storylineLabels.js";
+import { pillDetail, sizeBucket, SIZE_STEPS } from "./storylineLabels.js";
 
 /**
  * Storylines a search surfaced, as pills in the command bar — S8's variant E,
@@ -123,22 +123,26 @@ function StorylinePill({
   onOpen: () => void;
 }) {
   const label = storyline.label ?? "unlabelled storyline";
-  const exact = `${storyline.size} article${storyline.size === 1 ? "" : "s"}`;
+  const detail = pillDetail(storyline);
   return (
     <button
       onClick={onOpen}
-      // The exact count lives here, where it costs no width: the glyph answers
-      // "how big", and anyone who needs the number can still reach it.
-      title={`${label}${qualifier ? ` · ${qualifier}` : ""} — ${exact}`}
-      aria-label={`Open the storyline ${label}${qualifier ? `, ${qualifier}` : ""}, ${exact}`}
+      // The exact count and the dormancy live here, where they cost no width:
+      // the glyph answers "how big", the muting answers "still running", and
+      // anyone who needs the words can still reach them.
+      title={`${label}${qualifier ? ` · ${qualifier}` : ""} — ${detail}`}
+      aria-label={`Open the storyline ${label}${qualifier ? `, ${qualifier}` : ""}, ${detail}`}
       style={{
         display: "inline-flex",
         alignItems: "center",
         gap: "0.35rem",
         border: "1px solid var(--border)",
         borderRadius: "999px",
-        background: "var(--chip-bg)",
-        color: "var(--fg)",
+        // A dormant match is offered at lower contrast: it answers "why is a
+        // five-month-old story here" before the reader has to ask, without
+        // taking a row of its own to say it (S8's verdict).
+        background: storyline.dormant ? "transparent" : "var(--chip-bg)",
+        color: storyline.dormant ? "var(--fg-faint)" : "var(--fg)",
         cursor: "pointer",
         fontFamily: MONO,
         fontSize: "0.7rem",
