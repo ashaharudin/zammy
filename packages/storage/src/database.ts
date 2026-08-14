@@ -178,6 +178,63 @@ export interface TermBaselineTable {
   updated_at: Timestamp;
 }
 
+/**
+ * Provisional until a second group attaches, active once promoted, dormant once
+ * it has gone ~90 days without coverage (ADR-0011's Lifecycle). Nothing ends a
+ * storyline: dormant means "out of the normal candidate set", not dead.
+ */
+export type StorylineStatus = "provisional" | "active" | "dormant";
+
+/**
+ * One persistent arc of one event (ADR-0011). Identity is the UUID and only the
+ * UUID — the label is non-unique presentation that regenerates as the storyline
+ * drifts, so nothing may key off it.
+ */
+export interface StorylinesTable {
+  id: Generated<string>;
+  /** 2–3 words naming the event; null until promotion, and null is renderable. */
+  label: string | null;
+  /** When the label was generated — the drift-relabel clock (ADR-0011, Labels). */
+  label_at: Timestamp | null;
+  /**
+   * Tokens carried by at least half the member groups: the storyline's own
+   * vocabulary, and the GIN surface candidate retrieval overlaps against. The
+   * majority rule is the percolation damper — a growing storyline's consensus
+   * vocabulary tightens rather than loosens.
+   */
+  profile_tokens: Generated<string[]>;
+  status: Generated<StorylineStatus>;
+  /**
+   * Set when this storyline lost a merge: the row survives as an alias so
+   * nothing holding the UUID dangles. Non-null means "not a storyline, a
+   * pointer" — resolve it before using it.
+   */
+  merged_into: string | null;
+  created_at: Generated<Date>;
+}
+
+/** Group ↔ storyline, many-to-many: a group may belong to several storylines. */
+export interface StorylineGroupsTable {
+  storyline_id: string;
+  group_id: string;
+  attached_at: Generated<Date>;
+}
+
+/**
+ * One row per storyline per day it has coverage — the timeline's paginated unit
+ * (ADR-0011). Position is precomputed here at write time, so step one of the
+ * read stays a pure index scan and reads never re-sort (ADR-0002's spirit).
+ */
+export interface StorylineDaysTable {
+  storyline_id: string;
+  /** YYYY-MM-DD in APP_TIMEZONE; a bucket label, never arithmetic. */
+  day_key: string;
+  /** That day's earliest article's `published` — the keyset axis. */
+  day_slot_published: Timestamp;
+  /** That day's earliest article: the slot's hero. */
+  lead_article_id: string;
+}
+
 export interface Database {
   sightings: SightingsTable;
   articles: ArticlesTable;
@@ -188,6 +245,9 @@ export interface Database {
   trending_terms: TrendingTermsTable;
   term_snapshots: TermSnapshotsTable;
   term_baseline: TermBaselineTable;
+  storylines: StorylinesTable;
+  storyline_groups: StorylineGroupsTable;
+  storyline_days: StorylineDaysTable;
 }
 
 /**
