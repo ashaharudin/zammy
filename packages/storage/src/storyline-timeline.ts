@@ -204,28 +204,43 @@ export async function readStorylineTimelinePage(
  * `@>` as readily as `&&`, so the stricter reading costs nothing. Aliases are
  * excluded — a pointer has no profile — and provisional storylines with them:
  * a storyline-of-one is not a story to surface, it is the slot itself.
+ *
+ * UNLABELLED storylines are excluded too, and that one was learned by looking:
+ * eight pills reading "unlabelled storyline" is what the browser showed while
+ * the backfill's labelling pass was still running. A label-less storyline is a
+ * valid thing to RENDER — its slots simply carry no gutter label (ADR-0011) —
+ * but it is not a thing to OFFER, because a surfacing pill is a name plus a
+ * size and without the name there is nothing for the reader to choose between.
  */
 export async function findSurfacedStorylines(
   db: Kysely<Database>,
   input: { tokens: readonly string[]; limit: number },
 ): Promise<
-  { id: string; label: string | null; spanFrom: string; spanTo: string }[]
+  { id: string; label: string | null; spanFrom: string; spanTo: string; size: number }[]
 > {
   if (input.tokens.length === 0) return [];
 
+  // The size subquery counts member ARTICLES, and counts them per storyline
+  // rather than per matched search — a storyline's size is a fact about the
+  // story, not about the words that found it.
   const { rows } = await sql<{
     id: string;
     label: string | null;
     span_from: Date;
     span_to: Date;
+    size: string;
   }>`
     select s.id, s.label,
            min(d.day_slot_published) as span_from,
-           max(d.day_slot_published) as span_to
+           max(d.day_slot_published) as span_to,
+           (select count(*) from storyline_groups sg
+              join articles a on a.group_id = sg.group_id
+             where sg.storyline_id = s.id) as size
     from storylines s
     join storyline_days d on d.storyline_id = s.id
     where s.merged_into is null
       and s.status <> 'provisional'
+      and s.label is not null
       and s.profile_tokens @> ${[...input.tokens]}::text[]
     group by s.id, s.label
     order by max(d.day_slot_published) desc, s.id
@@ -237,6 +252,7 @@ export async function findSurfacedStorylines(
     label: row.label,
     spanFrom: row.span_from.toISOString(),
     spanTo: row.span_to.toISOString(),
+    size: Number(row.size),
   }));
 }
 

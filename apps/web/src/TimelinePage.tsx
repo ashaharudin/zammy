@@ -4,6 +4,7 @@ import { isTerminalPage } from "@zammy/shared";
 import { ApiError, type TopicQuery } from "./api.js";
 import { isCollapsed, noDaysCollapsed, toggleDay } from "./dayCollapse.js";
 import { groupByDay, hasLaterCoverage, relativeTime, timeLabel } from "./format.js";
+import { storylineQualifiers, visibleStorylines } from "./storylineLabels.js";
 import { collapseCopies, outletLinks } from "./relatedRows.js";
 import { MONO } from "./theme.js";
 import { CommandBar } from "./CommandBar.js";
@@ -35,6 +36,13 @@ export function TimelinePage({
   const latest = pages.at(-1);
   const items = pages.flatMap((page) => page.items);
   const { visible, newCount, reveal } = useHeldNewItems(items, JSON.stringify(topic));
+  const surfaced = latest?.storylines ?? [];
+  // The date qualifier each storyline needs, computed over everything ON SCREEN
+  // together — slots and pills alike — because "is this label ambiguous" is the
+  // condition ADR-0011 attaches the disambiguator to, and it is a question
+  // about the set rather than about any one storyline.
+  const qualifiers = storylineQualifiers(visibleStorylines(visible, surfaced));
+  const storylineView = topic.q === "" && topic.storyline !== undefined;
   const ingesting = latest?.meta.ingest.state === "in_progress";
   const terminal = latest !== undefined && !timeline.hasNextPage && isTerminalPage(latest);
 
@@ -46,6 +54,8 @@ export function TimelinePage({
         reference={reference.data}
         onSearch={onSearch}
         onClear={onClear}
+        onOpenStorylineView={(storylineId) => onSearch({ q: "", storyline: storylineId })}
+        qualifiers={qualifiers}
       />
       <main style={{ maxWidth: "var(--page-max)", margin: "0 auto", padding: "1.5rem 1rem 3rem" }}>
         {timeline.isPending && <SkeletonRail />}
@@ -64,13 +74,24 @@ export function TimelinePage({
             onOpenStoryline={(phrase, storylineId) =>
               onSearch({ ...topic, q: phrase, storyline: storylineId })
             }
+            // ADR-0011: the label's words are never executed as a search —
+            // labels are non-unique, so only the UUID identifies the story.
+            // The reader's filters do NOT travel: the view is not a search,
+            // and narrowing it by language would hide coverage that is part
+            // of the same story.
+            onOpenStorylineView={(storylineId) => onSearch({ q: "", storyline: storylineId })}
+            qualifiers={qualifiers}
             items={visible}
             newCount={newCount}
             onReveal={reveal}
             ingesting={ingesting ?? false}
             pendingJobs={latest.meta.ingest.pendingJobs}
             terminal={terminal}
-            emptyLabel={`No articles yet for “${topic.q}”.`}
+            emptyLabel={
+              storylineView
+                ? "This storyline has no coverage to show."
+                : `No articles yet for “${topic.q}”.`
+            }
             hasNextPage={timeline.hasNextPage}
             isFetchingNextPage={timeline.isFetchingNextPage}
             onLoadOlder={() => void timeline.fetchNextPage()}
@@ -147,6 +168,8 @@ function Rail({
   newCount,
   onReveal,
   onOpenStoryline,
+  onOpenStorylineView,
+  qualifiers,
   ingesting,
   pendingJobs,
   terminal,
@@ -159,6 +182,9 @@ function Rail({
   newCount: number;
   onReveal: () => void;
   onOpenStoryline: (phrase: string, storylineId: string) => void;
+  onOpenStorylineView: (storylineId: string) => void;
+  /** storyline id → the date that separates it from its namesakes on screen. */
+  qualifiers: Map<string, string>;
   ingesting: boolean;
   pendingJobs: number;
   terminal: boolean;
@@ -244,9 +270,14 @@ function Rail({
             {!dayCollapsed &&
               day.items.map((entry) => (
                 <GroupCard
-                  key={entry.storylineId}
+                  // NOT `storylineId` alone: under ADR-0011 a storyline takes
+                  // one slot per day it has coverage, so the id repeats down
+                  // the rail and React would reuse one card for several days.
+                  key={`${entry.storylineId}:${entry.published}`}
                   entry={entry}
                   onOpenStoryline={onOpenStoryline}
+                  onOpenStorylineView={onOpenStorylineView}
+                  qualifiers={qualifiers}
                 />
               ))}
           </section>
@@ -327,9 +358,14 @@ function LoadOlder({ loading, onLoadOlder }: { loading: boolean; onLoadOlder: ()
 function GroupCard({
   entry,
   onOpenStoryline,
+  onOpenStorylineView,
+  qualifiers,
 }: {
   entry: TimelineEntry;
   onOpenStoryline: (phrase: string, storylineId: string) => void;
+  onOpenStorylineView: (storylineId: string) => void;
+  /** storyline id → the date that separates it from its namesakes on screen. */
+  qualifiers: Map<string, string>;
 }) {
   const [showRelated, setShowRelated] = useState(false);
   const updated = hasLaterCoverage(entry);
@@ -343,11 +379,26 @@ function GroupCard({
       // to the middle of an expanded slot would no longer point at anything.
       head={
         <div style={{ maxWidth: "640px" }}>
-          {entry.storylinePhrase && (
-            <StorylinePhrase
-              phrase={entry.storylinePhrase}
-              onOpen={() => onOpenStoryline(entry.storylinePhrase!, entry.storylineId)}
+          {/*
+            The gutter holds ONE thing. Under ADR-0011 that is the storyline's
+            label, on every slot of a labelled storyline — universal, where the
+            phrase appeared only on slots with wider coverage, because a label
+            is an identity rather than a lucky bigram. The phrase remains the
+            fallback for as long as the old model can be read (S9 removes it).
+          */}
+          {entry.storyline?.label ? (
+            <StorylineLabel
+              label={entry.storyline.label}
+              qualifier={qualifiers.get(entry.storylineId) ?? null}
+              onOpen={() => onOpenStorylineView(entry.storylineId)}
             />
+          ) : (
+            entry.storylinePhrase && (
+              <StorylinePhrase
+                phrase={entry.storylinePhrase}
+                onOpen={() => onOpenStoryline(entry.storylinePhrase!, entry.storylineId)}
+              />
+            )
           )}
           <ArticleCard
             article={entry.article}
@@ -395,6 +446,64 @@ function GroupCard({
         </div>
       )}
     </RailEntry>
+  );
+}
+
+/**
+ * The storyline's LABEL, in the gutter on the far side of the spine — the same
+ * home ADR-0010's layout gave the phrase, and the half of ADR-0010 that
+ * survives (ADR-0011 keeps the gutter, drops the phrase-as-query).
+ *
+ * Clicking opens the STORYLINE, by UUID. The label's words are never executed
+ * as a search: labels are deliberately non-unique, so the words no longer
+ * identify the story and navigation has to ride the id. That is also why the
+ * qualifier can be presentational — it separates two labels on screen without
+ * having to be part of anything's identity.
+ *
+ * The qualifier renders only when this label actually collides with another on
+ * screen. Every slot of a labelled storyline carries the label, so a permanent
+ * date beside every one of them would be a lot of chrome answering a question
+ * almost no reader has.
+ */
+function StorylineLabel({
+  label,
+  qualifier,
+  onOpen,
+}: {
+  label: string;
+  qualifier: string | null;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      onClick={onOpen}
+      aria-label={`Open the storyline ${label}${qualifier ? `, ${qualifier}` : ""}`}
+      style={{
+        position: "absolute",
+        left: `calc(-1 * ${RAIL_INSET})`,
+        width: `calc(${RAIL_GUTTER} - ${GUTTER_GAP})`,
+        top: "50%",
+        transform: "translateY(-50%)",
+        border: "none",
+        background: "none",
+        padding: 0,
+        textAlign: "right",
+        color: "var(--fg-faint)",
+        fontFamily: MONO,
+        fontSize: "0.7rem",
+        lineHeight: 1.25,
+        cursor: "pointer",
+        overflowWrap: "anywhere",
+      }}
+    >
+      {label}
+      {qualifier && (
+        // Dimmer than the label and on its own line: it is a tiebreak, not part
+        // of the name, and a reader who has no collision should be able to
+        // ignore it without effort.
+        <span style={{ display: "block", opacity: 0.65 }}>{qualifier}</span>
+      )}
+    </button>
   );
 }
 

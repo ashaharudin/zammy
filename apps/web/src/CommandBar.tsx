@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { TimelinePage } from "@zammy/shared";
 import type { Reference, TopicQuery } from "./api.js";
 import { FilterChipRow, useFilterDefaults } from "./FilterChipRow.js";
+import { StorylinePills } from "./StorylinePills.js";
 import { MONO } from "./theme.js";
 import { upstreamHealthRecord } from "./upstreamHealth.js";
 
@@ -27,6 +28,8 @@ export function CommandBar({
   reference,
   onSearch,
   onClear,
+  onOpenStorylineView,
+  qualifiers,
 }: {
   topic: TopicQuery;
   /** The newest response — the authority on meta. */
@@ -34,8 +37,15 @@ export function CommandBar({
   reference: Reference | undefined;
   onSearch: (topic: TopicQuery, options?: { replace?: boolean }) => void;
   onClear: () => void;
+  onOpenStorylineView: (storylineId: string) => void;
+  /** storyline id → the date that separates it from its namesakes on screen. */
+  qualifiers: Map<string, string>;
 }) {
   const [q, setQ] = useState(topic.q);
+  // The storyline view: opened by clicking a label, so there are no keywords
+  // and the box is empty by definition (ADR-0011).
+  const view = topic.q === "" && topic.storyline !== undefined ? topic.storyline : null;
+  const viewLabel = view ? (page?.storylines[0]?.label ?? null) : null;
 
   // Back/forward (or a shared link) changes the topic from outside; the bar
   // must follow the URL, not fight it.
@@ -45,7 +55,13 @@ export function CommandBar({
 
   useUpstreamHealthLog(page);
   // The reader's own browser, on a topic whose URL states no filters (§8.1).
-  useFilterDefaults(topic, reference, "browser", (filters) =>
+  //
+  // NOT in the storyline view, which has no filters to default: it is one
+  // storyline's own coverage, and narrowing it by language would hide part of
+  // the story. Found by typing into the view and watching the search not
+  // happen — the hook was navigating (replace) to add `lang`/`country`, which
+  // changed `topic`, which reset the input from under the reader mid-keystroke.
+  useFilterDefaults(view ? null : topic, reference, "browser", (filters) =>
     onSearch({ ...topic, ...filters }, { replace: true }),
   );
 
@@ -68,7 +84,10 @@ export function CommandBar({
           // the reader types next would keep enrolling that slot in unrelated
           // topics. The filter chips below DO keep it: they narrow this same
           // topic rather than starting another.
-          const { storyline: _seed, ...carried } = topic;
+          // Typing exits the storyline view, and drops the ADR-0010 seed for
+          // the same reason: both are provenance for what the reader was
+          // looking at, and neither belongs to what they type next.
+          const { storyline: _held, ...carried } = topic;
           if (q.trim()) onSearch({ ...carried, q: q.trim() });
         }}
         style={{
@@ -95,10 +114,19 @@ export function CommandBar({
         >
           zammy&gt;
         </button>
+        {view && (
+          <StorylineChip
+            label={viewLabel}
+            onDismiss={() => {
+              const { storyline: _left, ...carried } = topic;
+              onSearch({ ...carried, q: "" });
+            }}
+          />
+        )}
         <input
           value={q}
           onChange={(event) => setQ(event.target.value)}
-          placeholder="keywords (all terms must match)"
+          placeholder={view ? "search to leave this storyline" : "keywords (all terms must match)"}
           aria-label="Search topics"
           style={{
             flex: 1,
@@ -127,13 +155,75 @@ export function CommandBar({
         }}
       >
         <span>{page ? <AsOf iso={page.meta.asOf} /> : "searching…"}</span>
-        <FilterChipRow
-          filters={topic}
-          reference={reference}
-          onChange={(filters) => onSearch({ ...topic, ...filters })}
-        />
+        {/* The storyline view is not a search, so there is nothing to narrow. */}
+        {!view && (
+          <FilterChipRow
+            filters={topic}
+            reference={reference}
+            onChange={(filters) => onSearch({ ...topic, ...filters })}
+          />
+        )}
       </div>
+      {/* S8's verdict: surfaced storylines live in the chrome, under the asOf
+          stamp — never in the results, which they are not part of. Suppressed
+          in the view itself, which is already about one storyline. */}
+      {!view && (
+        <StorylinePills
+          storylines={page?.storylines ?? []}
+          qualifiers={qualifiers}
+          onOpen={onOpenStorylineView}
+        />
+      )}
     </header>
+  );
+}
+
+/**
+ * The storyline view's subject, as a dismissible chip in the prompt row
+ * (ADR-0011). Dismissing returns to the hero: the view has no keywords behind
+ * it to fall back to, so there is nothing else it could mean.
+ *
+ * Renders "storyline" when the label is null — a promoted storyline whose
+ * label generation failed is still a storyline, and the chip is what tells the
+ * reader why the box is empty.
+ */
+function StorylineChip({ label, onDismiss }: { label: string | null; onDismiss: () => void }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "0.3rem",
+        border: "1px solid var(--border)",
+        borderRadius: "999px",
+        background: "var(--chip-bg)",
+        fontFamily: MONO,
+        fontSize: "0.75rem",
+        padding: "0.1rem 0.2rem 0.1rem 0.55rem",
+        whiteSpace: "nowrap",
+        maxWidth: "50%",
+      }}
+    >
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+        {label ?? "storyline"}
+      </span>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label={`Leave the storyline ${label ?? ""}`.trim()}
+        style={{
+          border: "none",
+          background: "none",
+          color: "var(--fg-faint)",
+          cursor: "pointer",
+          fontSize: "0.8rem",
+          lineHeight: 1,
+          padding: "0 0.25rem",
+        }}
+      >
+        ×
+      </button>
+    </span>
   );
 }
 

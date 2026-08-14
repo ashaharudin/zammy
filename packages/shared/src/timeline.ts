@@ -143,7 +143,19 @@ export const StorylineRef = z.object({
 export type StorylineRef = z.infer<typeof StorylineRef>;
 
 /** A surfaced storyline: a ref plus the UUID the storyline view opens by. */
-export const SurfacedStoryline = StorylineRef.extend({ id: z.string().min(1) });
+export const SurfacedStoryline = StorylineRef.extend({
+  id: z.string().min(1),
+  /**
+   * Articles in the storyline, over its whole life rather than this search.
+   *
+   * A SIZE, and the surfacing UI renders it as a bucket rather than a number
+   * (S8's verdict): the question a reader asks of a surfaced storyline is "how
+   * big is this", not "how many exactly", and a bucket survives the count
+   * moving while they look at it. The exact figure still travels, because it
+   * costs nothing here and the pill puts it in its `title`.
+   */
+  size: z.int().min(0),
+});
 export type SurfacedStoryline = z.infer<typeof SurfacedStoryline>;
 
 export const TimelineEntry = z.object({

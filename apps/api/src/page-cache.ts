@@ -47,7 +47,7 @@ export function freshnessTier(windowEnd: Date, now: Date): "hot" | "recent" | "h
  * rides in the key too (`pageCacheKey`'s `model`), which is what makes the flag
  * safe to flip in both directions rather than one.
  */
-const PAGE_SHAPE_VERSION = 5;
+const PAGE_SHAPE_VERSION = 6;
 
 /** page:v<shape>:<model>:<fingerprint>:<windowHash>:<cursor>:<limit> (§7.1). */
 export function pageCacheKey(
