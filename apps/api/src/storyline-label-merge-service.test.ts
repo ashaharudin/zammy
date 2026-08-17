@@ -102,6 +102,24 @@ function hormuz(day: string, n: number) {
   };
 }
 
+/**
+ * Ceasefire coverage whose one grounded name ENDS IN S.
+ *
+ * The label side folds through `normalizeLabel`, whose fold is `singular`, so
+ * the guard asks for `hama`. If the corpus side is not folded the same way it
+ * holds `hamas`, no label word is ever a name, and every story named for a
+ * Hamas, a Paris or a Philippines is refused as nameless.
+ */
+function ceasefire(day: string, n: number) {
+  return {
+    title: `Mediators press for a Gaza ceasefire`,
+    description:
+      `Negotiators said Hamas had accepted the outline in Doha on day ${n}. ` +
+      `The mediators expect Hamas and Israel to meet again this week.`,
+    published: `2026-08-${day}T09:0${n % 10}:00Z`,
+  };
+}
+
 /** Earnings coverage: every label word appears lowercase in the prose. */
 function earnings(day: string, company: string, n: number) {
   return {
@@ -178,6 +196,23 @@ describe("mergeAgreeingLabels", () => {
     // The survivor's day slots now span coverage neither arc held alone.
     const days = await readStorylineDays(db, big);
     expect(days).toHaveLength(5);
+  });
+
+  it("merges on a grounded name that ends in s", async () => {
+    const big = await labelledStoryline({
+      label: "Hamas Ceasefire Talks",
+      articles: [ceasefire("02", 1), ceasefire("05", 2), ceasefire("09", 3)],
+    });
+    const small = await labelledStoryline({
+      label: "Hamas Ceasefire Talks",
+      articles: [ceasefire("13", 4), ceasefire("14", 5)],
+    });
+
+    const report = await mergeAgreeingLabels({ db, rules: RULES, timeZone: TZ });
+
+    expect(report.refusals).toEqual([]);
+    expect(report.merged).toBe(1);
+    expect(await resolveStoryline(db, small)).toBe(big);
   });
 
   it("refuses a cluster whose label grounds no name", async () => {

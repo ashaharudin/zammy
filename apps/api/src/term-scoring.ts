@@ -231,9 +231,20 @@ function splitTokens(text: string): string[] {
  * Exported, and typed to the two fields it actually reads, because the
  * storyline phrase (`storyline-phrase.ts`) runs the verb gate below over a
  * corpus of one slot's members — the same evidence, a much smaller corpus.
+ *
+ * `fold` is for callers whose terms are not surface forms. Corpus tokens are
+ * folded on the way into the sets and the term is folded when it is asked, so
+ * both sides meet on one spelling. Without it a caller asking with singularized
+ * words — the label merge, whose labels arrive through `normalizeLabel` — can
+ * never get a `true` for a name ending in `s`: "Hamas" is recorded as `hamas`
+ * and asked for as `hama`. Defaults to the identity, because a caller holding
+ * surface forms wants the surface comparison: folding conflates a name with the
+ * common word that would disqualify it, which refuses rather than admits, and
+ * that is the safe direction only where refusing is cheap.
  */
 export function properNounEvidence(
   corpus: readonly { title: string; description: string | null }[],
+  fold: (token: string) => string = (token) => token,
 ): (term: string) => boolean {
   const capitalizedMidSentence = new Set<string>();
   const seenLowercase = new Set<string>();
@@ -246,18 +257,24 @@ export function properNounEvidence(
         const tokens = splitTokens(segment);
         tokens.forEach((token, index) => {
           const lower = token.toLowerCase();
+          // `keepable` before `fold`, the order `contentTokens` uses: the
+          // stopword list is written in surface forms.
           if (!keepable(lower)) return;
+          const folded = fold(lower);
           if (/^\p{Ll}/u.test(token)) {
-            seenLowercase.add(lower);
+            seenLowercase.add(folded);
           } else if (index > 0 && /^\p{Lu}/u.test(token)) {
-            capitalizedMidSentence.add(lower);
+            capitalizedMidSentence.add(folded);
           }
         });
       }
     }
   }
 
-  return (term) => capitalizedMidSentence.has(term) && !seenLowercase.has(term);
+  return (term) => {
+    const folded = fold(term);
+    return capitalizedMidSentence.has(folded) && !seenLowercase.has(folded);
+  };
 }
 
 /**

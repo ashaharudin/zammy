@@ -400,11 +400,15 @@ async function cascadeMerge(
   outcome: LinkOutcome,
 ): Promise<void> {
   const pending: [string, string][] = [[lo, hi]];
-  // Pairs already decided this cascade. A pair whose count fell short does not
-  // grow again inside one cascade, and re-asking would be a round trip per hop.
-  const seen = new Set<string>();
+  // Pairs already QUEUED this cascade, so one pair is merged once. A pair that
+  // fell short is deliberately NOT remembered: a later merge in this same
+  // cascade re-points more bridges onto the same survivor, and a pair that
+  // counted K-1 two hops ago can be at K now. Memoizing the shortfall is what
+  // left those pairs for the nightly sweep to repair a day late; the cost of
+  // dropping the memo is one more count per re-point, bounded by CASCADE_LIMIT.
+  const queued = new Set<string>();
   const key = (a: string, b: string): string => (a < b ? `${a}|${b}` : `${b}|${a}`);
-  seen.add(key(lo, hi));
+  queued.add(key(lo, hi));
 
   for (let step = 0; pending.length > 0; step += 1) {
     if (step >= CASCADE_LIMIT) {
@@ -436,13 +440,14 @@ async function cascadeMerge(
     for (const other of result.repointed) {
       if (other === survivor) continue;
       const pairKey = key(survivor, other);
-      if (seen.has(pairKey)) continue;
-      seen.add(pairKey);
+      if (queued.has(pairKey)) continue;
       const bridges = await countBridges(deps.db, {
         storylineA: survivor,
         storylineB: other,
       });
-      if (bridges >= deps.config.mergeBridges) pending.push([survivor, other]);
+      if (bridges < deps.config.mergeBridges) continue;
+      queued.add(pairKey);
+      pending.push([survivor, other]);
     }
   }
 }

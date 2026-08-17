@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { RawSighting, normalizeSightings } from "@zammy/currents-client";
-import { scoreTerms, type CorpusArticle } from "./term-scoring.js";
+import { properNounEvidence, scoreTerms, type CorpusArticle } from "./term-scoring.js";
+import { singular } from "./grouping.js";
 
 /**
  * Term scoring (ARCHITECTURE 10.3), tested against the RECORDED 80-article
@@ -409,5 +410,41 @@ describe("scoring mechanisms in isolation", () => {
     // "Danube". Displayed count stays honest; the SCORE ranks the Danube first.
     expect(equifax.dfArticles).toBe(6);
     expect(danube.score).toBeGreaterThan(equifax.score);
+  });
+});
+
+describe("properNounEvidence's fold", () => {
+  const corpus = [
+    {
+      title: "Talks Resume Over Gaza",
+      description:
+        "Negotiators said Hamas had accepted the terms in Doha. " +
+        "The mediators expect Hamas and Israel to sign this week.",
+    },
+    {
+      title: "Attack in Paris",
+      description:
+        "Investigators in Paris named a suspect on Tuesday. " +
+        "Prosecutors in Paris said the inquiry continues.",
+    },
+  ];
+
+  it("answers for the surface form by default", () => {
+    const evidence = properNounEvidence(corpus);
+    expect(evidence("hamas")).toBe(true);
+    expect(evidence("paris")).toBe(true);
+  });
+
+  it("meets a singularized caller on one spelling", () => {
+    // The label merge asks with words `normalizeLabel` has already folded, so
+    // it asks for `hama` and `pari`. Unfolded on the corpus side, every name
+    // ending in `s` answers false and the grounding guard refuses a whole
+    // class of stories as nameless.
+    const evidence = properNounEvidence(corpus, singular);
+    expect(evidence(singular("hamas"))).toBe(true);
+    expect(evidence(singular("paris"))).toBe(true);
+    // Still a name test, not a pass: a word written lowercase in the prose
+    // fails on either side of the fold.
+    expect(evidence(singular("negotiators"))).toBe(false);
   });
 });
