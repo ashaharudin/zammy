@@ -130,6 +130,60 @@ measure them, and it should.
 16,000-article window is 32, so the floor of 10 only binds for a language whose
 fortnight holds under ~5,000 articles. The archive has no such language.
 
+## The merge that never fired
+
+Found 2026-08-17, against the live dev archive rather than the sweep — and the
+sweep is why it survived so long. **The K-bridge merge had never fired once.**
+
+`countBridges` had exactly one caller, inside `recordBridgesAmong`, gated on a
+bridge row having just been INSERTED. That is the only moment the linker asks
+whether a pair has reached K. But a merge **re-points** the loser's bridges onto
+the winner (`mergeStorylines`), so a third storyline holding one bridge to each
+side of a merging pair ends up holding two to the survivor — K, reached with no
+insert, and nothing looking. Found in the archive:
+
+| bridges on the pair | live pairs | merged |
+| --- | --- | --- |
+| 1 | 1,627 | — |
+| **2** | **25** | **0** |
+| **3** | **6** | **0** |
+
+Thirty-one pairs at or above K, none merged, every one involving a storyline
+that had absorbed merges. No future insert would ever have revisited them.
+
+**The in-memory replay does not reproduce it**, which is why the table at the top
+of this page overstates what production achieved: `storyline-replay.ts` resolves
+aliases and re-keys its bridge map on merge, so the sweep's `merges` column
+measures a linker more correct than the one that shipped. A measurement harness
+that reimplements storage will agree with the storage it imagines, not the
+storage there is.
+
+A second, narrower miss sat next to it: `countBridges` was called with the ids
+the caller had retrieved candidates under, while `recordBridge` alias-resolves
+before inserting. A merge earlier in the same loop therefore left later pairs
+counted under a stale id — zero rows, check skipped.
+
+**The fix**, in three parts:
+
+- `mergeStorylines` returns `repointed`: the third storylines whose evidence just
+  moved. Storage does not know K, so it reports the change and the caller decides.
+- `cascadeMerge` in the linker drains those pairs against K after every merge,
+  to a fixed point. This is **not** the transitive linking ADR-0009 refused —
+  every step is still paid for by K independent groups bridging that exact pair;
+  what was broken is that the evidence was on the table and nobody read it.
+- `runBridgeSweep` enforces the invariant "no two live storylines hold K
+  bridges" over the whole archive, nightly and after a backfill. It is both the
+  repair for what accumulated and the backstop for whatever the write path still
+  misses.
+
+`recordBridge` now returns the resolved pair it actually wrote, so there is one
+place that resolves and no way to count under the wrong id.
+
+The regression test is the archive's own shape: three arcs, one bridge from the
+third to each of the other two, then two straddlers merging the first pair.
+Before the fix it produced one merge and left the survivor sitting at K for ever;
+it now produces two.
+
 ## One bug the tests caught, worth remembering
 
 The first version re-homed an already-linked group: on a replay it treated the

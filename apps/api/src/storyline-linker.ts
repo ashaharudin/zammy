@@ -5,9 +5,11 @@ import {
   createProvisionalStoryline,
   mergeStorylines,
   promoteStoryline,
+  readBridgedPairs,
   readCandidateStorylines,
   readGroupStorylines,
   recordBridge,
+  resolveStoryline,
   type Database,
 } from "@zammy/storage";
 import { readTrailingCorpus, type StoryDfConfig } from "./story-df.js";
@@ -79,6 +81,15 @@ export interface LinkerDeps {
  * recently-covered N yields a worse link, never a wrong row.
  */
 const CANDIDATE_LIMIT = 200;
+
+/**
+ * Merges one arrival's cascade may perform before it gives up and leaves the
+ * rest to the sweep. A safety valve, not a tuning knob: each step is paid for by
+ * K independent bridges, so a long chain is legitimate evidence — but an
+ * ingest-path decision that merges without bound is one slow request and an
+ * unreadable log, and `runBridgeSweep` finishes the job off the latency path.
+ */
+const CASCADE_LIMIT = 32;
 
 /** One group, as the linker needs to see it. */
 export interface LinkableGroup {
@@ -344,16 +355,67 @@ async function recordBridgesAmong(
   outcome: LinkOutcome,
 ): Promise<void> {
   for (const [a, b] of bridgePairs(qualified)) {
-    const { recorded } = await recordBridge(deps.db, {
+    const { recorded, pair } = await recordBridge(deps.db, {
       storylineA: a,
       storylineB: b,
       groupId,
     });
-    if (!recorded) continue;
+    if (!recorded || pair === null) continue;
 
-    if ((await countBridges(deps.db, { storylineA: a, storylineB: b })) < deps.config.mergeBridges) {
+    // The RESOLVED pair, not (a, b): an earlier iteration of this same loop may
+    // have merged one of them away, and the row above was written under the
+    // survivor's id. Counting under the stale id returns zero and silently skips
+    // a merge that was due.
+    const [lo, hi] = pair;
+    if (
+      (await countBridges(deps.db, { storylineA: lo, storylineB: hi })) <
+      deps.config.mergeBridges
+    ) {
       continue;
     }
+    await cascadeMerge(deps, lo, hi, outcome);
+  }
+}
+
+/**
+ * Merge a pair, then drain the pairs that merge left at or above K.
+ *
+ * A merge moves the loser's bridges onto the winner (`mergeStorylines`), so a
+ * third storyline that had one bridge to each side now has two to the survivor
+ * — K, reached without a single bridge being recorded, and the linker's K check
+ * only ever fires on an INSERT. That gap is not hypothetical: the dev archive
+ * held 31 pairs at or above K that no future insert would have revisited, every
+ * one involving a storyline that had absorbed merges.
+ *
+ * This is NOT the transitive linking ADR-0009 refused. Every merge here is still
+ * paid for by K INDEPENDENT groups bridging that exact pair; what the cascade
+ * fixes is that the evidence was already on the table and nobody read it. The
+ * bound below is a safety valve for a pathological chain, not a rule — a run
+ * that hits it has left the invariant unmet, so it says so rather than looping.
+ */
+async function cascadeMerge(
+  deps: LinkerDeps,
+  lo: string,
+  hi: string,
+  outcome: LinkOutcome,
+): Promise<void> {
+  const pending: [string, string][] = [[lo, hi]];
+  // Pairs already decided this cascade. A pair whose count fell short does not
+  // grow again inside one cascade, and re-asking would be a round trip per hop.
+  const seen = new Set<string>();
+  const key = (a: string, b: string): string => (a < b ? `${a}|${b}` : `${b}|${a}`);
+  seen.add(key(lo, hi));
+
+  for (let step = 0; pending.length > 0; step += 1) {
+    if (step >= CASCADE_LIMIT) {
+      deps.log?.warn(
+        { lo, hi, pending: pending.length },
+        "storyline merge cascade hit its limit; the bridge sweep will finish it",
+      );
+      return;
+    }
+    const [a, b] = pending.shift()!;
+
     // The winner is the storyline with more groups, then the older UUID: a
     // merge must be replayable, and "more coverage wins" keeps the surviving
     // UUID the one more readers are likely to be holding.
@@ -363,11 +425,142 @@ async function recordBridgesAmong(
       loserId,
       timeZone: deps.config.timeZone,
     });
-    if (result.merged) {
-      outcome.merged.push({ winnerId, loserId });
-      if (outcome.storylineId === loserId) outcome.storylineId = winnerId;
+    if (!result.merged) continue;
+
+    outcome.merged.push({ winnerId, loserId });
+    if (outcome.storylineId === loserId) outcome.storylineId = winnerId;
+
+    // Everything whose evidence just moved onto the survivor, re-asked against
+    // K — the loop this bug was missing.
+    const survivor = result.winnerId ?? winnerId;
+    for (const other of result.repointed) {
+      if (other === survivor) continue;
+      const pairKey = key(survivor, other);
+      if (seen.has(pairKey)) continue;
+      seen.add(pairKey);
+      const bridges = await countBridges(deps.db, {
+        storylineA: survivor,
+        storylineB: other,
+      });
+      if (bridges >= deps.config.mergeBridges) pending.push([survivor, other]);
     }
   }
+}
+
+export interface BridgeSweepReport {
+  /** Pairs found at or above K. */
+  found: number;
+  merged: number;
+  failures: number;
+  /** True when the run stopped on its bound with work still outstanding. */
+  incomplete: boolean;
+  /**
+   * Surviving storylines, alias-resolved and deduped — what the caller must
+   * re-label. A merge is one of ADR-0011's three label triggers because the
+   * story changed shape, and a survivor that absorbed three arcs is described by
+   * a label made for a third of it.
+   */
+  survivors: string[];
+}
+
+/**
+ * The bridge sweep: merge every live pair already holding K independent bridges.
+ *
+ * The linker checks K on the insert, which is the only moment it sees. That is
+ * enough for the pair being bridged and was never enough for the pairs a MERGE
+ * re-points — `cascadeMerge` closes that on the live path, and this closes it
+ * over the archive, where the misses have already accumulated: 31 pairs stood at
+ * or above K in the dev archive with the bridge merge never having fired once.
+ *
+ * Runs to a fixed point rather than once, because merging a pair re-points more
+ * evidence and can lift another pair to K — the same reason the cascade exists,
+ * at archive scale. `maxPasses` bounds a pathological chain, and an incomplete
+ * run says so instead of looping.
+ *
+ * Never throws for one pair's sake, the posture every storyline pass here takes.
+ */
+export async function runBridgeSweep(
+  deps: LinkerDeps,
+  options: { batchSize?: number; maxPasses?: number } = {},
+): Promise<BridgeSweepReport> {
+  const batchSize = options.batchSize ?? 500;
+  const maxPasses = options.maxPasses ?? 20;
+  const report: BridgeSweepReport = {
+    found: 0,
+    merged: 0,
+    failures: 0,
+    incomplete: false,
+    survivors: [],
+  };
+  // Winners collected as ids and resolved at the end: a survivor of one pass can
+  // be absorbed by a later one, and re-labelling an alias spends a model call to
+  // write a label nothing reads.
+  const winners = new Set<string>();
+
+  for (let pass = 0; ; pass += 1) {
+    if (pass >= maxPasses) {
+      report.incomplete = true;
+      break;
+    }
+    const pairs = await readBridgedPairs(deps.db, {
+      minBridges: deps.config.mergeBridges,
+      limit: batchSize,
+    });
+    if (pairs.length === 0) break;
+    report.found += pairs.length;
+
+    let mergedThisPass = 0;
+    for (const pair of pairs) {
+      // A pair may have been dissolved by an earlier merge in this same pass —
+      // both sides absorbed into one storyline. `mergeStorylines` resolves and
+      // returns `merged: false`, which is not a failure.
+      const outcome: LinkOutcome = {
+        groupId: "",
+        storylineId: pair.lo,
+        attached: false,
+        attachedTo: [],
+        promoted: [],
+        bridged: [],
+        merged: [],
+      };
+      try {
+        await cascadeMerge(deps, pair.lo, pair.hi, outcome);
+        mergedThisPass += outcome.merged.length;
+        report.merged += outcome.merged.length;
+        for (const merge of outcome.merged) {
+          winners.add(merge.winnerId);
+          winners.delete(merge.loserId);
+        }
+      } catch (error) {
+        report.failures += 1;
+        deps.log?.warn(
+          { err: error, lo: pair.lo, hi: pair.hi },
+          "bridge sweep: one pair failed to merge; it stands where it stood",
+        );
+      }
+    }
+
+    // Nothing moved, but pairs are still above K: every one of them refused to
+    // merge (all failures, or all already dissolved). Another pass would read
+    // the same rows and do the same nothing.
+    if (mergedThisPass === 0) {
+      report.incomplete = report.failures > 0;
+      break;
+    }
+  }
+
+  // Resolve once at the end rather than per merge: a winner absorbed by a later
+  // pass must not be handed back as something to re-label.
+  const survivors = new Set<string>();
+  for (const winner of winners) {
+    const resolved = await resolveStoryline(deps.db, winner);
+    if (resolved !== null) survivors.add(resolved);
+  }
+  report.survivors = [...survivors];
+
+  // The summary belongs to the caller: `LinkerDeps` carries only `warn`, which
+  // is the right level for a per-pair failure and the wrong one for a tally.
+  return report;
 }
 
 async function pickWinner(

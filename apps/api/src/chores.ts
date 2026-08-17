@@ -13,7 +13,18 @@ import {
 import { storyDfDay } from "./story-df.js";
 import { labelPass } from "./storyline-backfill.js";
 import { labelLinkedStorylines, type LabelerDeps } from "./storyline-label-service.js";
-import { linkGroup, type LinkOutcome, type LinkerConfig } from "./storyline-linker.js";
+import type { LabelMergeRules } from "./storyline-label-merge.js";
+import {
+  mergeAgreeingLabels,
+  type LabelMergeReport,
+} from "./storyline-label-merge-service.js";
+import {
+  linkGroup,
+  runBridgeSweep,
+  type BridgeSweepReport,
+  type LinkOutcome,
+  type LinkerConfig,
+} from "./storyline-linker.js";
 
 /**
  * Non-upstream chores (ARCHITECTURE 9.1): work with a clock but no quota
@@ -234,6 +245,94 @@ export async function runLateCandidateChore(
     "late-candidate sweep — retroactive attachment over the trailing window (ADR-0011)",
   );
   return tally;
+}
+
+/**
+ * The nightly bridge sweep: merge every live pair already holding K independent
+ * bridges (ADR-0011's repair, `runBridgeSweep`).
+ *
+ * The linker checks K when a bridge is inserted, which is the only moment it
+ * sees; a MERGE re-points evidence onto the survivor and can lift a pair to K
+ * with no insert at all. `cascadeMerge` closes that on the write path, and this
+ * is the backstop — for whatever a crash left half-done, and for the archive
+ * that accumulated misses before the cascade existed.
+ *
+ * Runs BEFORE the late-candidate sweep: a pair that should be one storyline
+ * should be one storyline before old groups are offered to it, or the offer is
+ * made against a profile that is about to change.
+ */
+export async function runBridgeSweepChore(
+  deps: ChoreDeps & {
+    linker: LinkerConfig;
+    /**
+     * Present, every survivor is re-named. Merge is one of ADR-0011's three
+     * label triggers for a reason: an arc that absorbed three others is
+     * described by a label made for a quarter of it, and the drift clock only
+     * catches the ones whose membership happened to double.
+     */
+    labeler?: Omit<LabelerDeps, "db">;
+  },
+): Promise<BridgeSweepReport> {
+  const report = await runBridgeSweep({
+    db: deps.db,
+    config: deps.linker,
+    log: deps.log,
+  });
+  deps.log.info(
+    { found: report.found, merged: report.merged, failures: report.failures,
+      incomplete: report.incomplete, survivors: report.survivors.length,
+      k: deps.linker.mergeBridges },
+    "storyline bridge sweep — pairs at or above K, merged (ADR-0011)",
+  );
+
+  // Re-label off the same outcome shape the linker's own tail uses, so a sweep
+  // merge and an ingest merge are named by one code path.
+  if (deps.labeler && report.survivors.length > 0) {
+    await labelLinkedStorylines(
+      { db: deps.db, labeler: deps.labeler, log: deps.log },
+      report.survivors.map((winnerId) => ({
+        groupId: "",
+        storylineId: winnerId,
+        attached: false,
+        attachedTo: [],
+        promoted: [],
+        bridged: [],
+        merged: [{ winnerId, loserId: winnerId }],
+      })),
+    );
+  }
+  return report;
+}
+
+/**
+ * The nightly label-agreement merge (`storyline-label-merge.ts`): storylines
+ * that were independently given the same name by the model, and whose coverage
+ * runs together, become one.
+ *
+ * Nightly rather than on the ingest path because the evidence only exists after
+ * the fact. A label is written by the tail the linker starts and does not wait
+ * for, so at the moment two arcs become mergeable neither of them is named yet;
+ * asking on the write path would ask before the answer exists.
+ *
+ * It runs AFTER the label pass for the same reason, which is why the caller
+ * orders it last: a storyline labelled tonight should be eligible tonight, not
+ * tomorrow. That ordering is also what makes the pass converge — each night's
+ * new labels are the next night's candidates.
+ */
+export async function runLabelMergeChore(
+  deps: ChoreDeps & {
+    rules: LabelMergeRules;
+    /** Present, the survivor is re-named over its enlarged membership. */
+    labeler?: Omit<LabelerDeps, "db">;
+  },
+): Promise<LabelMergeReport> {
+  return mergeAgreeingLabels({
+    db: deps.db,
+    rules: deps.rules,
+    timeZone: deps.config.timeZone,
+    ...(deps.labeler ? { labeler: deps.labeler } : {}),
+    log: deps.log,
+  });
 }
 
 /**

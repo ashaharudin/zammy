@@ -4,8 +4,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrateToLatest } from "./migrator.js";
 import {
   attachGroup,
+  countBridges,
   createProvisionalStoryline,
   mergeStorylines,
+  recordBridge,
   promoteStoryline,
   readGroupStorylines,
   readStoryline,
@@ -305,7 +307,7 @@ describe("storylines in storage", () => {
         timeZone: ZONE,
       });
 
-      expect(result).toEqual({ merged: true, winnerId: winner.id });
+      expect(result).toEqual({ merged: true, winnerId: winner.id, repointed: [] });
       // Every one of the loser's groups is now the winner's, and none of them
       // is left pointing at a UUID that no longer holds members.
       expect(await readGroupStorylines(harness.db, loserGroup)).toEqual([winner.id]);
@@ -326,6 +328,79 @@ describe("storylines in storage", () => {
       // Three groups now, so a token needs two of them: "reef" from all three
       // and "survey" from the loser's pair survive, the two singletons do not.
       expect(await profile(winner.id)).toEqual(["reef", "survey"]);
+    });
+
+    it("reports the third storylines whose bridges it re-pointed", async () => {
+      // The fact the linker's K check could not see. A merge moves the loser's
+      // bridges onto the winner, so a pair can reach K with no bridge ever being
+      // inserted for it — and the check fires on the insert. Storage does not
+      // know what K is, so it reports WHICH pairs changed and the caller re-asks.
+      const arc = async (tokens: string[]): Promise<string> => {
+        const groupId = await group("2026-08-11T09:00:00.000Z", tokens);
+        const born = await createProvisionalStoryline(harness.db, { groupId, timeZone: ZONE });
+        await promoteStoryline(harness.db, { storylineId: born.id });
+        return born.id;
+      };
+      const winner = await arc(["reef", "survey"]);
+      const loser = await arc(["quarry", "fire"]);
+      const third = await arc(["tanker", "strait"]);
+      const fourth = await arc(["eclipse", "solar"]);
+
+      const bridgeGroup = await group("2026-08-11T10:00:00.000Z", ["bridge"]);
+      const otherGroup = await group("2026-08-11T11:00:00.000Z", ["other"]);
+      // The loser is bridged to a third arc, and to the WINNER itself.
+      await recordBridge(harness.db, {
+        storylineA: loser,
+        storylineB: third,
+        groupId: bridgeGroup,
+      });
+      await recordBridge(harness.db, {
+        storylineA: loser,
+        storylineB: winner,
+        groupId: otherGroup,
+      });
+
+      const result = await mergeStorylines(harness.db, {
+        winnerId: winner,
+        loserId: loser,
+        timeZone: ZONE,
+      });
+
+      // The third arc is reported; the winner is not — a pair that is now one
+      // storyline has nothing left to bridge. An arc the loser never met is
+      // absent entirely.
+      expect(result.merged).toBe(true);
+      expect(result.repointed).toEqual([third]);
+      expect(result.repointed).not.toContain(winner);
+      expect(result.repointed).not.toContain(fourth);
+      // And the evidence really did move: the survivor now carries it.
+      expect(await countBridges(harness.db, { storylineA: winner, storylineB: third })).toBe(1);
+      expect(await countBridges(harness.db, { storylineA: loser, storylineB: third })).toBe(0);
+    });
+
+    it("records a bridge under the RESOLVED pair, and says which pair that was", async () => {
+      // The caller holds the ids it retrieved candidates under; a merge can have
+      // turned one into an alias since. Returning the pair actually written is
+      // what stops the caller counting under a stale id and reading zero.
+      const first = await group("2026-08-11T09:00:00.000Z", ["reef"]);
+      const second = await group("2026-08-11T09:30:00.000Z", ["quarry"]);
+      const third = await group("2026-08-11T10:00:00.000Z", ["tanker"]);
+      const a = await createProvisionalStoryline(harness.db, { groupId: first, timeZone: ZONE });
+      const b = await createProvisionalStoryline(harness.db, { groupId: second, timeZone: ZONE });
+      const c = await createProvisionalStoryline(harness.db, { groupId: third, timeZone: ZONE });
+      await mergeStorylines(harness.db, { winnerId: a.id, loserId: b.id, timeZone: ZONE });
+
+      const bridgeGroup = await group("2026-08-11T11:00:00.000Z", ["bridge"]);
+      // Bridging the ALIAS: it must land on the survivor's pair.
+      const recorded = await recordBridge(harness.db, {
+        storylineA: b.id,
+        storylineB: c.id,
+        groupId: bridgeGroup,
+      });
+
+      expect(recorded.recorded).toBe(true);
+      expect(recorded.pair).toEqual(a.id < c.id ? [a.id, c.id] : [c.id, a.id]);
+      expect(await countBridges(harness.db, { storylineA: a.id, storylineB: c.id })).toBe(1);
     });
 
     it("wakes a dormant winner for a live loser, and not for a dormant one", async () => {
@@ -439,9 +514,49 @@ describe("storylines in storage", () => {
         timeZone: ZONE,
       });
 
-      expect(replay).toEqual({ merged: false, winnerId: a.id });
-      expect(reversed).toEqual({ merged: false, winnerId: a.id });
+      expect(replay).toEqual({ merged: false, winnerId: a.id, repointed: [] });
+      expect(reversed).toEqual({ merged: false, winnerId: a.id, repointed: [] });
       expect(await readGroupStorylines(harness.db, groupB)).toEqual([a.id]);
+    });
+
+    it("survives two concurrent merges of the same pair in opposite directions", async () => {
+      // The ingest cascade and the nightly sweeps can nominate the same pair at
+      // the same moment with opposite winners. Un-serialized, both resolve
+      // against pre-merge state and both commit, writing merged_into on BOTH
+      // rows — a cycle every `merged_into is null` read excludes, so the
+      // storyline vanishes. The advisory lock in mergeStorylines makes the
+      // second merge resolve after the first commits and no-op.
+      const groupA = await group("2026-08-12T09:00:00.000Z", ["dam", "breach"]);
+      const groupB = await group("2026-08-12T10:00:00.000Z", ["dam", "evacuation"]);
+      const a = await createProvisionalStoryline(harness.db, {
+        groupId: groupA,
+        timeZone: ZONE,
+      });
+      const b = await createProvisionalStoryline(harness.db, {
+        groupId: groupB,
+        timeZone: ZONE,
+      });
+
+      const [forward, backward] = await Promise.all([
+        mergeStorylines(harness.db, { winnerId: a.id, loserId: b.id, timeZone: ZONE }),
+        mergeStorylines(harness.db, { winnerId: b.id, loserId: a.id, timeZone: ZONE }),
+      ]);
+
+      // Exactly one direction wins; the other arrives late and no-ops.
+      expect([forward.merged, backward.merged].filter(Boolean)).toHaveLength(1);
+      // Both callers were told the same survivor, and it is still readable.
+      expect(forward.winnerId).toBe(backward.winnerId);
+      const survivor = await resolveStoryline(harness.db, forward.winnerId!);
+      expect(survivor).not.toBeNull();
+      expect(await resolveStoryline(harness.db, a.id)).toBe(survivor);
+      expect(await resolveStoryline(harness.db, b.id)).toBe(survivor);
+      // One row survives un-merged; the other aliases to it. Never a cycle.
+      const rows = await harness.db
+        .selectFrom("storylines")
+        .select(["id", "merged_into"])
+        .where("id", "in", [a.id, b.id])
+        .execute();
+      expect(rows.filter((row) => row.merged_into === null)).toHaveLength(1);
     });
 
     it("refuses a merge naming a storyline this database never held", async () => {
@@ -456,7 +571,7 @@ describe("storylines in storage", () => {
           loserId: stale,
           timeZone: ZONE,
         }),
-      ).toEqual({ merged: false, winnerId: real.id });
+      ).toEqual({ merged: false, winnerId: real.id, repointed: [] });
     });
   });
 

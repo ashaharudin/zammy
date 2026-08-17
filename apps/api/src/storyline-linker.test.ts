@@ -6,6 +6,7 @@ import {
   createProvisionalStoryline,
   promoteStoryline,
   readGroupStorylines,
+  recordBridge,
   setStorylineStatus,
   readStoryline,
   readStorylineDays,
@@ -13,7 +14,12 @@ import {
   resolveStoryline,
 } from "@zammy/storage";
 import { createTestHarness, type TestHarness } from "./test-support.js";
-import { linkGroup, linkSeededGroups, type LinkerConfig } from "./storyline-linker.js";
+import {
+  linkGroup,
+  linkSeededGroups,
+  runBridgeSweep,
+  type LinkerConfig,
+} from "./storyline-linker.js";
 
 /**
  * The linker, end to end (ADR-0011): birth, attach, promote, bridge, merge.
@@ -461,6 +467,139 @@ describe("bridges and merging", () => {
 
     expect(await countBridges(db, { storylineA: left, storylineB: right })).toBe(1);
     expect(await resolveStoryline(db, left)).toBe(left);
+  });
+});
+
+describe("bridges a merge re-points", () => {
+  // Three arcs with nothing in common. THIRD bridges each of the other two
+  // once — below K either way — and then two straddlers merge LEFT and MID.
+  // That merge moves MID's bridge onto the survivor, so (survivor, THIRD) holds
+  // two independent bridges without one ever being inserted for that pair.
+  //
+  // Before the fix the K check only ran on an insert, so the pair sat at K for
+  // ever: 31 such pairs in the dev archive, the bridge merge never having fired.
+  const LEFT = ["fausto", "hawaii", "surf", "swell", "genevieve"];
+  const MID = ["ontario", "premier", "hotel", "expense", "scandal"];
+  const THIRD = ["tanker", "hormuz", "strait", "seizure", "shipping"];
+
+  async function threeStorylines() {
+    await seedCorpus({ rare: [...LEFT, ...MID, ...THIRD] });
+    let left = "";
+    let mid = "";
+    let third = "";
+    for (let i = 0; i < 4; i += 1) {
+      left = (await linkGroup(deps(), await group({ tokens: LEFT }))).storylineId;
+      mid = (await linkGroup(deps(), await group({ tokens: MID }))).storylineId;
+      third = (await linkGroup(deps(), await group({ tokens: THIRD }))).storylineId;
+    }
+    return { left, mid, third };
+  }
+
+  it("re-checks the survivor's pairs against K, and merges what reaches it", async () => {
+    const { left, mid, third } = await threeStorylines();
+
+    // One bridge each to THIRD: neither pair reaches K on its own.
+    await linkGroup(deps(), await group({ tokens: [...LEFT, ...THIRD] }));
+    await linkGroup(deps(), await group({ tokens: [...MID, ...THIRD] }));
+    expect(await countBridges(db, { storylineA: left, storylineB: third })).toBe(1);
+    expect(await countBridges(db, { storylineA: mid, storylineB: third })).toBe(1);
+    expect(await resolveStoryline(db, third)).toBe(third);
+
+    // Two independent straddlers merge LEFT and MID — and the cascade must then
+    // notice that THIRD's two bridges now point at one storyline.
+    await linkGroup(deps(), await group({ tokens: [...LEFT, ...MID] }));
+    const outcome = await linkGroup(deps(), await group({ tokens: [...LEFT, ...MID] }));
+
+    // Two merges from one arrival: the pair that had K, then the pair the
+    // re-pointing lifted to K.
+    expect(outcome.merged.length).toBeGreaterThanOrEqual(2);
+    const survivor = await resolveStoryline(db, left);
+    expect(await resolveStoryline(db, mid)).toBe(survivor);
+    expect(await resolveStoryline(db, third)).toBe(survivor);
+    // The healed pair keeps no evidence: a pair that is now one storyline has
+    // nothing left to bridge.
+    expect(await countBridges(db, { storylineA: survivor!, storylineB: third })).toBe(0);
+  });
+
+  it("leaves a re-pointed pair alone while it is still under K", async () => {
+    const { left, mid, third } = await threeStorylines();
+
+    // Only ONE bridge to THIRD this time, from the MID side.
+    await linkGroup(deps(), await group({ tokens: [...MID, ...THIRD] }));
+    await linkGroup(deps(), await group({ tokens: [...LEFT, ...MID] }));
+    await linkGroup(deps(), await group({ tokens: [...LEFT, ...MID] }));
+
+    const survivor = await resolveStoryline(db, left);
+    expect(await resolveStoryline(db, mid)).toBe(survivor);
+    // Re-pointed, still one bridge, still two storylines. The cascade merges on
+    // evidence, not on adjacency.
+    expect(await countBridges(db, { storylineA: survivor!, storylineB: third })).toBe(1);
+    expect(await resolveStoryline(db, third)).toBe(third);
+  });
+});
+
+describe("runBridgeSweep", () => {
+  const LEFT = ["fausto", "hawaii", "surf", "swell", "genevieve"];
+  const RIGHT = ["ontario", "premier", "hotel", "expense", "scandal"];
+
+  it("merges a pair that reached K without an insert to notice it", async () => {
+    await seedCorpus({ rare: [...LEFT, ...RIGHT] });
+    let left = "";
+    let right = "";
+    for (let i = 0; i < 3; i += 1) {
+      left = (await linkGroup(deps(), await group({ tokens: LEFT }))).storylineId;
+      right = (await linkGroup(deps(), await group({ tokens: RIGHT }))).storylineId;
+    }
+    // Two independent bridges written directly — the state a re-pointing merge
+    // leaves behind, and the state the archive was found in.
+    const one = await group({ tokens: LEFT });
+    const two = await group({ tokens: RIGHT });
+    await recordBridge(db, { storylineA: left, storylineB: right, groupId: one.groupId });
+    await recordBridge(db, { storylineA: left, storylineB: right, groupId: two.groupId });
+    expect(await resolveStoryline(db, right)).toBe(right);
+
+    const report = await runBridgeSweep(deps());
+
+    expect(report.found).toBe(1);
+    expect(report.merged).toBe(1);
+    expect(report.incomplete).toBe(false);
+    const survivor = await resolveStoryline(db, left);
+    expect(await resolveStoryline(db, right)).toBe(survivor);
+    // The survivor is handed back so the caller can re-name it: a merge is one
+    // of ADR-0011's label triggers.
+    expect(report.survivors).toEqual([survivor]);
+  });
+
+  it("is a no-op when the invariant already holds", async () => {
+    await seedCorpus({ rare: [...LEFT, ...RIGHT] });
+    for (let i = 0; i < 3; i += 1) await linkGroup(deps(), await group({ tokens: LEFT }));
+
+    const report = await runBridgeSweep(deps());
+
+    expect(report).toEqual({
+      found: 0,
+      merged: 0,
+      failures: 0,
+      incomplete: false,
+      survivors: [],
+    });
+  });
+
+  it("leaves a pair under K alone", async () => {
+    await seedCorpus({ rare: [...LEFT, ...RIGHT] });
+    let left = "";
+    let right = "";
+    for (let i = 0; i < 3; i += 1) {
+      left = (await linkGroup(deps(), await group({ tokens: LEFT }))).storylineId;
+      right = (await linkGroup(deps(), await group({ tokens: RIGHT }))).storylineId;
+    }
+    const one = await group({ tokens: LEFT });
+    await recordBridge(db, { storylineA: left, storylineB: right, groupId: one.groupId });
+
+    const report = await runBridgeSweep(deps());
+
+    expect(report.found).toBe(0);
+    expect(await resolveStoryline(db, right)).toBe(right);
   });
 });
 
