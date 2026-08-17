@@ -532,10 +532,57 @@ describe("the Gemini client's rate limiter", () => {
     expect(results[0]).toEqual({ ok: false, reason: "http 429" });
     expect(results[1]).toEqual({ ok: true, text: "Fort Hood Crash" });
     expect(results[2]).toEqual({ ok: true, text: "Fort Hood Crash" });
-    // The waiter due at :60 held until the cooldown ended rather than firing
-    // inside it; the one due at :120 was already past it and kept its slot.
-    expect(at).toEqual([0, 90_000, 120_000]);
+    // The waiter due at :60 held rather than firing inside the cooldown — and
+    // did not fire AT the cooldown's end either: the :120 reservation was
+    // already there, so a :90 send would have put two requests 30s apart under
+    // a 1/min ceiling. It re-derived a window slot behind the unmoved :120
+    // waiter instead.
+    expect(at).toEqual([0, 120_000, 180_000]);
     expect(at.slice(1).every((sentAt) => sentAt >= 90_000)).toBe(true);
+  });
+
+  it("keeps the ceiling when a cooldown relocates several waiters at once", async () => {
+    // The burst this rules out: every waiter parked at bare `cooldownUntil`
+    // fires in the same tick the cooldown expires — under a 2/min ceiling, a
+    // cooldown landing across two reserved slots would discharge them together
+    // and spend the whole minute's budget at one instant, re-earning exactly
+    // the 429 the cooldown answered. Relocated waiters must re-derive a window
+    // slot, not just a cooldown floor.
+    const time = scheduler();
+    const { fetch, at } = paced(
+      time.now,
+      new Response(JSON.stringify({ error: {} }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": "70" },
+      }),
+      jsonResponse(RESPONSES.ok),
+    );
+    const client = createGeminiClient({
+      ...OPTIONS,
+      fetch,
+      now: time.now,
+      sleep: time.sleep,
+      maxRequestsPerMinute: 2,
+      maxRetries: 0,
+      backoffBaseMs: 0,
+      maxRateWaitMs: 300_000,
+    });
+
+    // Two send at :0 (the first earns the 429 → cooldown to :70), two are
+    // parked at :60 inside the cooldown, one at :120 beyond it.
+    const calls = Promise.all(
+      ["one", "two", "three", "four", "five"].map((prompt) => client.generate({ prompt })),
+    );
+    await time.run();
+    const results = await calls;
+
+    expect(results.slice(1).every((result) => result.ok)).toBe(true);
+    // No sliding minute may ever hold more than the ceiling — including the
+    // minute straddling the cooldown's expiry.
+    for (const sentAt of at) {
+      const inWindow = at.filter((t) => t > sentAt - 60_000 && t <= sentAt);
+      expect(inWindow.length).toBeLessThanOrEqual(2);
+    }
   });
 
   it("abandons a long wait when the caller aborts during it", async () => {

@@ -222,10 +222,13 @@ export function createGeminiClient(options: GeminiOptions): TextGenerator {
    * inside the cooldown and send the exact request the cooldown exists to stop.
    * So on waking we compare the cooldown against our reservation again, move the
    * reservation if it grew, and sleep the remainder — as many times as it takes.
-   * Only the cooldown is re-read: the window slot was settled when we reserved,
-   * and later arrivals hold later reservations, so re-deriving it from a window
-   * that now contains them would make us queue behind callers who queued behind
-   * us.
+   * A relocation re-derives the WINDOW slot too, not just the cooldown: every
+   * waiter parked at bare `cooldownUntil` would fire in the same tick the
+   * cooldown expires — a burst past the ceiling that re-earns exactly the 429
+   * the cooldown answered. Re-deriving queues a relocated waiter behind callers
+   * who reserved while it slept, and behind them is where the ceiling says a
+   * relocated send belongs. An UNMOVED waiter keeps its settled slot: its window
+   * was honest when it reserved, and later arrivals reserved after it.
    *
    * Returns the reason to give up, or null to proceed.
    */
@@ -260,15 +263,20 @@ export function createGeminiClient(options: GeminiOptions): TextGenerator {
         return "aborted";
       }
       if (cooldownUntil > readyAt) {
-        // The cap is on the wait this caller has been asked to sit through in
-        // total, so a cooldown landing mid-wait can push it past the cap the
-        // same way a long `Retry-After` does on arrival.
-        if (cooldownUntil - arrivedAt > maxRateWaitMs) {
-          release(readyAt);
-          return tooLong(cooldownUntil - arrivedAt);
-        }
         release(readyAt);
-        readyAt = cooldownUntil;
+        // Floor at the cooldown, then re-derive the window over the OTHER
+        // reservations (ours is released) — see the relocation note above.
+        const slot =
+          sent.length >= maxRequestsPerMinute
+            ? sent[sent.length - maxRequestsPerMinute]! + WINDOW_MS
+            : 0;
+        readyAt = Math.max(cooldownUntil, slot);
+        // The cap is on the wait this caller has been asked to sit through in
+        // total, so a relocation mid-wait can push it past the cap the same
+        // way a long `Retry-After` does on arrival.
+        if (readyAt - arrivedAt > maxRateWaitMs) {
+          return tooLong(readyAt - arrivedAt);
+        }
         reserve(readyAt);
       }
     }
