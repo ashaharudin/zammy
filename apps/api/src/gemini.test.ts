@@ -454,6 +454,90 @@ describe("the Gemini client's rate limiter", () => {
     expect(waits).toEqual([60_000]);
   });
 
+  /**
+   * A virtual clock with real suspension, for the concurrency tests.
+   *
+   * `clock()` above advances the moment `sleep` is called, which is enough when
+   * one caller sleeps at a time but wrong when several do: the assertion we want
+   * here is about what a sleeping waiter does when the world changes UNDER it,
+   * so the waiter has to actually stay suspended while another caller's response
+   * is handled. `sleep` therefore parks a timer, and `run` fires them in time
+   * order — the earliest first, draining the microtask queue after each — so the
+   * interleaving is the one a real event loop would produce, deterministically.
+   */
+  function scheduler() {
+    let at = 0;
+    let parked: Array<{ due: number; wake: () => void }> = [];
+    return {
+      now: () => at,
+      sleep: (ms: number) =>
+        new Promise<void>((wake) => {
+          parked.push({ due: at + ms, wake });
+        }),
+      /** Run until nothing is sleeping. */
+      async run(): Promise<void> {
+        for (let guard = 0; guard < 100; guard += 1) {
+          // A real macrotask, so everything the callers can do at the current
+          // time — send, park, handle a response — has happened before we move
+          // the clock. Drained FIRST, so the callers who never slept get to run
+          // at time zero rather than at the first sleeper's wake-up.
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          if (parked.length === 0) return;
+          parked.sort((a, b) => a.due - b.due);
+          const next = parked.shift()!;
+          at = Math.max(at, next.due);
+          next.wake();
+        }
+      },
+    };
+  }
+
+  it("holds waiters already sleeping when another call's 429 starts a cooldown", async () => {
+    // The bug this rules out: a waiter computes its ready time, sleeps, and
+    // wakes into a cooldown that was set while it slept — sending the exact
+    // request the cooldown exists to stop, and doing it on behalf of a client
+    // whose whole claim is that nothing goes out before `cooldownUntil`.
+    //
+    // Three callers arrive together against a 1/min ceiling, so the first sends
+    // and the other two are parked at :60 and :120. The first earns a 429 asking
+    // for 90 seconds.
+    const time = scheduler();
+    const { fetch, at } = paced(
+      time.now,
+      new Response(JSON.stringify({ error: {} }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": "90" },
+      }),
+      jsonResponse(RESPONSES.ok),
+    );
+    const client = createGeminiClient({
+      ...OPTIONS,
+      fetch,
+      now: time.now,
+      sleep: time.sleep,
+      maxRequestsPerMinute: 1,
+      maxRetries: 0,
+      backoffBaseMs: 0,
+      maxRateWaitMs: 300_000,
+    });
+
+    const calls = Promise.all([
+      client.generate({ prompt: "one" }),
+      client.generate({ prompt: "two" }),
+      client.generate({ prompt: "three" }),
+    ]);
+    await time.run();
+    const results = await calls;
+
+    expect(results[0]).toEqual({ ok: false, reason: "http 429" });
+    expect(results[1]).toEqual({ ok: true, text: "Fort Hood Crash" });
+    expect(results[2]).toEqual({ ok: true, text: "Fort Hood Crash" });
+    // The waiter due at :60 held until the cooldown ended rather than firing
+    // inside it; the one due at :120 was already past it and kept its slot.
+    expect(at).toEqual([0, 90_000, 120_000]);
+    expect(at.slice(1).every((sentAt) => sentAt >= 90_000)).toBe(true);
+  });
+
   it("abandons a long wait when the caller aborts during it", async () => {
     const time = clock();
     const controller = new AbortController();
@@ -474,6 +558,33 @@ describe("the Gemini client's rate limiter", () => {
 
     expect(second).toEqual({ ok: false, reason: "aborted" });
     expect(at).toEqual([0]);
+  });
+
+  it("gives the slot back when a waiter aborts, rather than banking a phantom send", async () => {
+    // A reservation is a promise to spend a request. An abandoned one that stays
+    // in the window is a request nobody made, and it holds the next live caller
+    // back for up to a minute on the strength of it.
+    const time = clock();
+    const controller = new AbortController();
+    const { fetch, at } = paced(time.now, jsonResponse(RESPONSES.ok));
+    const client = createGeminiClient({
+      ...OPTIONS,
+      fetch,
+      now: time.now,
+      sleep: async (ms) => {
+        time.advance(ms);
+        controller.abort();
+      },
+      maxRequestsPerMinute: 1,
+    });
+
+    await client.generate({ prompt: "one" });
+    await client.generate({ prompt: "two", signal: controller.signal });
+    // :60 now, the first request has aged out, and the abandoned :60 slot must
+    // not be standing where the third caller's own slot is.
+    await client.generate({ prompt: "three" });
+
+    expect(at).toEqual([0, 60_000]);
   });
 
   it("keeps the failure that caused a retry when the pacer blocks the retry", async () => {
