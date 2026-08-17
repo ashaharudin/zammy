@@ -6,7 +6,8 @@ import { Pool } from "pg";
 // rather than the class under NodeNext resolution.
 import { Redis } from "ioredis";
 import { type Config, redactConfig } from "@zammy/config";
-import { createCurrentsClient, type CurrentsClient } from "@zammy/currents-client";
+import type { CurrentsClient } from "@zammy/currents-client";
+import { createNewsClient } from "@zammy/news-providers";
 import { createDb } from "@zammy/storage";
 import { registerHealthRoutes } from "./health.js";
 import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
@@ -100,16 +101,24 @@ export async function buildApp(config: Config): Promise<App> {
     allowList: (request) => !request.url.startsWith("/api/"),
   });
 
-  // One interface for both modes: nothing below this line knows or cares whether
-  // articles come from the live API or from the recorded payloads
+  // One interface for both modes AND for however many providers are configured:
+  // nothing below this line knows or cares whether articles come from the live
+  // API or from recorded payloads, nor which upstream answered
   // (ARCHITECTURE 4.1 — a code path that branches on environment is a code path
-  // local development stops predicting).
-  const currents = await createCurrentsClient(config, { logger: app.log });
+  // local development stops predicting; ARCHITECTURE 5.6 for the provider seam).
+  const currents = await createNewsClient(config, { logger: app.log });
   app.decorate("currents", currents);
   if (config.CURRENTS_MODE === "fixture") {
     app.log.info(
       { dir: config.FIXTURES_DIR },
       "CURRENTS_MODE=fixture — serving recorded payloads, no upstream calls, no quota spend",
+    );
+  }
+  if (config.GNEWS_ENABLED) {
+    app.log.info(
+      { mode: config.GNEWS_MODE, dailyLimit: config.GNEWS_DAILY_CALL_LIMIT },
+      "GNEWS_ENABLED — fanning out to a second provider as best-effort breadth; " +
+        "Currents remains coverage-bearing",
     );
   }
 

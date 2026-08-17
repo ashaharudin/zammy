@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { RawSighting, type SearchParams } from "./raw.js";
+import type { SearchParams } from "@zammy/news-client";
+import { RawSighting } from "./raw.js";
 import { parsePublished } from "./normalize.js";
 
 /**

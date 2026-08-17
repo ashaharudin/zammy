@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { createCurrentsClient } from "./factory.js";
-import { collectPages } from "./paging.js";
+import { collectPages } from "@zammy/news-client";
 import { usefulCategories } from "./client.js";
 import type { CurrentsClient } from "./client.js";
 import { FIXTURES_DIR } from "./test-support.js";
@@ -141,7 +141,7 @@ describe("paging over fixture mode reproduces the cap", () => {
   it("stops at the 100-result cap with a full final page", async () => {
     // 180 recorded sightings is more than the tier can retrieve for one query, so
     // offline mode exercises the truncation path rather than only the tidy one —
-    // and `cap`, not `end_of_results`, is what makes Phase 3 subdivide the window.
+    // and `cap`, not `end_of_results`, is what makes the planner subdivide the window.
     const result = await collectPages(client, {});
 
     expect(result.pages).toBe(5);
@@ -198,6 +198,6 @@ describe("per-call date range ceiling — fixture mode reproduces the wall", () 
         startDate: new Date("2026-07-01T00:00:00Z"),
         endDate: new Date("2026-08-06T00:00:00Z"),
       }),
-    ).rejects.toMatchObject({ name: "CurrentsInvalidQueryError" });
+    ).rejects.toMatchObject({ name: "NewsInvalidQueryError" });
   });
 });

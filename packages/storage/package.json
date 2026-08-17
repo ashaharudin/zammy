@@ -3,10 +3,17 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -14,15 +21,16 @@
     "migrate": "tsc -b && node --env-file-if-exists=../../.env dist/migrate-cli.js"
   },
   "dependencies": {
-    "@zammy/currents-client": "workspace:*",
     "@zammy/shared": "workspace:*",
     "kysely": "^0.28.2",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "@zammy/news-client": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/pg": "^8.11.10",
     "typescript": "^5.7.2",
-    "vitest": "^3.0.5"
+    "vitest": "^3.0.5",
+    "@zammy/currents-client": "workspace:*"
   }
 }

@@ -158,10 +158,11 @@ export async function purgeTopicKeys(redis: Redis, fingerprint: string): Promise
 
 /**
  * Pass-through client that counts (and can slow down) upstream calls. Wraps at
- * the CurrentsClient seam — the same boundary a second provider would use
+ * the client seam — the same boundary the second provider went in behind
  * (ARCHITECTURE 5.6) — so the planner under test cannot tell the difference.
  */
 export class CountingClient implements CurrentsClient {
+  readonly provider = "counting";
   searchCalls = 0;
   /** Quota priority of each search call, in order (§9.4). */
   priorities: Array<CallOpts["priority"]> = [];

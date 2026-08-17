@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  CurrentsQuotaError,
+  NewsQuotaError,
   type CallOpts,
   type SearchParams,
   type SearchResult,
@@ -278,7 +278,7 @@ describe("quota exhaustion is a designed-for state, not an incident", () => {
     await readTimeline(harness.deps, climateQuery(), { limit: 25 });
     const search = harness.counting.search.bind(harness.counting);
     harness.counting.search = async (_p: SearchParams, _o?: CallOpts): Promise<SearchResult> => {
-      throw new CurrentsQuotaError("daily limit exhausted");
+      throw new NewsQuotaError("daily limit exhausted");
     };
 
     // A wider window forces a new gap, whose fill now hits the quota wall.

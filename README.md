@@ -2,7 +2,7 @@
 
 A news aggregator: keywords in, a time-ordered timeline of headlines out, with a landing-page
 wordcloud of the last 24 hours' most-referenced topics. Backed by
-[Currents API](https://currentsapi.services).
+[Currents API](https://currentsapi.services), and optionally [GNews](https://gnews.io) alongside it.
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the design, and why it is shaped this way.
 - **[docs/PROBE-FINDINGS.md](docs/PROBE-FINDINGS.md)** — what 45 live API calls revealed. Read this
@@ -47,7 +47,11 @@ To go online, set `CURRENTS_MODE=live` and `CURRENTS_API_KEY` in `.env`.
 ```
 packages/shared            wire contract ONLY — what ships to the browser (ADR-0004)
 packages/config            server-only env validation — MUST NOT be imported by web
-packages/currents-client   upstream SDK: error taxonomy, wire shapes, fixture store
+packages/news-client       provider-agnostic core: Sighting, error taxonomy, quota, transport, pager
+packages/currents-client   Currents adapter: its wire shapes, its quirks, its fixture store
+packages/gnews-client      GNews adapter: same, for the second provider
+packages/news-providers    the composite + the factory apps/api calls — the only layer
+                           that knows how many providers exist
 apps/api                   Fastify: HTTP surface, query planning, in-process job consumer
 apps/web                   React + Vite
 fixtures/                  real captured upstream payloads — the regression basis
@@ -58,12 +62,19 @@ key. Keeping them apart is what makes it structurally hard to leak the key into 
 
 ## Talking to the upstream
 
-`createCurrentsClient(config)` returns one interface backed by either the live API or the recorded
-fixtures, chosen by `CURRENTS_MODE`. Nothing above the package branches on the mode — that rule is
-what makes offline development predict production instead of merely resembling it.
+`createNewsClient(config)` returns one interface backed by either the live APIs or the recorded
+fixtures, chosen by `CURRENTS_MODE` / `GNEWS_MODE`, and by however many providers are enabled.
+Nothing above the package branches on the mode or on which upstream answered — that rule is what
+makes offline development predict production instead of merely resembling it.
+
+With `GNEWS_ENABLED=false` (the default) you get the Currents client bare. Switched on, calls fan
+out to both and merge, with one caveat worth knowing before you rely on it: Currents is
+*coverage-bearing* and GNews is best-effort breadth, so a GNews outage narrows what you get but
+never fails a call and never ends a walk. [ADR-0012](docs/adr/0012-a-second-provider-adds-breadth-but-never-coverage.md)
+explains why they are not equals.
 
 ```ts
-const client = await createCurrentsClient(config);
+const client = await createNewsClient(config);
 const page = await client.search({ keywords: ["climate", "policy"], pageSize: 20 });
 
 // Page a whole window, with an honest reason for stopping.
@@ -116,8 +127,11 @@ with Phase 6.
   appeared 50 times in 100 results — so a `sighting` is one emission and an `article` is the real
   story. The timeline pages over articles, and `count(articles)` is the number you want. See
   [CONTEXT.md](CONTEXT.md).
-- **Never `new Date()` an upstream timestamp.** Use the parser in `@zammy/currents-client`; the format
-  is not ISO-8601 and a wrong timestamp silently corrupts the timeline.
+- **Never `new Date()` an upstream timestamp.** Use the adapter's parser — Currents' format is not
+  ISO-8601, and a wrong timestamp silently corrupts the timeline.
+- **Never branch on an HTTP status code above an adapter.** The same code means different things to
+  different providers: a 403 is a Cloudflare ban on Currents and a spent daily budget on GNews.
+  Branch on the typed error's `kind`.
 - **End-of-page is decided by the raw count, never by how many articles survived normalization.**
   One malformed article would otherwise read as "that's all there is" and truncate a topic's history
   with no error to report it.

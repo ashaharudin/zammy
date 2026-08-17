@@ -1,11 +1,12 @@
 import {
-  CurrentsAuthError,
-  CurrentsBlockedError,
-  CurrentsError,
-  CurrentsInvalidQueryError,
-  CurrentsQuotaError,
-  CurrentsUpstreamError,
-} from "./errors.js";
+  NewsAuthError,
+  NewsBlockedError,
+  NewsError,
+  NewsInvalidQueryError,
+  NewsQuotaError,
+  NewsUpstreamError,
+  type ErrorResponseInput,
+} from "@zammy/news-client";
 
 /**
  * HTTP failure → typed error (ARCHITECTURE 5.3).
@@ -17,21 +18,15 @@ import {
  * to derive this mapping — only the recorded bodies can.
  */
 
-export interface ErrorResponseInput {
-  status: number;
-  bodyText: string;
-  headers?: Headers;
-}
-
 /** Cloudflare's block page names its own error code; the body is HTML, not JSON. */
 const CLOUDFLARE_MARKERS = [/error code:\s*1010/i, /cloudflare/i, /<!doctype html/i];
 
-export function mapErrorResponse(input: ErrorResponseInput): CurrentsError {
+export function mapErrorResponse(input: ErrorResponseInput): NewsError {
   const { status, bodyText, headers } = input;
   const body = parseJson(bodyText);
 
   if (status === 401) {
-    return new CurrentsAuthError(
+    return new NewsAuthError(
       `upstream rejected the API key (401): ${messageOf(body) ?? "Invalid token"}`,
     );
   }
@@ -42,19 +37,19 @@ export function mapErrorResponse(input: ErrorResponseInput): CurrentsError {
     // the key instead of at the request headers. A non-JSON 403 is therefore
     // *always* a block, never an auth error (PROBE-FINDINGS 2).
     if (body === null || CLOUDFLARE_MARKERS.some((marker) => marker.test(bodyText))) {
-      return new CurrentsBlockedError(
+      return new NewsBlockedError(
         "blocked before reaching the API (403, non-JSON body) — almost certainly " +
           "the User-Agent. Check CURRENTS_USER_AGENT is set and non-empty; this is " +
           "NOT an authentication failure.",
       );
     }
-    return new CurrentsAuthError(
+    return new NewsAuthError(
       `upstream refused the request (403): ${messageOf(body) ?? "forbidden"}`,
     );
   }
 
   if (status === 429) {
-    return new CurrentsQuotaError(
+    return new NewsQuotaError(
       `upstream rate limit hit (429): ${messageOf(body) ?? "too many requests"}`,
       resetAtFrom(headers),
     );
@@ -68,14 +63,14 @@ export function mapErrorResponse(input: ErrorResponseInput): CurrentsError {
     // `details.errors` names the exact violated limit — e.g.
     // { page_size: "Max page_size for Free tier is 20" }. Surfacing it verbatim
     // turns a tier-limit mistake into a one-line diagnosis instead of a hunt.
-    return new CurrentsInvalidQueryError(
+    return new NewsInvalidQueryError(
       `upstream rejected our query (400): ${detail || messageOf(body) || "bad request"}`,
       fieldErrors,
     );
   }
 
   if (status >= 500) {
-    return new CurrentsUpstreamError(
+    return new NewsUpstreamError(
       `upstream error (${status}): ${messageOf(body) ?? truncate(bodyText)}`,
       status,
     );
@@ -83,7 +78,7 @@ export function mapErrorResponse(input: ErrorResponseInput): CurrentsError {
 
   // Any other 4xx is our bug, not a transient fault, so it must never be retried —
   // each retry costs a quota token to learn the same thing twice.
-  return new CurrentsInvalidQueryError(
+  return new NewsInvalidQueryError(
     `unexpected upstream status ${status}: ${messageOf(body) ?? truncate(bodyText)}`,
   );
 }

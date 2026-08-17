@@ -32,6 +32,8 @@ function sighting(domain: string, title: string, published: string): Sighting {
   return {
     id: `e0000000-0000-4000-8000-${String(uuid).padStart(12, "0")}`,
     url,
+    provider: "currents",
+    providerSightingId: url,
     dedupKey: deriveDedupKey(url),
     title,
     description: null,

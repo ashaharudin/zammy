@@ -1,8 +1,8 @@
 import type { Sighting } from "./sighting.js";
-import { emptyStats, type NormalizationStats } from "./normalize.js";
-import type { SearchParams } from "./raw.js";
+import { accumulateStats, emptyStats, type NormalizationStats } from "./normalize.js";
+import type { SearchParams } from "./search-params.js";
 import type { QuotaSnapshot } from "./quota.js";
-import type { CallOpts, ClientLimits, CurrentsClient } from "./client.js";
+import type { CallOpts, ClientLimits, NewsClient } from "./client.js";
 
 /**
  * Paging over one query (ARCHITECTURE 6.3, step 4).
@@ -10,9 +10,9 @@ import type { CallOpts, ClientLimits, CurrentsClient } from "./client.js";
  * This is the client-level primitive only: page through a single window until
  * upstream signals the end, the retrievable cap is hit, or the caller's budget
  * runs out. Deciding *which* windows to ask about — the coverage-gap arithmetic
- * and the adaptive subdivision that gets past the 100-result cap — is the Query
- * Service's job in Phase 3, and it needs exactly one thing from here: an honest
- * answer about whether upstream had more to give.
+ * and the adaptive subdivision that gets past the 100-result cap — belongs to
+ * the Query Service in `apps/api`, which needs exactly one thing from here: an
+ * honest answer about whether upstream had more to give.
  *
  * That answer is `stoppedBy`, and getting it wrong is a silent data-loss bug:
  * a full final page means "truncated by the cap", never "finished". Treating it
@@ -68,7 +68,7 @@ export interface CollectPagesOptions extends CallOpts {
 }
 
 export async function collectPages(
-  client: CurrentsClient,
+  client: NewsClient,
   params: SearchParams,
   options: CollectPagesOptions = {},
 ): Promise<PagedResult> {
@@ -127,7 +127,7 @@ export async function collectPages(
     rawCount += result.rawCount;
     sightings.push(...result.sightings);
     for (const sighting of result.sightings) dedupKeys.add(sighting.dedupKey);
-    accumulate(normalization, result.normalization);
+    accumulateStats(normalization, result.normalization);
     for (const adjustment of result.adjustments) {
       if (!adjustments.includes(adjustment)) adjustments.push(adjustment);
     }
@@ -182,10 +182,3 @@ export async function collectPages(
   }
 }
 
-function accumulate(target: NormalizationStats, source: NormalizationStats): void {
-  target.received += source.received;
-  target.kept += source.kept;
-  for (const [reason, count] of Object.entries(source.dropped)) {
-    target.dropped[reason as keyof NormalizationStats["dropped"]] += count;
-  }
-}

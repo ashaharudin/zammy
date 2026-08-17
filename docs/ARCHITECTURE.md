@@ -36,7 +36,8 @@ the upstream actually does, and [docs/adr/](./adr/) for decisions and the altern
   says whether more may arrive, which covers the honest-freshness requirement; a per-range gap map
   means a second range structure on the wire for something nobody has asked for. A deliberate no,
   recorded so it is not mistaken for an oversight.
-- Multiple upstream news providers (the client is abstracted so this stays cheap to add — see §5.6).
+- ~~Multiple upstream news providers~~ — **done** (GNews, 2026-08-17). The seam held: a new adapter
+  and a composite, with no change to §6–§8. See §5.6 and ADR-0012.
 - LLM-generated topic summaries. The schema reserves a place for them (§7.2); generation is a later phase.
 
 ---
@@ -296,40 +297,98 @@ Every article is normalized once, at the boundary, so nothing downstream ever se
 - **Response validation:** parse `{status, news[]}` with Zod, tolerating unknown fields (upstream
   already ships an undocumented `source_category`). `status: "error"` under HTTP 200 is a failure.
 
-### 5.4 Quota governance — header-driven
+### 5.4 Quota governance
 
-The probe found `x-ratelimit-*` on every response, so we do not have to guess. Each response updates
-a Redis-held snapshot shared by the API and worker:
+Every call is **pre-flight checked** against a per-provider budget and refused locally when
+exhausted — cheaper and kinder than earning a real `429`, which spends a request to learn something
+we already knew.
 
-```
-quota:currents  →  { limit, remaining, burstLimit, burstRemaining, resetTime, observedAt }
-```
+Where the budget's numbers come from is per provider, and the difference matters:
 
-Every call is **pre-flight checked** against the snapshot and refused locally when exhausted —
-cheaper and kinder than earning a real `429`. A Redis `INCR` counter covers in-flight calls made
-since the last observed header, so concurrent dispatch cannot overshoot between refreshes.
+- **Observed.** Currents returns `x-ratelimit-*` on every response, including error responses, so its
+  budget is read rather than guessed — and it accounts for spend by *any* client sharing the key.
+- **Counted.** GNews returns no rate-limit headers at all and reports an exhausted day as a `403`.
+  Its budget is counted locally and corrected only when that `403` arrives (ADR-0012).
 
-Two governors, because the limits have different shapes:
+An absent observation means "no new information", never "no limit".
 
-- **Burst (60/60s):** a short-window counter, since exceeding it stalls everything for up to a minute.
-- **Daily (1000, midnight UTC):** the strategic budget, split into an **interactive reserve** and a
-  **worker allowance**. The worker may only draw while `remaining > INTERACTIVE_RESERVE` (default
-  250), so background backfill can never starve a live user search — the failure mode that would
-  otherwise appear only on the busiest day.
+> **Status: partly built.** The intended shape is a Redis-held snapshot shared by the API and
+> worker, one key per provider —
+> `quota:<provider> → { limit, remaining, burstLimit, burstRemaining, resetTime, observedAt }` —
+> with a Redis `INCR` covering in-flight calls since the last observation, so concurrent dispatch
+> cannot overshoot between refreshes.
+>
+> **That does not exist.** The counter is in-process (`InProcessQuotaGovernor`), so replicas do not
+> share a budget and a restart forgets the day's spend. Currents self-corrects from headers one call
+> later; GNews cannot, and stays wrong until it earns the `403`. See §13, "Designed but unbuilt".
 
-Limits are read from headers but *bounded* by config, so a plan upgrade is a config change and a
-missing header never means "unlimited".
+Two governors within a provider, because the limits have different shapes:
+
+- **Burst:** a short-window counter, since exceeding it costs a stall or a `429`. The *shape* of the
+  window differs — 60 per 60s on Currents, 1 per second on GNews Free — so the window length is
+  configured per provider, not just its size.
+- **Daily** (midnight UTC): the strategic budget, split into an **interactive reserve** and a
+  **worker allowance**. The worker may only draw while `remaining > INTERACTIVE_RESERVE`, so
+  background backfill can never starve a live user search — the failure mode that would otherwise
+  appear only on the busiest day. The reserve is sized per provider and proportionally: 250 of
+  Currents Free's 1000, 25 of GNews Free's 100. Reusing one number across providers would silently
+  make the smaller one interactive-only.
+
+Limits are read from a provider where it reports them, but always *bounded* by config, so a plan
+upgrade is a config change and a missing header never means "unlimited".
 
 ### 5.5 Secrets
 
-`CURRENTS_API_KEY` is server-side only, injected by env. It never reaches the browser — the front
-end talks exclusively to our own API. The key is redacted from all logs and error messages.
+`CURRENTS_API_KEY` and `GNEWS_API_KEY` are server-side only, injected by env. Neither reaches the
+browser — the front end talks exclusively to our own API. Each is redacted from all logs and error
+messages, and from `redactConfig`; a provider added without adding its key to that list leaks it
+into the first startup log line.
 
-### 5.6 Extensibility
+### 5.6 A second provider
 
-`search()` returning `Sighting[]` is the seam for a future second provider. Adding one
-means a new client satisfying the same interface plus a `provider` column on `articles`; nothing in
-§6–§8 changes.
+`search()` returning `Sighting[]` was the seam for a future second provider. GNews went in behind it
+on 2026-08-17 and the prediction held: a new adapter, a `provider` column, and nothing in §6–§8
+changed. The component is now four packages:
+
+| Package | Knows |
+| --- | --- |
+| `@zammy/news-client` | No provider. The `Sighting` shape, the error taxonomy, URL canonicalization and the dedup key, quota governance, the breaker, pre-flight clamping, the retrying HTTP transport, the pager. |
+| `@zammy/currents-client` | Currents only. `{status, news[]}`, `"2026-08-04 20:45:56 +0000"`, `"None"` images, `url`/`urls`, `x-ratelimit-*`, the Cloudflare 403, two API versions, the v2 taxonomy. |
+| `@zammy/gnews-client` | GNews only. `X-Api-Key`, `{totalArticles, articles[]}`, ISO-8601, no rate-limit headers, a 403 that means *quota*, no article categories. |
+| `@zammy/news-providers` | How many providers there are. The composite, and the factory `apps/api` calls. |
+
+**The taxonomy is shared; the mapping is not.** The same status code means different things to
+different providers — a 403 is a client-fingerprint ban on Currents and a spent daily budget on
+GNews — so each adapter owns its own `mapErrorResponse`, and nothing downstream may branch on a
+status code. Same for quota: Currents reports headers and is *observed*; GNews reports nothing and
+is *counted*, corrected only when a 403 arrives.
+
+**The two providers are not equals**, and that asymmetry is load-bearing. `topic_coverage` is
+written when `isLastPage` comes back true (§6.3), so a combined end-of-results signal would let a
+supplement that ran out of budget mid-window contribute to a claim that the window was finished —
+coverage over days nobody fetched, permanent and silent, with no error and no retry, because
+coverage says the work is done. Therefore:
+
+- **Currents is coverage-bearing.** `isLastPage` is its answer alone and its failures propagate.
+  Every invariant in §6–§8 holds exactly as it did before GNews existed.
+- **GNews is best-effort breadth.** Its articles merge in when they arrive; its errors, sit-outs and
+  exhaustion never fail a call and never end a walk. Each one is reported in `adjustments`, in a warn
+  log, and in `/readyz.upstream.providers`.
+
+The accepted cost: GNews coverage is opportunistic, so a GNews-only article inside an
+already-covered span may never be fetched. Per-provider coverage is the eventual fix. The reasoning
+is ADR-0012, and the code is `packages/news-providers/src/composite.ts`.
+
+Two further consequences worth knowing before adding a third provider:
+
+- **Limits narrow to the strictest.** Every provider is asked the same `pageNumber` and `pageSize`,
+  so the composite intersects their limits. Enabling GNews Free drops the shared page size from 20 to
+  10, which costs Currents twice the calls for the same window. That is deliberate: letting each
+  provider clamp its own page size reads fine and silently under-covers, because page 2 then means
+  different items to each of them.
+- **A provider that cannot express a query sits it out.** GNews `/search` has no category or domain
+  filter, so a category-scoped topic is refused locally rather than answered unfiltered — answering
+  would fill that topic with articles that do not belong to it.
 
 ---
 
@@ -1352,28 +1411,52 @@ cloud, where the day key used to guarantee it for the whole day.
 
 ## 13. Delivery phases
 
-| Phase | Deliverable |
-| --- | --- |
-| 0 | Monorepo scaffold, shared Zod schemas, config validation, multi-stage Dockerfiles, `docker-compose` local dev stack, `CURRENTS_MODE=fixture` offline mode (§4.1). |
-| 1 | `currents-client`: normalization, explicit UA, typed errors, header-driven quota, paging. Error taxonomy tested against `fixtures/error-and-reference-bodies.json`. |
-| 1b | Vocabulary reconciliation: `Sighting`/`Article` split, `Sighting` moved out of `@zammy/shared`, docs aligned to [CONTEXT.md](../CONTEXT.md). |
-| 2 | Postgres schema + migrations; the **sighting→article collapse** and keyset-read repositories. Dedup tested here against `fixtures/search-climate-duplicates.json`, not later. |
-| 3 | Query Service: canonicalization, coverage-gap planning with adaptive subdivision, single-flight, Redis page cache, **plus the in-process job queue and `meta.ingest` contract** — the deadline-bounded fill (§6.3) produces deferred work by construction, so the queue lands here, not later. |
-| 4 | Front end: search → timeline → infinite scroll → freshness states → progressive fill (§6.5). |
-| 5 | Refresh-on-read, adaptive subdivision backfill, budget guards (§9.4), retention, metrics. |
-| 5b | **Wordcloud (§10):** breadth sample, term aggregation over a rolling recency-weighted 24h window with domain-breadth gating and a snapshot-fed baseline, `/api/v1/trending`, d3-cloud landing page with accessible list equivalent. Scorer tested against `fixtures/search-keywordless-category-sample.json` including the empty-baseline day-one case. |
-| 5d | **Grouping maintenance:** `articles.tokens_version`, and `pnpm regroup [--days=N] [--tokens-only]` to re-derive stored tokens and re-run the grouping decision for groups of one after a rule change (ADR-0005). |
-| 5c | **Article grouping (§14.3):** `group_id` / `group_published` / `title_tokens` on `articles`, write-time grouping after the collapse, the keyset moved onto the group axis, per-topic representative from the source-authority list, and the "related" disclosure in the timeline. |
-| 6 *(later)* | **AWS deploy:** Terraform/CDK, Fargate task definitions, RDS + ElastiCache, secret wiring, migration-on-deploy (§4.1). |
-| 7 *(later)* | Topic summaries into `topics.summary`; second provider behind the client interface. |
+> **Two numbering schemes exist in this repo, and they are unrelated.** These are the *product*
+> phases. The OCI rollout has its own 0–5 in [DEPLOYMENT-OCI §7](DEPLOYMENT-OCI.md), so "Phase 3"
+> means the Query Service here and "first end-to-end deploy" there. Say which you mean.
 
-Phases 1–4 are the walking skeleton: a working keyword→timeline product with caching, where the first
-searcher populates and everyone after reads from storage. Phase 5 adds depth and self-repairing
-freshness. Because the queue runs in-process (§9.1), no phase introduces a second deployable.
+| Phase | Deliverable | Status |
+| --- | --- | --- |
+| 0 | Monorepo scaffold, shared Zod schemas, config validation, multi-stage Dockerfiles, `docker-compose` local dev stack, `CURRENTS_MODE=fixture` offline mode (§4.1). | ✅ |
+| 1 | `currents-client`: normalization, explicit UA, typed errors, header-driven quota, paging. Error taxonomy tested against `fixtures/error-and-reference-bodies.json`. | ✅ |
+| 1b | Vocabulary reconciliation: `Sighting`/`Article` split, `Sighting` moved out of `@zammy/shared`, docs aligned to [CONTEXT.md](../CONTEXT.md). | ✅ |
+| 2 | Postgres schema + migrations; the **sighting→article collapse** and keyset-read repositories. Dedup tested here against `fixtures/search-climate-duplicates.json`, not later. | ✅ |
+| 3 | Query Service: canonicalization, coverage-gap planning with adaptive subdivision, single-flight, Redis page cache, **plus the in-process job queue and `meta.ingest` contract** — the deadline-bounded fill (§6.3) produces deferred work by construction, so the queue lands here, not later. | ✅ |
+| 4 | Front end: search → timeline → infinite scroll → freshness states → progressive fill (§6.5). | ✅ |
+| 5 | Refresh-on-read, adaptive subdivision backfill, budget guards (§9.4), retention, metrics. | ✅ |
+| 5b | **Wordcloud (§10):** breadth sample, term aggregation over a rolling recency-weighted 24h window with domain-breadth gating and a snapshot-fed baseline, `/api/v1/trending`, d3-cloud landing page with accessible list equivalent. Scorer tested against `fixtures/search-keywordless-category-sample.json` including the empty-baseline day-one case. | ✅ |
+| 5d | **Grouping maintenance:** `articles.tokens_version`, and `pnpm regroup [--days=N] [--tokens-only]` to re-derive stored tokens and re-run the grouping decision for groups of one after a rule change (ADR-0005). | ✅ |
+| 5c | **Article grouping (§14.3):** `group_id` / `group_published` / `title_tokens` on `articles`, write-time grouping after the collapse, the keyset moved onto the group axis, per-topic representative from the source-authority list, and the "related" disclosure in the timeline. | ✅ |
+| 5e | **Storylines:** day-clustered slots (ADR-0009), then the persistent arc that superseded them (ADR-0011) — `storylines` / `storyline_days`, the linker, bridges and auto-merge, the timeline paged over storyline-days. Migration 0012 dropped the day-bounded model and the flag that chose between them. | ✅ |
+| 5f | **Storyline labels (ADR-0011, "Labels"):** Gemini-generated names at promotion, merge and drift, with a bigram fallback when no key is set, plus `label_source` so a relabel campaign can resume. | ✅ |
+| 6 | ~~**AWS deploy**~~ — superseded. The target moved to **OCI** on 2026-08-14; the plan and its own phase table are in [DEPLOYMENT-OCI.md](DEPLOYMENT-OCI.md). CI publishes arm64 to OCIR and staging has a cloud-init bootstrap. | 🔄 in progress |
+| 7a | **Second provider behind the client interface:** `@zammy/news-client` core + per-provider adapters + the composite, GNews added, `provider` column on `articles`/`sightings` (§5.6, ADR-0012). | ✅ |
+| 7b | Topic summaries into `topics.summary`. The schema reserves the columns (§7.2); nothing generates them. | ⬜ not started |
 
-Phase 2 is the highest-risk phase, not Phase 3. Deduplication is the difference between a usable
-timeline and an unusable one, and it is cheapest to get right at schema time — the recorded probe
-payload (100 sightings, 42 unique URLs, one repeated 50×) is a ready-made regression fixture.
+Phases 1–4 were the walking skeleton: a working keyword→timeline product with caching, where the
+first searcher populates and everyone after reads from storage. Phase 5 added depth and
+self-repairing freshness. Because the queue runs in-process (§9.1), no phase introduced a second
+deployable, and none has since.
+
+Phase 2 was the highest-risk phase, not Phase 3, and that held up. Deduplication is the difference
+between a usable timeline and an unusable one, and it was cheapest to get right at schema time — the
+recorded probe payload (100 sightings, 42 unique URLs, one repeated 50×) was a ready-made regression
+fixture.
+
+### Designed but unbuilt
+
+Carried here because these are described elsewhere in this document in the present tense, which
+reads as though they exist. No phase currently carries them.
+
+- **The shared quota governor (§5.4).** Quota is counted in-process, not in the Redis-held snapshot
+  §5.4 describes. Replicas therefore do not share a budget, and a restart forgets the day's spend.
+  Currents survives this because every response carries `x-ratelimit-*` and corrects the count one
+  call later; GNews sends no headers at all, so its count stays wrong until a 403 arrives — the exact
+  outcome pre-flight refusal exists to prevent. `createNewsClient` already accepts per-provider
+  governors via `deps.quota`, so this is a contained change.
+- **Per-provider coverage (ADR-0012).** `topic_coverage` is per topic, so a best-effort second
+  provider is not allowed to contribute to the end-of-results signal. The cost is that a GNews-only
+  article inside an already-covered span may never be fetched.
 
 ---
 

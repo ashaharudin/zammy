@@ -1,19 +1,28 @@
 # Zammy
 
 A news aggregator. Users search keywords and get a time-ordered timeline of headlines;
-a landing-page cloud shows what the day's news is mostly about. All content comes from
-the Currents API, which re-emits the same story many times over — a quirk that shapes
-most of the language below.
+a landing-page cloud shows what the day's news is mostly about. Content comes from the
+Currents API, which re-emits the same story many times over — a quirk that shapes most
+of the language below — and optionally from GNews alongside it.
 
 ## Language
 
 ### Content
 
 **Sighting**:
-One emission of an article by the upstream API. Upstream re-emits the same story under
+One emission of an article by an upstream API. Upstream re-emits the same story under
 fresh identifiers — one page arrived 50 times in 100 results — so a sighting is an
-observation, not a story.
+observation, not a story. Two providers reporting one URL is likewise two sightings of
+one article, not a duplicate to resolve.
 _Avoid_: emission, raw article, row
+
+**Provider**:
+An upstream news API we fetch from — Currents, and optionally GNews. Providers are not
+equals: one is **coverage-bearing** and alone decides when a time window has been fully
+fetched, while any other is best-effort breadth whose absence is never recorded as
+coverage (ADR-0012). Distinct from **source**, which is the outlet that published an
+article; one provider reports many sources, and two providers report many of the same.
+_Avoid_: upstream (as a countable noun), API, feed, source
 
 **Article**:
 A single real-world news story, identified by its canonical URL. An article has one or

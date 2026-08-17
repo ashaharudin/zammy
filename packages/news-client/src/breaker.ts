@@ -1,4 +1,4 @@
-import { CurrentsCircuitOpenError } from "./errors.js";
+import { NewsCircuitOpenError } from "./errors.js";
 
 /**
  * Circuit breaker (ARCHITECTURE 5.3).
@@ -53,7 +53,7 @@ export class CircuitBreaker {
     }
 
     const retryAt = new Date((this.openedAt ?? this.now()) + this.cooldownMs);
-    throw new CurrentsCircuitOpenError(
+    throw new NewsCircuitOpenError(
       `circuit open after ${this.consecutiveFailures} consecutive upstream failures; ` +
         `not retrying until ${retryAt.toISOString()}`,
       retryAt,

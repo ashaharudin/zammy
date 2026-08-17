@@ -1,8 +1,14 @@
+import {
+  InProcessQuotaGovernor,
+  type ClientLimits,
+  type ClientLogger,
+  type FetchLike,
+  type QuotaGovernor,
+} from "@zammy/news-client";
 import { FixtureCurrentsClient } from "./fixture-client.js";
 import { FixtureStore } from "./fixture-store.js";
-import { HttpCurrentsClient, type ClientLogger, type FetchLike } from "./http.js";
-import { InProcessQuotaGovernor, type QuotaGovernor } from "./quota.js";
-import type { ClientLimits, CurrentsClient } from "./client.js";
+import { HttpCurrentsClient } from "./http.js";
+import type { CurrentsClient } from "./client.js";
 
 /**
  * Only the settings the client needs, structurally — not an import of
@@ -32,9 +38,11 @@ export interface CreateClientDeps {
   logger?: ClientLogger;
   fetch?: FetchLike;
   /**
-   * Phase 3 passes the Redis-backed governor here so quota is shared across
-   * Fargate tasks (ARCHITECTURE 5.4). Until then the in-process one is correct
-   * for a single replica.
+   * A shared governor, when one exists. Defaults to the in-process counter,
+   * which is correct for a single replica that stays up and wrong in the two
+   * ways `InProcessQuotaGovernor` documents. ARCHITECTURE 5.4's Redis-backed
+   * snapshot is the intended occupant of this slot; it is designed and not yet
+   * built, and this parameter is the whole of what wiring it in requires.
    */
   quota?: QuotaGovernor;
 }
@@ -49,9 +57,9 @@ export function clientLimits(config: CurrentsClientConfig): ClientLimits {
 }
 
 /**
- * Build the client the configured mode calls for. Callers get one interface and
- * never learn which they got — the whole point of ARCHITECTURE 4.1's rule that no
- * code path may branch on environment.
+ * Build the Currents client the configured mode calls for. Callers get one
+ * interface and never learn which they got — the whole point of
+ * ARCHITECTURE 4.1's rule that no code path may branch on environment.
  */
 export async function createCurrentsClient(
   config: CurrentsClientConfig,
@@ -59,19 +67,16 @@ export async function createCurrentsClient(
 ): Promise<CurrentsClient> {
   const limits = clientLimits(config);
 
-  if (config.CURRENTS_MODE === "fixture") {
-    const store = new FixtureStore(config.FIXTURES_DIR);
-    await store.load();
-    return new FixtureCurrentsClient(store, limits, {
-      dailyLimit: config.CURRENTS_DAILY_CALL_LIMIT,
-      burstLimit: config.CURRENTS_BURST_CALL_LIMIT,
-    });
-  }
-
   const bounds = {
     dailyLimit: config.CURRENTS_DAILY_CALL_LIMIT,
     burstLimit: config.CURRENTS_BURST_CALL_LIMIT,
   };
+
+  if (config.CURRENTS_MODE === "fixture") {
+    const store = new FixtureStore(config.FIXTURES_DIR);
+    await store.load();
+    return new FixtureCurrentsClient(store, limits, bounds);
+  }
 
   return new HttpCurrentsClient({
     baseUrl: config.CURRENTS_BASE_URL,

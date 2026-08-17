@@ -9,7 +9,7 @@ import {
   type TimelineEntry,
 } from "@zammy/shared";
 import {
-  CurrentsQuotaError,
+  NewsQuotaError,
   type CallPriority,
   type CurrentsClient,
 } from "@zammy/currents-client";
@@ -271,7 +271,7 @@ async function planAndRead(
           capped = true;
         }
       } catch (error) {
-        degraded = error instanceof CurrentsQuotaError ? "quota" : "upstream";
+        degraded = error instanceof NewsQuotaError ? "quota" : "upstream";
         deps.log?.warn(
           { err: error, fingerprint: query.fingerprint },
           "synchronous fill failed; serving from store",
