@@ -88,17 +88,34 @@ environment-scoped values would be invisible to it):
   pulls work but buy egress and latency on every deploy.
 - `OCI_NAMESPACE` — the tenancy's object-storage namespace, an auto-generated string rather than the
   tenancy name. Profile → Tenancy, same page as Home Region.
-- `OCI_REPOSITORY` — e.g. `zammy/api`. Create it **private** first; a push to a non-existent repo
-  auto-creates it, but under a tenancy default rather than a decision.
+- `OCI_REPO_PREFIX` = **`zammy`** — the grouping only, not the component. The job appends `/api`
+  itself; Phase 4's web job will append `/web`.
 
 Repository **secrets**: `OCI_USERNAME` — `<namespace>/<user>`, or
-`<namespace>/oracleidentitycloudservice/<user>` on a federated tenancy — and `OCI_AUTH_TOKEN`, an
-auth token generated under User settings → Tokens and keys. Not the console password; OCIR does not
-accept it.
+`<namespace>/<domain-name>/<user>` on a tenancy with identity domains, where the default IDCS domain
+is literally named `oracleidentitycloudservice`. The console's Profile menu displays the
+`<domain>/<user>` portion for federated users, so it can be read off rather than guessed. And
+`OCI_AUTH_TOKEN`, an auth token generated under User settings → Tokens and keys — not the console
+password, which OCIR does not accept.
 
-Create the target repo as **private** in OCIR first: a push to a non-existent repo auto-creates it
-as private under most tenancy defaults, but relying on a default for image visibility is not a
-decision anyone should discover later.
+#### Repository naming
+
+One repository per deployable image, grouped under `zammy`:
+
+| Image | OCIR repository | Built from |
+|---|---|---|
+| api | `<namespace>/zammy/api` | `apps/api/Dockerfile` |
+| web | `<namespace>/zammy/web` | `apps/web/Dockerfile` (Phase 4, does not exist yet) |
+
+**Why the component is hardcoded in the workflow rather than held in a variable.** Which image a job
+publishes is a property of that job — it is decided by the Dockerfile it builds — while the variable
+carries only what differs per tenancy. Splitting them that way makes it impossible for the api job
+to publish over the web path, or for a variable edit to silently redirect a build. The cost is one
+line per job; the alternative is a class of mistake that is invisible in the diff.
+
+Create both repositories as **private** in OCIR before the first push. A push to a non-existent repo
+auto-creates it, but visibility then comes from a tenancy default rather than a decision, and
+reserving `zammy/web` now costs nothing.
 
 ## 3. Network layout
 
@@ -236,7 +253,7 @@ state managed for you); decide when the CI pipeline is being written, it changes
 | **1. Ground** | VCN, subnets, NSGs, gateways, Vault, state bucket | staging VM cloud-init ✅ drafted |
 | **2. Data** | PostgreSQL private endpoint + one shared Redis Container Instance | assert `/readyz` says `ready`, not just 200 (`rediss://` ✅ verified but unused — §4) |
 | **3. api** | Container Instances, LB `/api/*` routing, migration job, first end-to-end deploy | — |
-| **4. web** | static container, path routing, domain + TLS on the LB | `apps/web/Dockerfile` |
+| **4. web** | static container, path routing, domain + TLS on the LB | `apps/web/Dockerfile`, plus an `image` job publishing to `zammy/web` |
 | **5. Ops** | OCI Logging for container stdout, Monitoring alarms (LB unhealthy-backend count, 5xx rate, api restart count), backup verification | — |
 
 Phase 3 is the milestone that proves the shape: image → migrate → roll → healthy behind the LB.
