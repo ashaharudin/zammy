@@ -191,7 +191,10 @@ write_files:
       LOG_LEVEL=info
 
   # Boot-time start that tolerates a not-yet-configured box. A first boot with no
-  # .env is the normal case, not a failure, and should not leave a red unit.
+  # .env is the normal case, not a failure, and should not leave a red unit. A
+  # half-finished deploy is the opposite case and deliberately IS one: the pinned
+  # image was never verified, and quietly starting it would be worse than a red
+  # unit.
   - path: /opt/zammy/bin/zammy-up
     permissions: "0755"
     content: |
@@ -206,6 +209,16 @@ write_files:
       if ! grep -qE '^ZAMMY_API_IMAGE=.+' .env; then
         echo "zammy: no image pinned yet — run: zammy-deploy <image@sha256:...>"
         exit 0
+      fi
+      # zammy-deploy writes "in-progress <image>" before it migrates and "ok
+      # <image>" only after /readyz reports ready. Anything else means the last
+      # deploy died in the middle: .env names what was ATTEMPTED, not what was
+      # verified, and an unattended reboot must not promote it.
+      if [[ -f deploy.state ]] && [[ "$(awk '{print $1; exit}' deploy.state)" != "ok" ]]; then
+        echo "zammy: last deploy did not complete: $(cat deploy.state)" >&2
+        echo "zammy: refusing to start the unverified image. Re-run zammy-deploy" >&2
+        echo "zammy: (same digest to retry, or a known-good one to roll back)." >&2
+        exit 1
       fi
       exec docker compose up -d --remove-orphans
 
@@ -241,7 +254,7 @@ write_files:
         echo "usage: zammy-deploy <image@sha256:...>" >&2
         exit 64
       fi
-      if [[ "$image" != *"@sha256:"* ]]; then
+      if [[ ! "$image" =~ @sha256:[0-9a-f]{64}$ ]]; then
         echo "refusing: deploy by digest, not by tag (got '$image')." >&2
         echo "CI prints the digest in its job summary." >&2
         exit 64
@@ -258,8 +271,21 @@ write_files:
       # it here costs one line and replaces a 30s readiness timeout plus a restart
       # loop with a sentence. An absent CURRENTS_MODE means live, matching the
       # default in compose.yaml — so absent-and-keyless must fail too.
+      # Reads a value the way compose reads .env: last assignment wins, a quoted
+      # value ends at its closing quote, and an unquoted value ends at the first
+      # whitespace-then-# inline comment — so this gate and compose cannot
+      # disagree about the same line.
       read_env() {
-        sed -n "s/^[[:space:]]*$1=//p" .env | tail -1 | tr -d '\r' | sed 's/^"//; s/"$//'
+        local raw
+        raw="$(sed -n "s/^[[:space:]]*$1=//p" .env | tail -1 | tr -d '\r')"
+        if [[ "$raw" =~ ^\"([^\"]*)\" ]]; then
+          printf '%s' "${BASH_REMATCH[1]}"
+        elif [[ "$raw" =~ ^\'([^\']*)\' ]]; then
+          printf '%s' "${BASH_REMATCH[1]}"
+        else
+          raw="${raw%%[[:space:]]#*}"
+          printf '%s' "${raw%"${raw##*[![:space:]]}"}"
+        fi
       }
       mode="$(read_env CURRENTS_MODE)"
       if [[ "${mode:-live}" == "live" && -z "$(read_env CURRENTS_API_KEY)" ]]; then
@@ -279,12 +305,17 @@ write_files:
       fi
 
       # Record the digest before rolling, so a failed roll leaves an .env that
-      # says what was attempted rather than what used to run.
+      # says what was attempted rather than what used to run. deploy.state is
+      # what separates attempted from verified: it stays "in-progress" until
+      # /readyz says ready, and zammy-up refuses to auto-start while it does —
+      # otherwise an unattended reboot after a failed migration would boot the
+      # unvetted image against an un-migrated database.
       if grep -q '^ZAMMY_API_IMAGE=' .env; then
         sed -i "s|^ZAMMY_API_IMAGE=.*|ZAMMY_API_IMAGE=${image}|" .env
       else
         printf 'ZAMMY_API_IMAGE=%s\n' "$image" >> .env
       fi
+      printf 'in-progress %s\n' "$image" > deploy.state
 
       # --wait blocks until both report healthy, so the migration below cannot
       # race Postgres's startup. It also fails loudly if either never gets there,
@@ -310,6 +341,7 @@ write_files:
       d = json.load(sys.stdin)
       sys.exit(0 if d.get("status") == "ready" else 1)
       '; then
+          printf 'ok %s\n' "$image" > deploy.state
           echo "ready after ${attempt}s: $body"
           exit 0
         fi
@@ -338,8 +370,10 @@ write_files:
   # Applied by a unit ordered after docker.service rather than persisted with
   # netfilter-persistent: Docker rebuilds its chains on every start, and
   # restoring a saved copy of them races that rebuild. Re-applying our own two
-  # rules afterwards is deterministic. The script is idempotent (-C before -I),
-  # so running it twice is harmless.
+  # rules afterwards is deterministic. The script rebuilds rather than appends —
+  # every rule for the api port is deleted before the pair is inserted — so
+  # re-running it after a CIDR change replaces the old ACCEPT instead of
+  # leaving that range allowed until the next reboot.
   #
   # This is defence in depth behind the NSG, not a replacement for it.
   - path: /opt/zammy/bin/zammy-firewall
@@ -348,7 +382,11 @@ write_files:
       #!/usr/bin/env bash
       set -euo pipefail
 
-      # Override in /etc/zammy-firewall.conf if the VCN CIDR differs.
+      # /etc/zammy-firewall.conf is the single source of truth: systemd passes
+      # it via EnvironmentFile, and sourcing it here makes a manual run see the
+      # same values instead of silently falling back to the defaults below,
+      # which only cover a missing file.
+      [[ -f /etc/zammy-firewall.conf ]] && . /etc/zammy-firewall.conf
       CIDR="${ZAMMY_LB_CIDR:-10.0.0.0/16}"
       PORT="${ZAMMY_API_PORT:-3000}"
 
@@ -358,14 +396,21 @@ write_files:
         exit 1
       fi
 
+      # Rebuild, don't accumulate: delete every rule for this port first, so a
+      # changed CIDR replaces the old ACCEPT instead of leaving that range
+      # allowed until the next reboot. (A changed PORT still leaves the old
+      # port's pair behind — the conf file says how to remove it.)
+      iptables -S DOCKER-USER \
+        | sed -n "s/^-A DOCKER-USER \(.* --dport $PORT .*\)/\1/p" \
+        | while read -r rule; do
+            # shellcheck disable=SC2086 — reusing iptables' own tokenization
+            iptables -D DOCKER-USER $rule
+          done
+
       # Insert at explicit positions so both land above the trailing RETURN,
-      # ACCEPT before DROP. -C first, so re-runs don't stack duplicates.
-      if ! iptables -C DOCKER-USER -p tcp --dport "$PORT" -s "$CIDR" -j ACCEPT 2>/dev/null; then
-        iptables -I DOCKER-USER 1 -p tcp --dport "$PORT" -s "$CIDR" -j ACCEPT
-      fi
-      if ! iptables -C DOCKER-USER -p tcp --dport "$PORT" -j DROP 2>/dev/null; then
-        iptables -I DOCKER-USER 2 -p tcp --dport "$PORT" -j DROP
-      fi
+      # ACCEPT before DROP.
+      iptables -I DOCKER-USER 1 -p tcp --dport "$PORT" -s "$CIDR" -j ACCEPT
+      iptables -I DOCKER-USER 2 -p tcp --dport "$PORT" -j DROP
 
       echo "DOCKER-USER now:"
       iptables -S DOCKER-USER
@@ -394,6 +439,10 @@ write_files:
     permissions: "0644"
     content: |
       # The CIDR allowed to reach the api port — set this to your VCN's range.
+      # After editing: sudo systemctl restart zammy-firewall — it rebuilds both
+      # rules, so the old CIDR stops being allowed immediately. Changing
+      # ZAMMY_API_PORT is the one edit that leaves the OLD port's pair in
+      # place; remove it with `iptables -D DOCKER-USER ...` or reboot.
       ZAMMY_LB_CIDR=10.0.0.0/16
       ZAMMY_API_PORT=3000
 
@@ -419,17 +468,31 @@ write_files:
 
   # The free tier has no managed backups, so staging gets the cheap version. Not
   # PITR and not a substitute for §4's production requirement — but it means a
-  # staging database is worth having data in.
+  # staging database is worth having data in. bash with pipefail, because under
+  # plain sh a failed pg_dump still exits 0 through gzip: seven days of
+  # valid-looking empty archives, and the rotation below has deleted every real
+  # backup — discovered at restore time.
   - path: /etc/cron.daily/zammy-pgdump
     permissions: "0755"
     content: |
-      #!/bin/sh
-      set -e
-      cd /opt/zammy || exit 0
-      [ -f .env ] || exit 0
+      #!/usr/bin/env bash
+      set -euo pipefail
+      cd /opt/zammy 2>/dev/null || exit 0
+      [[ -f .env ]] || exit 0
       mkdir -p /var/backups/zammy
       out="/var/backups/zammy/zammy-$(date +%F).sql.gz"
-      docker compose exec -T postgres pg_dump -U zammy zammy | gzip > "$out"
+      tmp="${out}.tmp"
+      trap 'rm -f "$tmp"' EXIT
+      docker compose exec -T postgres pg_dump -U zammy zammy | gzip > "$tmp"
+      # pg_dump writes its own trailer last; a dump without one is truncated,
+      # whatever the exit codes said.
+      if ! zcat "$tmp" | tail -n 5 | grep -q 'PostgreSQL database dump complete'; then
+        echo "zammy-pgdump: dump has no completion trailer — discarding" >&2
+        exit 1
+      fi
+      mv "$tmp" "$out"
+      # Rotate only after this run produced a verified backup, so a stretch of
+      # failures can never age the last good ones out.
       find /var/backups/zammy -name 'zammy-*.sql.gz' -mtime +7 -delete
 
   - path: /opt/zammy/README
@@ -447,7 +510,7 @@ write_files:
 
       If your VCN CIDR is not 10.0.0.0/16:
         sudo vi /etc/zammy-firewall.conf
-        sudo systemctl restart zammy-firewall   # idempotent; prints the chain
+        sudo systemctl restart zammy-firewall   # rebuilds both rules; prints the chain
 
       Check the firewall actually took effect (the DROP must sit ABOVE RETURN):
         sudo iptables -S DOCKER-USER
@@ -460,6 +523,9 @@ write_files:
         docker compose -f /opt/zammy/compose.yaml logs -f api
         curl -s localhost:3000/readyz | python3 -m json.tool
         sudo systemctl status zammy
+        cat /opt/zammy/deploy.state    # "ok <digest>" after a verified deploy;
+                                       # anything else and zammy-up refuses to
+                                       # auto-start until a deploy completes
 
       What staging does NOT prove: managed Postgres/Cache, private endpoints,
       PITR, rediss:// against a real TLS endpoint, or multi-instance rolling
