@@ -1,0 +1,141 @@
+# CI — verify, then publish the deploy artifact to OCIR (DEPLOYMENT-OCI §2.3).
+#
+# Everything here runs on arm64 because the deployment target is OCI Ampere,
+# which is arm64-only. `ubuntu-24.04-arm` is a native arm64 runner (available in
+# private repositories since 2026-01-29, 2 vCPU, free-minutes eligible), so the
+# image is built on the architecture it will run on — no QEMU, and no gap
+# between "builds in CI" and "boots on the VM". This is also what pins §2.2's
+# architecture decision: it is the runner label, not the builder's mood.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A superseded run on the same ref has nothing to tell us.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify (arm64)
+    runs-on: ubuntu-24.04-arm
+
+    # The api tests are integration tests, not unit tests: createTestHarness
+    # CREATEs a real database per run and drives a real Redis (test-support.ts).
+    # Both images are multi-arch, so they run natively alongside the runner.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: zammy
+          POSTGRES_PASSWORD: zammy
+          POSTGRES_DB: zammy
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U zammy -d zammy"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      # Matches the defaults in test-support.ts; stated explicitly so a change
+      # to either side is a visible conflict rather than a silent divergence.
+      TEST_DATABASE_URL: postgres://zammy:zammy@localhost:5432/zammy
+      TEST_REDIS_URL: redis://localhost:6379
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reads the pinned version from the root package.json `packageManager`
+      # field, so CI and the Dockerfile's corepack cannot drift apart.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Root `build` orders packages before apps, which `tsc -b` needs.
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  image:
+    name: publish image to OCIR
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+
+    # Consumed by the staging deploy once there is a host to deploy to. Always
+    # the digest — a tag is a mutable pointer and the README already documents
+    # what stale-image resolution costs locally; it is worse on a server.
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image: ${{ steps.meta.outputs.image }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to OCIR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.OCI_REGISTRY }}
+          username: ${{ secrets.OCI_USERNAME }}
+          password: ${{ secrets.OCI_AUTH_TOKEN }}
+
+      - name: Compose image reference
+        id: meta
+        run: echo "image=${{ vars.OCI_REGISTRY }}/${{ vars.OCI_NAMESPACE }}/${{ vars.OCI_REPOSITORY }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          platforms: linux/arm64
+          push: true
+          # SHA-tagged only. No `latest`, no moving `staging` tag: deploys
+          # resolve the digest below, and a mutable tag beside it is an
+          # invitation to deploy something nobody can name afterwards.
+          tags: ${{ steps.meta.outputs.image }}:${{ github.sha }}
+          # OCIR is strict about the extra attestation manifests these attach;
+          # they turn a single-arch push into an index and buy us nothing while
+          # there is exactly one platform.
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report the digest
+        run: |
+          {
+            echo "### Image published"
+            echo
+            echo '```'
+            echo "${{ steps.meta.outputs.image }}@${{ steps.build.outputs.digest }}"
+            echo '```'
+            echo
+            echo "Tag: \`${{ github.sha }}\` — deploy by digest, never by tag."
+          } >> "$GITHUB_STEP_SUMMARY"
