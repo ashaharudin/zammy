@@ -115,14 +115,13 @@ describe("cold search — the synchronous fill", () => {
 
 describe("truncation — a full final page means hidden history, not success", () => {
   it("records the fetched frontier as covered and enqueues ONLY the remainder", async () => {
-    // A deadline wide enough not to be what this test measures. The default
-    // 1200ms no longer fits five pages: linking costs a measured ~190ms per
-    // batch (ADR-0011) and five batches spend most of the budget, so under load
-    // the fill stops at three calls and this asserts a timing accident instead
-    // of the truncation handling it is named for. That the default is now tight
-    // is a real finding, recorded in `grouping-service.ts` and the S9 notes —
-    // not something to hide by asserting three.
-    harness = await createTestHarness({ syncFillDeadlineMs: 10_000 }, NOW);
+    // The default deadline, and it cannot be what this test measures: nothing
+    // advances the harness clock unless a test asks it to, so all five pages
+    // fit however loaded the machine is. That 1200ms is tight for five pages in
+    // PRODUCTION — linking costs a measured ~190ms per batch (ADR-0011) — is a
+    // real finding, recorded in `grouping-service.ts` and the S9 notes. It is
+    // not this test's subject, and it used to be able to masquerade as one.
+    harness = await createTestHarness({}, NOW);
 
     const result = await readTimeline(harness.deps, broadQuery(), { limit: 100 });
 
@@ -143,7 +142,10 @@ describe("truncation — a full final page means hidden history, not success", (
     // everything" mid-ingest — the two flags must be independently true.
     expect(result.page.hasMore).toBe(false);
     expect(result.items.length).toBeGreaterThan(0);
-  });
+    // Five fetches, five grouping batches and a linker pass against a real
+    // Postgres: the ASSERTIONS are load-independent now, the runtime is not.
+    // A generous timeout is the honest way to say that (as the sibling above).
+  }, 30_000);
 
   it("the consumer walks the frontier to full coverage without refetching", async () => {
     harness = await createTestHarness({}, NOW);
@@ -209,19 +211,20 @@ describe("truncation — a full final page means hidden history, not success", (
 
 describe("the deadline is wall-clock, not a call count", () => {
   it("defers the rest of the plan when calls are slow", async () => {
-    // 1000ms calls against a 1500ms deadline, not 300 against 500: the shorter
-    // pair left ~200ms for everything that is not an upstream call, and the
-    // write path now spends a measured ~190ms of it linking (ADR-0011). The
-    // property under test is unchanged — the fill stops on a CLOCK rather than
-    // a call count — and it is now tested with slack rather than by a
-    // photo-finish.
+    // The latency is charged to the harness clock, which is also the clock the
+    // deadline reads (test-support): the calls are slow by fiat, not by
+    // sleeping. Real time made this a race — a loaded machine spent the budget
+    // on the work BETWEEN the calls (linking costs a measured ~190ms per batch,
+    // ADR-0011) and the fill stopped at one. The property under test is
+    // unchanged: the fill stops on a CLOCK, not on a call count.
     harness = await createTestHarness({ syncFillDeadlineMs: 1500 }, NOW);
     harness.counting.delayMs = 1000;
 
     const result = await readTimeline(harness.deps, broadQuery(), { limit: 25 });
 
-    // 1000ms/call against a 1500ms deadline: call 1 at t≈0, call 2 at t≈1000,
-    // call 3 would start past the deadline → deferred with a resume page.
+    // 1000ms/call against a 1500ms deadline: call 1 starts at t=0 and lands at
+    // t=1000, call 2 still fits and lands at t=2000, call 3 would start past
+    // the deadline → deferred with a resume page. Exactly, every run.
     expect(harness.counting.searchCalls).toBe(2);
     expect(result.meta.ingest.state).toBe("in_progress");
     expect(result.meta.ingest.pendingJobs).toBe(1);
@@ -514,7 +517,7 @@ describe("metrics (§12) — the numbers that make the design observable", () =>
     // p95 by servedFrom needs reads labeled by source.
     expect(await value("zammy_timeline_read_seconds_count", { served_from: "upstream" })).toBe(2);
     expect(await value("zammy_timeline_read_seconds_count", { served_from: "cache" })).toBe(1);
-  });
+  }, 30_000); // three reads, one of them a five-call broad fill (see truncation)
 });
 
 describe("the 7-day per-call range ceiling (observed live 2026-08-11)", () => {

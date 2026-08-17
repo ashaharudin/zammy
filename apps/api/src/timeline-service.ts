@@ -239,14 +239,17 @@ async function planAndRead(
     // §6.3 steps 4–5 — fill what fits the wall-clock deadline, newest gap
     // first (that is where the reader is looking), defer the rest.
     const budget: FillBudget = {
-      deadline: Date.now() + deps.config.syncFillDeadlineMs,
+      deadline: deps.now().getTime() + deps.config.syncFillDeadlineMs,
       maxCalls: deps.config.maxSyncUpstreamCalls,
       callsUsed: 0,
     };
     const deferred: SegmentJob[] = [];
 
     for (const gap of gaps) {
-      if (budget.callsUsed >= budget.maxCalls || (budget.callsUsed > 0 && Date.now() >= budget.deadline)) {
+      if (
+        budget.callsUsed >= budget.maxCalls ||
+        (budget.callsUsed > 0 && deps.now().getTime() >= budget.deadline)
+      ) {
         deferred.push(segmentJob(query.fingerprint, gap, 1));
         continue;
       }
@@ -630,6 +633,13 @@ export async function processSegmentJob(deps: TimelineDeps, job: SegmentJob): Pr
 }
 
 interface FillBudget {
+  /**
+   * Epoch ms on `deps.now()`'s clock — the injected one, never `Date.now()`.
+   * In production the two are the same live clock, so nothing changes there;
+   * in a test they are not, and a deadline read from a clock the test cannot
+   * move turns "how many calls fit" into a race against whatever else the
+   * machine is doing. One clock for the planner, deadline included.
+   */
   deadline: number;
   maxCalls: number;
   callsUsed: number;
@@ -669,7 +679,7 @@ async function fillSegment(
     // both the wall-clock deadline and the call ceiling.
     if (
       budget.callsUsed > 0 &&
-      (budget.callsUsed >= budget.maxCalls || Date.now() >= budget.deadline)
+      (budget.callsUsed >= budget.maxCalls || deps.now().getTime() >= budget.deadline)
     ) {
       return { kind: "deferred", resumePage: pageNumber, callsMade };
     }
