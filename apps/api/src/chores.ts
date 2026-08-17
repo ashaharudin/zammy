@@ -5,7 +5,6 @@ import {
   markDormantStorylines,
   pruneStoryDf,
   readLinkableGroups,
-  pruneTermSnapshots,
   retentionReport,
   type Database,
   type RetentionReport,
@@ -28,8 +27,10 @@ import {
 
 /**
  * Non-upstream chores (ARCHITECTURE 9.1): work with a clock but no quota
- * cost. The nightly retention REPORT (§7.5, ADR-0001), and with it the one
- * prune that DOES delete — `term_snapshots` past the baseline's reach.
+ * cost. The nightly retention REPORT (§7.5, ADR-0001), and with it the prune
+ * that DOES delete — `story_token_days` past the linker's trailing window.
+ * (`term_snapshots` used to be pruned here too; the table went with the term
+ * cloud, ADR-0013.)
  *
  * The schedule lives in BullMQ's job scheduler, which is Redis-shared state:
  * N Fargate tasks register the same scheduler id and exactly one instance
@@ -44,7 +45,6 @@ export interface ChoreDeps {
   db: Kysely<Database>;
   config: {
     retentionDays: number;
-    baselineWindowDays: number;
     storyDfWindowDays: number;
     /** ADR-0011's ~90: days without coverage after which a storyline is quiet.
      * The same knob the linker's gate reads, so the column cannot disagree
@@ -77,21 +77,10 @@ export async function runRetentionChore(deps: ChoreDeps): Promise<RetentionRepor
   );
 
   // The one exception to report-only, and it is not an exception to ADR-0001:
-  // these rows are derived (§10.4) and worthless once the baseline can no
-  // longer reach them. A day of slack past the window so a late chore run
-  // cannot cut into the range the next refresh reads.
-  const cutoff = new Date(
-    deps.now().getTime() - (deps.config.baselineWindowDays + 1) * 86_400_000,
-  );
-  const prunedSnapshots = await pruneTermSnapshots(deps.db, { before: cutoff });
-  deps.log.info(
-    { prunedSnapshots, cutoff: cutoff.toISOString() },
-    "pruned term_snapshots past the baseline window (§10.4)",
-  );
-
-  // Same argument, same slack, for the storyline linker's trailing corpus
-  // (ADR-0011): day buckets the rolling window can no longer reach are
-  // derived rows nothing will read again. The cutoff is a DAY KEY, so a
+  // the storyline linker's trailing corpus is derived, and day buckets the
+  // rolling window can no longer reach are rows nothing will read again
+  // (ADR-0011). A day of slack past the window so a late chore run cannot cut
+  // into the range the next link decision reads. The cutoff is a DAY KEY, so a
   // bucket leaves only once the whole local day is out of reach.
   const dfCutoff = storyDfDay(
     new Date(

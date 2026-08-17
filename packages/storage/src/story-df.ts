@@ -245,8 +245,9 @@ export async function rebuildStoryDf(
 }
 
 /**
- * Drop day buckets the window can no longer reach. Derived rows, like
- * `term_snapshots` (§10.4) — deleting them is not what ADR-0001 guards.
+ * Drop day buckets the window can no longer reach. Derived rows, rebuildable
+ * from `articles` — deleting them is not what ADR-0001 guards, and since the
+ * term cloud's `term_snapshots` went (ADR-0013) this is the only prune left.
  */
 export async function pruneStoryDf(
   db: Kysely<Database>,

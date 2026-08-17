@@ -147,8 +147,9 @@ const EnvSchema = z
      * it is asked. Fourteen is the starting knob ADR-0011 names, not a
      * commitment — S3's sweep is what pins it.
      *
-     * Also what the nightly prune keeps, plus a day of slack, exactly as
-     * BASELINE_WINDOW_DAYS is for `term_snapshots`.
+     * Also what the nightly prune keeps, plus a day of slack — and since the
+     * term cloud's `term_snapshots` went (ADR-0013), the only thing that prune
+     * still deletes.
      */
     STORYLINE_DF_WINDOW_DAYS: z.coerce.number().int().min(1).max(90).default(14),
 
@@ -358,23 +359,15 @@ const EnvSchema = z
     /**
      * How far back the wordcloud looks (ARCHITECTURE 10.1). The window rolls
      * with the clock rather than resetting at midnight (ADR-0008), so this is
-     * the only thing that decides what "now" covers.
+     * the only thing that decides what "now" covers — and since the cloud
+     * names the storylines the window UPDATED (ADR-0013), it is now the only
+     * cloud knob at all. `TERM_HALF_LIFE_HOURS` (the recency decay) and
+     * `BASELINE_WINDOW_DAYS` (the trailing per-term mean) went with the terms
+     * they weighted and suppressed; recency is the cloud's ordering now rather
+     * than a term of a score, and a storyline needs no suppressor because it is
+     * an event rather than a word.
      */
     TREND_WINDOW_HOURS: z.coerce.number().int().min(1).max(168).default(24),
-
-    /**
-     * Recency half-life inside that window (§10.3). An article contributes
-     * `0.5 ^ (age / this)`: ~0.125 at the 24-hour edge by default. Much
-     * shorter than TREND_WINDOW_HOURS makes the window's older half
-     * decorative; much longer and the weighting stops doing anything.
-     */
-    TERM_HALF_LIFE_HOURS: z.coerce.number().min(0.5).max(168).default(8),
-
-    /**
-     * How many days of hourly snapshots the baseline means over (§10.3).
-     * Also what the nightly prune keeps, plus a day of slack (§7.5).
-     */
-    BASELINE_WINDOW_DAYS: z.coerce.number().int().min(1).max(90).default(7),
 
     /**
      * The calendar day ARTICLE GROUPING is bounded by (§7.4, ADR-0005) — a

@@ -1,5 +1,5 @@
 import type { GroupCandidate } from "@zammy/storage";
-import { contentTokens } from "./term-scoring.js";
+import { contentTokens } from "./headline-tokens.js";
 
 /**
  * Article grouping (ARCHITECTURE 14.3) — the write-time decision: does this

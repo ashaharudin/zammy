@@ -8,10 +8,11 @@ import { searchPlaceholder } from "./searchPlaceholder.js";
 import { useReference } from "./useTimeline.js";
 
 /**
- * The empty state: the rolling 24-hour wordcloud with the command-bar prompt scaled up
- * and centered beneath it (ARCHITECTURE 10) — the landing page is never
- * blank, and the cloud gives users something to click before they know what
- * to type (§9.3 cold start).
+ * The empty state: the rolling 24-hour wordcloud — the storylines the window
+ * updated, named by their labels (ADR-0013) — with the command-bar prompt
+ * scaled up and centered beneath it (ARCHITECTURE 10). The landing page is
+ * never blank, and the cloud gives users something to click before they know
+ * what to type (§9.3 cold start).
  *
  * The same filter chips the open-topic bar carries sit under the prompt, set
  * before there is anything to search and carried into whatever the reader then
@@ -75,7 +76,7 @@ export function Hero({
             autoFocus
             value={q}
             onChange={(event) => setQ(event.target.value)}
-            placeholder={searchPlaceholder(trending.data?.terms ?? [])}
+            placeholder={searchPlaceholder(trending.data?.storylines ?? [])}
             aria-label="Search topics"
             style={{
               width: "100%",

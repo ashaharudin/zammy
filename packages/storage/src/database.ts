@@ -156,43 +156,12 @@ export interface FetchLogTable {
   error_kind: string | null;
 }
 
-/**
- * The live cloud (§10.4): one row set per language over the last
- * TREND_WINDOW_HOURS, replaced wholesale on each recompute (ADR-0008).
+/*
+ * No cloud tables. The landing-page cloud names the storylines the rolling
+ * window updated (ADR-0013), which `storylines` + `storyline_groups` already
+ * hold; `trending_terms`, `term_snapshots` and `term_baseline` were dropped
+ * with the term cloud they served (migration 0014).
  */
-export interface TrendingTermsTable {
-  language: string;
-  term: string;
-  is_bigram: boolean;
-  /** True, uncapped, unweighted — the displayed "unique articles". */
-  df_articles: number;
-  df_domains: number;
-  /** Recency-weighted and per-domain-capped; what the score is built on. */
-  weighted_df: number;
-  score: number;
-  window_start: Timestamp;
-  window_end: Timestamp;
-}
-
-/**
- * Hourly RAW per-term counts — the baseline's only input, and the only thing
- * here that accumulates (§10.3). Never weighted, so a mean over these rows
- * compares like with like across time.
- */
-export interface TermSnapshotsTable {
-  bucket_hour: Timestamp;
-  language: string;
-  term: string;
-  df_articles: number;
-}
-
-/** Trailing per-term mean — the suppressor for perennial vocabulary (§10.3). */
-export interface TermBaselineTable {
-  language: string;
-  term: string;
-  mean_df: number;
-  updated_at: Timestamp;
-}
 
 /**
  * Provisional until a second group attaches, active once promoted, dormant once
@@ -306,9 +275,6 @@ export interface Database {
   topic_articles: TopicArticlesTable;
   topic_coverage: TopicCoverageTable;
   fetch_log: FetchLogTable;
-  trending_terms: TrendingTermsTable;
-  term_snapshots: TermSnapshotsTable;
-  term_baseline: TermBaselineTable;
   storylines: StorylinesTable;
   storyline_groups: StorylineGroupsTable;
   storyline_days: StorylineDaysTable;

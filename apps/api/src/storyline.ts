@@ -1,4 +1,4 @@
-import { contentTokens } from "./term-scoring.js";
+import { contentTokens } from "./headline-tokens.js";
 import { singular } from "./grouping.js";
 
 /**

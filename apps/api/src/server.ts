@@ -207,8 +207,6 @@ export async function buildApp(config: Config): Promise<App> {
       samplePages: config.SAMPLE_PAGES,
       sampleRefreshMinutes: config.SAMPLE_REFRESH_MINUTES,
       windowHours: config.TREND_WINDOW_HOURS,
-      halfLifeHours: config.TERM_HALF_LIFE_HOURS,
-      baselineWindowDays: config.BASELINE_WINDOW_DAYS,
     },
   };
 
@@ -224,7 +222,6 @@ export async function buildApp(config: Config): Promise<App> {
     db,
     config: {
       retentionDays: config.RETENTION_DAYS,
-      baselineWindowDays: config.BASELINE_WINDOW_DAYS,
       storyDfWindowDays: config.STORYLINE_DF_WINDOW_DAYS,
       storylineDormancyDays: config.STORYLINE_DORMANCY_DAYS,
       timeZone: config.APP_TIMEZONE,

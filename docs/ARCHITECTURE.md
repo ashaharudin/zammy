@@ -21,11 +21,12 @@ the upstream actually does, and [docs/adr/](./adr/) for decisions and the altern
   populates it, everyone after reads from storage.
 - Accumulate articles over time so a topic's timeline deepens beyond what one upstream call returns —
   driven by actual use, not by a scheduled watchlist (§9).
-- **A landing page wordcloud of the last 24 hours' most-referenced terms**, each word sized by how
-  many *unique articles* reference it and how recently, and clickable to run that search (§10). The
-  window rolls continuously rather than resetting at midnight. Note the vocabulary: a
-  **term** is a word extracted from headlines; a **topic** is a saved canonical query. They meet when
-  a click turns one into the other.
+- **A landing page wordcloud of the storylines the last 24 hours updated**, each word a storyline's
+  label, sized by how many *unique articles* it gained inside the window and coloured by how recently
+  it moved, and clickable to run that name as a search (§10). The window rolls continuously rather
+  than resetting at midnight. Note the vocabulary: a **storyline** is one arc of one event and its
+  **label** names it; a **topic** is a saved canonical query. They meet when a click turns one into
+  the other.
 - A clean, fast front end; keywords in, timeline out.
 
 **Non-goals for v1**
@@ -143,7 +144,7 @@ zammy/
 │                          #   keyset timeline reads (§7.3)
 ├── apps/
 │   ├── api/               # Component 2 — Fastify. HTTP surface, query planning,
-│   │                      #   in-process job consumer (§9.1), term aggregation (§10)
+│   │                      #   in-process job consumer (§9.1), the cloud's read (§10)
 │   ├── worker/            # Component 5 — only if ingestion load justifies splitting it out
 │   └── web/               # Component 4 — React + Vite, timeline + wordcloud
 ├── fixtures/              # real captured upstream payloads — regression basis (§12)
@@ -828,9 +829,11 @@ order is the display order; `ORDER BY` in §7.3 is the only source of truth.
 
 A nightly job reports articles (and their sightings) older than `RETENTION_DAYS` (default 90)
 belonging to no recently-hit topic, plus topics with `last_hit_at` older than 30 days. The same job
-**deletes** `term_snapshots` rows older than `BASELINE_WINDOW_DAYS + 1` (§10.4) — the one derived
-table that grows without bound. Deleting derived rows is not what ADR-0001 guards against: the
-snapshots are recomputable in principle and worthless once outside the baseline window.
+**deletes** `story_token_days` buckets past `STORYLINE_DF_WINDOW_DAYS + 1` — the derived table that
+grows without bound. Deleting derived rows is not what ADR-0001 guards against: those buckets are
+rebuildable from `articles` and worthless once outside the window the linker measures rarity
+against. (It used to prune `term_snapshots` too; that table went with the term cloud,
+[ADR-0013](adr/0013-the-cloud-names-recently-updated-storylines.md).)
 
 **It reports and does not delete.** Point-in-time recovery protects against accidents, not against
 this job doing exactly what it was told — a legitimate prune noticed three months later is outside
@@ -1017,29 +1020,32 @@ this is the main thing the model adds rather than removes:
 
 ---
 
-## 10. Landing page — topic wordcloud
+## 10. Landing page — storyline wordcloud
 
-The last 24 hours' most-referenced topics, each word sized by how many unique articles reference it
-and how recently they did, and clicking a word runs that search. It doubles as the answer to cold
-start (§9.3): the landing page is never blank, and it gives users something to act on before they
-know what to type.
-
-I probed this feature's assumptions before specifying it (4 calls). The corpus mechanism works, and
-**the naive scoring does not** — see §10.3, which is the part worth reading. The probe exercised
-keywordless `/search`; the sample has since moved to `/latest-news` (below), which changes the cost
-arithmetic but none of the scoring findings — those are properties of headline corpora, not of the
-endpoint that fetched them.
+The storylines the last 24 hours **updated**, most recently updated first, each word being that
+storyline's label — "Fort Hood Crash", not "fort hood" — sized by how many articles the storyline
+gained inside the window, coloured by how recently it last moved, and clicking a word runs that name
+as a search. It doubles as the answer to cold start (§9.3): the landing page is never blank, and it
+gives users something to act on before they know what to type.
 
 **The window rolls; it does not reset.** The cloud covers `TREND_WINDOW_HOURS` (default 24) back from
-now, and an article's contribution decays with its age inside that window (§10.3). This replaces an
-earlier design in which the cloud aggregated a fixed `APP_TIMEZONE` calendar day and froze when the
-day closed — what that cost, and what the roll buys, is
-[ADR-0008](adr/0008-the-cloud-rolls-over-a-weighted-24-hour-window.md). `APP_TIMEZONE` does not
-disappear with it: article grouping still bounds a group by the local calendar day (§7.4,
-[ADR-0005](adr/0005-headline-tokens-not-embeddings-decide-article-grouping.md)). The cloud simply
-stops being the thing that needs a midnight.
+now, exactly as [ADR-0008](adr/0008-the-cloud-rolls-over-a-weighted-24-hour-window.md) made it —
+which retired an earlier design that aggregated a fixed `APP_TIMEZONE` calendar day and froze when
+the day closed. `APP_TIMEZONE` does not disappear with it: article grouping still bounds a group by
+the local calendar day (§7.4,
+[ADR-0005](adr/0005-headline-tokens-not-embeddings-decide-article-grouping.md)).
 
-### 10.1 Corpus — where the window's articles come from
+**What is in the window is an event, not a word.** The cloud used to draw *terms* — proper nouns and
+two-word phrases extracted from headlines, scored against a trailing per-term baseline and
+recomputed by the sampler. It draws storylines now
+([ADR-0013](adr/0013-the-cloud-names-recently-updated-storylines.md)), which is the same change of
+unit the timeline already made: a storyline is a persistent arc with a generated label
+([ADR-0011](adr/0011-a-storyline-is-a-persistent-arc-of-one-event.md)), so the cloud stopped
+defending a phrase of its own and started naming something the write path already maintains. The
+probe that shaped the term scorer is still worth reading (§10.3) — one of its findings survives as
+the only gate this cloud keeps, and the rest of it is why the unit changed.
+
+### 10.1 Corpus — where the window's storylines come from
 
 Demand-driven ingestion alone cannot feed this: a wordcloud must know what is prominent *before*
 anyone searches. So the corpus is a union of two sources:
@@ -1058,6 +1064,14 @@ anyone searches. So the corpus is a union of two sources:
    above it. Depth is deliberately modest: consecutive snapshots overlap, so this hour's page 5
    is roughly next hour's page 3, and deep pages mostly re-buy what cadence returns for free.
 
+**Articles are not yet a cloud, and what closes the gap is grouping.** Every write path into
+`articles` owes grouping a call (§14.3), grouping births and links storylines
+([ADR-0011](adr/0011-a-storyline-is-a-persistent-arc-of-one-event.md)), and the linker is what turns
+"forty articles arrived" into "this arc gained two groups". So the sampler's job is corpus and
+nothing else — it computes nothing the cloud reads — and an article ingested without tokens is worse
+here than it looks: it can never join a group, is invisible as a candidate to everything ingested
+after it, and therefore can never reach a storyline the cloud is able to name.
+
 A single snapshot buys ~40 articles where the old category-sliced `/search` sample bought a few
 hundred for 12–24 calls, so a single daily sample would starve the corpus. The budget freed by the
 cheaper call goes into **cadence** instead of depth: a sample is considered fresh for
@@ -1068,16 +1082,15 @@ the morning's news; the corpus accumulates across snapshots to the same few hund
 Successive samples overlap; overlap is free, because re-ingested articles collapse into their
 existing rows (§7.4) and only the genuinely new ones extend the corpus. A day with no visitors still
 costs nothing, so this stays consistent with §9 rather than smuggling a scheduler back in — the
-stored cloud is served instantly while a refresh runs behind it, reusing the same
+stored storylines are served instantly while a refresh runs behind them, reusing the same
 stale-while-revalidate and `meta.ingest` machinery as §6.5.
 
-Two things this trades away, named rather than hidden — both now measured (PROBE-FINDINGS 6c).
+Two things this trades away, named rather than hidden — both measured (PROBE-FINDINGS 6c).
 **The filter filters; it does not balance.** A probed two-category call came back 19:1 — newest-
 matching-any wins, so one busy category can crowd a multi-category sample. Category steering is
 *exclusion*, not *allocation*: a slow news day in one domain cannot be compensated by deliberately
-over-sampling another the way per-category `/search` calls could. The `df_domains >= 2` gate
-(§10.3) is what keeps a lopsided feed from minting a lopsided cloud, and paging deeper or splitting
-the curated list across 2–3 grouped calls are the levers if the skew shows up in practice. And
+over-sampling another the way per-category `/search` calls could. Paging deeper or splitting the
+curated list across 2–3 grouped calls are the levers if the skew shows up in practice. And
 **v2 is a second taxonomy living alongside v1**: its 16 category values are disjoint from
 `/v1/available/categories` (which must not be used to validate them), and since v1 and v2 serve
 the same articles under different labels (20/20 id overlap, relabeled), ingesting from both mixes
@@ -1090,263 +1103,203 @@ remains the one unmeasured input; the cadence knob absorbs it either way.
 a no-op in single-replica local dev, but without it the first concurrent requests across multiple
 Fargate tasks (§4.1) would each enqueue a sample. The waste is smaller than under the old 12–24 call
 design, but the 60/60s burst budget still says one election, not N. The key carries no day: cadence
-is now governed by the TTL alone, where the frozen-day design had to key the lock per day so that a
+is governed by the TTL alone, where the frozen-day design had to key the lock per day so that a
 rollover did not leave the new day's first visitor waiting out last night's TTL.
 
-**There is no midnight.** The window ends at `now` on every recompute, so the cloud is never emptier
+**There is no midnight.** The window ends at `now` on every read, so the cloud is never emptier
 at 5pm than at 9am and nothing has to be true of the local calendar for it to be right. This is what
 retires the old design's timezone problem rather than solving it: under a UTC calendar day a
 Vancouver afternoon was already tomorrow and the landing page went near-empty after about 5pm local,
 which is why `APP_TIMEZONE` existed here at all.
 
-**The aggregate is recomputed on each sample, and there is nothing to freeze.** Every recompute
-re-reads the window from `articles`, so a late-arriving article — a slow feed, a deferred backfill —
-counts from the moment it lands, at whatever weight its age gives it, and ages out of its own accord.
-The frozen-day design had to refuse those articles to keep its baseline reasonable about; a rolling
-window has no closed period for them to rewrite. What replaces the freeze is the **snapshot history**
-the baseline reads (§10.3): each recompute records its raw per-term counts under the hour it ran, and
-those rows are immutable once written. History is a record of what we computed, not a claim about
-what a period contained.
+**And there is nothing to recompute.** The window's contents *are* the answer, so a late-arriving
+article — a slow feed, a deferred backfill — counts the moment it lands and ages out of its own
+accord, and a storyline that gains an article at 14:03 outranks its neighbour at 14:04 with nothing
+having run in between. Under the term design this needed a per-window recompute and an immutable
+hourly history to give the baseline something stable to average; both are gone with the baseline
+(§10.4).
 
 One caveat carried over from the probe, sharper now: `/latest-news` is a snapshot of *this moment's*
 news, with no way to ask about earlier at all. The window's corpus is therefore an **accumulation of
 hourly snapshots plus whatever user searches stored** — a rolling record of what was prominent while
 people were looking, not a census of the last 24 hours. Hours with no visitors are simply absent.
-Worth saying plainly, because "top topics right now" implies more completeness than the source can
-give — though the roll does narrow the gap the old design had, where a day's cloud was carried
-disproportionately by whichever hours happened to be busy and stayed that way until midnight.
+Worth saying plainly, because "what's happening right now" implies more completeness than the source
+can give.
 
-### 10.2 Term extraction
+### 10.2 What a word is — a storyline's label
 
-Body text is unavailable (§2), so terms come from `title` + `description` only. This is "topics as
-they appear in headlines" — an honest limitation, and headlines are dense with topical nouns, so it
-works better than it sounds.
+A word in the cloud is a **storyline label**: two to five words naming an event, generated by the
+model when a storyline is promoted and regenerated on merge and drift
+([ADR-0011](adr/0011-a-storyline-is-a-persistent-arc-of-one-event.md), "Labels"), with a
+deterministic bigram fallback when the model is unavailable or refuses.
 
-Unigrams **and bigrams**: headlines are short, and "michigan senate" is a better topic than
-"michigan" plus "senate" counted separately — a phrase names the story more precisely than either
-word does, which is why §10.3 also lets a surviving phrase suppress the unigrams inside it.
-Tokenization must survive identifiers — my probe's regex shredded
-`CVE-2026-1234` into a `cve-` token that then ranked #1, which is exactly the class of bug that makes
-a cloud look broken.
+This is the change that retires §10.2's old contents — term extraction over `title` + `description`,
+unigrams and bigrams, stopped at two words by
+[ADR-0007](adr/0007-the-cloud-stops-at-two-word-phrases.md). None of that machinery is deleted; it
+moved one layer down and kept its readers. `headline-tokens.ts` (formerly `term-scoring.ts`) still
+owns the tokenizer that survives identifiers — the probe's regex shredded `CVE-2026-1234` into a
+`cve-` token that then ranked #1 — because **article grouping compares headlines through it** and
+would otherwise re-acquire that bug independently. It still owns the propriety gate (case evidence
+in running text) and the verb lexicon
+([ADR-0006](adr/0006-a-curated-verb-lexicon-keeps-predicates-out-of-the-cloud.md)), because the
+bigram label reads both: a label that states something rather than naming something is a headline
+with its middle removed, whether it was going into a cloud or into a gutter.
 
-**And it stops at two.** Trigrams were measured against the recorded corpora and refused
-([ADR-0007](adr/0007-the-cloud-stops-at-two-word-phrases.md)): 858 distinct three-grams yield one
-that clears the gates, and it is a restatement of a phrase already in the cloud. The refusal is
-structural rather than a small-sample result — a trigram's article set is a subset of both its
-bigrams', so it can only tie on merit, and it out-ranks them only by having a smaller baseline to
-divide by.
+What is gone is the *scorer* — `scoreTerms`, the per-domain cap, the baseline division, and the
+rule that a unigram inside a surviving bigram is suppressed. Those existed to rank extracted
+phrases against each other, and there are no longer any extracted phrases to rank.
 
-### 10.3 Scoring — why the obvious approach fails
+Two properties of labels shape the read below, and both come from ADR-0011:
 
-I ran naive document-frequency over an 80-article live sample. The top terms were:
+- **A label is presentation, never identity.** It regenerates as a storyline drifts, so nothing may
+  key off it — the cloud keys on the UUID and draws the label.
+- **Labels are deliberately non-unique.** Two storylines may be called the same thing; the dev
+  archive holds three "Trump Administration". A pill has room for a date qualifier and a timeline
+  can therefore show both. A cloud cannot: it would draw one word twice, at two sizes and two
+  colours, with one click behind both. So the API keeps **one word per label**, the most recently
+  updated claimant.
 
-```
-cve-, earlier, jenkins, plugin, attackers, permission, credentials, how, not, just, found, read
-```
+### 10.3 Selection — what enters the cloud, and what the two channels say
 
-Three distinct failures, all of which the design has to answer:
+A storyline enters the cloud when **at least one of its member articles was published inside the
+window**, in the language being asked for. "Updated" means exactly that and nothing softer: the arc
+gained coverage, measured on the articles themselves rather than on when we happened to see them.
 
-1. **A single-source burst captured the whole cloud.** A run of near-identical Jenkins security
-   advisories dominated. These were many *distinct, non-duplicate* articles, so the sighting→article
-   collapse (§7.4) does **not** catch it — a different problem from the 50×-duplicate finding, needing
-   a different fix.
-2. **Generic news vocabulary survived stopwording** — "earlier", "found", "read", "how", "just". These
-   are frequent in *all* news, so raw frequency can never distinguish them from real topics.
-3. **A tokenization artifact ranked first** (`cve-`).
+Four exclusions, three of which the surfaced pills already made (§7.3):
 
-So six mechanisms are **required for the first cut**, not deferred as polish:
+- **Aliases** (`merged_into is not null`) — a pointer with no coverage of its own; the survivor
+  carries it.
+- **Provisional** storylines — a storyline-of-one is the ordinary timeline slot, not a story
+  (ADR-0011's Lifecycle). Offering one says a single group is an event.
+- **Unlabelled** storylines — a label-less storyline renders perfectly well in a timeline, its slots
+  simply carrying no gutter label, but in a cloud the label *is* the word. `findSurfacedStorylines`
+  learned this by shipping without the rule: the browser showed eight pills reading "unlabelled
+  storyline" while the backfill's label pass was still running.
+- **Fewer than two distinct source domains over the whole arc.** This is the one mechanism that
+  survives the term scorer intact, and it survives because it was the one the probe proved
+  necessary.
 
-- **Distinct source domains, not just article count.** A term in 8 articles from one outlet is not a
-  topic of the day; a term in 8 articles across 6 outlets is. Terms need `df_domains >= 2` to appear
-  at all, which alone would have removed the Jenkins flood. Note this *extends* the stated goal —
-  unique-article count remains the displayed number and the size input, but distinct-domain breadth
-  gates and dampens it. Without that gate the feature does not work; flagging it rather than
-  silently redefining the metric.
-- **A rolling baseline.** Score the window's frequency against what that term normally does, so
-  perennial news vocabulary is suppressed and genuinely unusual terms rise. This is what makes the
-  cloud show *now* rather than *news in general*. Its input is the **hourly snapshot history**
-  (§10.4): every recompute records each surviving term's raw window count under the hour it ran, and
-  the baseline is the mean of those counts over the `BASELINE_WINDOW_DAYS` (default 7) of snapshots
-  ending one window-length ago. The exclusion is the point — a snapshot taken less than
-  `TREND_WINDOW_HOURS` ago shares most of its corpus with the live window, so including it would let
-  a term suppress itself. Two properties follow from sampling being visit-driven. Absence *within* a
-  recorded snapshot counts as a zero, because a snapshot we computed is evidence the term was not
-  prominent then; an hour with **no** snapshot is not an observation at all, so the divisor is the
-  number of snapshots actually recorded in the range, not the number of hours in it. And a genuine
-  one-day story is not one snapshot but roughly twenty-four consecutive ones, since the window drags
-  it along — so yesterday's big story arrives today already carrying a real baseline, which is the
-  suppression working, not a bug.
-- **A real stopword list** (plus min length, numeral and identifier filtering), not a hand-rolled set.
-  It carries a second class beyond generic news vocabulary: **wire services, honorifics, mastheads and
-  desk furniture** — `ap`, `rep`, `ceo`, `daily`. These defeat the breadth gate rather than merely
-  surviving frequency, because `LOS ANGELES (AP) —` opens a wire story whatever it is about, so two
-  outlets carrying AP copy look like two newsrooms choosing a word
-  ([ADR-0007](adr/0007-the-cloud-stops-at-two-word-phrases.md)).
-- **Every term must carry a proper noun.** The first live cloud confirmed what the
-  baseline can only fix a week in: generic vocabulary ("community", "finally", "rise") topped day
-  one. With only headline text to work from, propriety comes from case evidence in running text — a
-  term qualifies when it is capitalized mid-sentence at least once and NEVER seen lowercase, so
-  Title Case headlines prove nothing and prose betrays every common noun. **One qualifying word
-  anchors a phrase**: "michigan senate" and "trump tariffs" are topics, and the common word rides
-  along. Two common words adjacent are not — the second live cloud showed "slipped away" and
-  "secretly moved", verb phrases that survive stopwording, mean nothing as a topic, and lead
-  nowhere when clicked. This is a reversal: phrases were initially exempt on the strength of
-  "climate policy", and that example is the real cost — a topical phrase of two common nouns no
-  longer appears. Measured against the recorded latest-news sample, the exemption was paying for
-  `gas flows`, `flows rise`, `power play` and `shape tmk` to buy it, which is not a trade worth
-  keeping. Weekdays and months — grammatically proper, journalistically generic — are stopworded
-  instead, since no case evidence can catch them.
-- **No term may contain a verb.** The propriety gate above closed one junk class and opened
-  another: once one name could anchor a phrase, the rest of its headline came with it. Twelve of the
-  live cloud's forty-two terms were fragments of that shape, six a name beside a verb — "graham
-  advances", "trump slipped", "leaving turkey". A topic is a nominal; a name plus a verb is a
-  headline with its middle removed. The test cannot be morphological, because "funding" and "games"
-  wear the same `-ing` and `-s` as "giving" and "advances", so it is lexical: a curated list of news
-  verbs split by which inflection has nominalized
-  ([ADR-0006](adr/0006-a-curated-verb-lexicon-keeps-predicates-out-of-the-cloud.md), which records the
-  three corpus-evidence rules this beat and why). Corpus case outranks the lexicon, so "Sitting Bull"
-  survives, and a participle counts only after the first word, since in front it modifies ("armed
-  forces"). The sibling class — adjective or title plus a name, "president trump" and "late sen" —
-  is still open.
-- **A unigram subsumed by a surviving bigram is suppressed.** The live cloud showed "ben" beside
-  "ben carroll" — the same story twice. When a bigram survives every gate, any unigram that is one
-  of its words is dropped; the phrase is the more specific name for the topic.
+**The breadth gate, and why the probe still matters.** Naive document-frequency over a live
+80-article sample returned `cve-, earlier, jenkins, plugin, attackers, permission, credentials, how,
+not, just, found, read` — three failure classes: a single-source burst of near-identical Jenkins
+advisories captured the whole cloud, generic news vocabulary survived stopwording, and a
+tokenization artifact ranked first. The storyline unit answers the second and third by construction
+(a storyline cannot be "earlier", and the label is written by a model reading real headlines), but
+**not the first**: eight advisories from one newsroom are eight groups, and eight groups can link
+into a genuinely real arc that is nonetheless not what several newsrooms are covering. So a
+storyline needs `>= 2` distinct source domains to appear at all.
 
-**And an article's weight decays with its age.** A flat 24-hour window would rank a story that broke
-23 hours ago exactly level with one breaking now, and then drop it off a cliff an hour later — the
-cliff being visible precisely because the window slides continuously rather than in daily steps. So
-each article contributes
+Measured over the **whole arc**, unlike every other count here, and that asymmetry is deliberate:
+the question is whether several newsrooms have covered this event, which is a fact about the story.
+A three-week storyline that eleven outlets have carried is not disqualified because today's one new
+article came from one of them.
+
+**Two channels, one question each.** The term cloud folded recency, volume and breadth into a single
+score and gave font size the result, which meant a reader could not tell a busy old story from a
+quiet new one. Here they separate:
 
 ```
-w(age) = 0.5 ^ (age_hours / TERM_HALF_LIFE_HOURS)     TERM_HALF_LIFE_HOURS default 8
+order  = max(published) over the arc's articles inside the window, DESC   -- "how recently"
+size   ∝ sqrt(count of the arc's articles inside the window)              -- "how much"
 ```
 
-which is `1.0` for something published this minute and `≈0.125` at the 24-hour edge: still present,
-clearly outranked, and fading rather than vanishing. Exponential over linear because the interesting
-distinction is at the recent end — a linear ramp separates a 1-hour-old story from a 5-hour-old one
-by 17%, which is not a distinction a reader would recognise. Both knobs want tuning against real
-traffic, and they interact: a half-life much shorter than the window makes the older half of the
-window decorative, and one much longer makes the whole thing flat again.
+- **Recency is the ordering**, so it is also the palette (§10.5) and the accessible list's order.
+  There is no half-life and no decay: ADR-0008's `0.5 ^ (age / TERM_HALF_LIFE_HOURS)` existed to
+  keep a 23-hour-old term from ranking level with a breaking one *inside a single score*, and an
+  ordering answers that question directly. The 24-hour edge is a plain cliff again, which is
+  honest here in a way it was not for terms — a storyline that has not gained an article in a day
+  is not, on this page, happening.
+- **Size is the window's article count, not the arc's.** A storyline running since March would
+  otherwise be the biggest word on the board every day for a month, whatever happened today.
+- **The arc's total size gets no channel at all**, and appears in the `title` and the accessible
+  `<ol>` instead. It is the one fact that separates a three-week story from a three-hour one, and
+  no visual channel is legible as a number.
 
-Starting formula, explicitly expected to need tuning against real data:
+**What the cloud is only as good as: the labels.** A bad label is now a bad word on the landing
+page, where before the worst it could do was mis-name one timeline gutter. That raises the stakes on
+ADR-0011's labeler, its fallback, and the nightly label pass (§9.1).
 
-```
-score(term) = sqrt(df_domains) × weighted_df / (baseline + k)
-```
-
-with `weighted_df` summing `w(age)` over the **`articles`** carrying the term — never `sightings`,
-because the 50×-repeated link-roundup post would otherwise weight its headline terms 50 times and
-swamp everything. The collapse earns its keep twice.
-
-Additional guards: cap any single domain's contribution (default 3 articles — under weighting, its
-**most recent** three, which is the same rule read through the decay), and cap the cloud at ~40–50
-terms, beyond which it becomes visual mush.
-
-**The weight moves the size, never the number.** `df_articles` — the count the API returns as
-`uniqueArticles` and the accessible `<ol>` prints — stays the true, uncapped, unweighted number of
-distinct articles in the window. A reader who sees "14 articles" can go and find fourteen articles;
-a decayed 6.3 rounded to 6 would be a number that answers no question anyone asked. The same
-unweighted count is what the snapshot history records, so the baseline compares like with like
-across time instead of comparing a term against how recent it happened to be when last observed.
-
-**The baseline needs a week to exist**, which matters for launch: on day one it is empty and
-scoring collapses to the raw frequency I just showed produces garbage. So the day-one cloud must lean on
-the mechanisms that work immediately — the `df_domains >= 2` gate, the per-domain cap, the proper-noun
-gate on every term, and a shipped stopword list seeded with generic news vocabulary ("report", "says",
-"after", "found", "earlier"…) — with the baseline improving it over the first week. The propriety gate
-does most of what makes day one presentable: names, and the phrases built around them, carry a cloud
-on their own.
+**And a cold deployment stays empty longer than the term cloud did.** Forty unrelated articles yield
+terms; they yield forty *provisional storylines of one*, which this cloud refuses. So it fills once
+the linker has seen enough coverage for second groups to attach, and the empty state says so rather
+than drawing nothing and letting the reader assume a broken board.
 
 ### 10.4 Storage and API
 
+**No tables.** The cloud is a query over `storylines`, `storyline_groups` and `articles` — rows the
+linker, the labeler and the ingest path already maintain — so there is nothing to store, nothing to
+replace wholesale, and nothing that can be stale relative to what it describes. Migration 0014 drops
+the three tables the term cloud needed and says what that cost:
+
 ```sql
--- The live cloud: ONE row set per language, replaced wholesale on each recompute.
--- There is no day column, because there is no day — `window_start`/`window_end`
--- record which 24 hours these numbers describe, and the next recompute replaces them.
-CREATE TABLE trending_terms (
-  language     text        NOT NULL,
-  term         text        NOT NULL,
-  is_bigram    boolean     NOT NULL,
-  df_articles  int         NOT NULL,   -- distinct articles (the displayed "unique articles")
-  df_domains   int         NOT NULL,   -- distinct source domains
-  weighted_df  real        NOT NULL,   -- recency-weighted and per-domain-capped; the size input
-  score        real        NOT NULL,
-  window_start timestamptz NOT NULL,
-  window_end   timestamptz NOT NULL,
-  PRIMARY KEY (language, term)
-);
-CREATE INDEX trending_terms_top_idx ON trending_terms (language, score DESC);
+DROP TABLE trending_terms;   -- the computed cloud, one row set per language
+DROP TABLE term_snapshots;   -- hourly RAW per-term counts, the baseline's only input
+DROP TABLE term_baseline;    -- the trailing per-term mean; the suppressor for perennial vocabulary
 
--- Hourly snapshot history — the baseline's only input, and the only thing here
--- that accumulates. RAW counts: never weighted, never capped, so a mean over them
--- compares like with like (§10.3). Immutable once written; pruned past the window.
-CREATE TABLE term_snapshots (
-  bucket_hour timestamptz NOT NULL,
-  language    text        NOT NULL,
-  term        text        NOT NULL,
-  df_articles int         NOT NULL,
-  PRIMARY KEY (bucket_hour, language, term)
-);
-CREATE INDEX term_snapshots_prune_idx ON term_snapshots (bucket_hour);
-
--- Materialized trailing mean per term, recomputed from term_snapshots on each
--- sample; the suppressor for generic vocabulary. Read whole into memory to score.
-CREATE TABLE term_baseline (
-  language text, term text, mean_df real, updated_at timestamptz,
-  PRIMARY KEY (language, term)
-);
+-- Added in their place: every cloud read is language-scoped, and the aggregate now runs
+-- on the request path rather than in the sampler, so the language goes in front of the range.
+CREATE INDEX articles_language_window_idx ON articles (language, published DESC);
 ```
 
-Two recomputes inside the same hour write the same `bucket_hour`; the later one wins by upsert, so
-the history holds at most one observation per hour per language however often the sampler runs.
-Snapshots older than `BASELINE_WINDOW_DAYS + 1` are pruned by the nightly chore (§7.5) — the one
-table here that would otherwise grow without bound, and unlike article data it is derived, so
-deleting it is not the irreversible act ADR-0001 guards against.
+All three were derived from `articles`, so no
+[ADR-0001](adr/0001-postgres-is-the-archive-beyond-the-upstream-lookback.md) exemption is needed —
+but the baseline's accumulated history took a week of real traffic to earn and cannot be rebuilt,
+which is why the migration's `down` restores the schema **empty** and records that plainly. With
+`term_snapshots` goes §7.5's one deleting prune; the nightly chore now prunes only the storyline
+linker's trailing corpus.
 
-`GET /api/v1/trending?language=&limit=50` → `{ windowStart, windowEnd, language, terms: [{ term,
-isBigram, score, uniqueArticles, sourceCount }], meta }`, with the same `meta.ingest` block as §6.1
-so the front end can show a warming cloud with the machinery it already has. Redis-cached under
-`<queue>:trending:<language>` for ~15 minutes — scoped to the ingest queue exactly as its pending
-keys are, so a test run and a local dev server sharing one Redis cannot write each other's cloud or
-each other's sample lock.
+The read itself is one aggregate: a windowed join for the recency and the window count, a lateral for
+the arc's size and breadth, the exclusions in `where`, ordered by `max(published) DESC, id` and
+limited (`packages/storage/src/trending-storylines.ts`).
 
-**What is cached is the whole ranked list, and `limit` slices it on the way out.** The key names a
-language and nothing else, so caching one caller's slice lets a `?limit=4` request serve a four-term
-cloud to everyone behind it for the next fifteen minutes — observed, not hypothetical. Terms are
-ordered by score then term (§10.5), which is what makes every limit a prefix of one list rather than
-a different question, so readers asking for different amounts never disagree about what ranks first.
+`GET /api/v1/trending?language=&limit=50` → `{ windowStart, windowEnd, language, storylines: [{ id,
+label, windowArticles, size, sourceCount, lastUpdated }], meta }`, with the same `meta.ingest` block
+as §6.1 so the front end can show a warming cloud with the machinery it already has. Redis-cached
+under `<queue>:trending:<language>` for ~15 minutes — scoped to the ingest queue exactly as its
+pending keys are, so a test run and a local dev server sharing one Redis cannot write each other's
+cloud or each other's sample lock. The contract changed wholesale with the unit: `term`, `isBigram`,
+`uniqueArticles` and `score` are gone, and there is no compatibility shim — the front end and the
+API ship together.
+
+**What is cached is the whole list, and `limit` slices it on the way out.** The key names a
+language and nothing else, so caching one caller's slice lets a `?limit=4` request serve a four-word
+cloud to everyone behind it for the next fifteen minutes — observed, not hypothetical. Storylines
+are ordered by recency then id, which is what makes every limit a prefix of one list rather than a
+different question, so readers asking for different amounts never disagree about what leads.
 
 **There is no `day` parameter and no archive read.** The old contract took `?day=` and could serve a
-closed day; a rolling window has no addressable periods, and the snapshot history is deliberately not
-a substitute — it stores raw counts for the baseline, not scored clouds, so it cannot reconstruct
-what the cloud showed at 3pm on Tuesday. That is a capability the roll gives up
-([ADR-0008](adr/0008-the-cloud-rolls-over-a-weighted-24-hour-window.md)), and nothing in v1 asked for
-it. The cache TTL is now the only thing that makes two readers a few minutes apart see the same
-cloud, where the day key used to guarantee it for the whole day.
+closed day; a rolling window has no addressable periods
+([ADR-0008](adr/0008-the-cloud-rolls-over-a-weighted-24-hour-window.md)). A stale `?day=` is
+stripped rather than rejected, so an old bookmark lands on the live cloud. The cache TTL is the only
+thing that makes two readers a few minutes apart see the same cloud.
 
 ### 10.5 Rendering
 
 `d3-cloud` for spiral layout and collision handling; hand-rolling that is a poor use of effort.
 
-- Font size ∝ **`sqrt(score)`**, clamped to a `[12px, 56px]` range. Linear scaling makes the top term
-  absurd and the tail illegible.
+- Font size ∝ **`sqrt(windowArticles)`**, clamped to a `[12px, 56px]` range. Linear scaling makes
+  the busiest storyline absurd and the tail illegible.
 - **And clamped again by LENGTH**, because d3-cloud drops a word too wide for the board instead of
-  shrinking it — silently, and the top-ranked term meets the bound first, since rank is what assigns
-  the largest font. Measured: `artificial intelligence` (23 chars) never places at 56px on a 700px
-  board. No term the recorded corpora emit is long enough to hit this, so the clamp is a guard, not
-  a repair; the word would stay in the `<ol>` either way, so the two views would disagree with
-  nothing to say why ([ADR-0007](adr/0007-the-cloud-stops-at-two-word-phrases.md)).
-- Each word is a real `<button>` that navigates to `/?q=<term>` — so the cloud feeds the
-  demand-driven ingestion loop, and browsing becomes the mechanism that populates topics.
+  shrinking it — silently. Under the term cloud this was a guard that no recorded corpus could
+  trip; a label is two to five WORDS, so it is now routinely load-bearing. Measured:
+  `artificial intelligence` (23 chars) never places at 56px on a 700px board.
+- **Colour is the warm→cool ramp keyed to recency rank**: the freshest arc burns red, the quietest
+  end of the window cools to blue. It read score rank before, which conflated volume with
+  freshness. Decorative — the cloud is `aria-hidden` — and colour never carries meaning on its own.
+- Each word is a real `<button>` that navigates to `/?q=<label>`, so the cloud feeds the
+  demand-driven ingestion loop and browsing becomes the mechanism that populates topics. **This is
+  the one place in the product where a label's words are executed as a search**; the surfaced pills
+  and the timeline gutter open the storyline by UUID. The reversal, and what it costs — the search
+  is a keyword match over headlines, not the arc — is
+  [ADR-0013](adr/0013-the-cloud-names-recently-updated-storylines.md).
 - **Accessibility is not optional here.** A wordcloud is close to unusable for screen readers and
-  keyboard-only navigation, so the same data renders as an ordered `<ol>` of terms with their article
-  counts — visually hidden by default, toggleable for everyone (it is genuinely useful sighted, too).
-  Font size is decorative; the count is the accessible signal. Colour never carries meaning on its own.
-- Deterministic layout seed **per `language`**, so the cloud does not reshuffle on every poll. This
-  matters more than it did: the seed used to key on `(day, language)` and the day was stable for
-  hours, whereas a rolling window changes its `windowEnd` on every single response. Seeding on
-  anything derived from the window would reshuffle the whole board each poll — the layout must be
-  a function of the terms, not of when they were counted.
+  keyboard-only navigation, so the same data renders as an ordered `<ol>` of labels with their
+  counts and update times — visually hidden by default, toggleable for everyone (it is genuinely
+  useful sighted, too). Size and colour are decorative; the numbers and "updated 2h ago" are the
+  accessible signal, and the arc's total is stated only there.
+- Deterministic layout seed **per `language`**, so the cloud does not reshuffle on every poll.
+  Seeding on anything derived from the window — `windowEnd`, `meta.asOf` — would reshuffle the whole
+  board each poll: the layout must be a function of the words, not of when they were counted.
 
 ---
 
@@ -1400,10 +1353,10 @@ cloud, where the day key used to guarantee it for the whole day.
   | Fixture | Guards | Assertions |
   | --- | --- | --- |
   | `search-climate-duplicates.json`<br/>100 sightings, 42 unique URLs, one URL ×50 | The collapse (§7.4) | 100 rows in `sightings` → **42** rows in `articles`; the ×50 article has `sighting_count = 50`; re-ingesting the same payload leaves both counts unchanged; a `limit=25` timeline page returns ≤25 **slots**, never 25 sightings — 25 articles before grouping, and 25 groups after (§14.3), which is the same guarantee about page size; `dedup_key` normalization neither over- nor under-collapses (42 → 42) |
-  | `search-keywordless-category-sample.json`<br/>80 articles incl. a single-source Jenkins CVE burst | Term scoring (§10.3) | `cve-`-style identifier fragments never appear as terms; no term whose `df_domains < 2` is emitted, so the Jenkins burst is absent from the top 50; generic vocabulary (`earlier`, `found`, `read`, `how`) is absent via the stopword list; generic non-proper unigrams (`set`, `use`, `learn`, `development`) are absent via the propriety gate while named entities (`ai`) and phrases (`donald trump`, subsuming the bare `trump`) survive; **with `term_baseline` empty** the top 50 is still free of all four failure classes — the day-one case (§10.3) |
+  | `search-keywordless-category-sample.json`<br/>80 articles incl. a single-source Jenkins CVE burst | The headline tokenizer and its gates (§10.2), which grouping and the bigram label read | `cve-`-style identifier fragments and anything containing a digit never survive tokenization; generic vocabulary (`earlier`, `found`, `read`, `how`) is absent via the stopword list; wire-service and desk furniture (`angeles ap`, `ap`, `ceo`, `daily`, `rep`) is absent while named entities (`ai`, `los angeles`) and phrases (`donald trump`) survive; a name beside a verb (`kelowna advances`, `leaving kelowna`) is refused while deverbal nouns (`kelowna funding`, `kelowna games`) are kept. Written against `scoreTerms` and re-pointed when the cloud stopped drawing terms (ADR-0013): the classes are properties of headline text, not of the cloud |
   | `error-and-reference-bodies.json` | Client error taxonomy (§5.3) | each `400` maps to `CurrentsInvalidQueryError` with `details.errors` preserved; `401` → `CurrentsAuthError`; a non-JSON `403` → `CurrentsBlockedError`, **not** an auth error; `{"status":"ok","news":[]}` → `isLastPage: true`, not an error; reference maps parse as name→code with values used verbatim |
 
-  The scorer test asserts against *failure classes*, not an expected term list — the day's news is not
+  That test asserts against *failure classes*, not an expected token list — the day's news is not
   reproducible, and pinning exact output would make the test a snapshot of one afternoon rather than a
   check on the mechanisms.
 
@@ -1424,7 +1377,7 @@ cloud, where the day key used to guarantee it for the whole day.
 | 3 | Query Service: canonicalization, coverage-gap planning with adaptive subdivision, single-flight, Redis page cache, **plus the in-process job queue and `meta.ingest` contract** — the deadline-bounded fill (§6.3) produces deferred work by construction, so the queue lands here, not later. | ✅ |
 | 4 | Front end: search → timeline → infinite scroll → freshness states → progressive fill (§6.5). | ✅ |
 | 5 | Refresh-on-read, adaptive subdivision backfill, budget guards (§9.4), retention, metrics. | ✅ |
-| 5b | **Wordcloud (§10):** breadth sample, term aggregation over a rolling recency-weighted 24h window with domain-breadth gating and a snapshot-fed baseline, `/api/v1/trending`, d3-cloud landing page with accessible list equivalent. Scorer tested against `fixtures/search-keywordless-category-sample.json` including the empty-baseline day-one case. | ✅ |
+| 5b | **Wordcloud (§10):** breadth sample, term aggregation over a rolling recency-weighted 24h window with domain-breadth gating and a snapshot-fed baseline, `/api/v1/trending`, d3-cloud landing page with accessible list equivalent. Scorer tested against `fixtures/search-keywordless-category-sample.json` including the empty-baseline day-one case. **The terms have since been replaced by storyline labels** ([ADR-0013](adr/0013-the-cloud-names-recently-updated-storylines.md)): the sample, the rolling window, the breadth gate, the API shape and the accessible list survive; the scorer, the baseline and their three tables do not. | ✅ |
 | 5d | **Grouping maintenance:** `articles.tokens_version`, and `pnpm regroup [--days=N] [--tokens-only]` to re-derive stored tokens and re-run the grouping decision for groups of one after a rule change (ADR-0005). | ✅ |
 | 5c | **Article grouping (§14.3):** `group_id` / `group_published` / `title_tokens` on `articles`, write-time grouping after the collapse, the keyset moved onto the group axis, per-topic representative from the source-authority list, and the "related" disclosure in the timeline. | ✅ |
 | 5e | **Storylines:** day-clustered slots (ADR-0009), then the persistent arc that superseded them (ADR-0011) — `storylines` / `storyline_days`, the linker, bridges and auto-merge, the timeline paged over storyline-days. Migration 0012 dropped the day-bounded model and the flag that chose between them. | ✅ |
@@ -1484,7 +1437,11 @@ ceiling, with the stopword class and the render bound that came out of measuring
 ADR, being cheap to reverse: `DEFAULT_LANGUAGE=en` (§6.1) and no coverage-gap map (§1). Two entries
 that were on this list — `APP_TIMEZONE` rather than UTC for the cloud's day, and closed days freeze —
 have since been reversed and needed an ADR after all: the cloud rolls over a weighted 24-hour window
-([0008](adr/0008-the-cloud-rolls-over-a-weighted-24-hour-window.md)), which retires both.
+([0008](adr/0008-the-cloud-rolls-over-a-weighted-24-hour-window.md)), which retires both. And the
+unit those four ADRs were about — the extracted term — was itself replaced by the storyline label
+([0013](adr/0013-the-cloud-names-recently-updated-storylines.md)), which keeps 0006's and 0007's
+findings as gates on the tokenizer that grouping and the bigram label share, and keeps 0008's roll
+exactly as it stands.
 
 Resolved by decision: **deployment target is AWS** (ECS Fargate + RDS + ElastiCache), with Docker
 Compose as the local development environment (§4.1). Correcting the earlier claim that the deployment
@@ -1547,7 +1504,7 @@ Still open:
      badge — the same pattern ADR-0002 already uses for an article's earliest sighting.
    - **Groups are global; the representative is per-topic.** A global headline can surface an article
      that never matched the topic the user searched, hiding the matching one under "related".
-   - **`df_articles` does not become `df_groups`.** It is the size input *and* the displayed number
+   - **A cloud count is over ARTICLES, not groups.** It is the size input *and* the displayed number
      (§10.3); the cloud/timeline count mismatch is a labelling problem, fixable in the timeline header.
    - **Time buckets the similarity, and bounds the drift.** Candidates come from the same
      `APP_TIMEZONE` calendar day (§10.1's rule, not UTC), and a new article is compared against one
@@ -1575,8 +1532,9 @@ Still open:
      articles.
 
    - **Plurals are folded before comparison, in grouping only.** `chiefs` and `chief` are the same
-     word when asking whether two headlines describe one story; they are two different terms in the
-     cloud, where a term is a surface form (§10.3). So the stemmer sits over the shared tokenizer in
+     word when asking whether two headlines describe one story; they are two different surface forms
+     everywhere else, and the label merge's grounding guard folds them again for its own question
+     (§10.2). So the stemmer sits over the shared tokenizer in
      grouping and `contentTokens` still returns what was written. Plurals only: measured at +44
      grouped articles with no new single-outlet merges, where `-ing`/`-ed` stripping bought less and
      risked more (ADR-0005).
@@ -1665,15 +1623,19 @@ Still open:
    in a single sitting: how much of the ~20-item feed is new after an hour. Cheap to measure once
    the sampler runs (compare consecutive samples' ids in the logs); `SAMPLE_REFRESH_MINUTES` is the
    knob it informs.
-7. **Term variants in the cloud** — "China" and "Chinese" can both survive §10.3's gates and occupy
-   two slots for one story, as can "sanction"/"sanctions". Designed and **not built**: the cost was
-   out of proportion to the benefit. Recorded because the shape of the answer is not obvious and the
-   question will recur.
+7. **Term variants in the cloud** — ~~"China" and "Chinese" can both survive §10.3's gates and occupy
+   two slots for one story, as can "sanction"/"sanctions"~~. **Retired by
+   [ADR-0013](adr/0013-the-cloud-names-recently-updated-storylines.md)**: the cloud draws storyline
+   labels, so there are no unigrams to be variants of, and one word per label is enforced by the read
+   (§10.2). Kept below because the reasoning is about *when orthography and embeddings may be trusted
+   to mean "the same thing"*, which the label-agreement merge asks in its own form (ADR-0011), and
+   because the question will recur. Designed and **not built**: the cost was out of proportion to the
+   benefit.
 
    The workable design was: at read time, merge two unigrams when they share a 4-character prefix
    **and** their embeddings exceed a measured cosine threshold; the higher-ranked term survives, the
-   other is dropped with no transfer of counts (matching the bigram-subsumption rule in §10.3), with
-   over-fetch from `trending_terms` to refill the freed slot. Both conditions are load-bearing and cover
+   other is dropped with no transfer of counts (matching the bigram-subsumption rule the term scorer
+   applied), with over-fetch from `trending_terms` to refill the freed slot. Both conditions are load-bearing and cover
    each other's blind spot: orthography alone merges `iran`/`iraq` and `austria`/`australia`;
    embeddings alone merge `trump`/`biden` and `israel`/`palestine`, because they measure *relatedness*,
    not *sameness*. Neither is safe on its own, which is why the cheap version of this feature does

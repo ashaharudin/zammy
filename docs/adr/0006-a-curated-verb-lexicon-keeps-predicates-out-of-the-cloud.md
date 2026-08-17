@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted (the cloud stopped drawing terms in ADR-0013; the lexicon still gates the bigram label)
 ---
 
 # A curated verb lexicon keeps predicates out of the cloud

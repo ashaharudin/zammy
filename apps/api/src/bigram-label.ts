@@ -1,5 +1,5 @@
 import { singular } from "./grouping.js";
-import { contentTokens, isVerb, properNounEvidence } from "./term-scoring.js";
+import { contentTokens, isVerb, properNounEvidence } from "./headline-tokens.js";
 
 /**
  * The BIGRAM LABEL: two adjacent words lifted from a storyline's headlines,

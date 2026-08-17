@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0013 (the cloud draws storyline labels, not terms; the stopword and desk-furniture findings still gate the tokenizer)
 ---
 
 # The cloud stops at two-word phrases
