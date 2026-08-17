@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Article } from "@zammy/shared";
-import { deriveDedupKey, type Sighting } from "@zammy/currents-client";
+import { deriveDedupKey, type Sighting } from "@zammy/news-client";
 import { ingestSightings, upsertTopic } from "./ingest.js";
 import { migrateToLatest } from "./migrator.js";
 import { readStorylineTimelinePage, type StorylineTimelinePage } from "./storyline-timeline.js";
@@ -203,6 +203,8 @@ describe("a storyline's day is one slot in the timeline", () => {
   const story = (id: string, url: string, published: string, title: string): Sighting => ({
     id,
     url,
+    provider: "currents",
+    providerSightingId: url,
     dedupKey: deriveDedupKey(url),
     title,
     description: null,
@@ -366,6 +368,8 @@ describe("slots sharing a position", () => {
   const story = (id: string, url: string, published: string): Sighting => ({
     id,
     url,
+    provider: "currents",
+    providerSightingId: url,
     dedupKey: deriveDedupKey(url),
     title: `story at ${url}`,
     description: null,

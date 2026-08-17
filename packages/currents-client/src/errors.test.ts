@@ -2,13 +2,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
-  CurrentsAuthError,
-  CurrentsBlockedError,
-  CurrentsInvalidQueryError,
-  CurrentsQuotaError,
-  CurrentsSchemaError,
-  CurrentsUpstreamError,
-} from "./errors.js";
+  NewsAuthError,
+  NewsBlockedError,
+  NewsInvalidQueryError,
+  NewsQuotaError,
+  NewsSchemaError,
+  NewsUpstreamError,
+} from "@zammy/news-client";
 import { mapErrorResponse } from "./map-error.js";
 import { RawCategories, RawLanguages, RawRegions } from "./raw.js";
 import { FIXTURES_DIR, makeClient, quotaHeaders, stubFetch } from "./test-support.js";
@@ -55,16 +55,16 @@ describe("400 — a bug in our query construction", () => {
   ] as const;
 
   for (const [key, expectedField, expectedMessage] of cases) {
-    it(`maps ${key} to CurrentsInvalidQueryError preserving details.errors`, () => {
+    it(`maps ${key} to NewsInvalidQueryError preserving details.errors`, () => {
       const error = mapErrorResponse({
         status: 400,
         bodyText: asBody(fixture[key]),
       });
 
-      expect(error).toBeInstanceOf(CurrentsInvalidQueryError);
+      expect(error).toBeInstanceOf(NewsInvalidQueryError);
       expect(error.retryable).toBe(false);
 
-      const fieldErrors = (error as CurrentsInvalidQueryError).fieldErrors;
+      const fieldErrors = (error as NewsInvalidQueryError).fieldErrors;
       expect(Object.keys(fieldErrors)).toContain(expectedField);
       expect(fieldErrors[expectedField]).toMatch(expectedMessage);
 
@@ -85,14 +85,14 @@ describe("400 — a bug in our query construction", () => {
 });
 
 describe("401 — an operator problem", () => {
-  it("maps the recorded body to CurrentsAuthError", () => {
+  it("maps the recorded body to NewsAuthError", () => {
     const error = mapErrorResponse({
       status: 401,
       bodyText: asBody(fixture.unauthorized_401),
     });
 
-    expect(error).toBeInstanceOf(CurrentsAuthError);
-    expect(error).not.toBeInstanceOf(CurrentsBlockedError);
+    expect(error).toBeInstanceOf(NewsAuthError);
+    expect(error).not.toBeInstanceOf(NewsBlockedError);
     expect(error.message).toContain("Invalid token");
     expect(error.retryable).toBe(false);
   });
@@ -107,11 +107,11 @@ describe("403 non-JSON — Cloudflare, NOT an auth failure", () => {
     "<body>error code: 1010</body></html>",
   ].join("");
 
-  it("maps to CurrentsBlockedError", () => {
+  it("maps to NewsBlockedError", () => {
     const error = mapErrorResponse({ status: 403, bodyText: cloudflareBody });
 
-    expect(error).toBeInstanceOf(CurrentsBlockedError);
-    expect(error).not.toBeInstanceOf(CurrentsAuthError);
+    expect(error).toBeInstanceOf(NewsBlockedError);
+    expect(error).not.toBeInstanceOf(NewsAuthError);
     expect(error.retryable).toBe(false);
   });
 
@@ -123,39 +123,39 @@ describe("403 non-JSON — Cloudflare, NOT an auth failure", () => {
 
   it("treats an empty or plain-text 403 body as a block too", () => {
     expect(mapErrorResponse({ status: 403, bodyText: "" })).toBeInstanceOf(
-      CurrentsBlockedError,
+      NewsBlockedError,
     );
     expect(mapErrorResponse({ status: 403, bodyText: "denied" })).toBeInstanceOf(
-      CurrentsBlockedError,
+      NewsBlockedError,
     );
   });
 });
 
 describe("429 and 5xx — the retryable ones", () => {
-  it("maps 429 to CurrentsQuotaError, carrying the reset time", () => {
+  it("maps 429 to NewsQuotaError, carrying the reset time", () => {
     const error = mapErrorResponse({
       status: 429,
       bodyText: JSON.stringify({ status: "429", msg: "Too many requests" }),
       headers: new Headers({ "x-ratelimit-reset-time": "2026-08-05T00:00:00+00:00" }),
     });
 
-    expect(error).toBeInstanceOf(CurrentsQuotaError);
-    expect((error as CurrentsQuotaError).resetAt?.toISOString()).toBe(
+    expect(error).toBeInstanceOf(NewsQuotaError);
+    expect((error as NewsQuotaError).resetAt?.toISOString()).toBe(
       "2026-08-05T00:00:00.000Z",
     );
     expect(error.retryable).toBe(true);
   });
 
-  it("maps 5xx to CurrentsUpstreamError, retryable", () => {
+  it("maps 5xx to NewsUpstreamError, retryable", () => {
     const error = mapErrorResponse({ status: 503, bodyText: "gateway down" });
-    expect(error).toBeInstanceOf(CurrentsUpstreamError);
-    expect((error as CurrentsUpstreamError).status).toBe(503);
+    expect(error).toBeInstanceOf(NewsUpstreamError);
+    expect((error as NewsUpstreamError).status).toBe(503);
     expect(error.retryable).toBe(true);
   });
 
   it("treats an unexpected 4xx as our bug, never as retryable", () => {
     const error = mapErrorResponse({ status: 404, bodyText: "not found" });
-    expect(error).toBeInstanceOf(CurrentsInvalidQueryError);
+    expect(error).toBeInstanceOf(NewsInvalidQueryError);
     expect(error.retryable).toBe(false);
   });
 });
@@ -179,7 +179,7 @@ describe("past-end page — an end signal, not an error", () => {
     const client = makeClient({ fetch });
 
     await expect(client.search({ keywords: ["climate"] })).rejects.toBeInstanceOf(
-      CurrentsSchemaError,
+      NewsSchemaError,
     );
   });
 });
@@ -224,7 +224,7 @@ describe("reference bodies — name→code maps, values used verbatim", () => {
 });
 
 describe("v2 latest-news 400 — the recorded invalid-category body (PROBE-FINDINGS 6c)", () => {
-  it("maps to CurrentsInvalidQueryError with the taxonomy list preserved", () => {
+  it("maps to NewsInvalidQueryError with the taxonomy list preserved", () => {
     const recorded = JSON.parse(
       readFileSync(join(FIXTURES_DIR, "latest-news-v2-sample.json"), "utf8"),
     ) as { error_bodies: { v2_invalid_category_400: unknown } };
@@ -234,9 +234,9 @@ describe("v2 latest-news 400 — the recorded invalid-category body (PROBE-FINDI
       bodyText: asBody(recorded.error_bodies.v2_invalid_category_400),
     });
 
-    expect(error).toBeInstanceOf(CurrentsInvalidQueryError);
+    expect(error).toBeInstanceOf(NewsInvalidQueryError);
     expect(error.retryable).toBe(false);
-    const fieldErrors = (error as CurrentsInvalidQueryError).fieldErrors;
+    const fieldErrors = (error as NewsInvalidQueryError).fieldErrors;
     // The allowed-values list IS the taxonomy documentation — losing it turns
     // a one-line diagnosis into a hunt (ARCHITECTURE 5.3).
     expect(fieldErrors.category).toMatch(/science_technology/);

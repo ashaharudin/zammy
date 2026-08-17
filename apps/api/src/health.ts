@@ -4,6 +4,7 @@ import type { Pool } from "pg";
 // rather than the class under NodeNext resolution.
 import type { Redis } from "ioredis";
 import type { CurrentsClient } from "@zammy/currents-client";
+import type { QuotaView } from "@zammy/news-client";
 
 interface HealthDeps {
   pool: Pool;
@@ -33,10 +34,11 @@ export function registerHealthRoutes(app: FastifyInstance, deps: HealthDeps): vo
   app.get("/healthz", async () => ({ status: "ok" }));
 
   app.get("/readyz", async (_request, reply) => {
-    const [postgres, redis, quota] = await Promise.all([
+    const [postgres, redis, quota, providers] = await Promise.all([
       check(() => deps.pool.query("SELECT 1")),
       check(() => deps.redis.ping()),
       deps.currents.quota(),
+      quotaByProvider(deps.currents),
     ]);
 
     // Redis down is survivable; Postgres down is not.
@@ -53,9 +55,44 @@ export function registerHealthRoutes(app: FastifyInstance, deps: HealthDeps): vo
         burstRemaining: quota.burstRemaining,
         resetAt: quota.resetAt?.toISOString() ?? null,
         observed: quota.observed !== null,
+        // The top-level numbers stay the coverage-bearing provider's, so this
+        // field keeps meaning what it always did. `providers` is additive: a
+        // supplement running out narrows breadth rather than stopping the
+        // timeline, and folding its much smaller budget into the headline would
+        // make a healthy system look exhausted every afternoon.
+        providers,
       },
     });
   });
+}
+
+/**
+ * Per-provider budgets, when there is more than one provider to report.
+ *
+ * Feature-detected rather than typed into the client interface: a single-provider
+ * deployment returns its own client bare, and `NewsClient` should not carry a
+ * method that only the composite can answer.
+ */
+async function quotaByProvider(
+  client: CurrentsClient,
+): Promise<Record<string, unknown> | null> {
+  const composite = client as CurrentsClient & {
+    quotaByProvider?: () => Promise<Record<string, QuotaView>>;
+  };
+  if (typeof composite.quotaByProvider !== "function") return null;
+
+  const byProvider = await composite.quotaByProvider();
+  return Object.fromEntries(
+    Object.entries(byProvider).map(([provider, view]) => [
+      provider,
+      {
+        dailyRemaining: view.dailyRemaining,
+        burstRemaining: view.burstRemaining,
+        resetAt: view.resetAt?.toISOString() ?? null,
+        observed: view.observed !== null,
+      },
+    ]),
+  );
 }
 
 async function check(

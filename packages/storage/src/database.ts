@@ -29,12 +29,18 @@ type DefaultedTimestamp = ColumnType<Date, Date | string | undefined, Date | str
  * would violate it.
  */
 export interface SightingsTable {
-  /** Upstream UUID. Unique per emission, and NOT an identity for the story. */
+  /**
+   * Sighting identity, unique across providers and NOT an identity for the
+   * story. Currents' own UUID where it sent one; a UUIDv5 derived from
+   * `provider:id` where it did not (migration 0013).
+   */
   id: string;
   article_id: string;
   dedup_key: Buffer;
   published: Timestamp;
   first_seen_at: Generated<Date>;
+  /** Which upstream reported this emission. Exact, one row per emission. */
+  provider: Generated<string>;
   /** Original payload; lets us re-normalize without refetching. */
   raw: ColumnType<unknown, string, string>;
 }
@@ -58,6 +64,13 @@ export interface ArticlesTable {
   /** Undocumented upstream field, kept verbatim (PROBE-FINDINGS 1). */
   source_category: string[];
   source_domain: string | null;
+  /**
+   * Which upstream reported the EARLIEST sighting, following the same rule as
+   * every other denormalized field here (ADR-0002). "Who got there first", not
+   * "who is authoritative": an article can be seen by both providers, and
+   * `sightings.provider` is where the exact record lives.
+   */
+  provider: Generated<string>;
   /** EARLIEST sighting; the article's own place in time. */
   published: Timestamp;
   /** Most recent sighting. */
@@ -116,8 +129,13 @@ export interface TopicArticlesTable {
 
 /**
  * Which time windows have actually been fetched for a topic — what makes "do I
- * need an upstream call?" an exact question instead of a guess. Written by the
- * Phase 3 query planner; the table exists now because the schema ships whole.
+ * need an upstream call?" an exact question instead of a guess (ADR-0001).
+ * Written by the query planner in `apps/api` as each gap segment completes.
+ *
+ * Per TOPIC, not per provider, which is the one thing to know before reading a
+ * row as "we have everything for this span". It means the span was fetched, not
+ * that every configured provider fetched it — see ADR-0012 for why a
+ * best-effort second provider is deliberately not allowed to write here.
  */
 export interface TopicCoverageTable {
   fingerprint: Buffer;

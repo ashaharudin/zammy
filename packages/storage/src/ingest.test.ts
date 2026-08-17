@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { deriveDedupKey, type Sighting } from "@zammy/currents-client";
+import { deriveDedupKey, type Sighting } from "@zammy/news-client";
 import { hexToBytea } from "./database.js";
 import { ingestSightings, upsertTopic } from "./ingest.js";
 import { migrateToLatest } from "./migrator.js";
@@ -195,6 +195,8 @@ describe("the earliest sighting owns the display fields", () => {
   const emission = (id: string, published: string, title: string): Sighting => ({
     id,
     url: URL,
+    provider: "currents",
+    providerSightingId: URL,
     dedupKey: deriveDedupKey(URL),
     title,
     description: `${title} description`,

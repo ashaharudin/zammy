@@ -1,14 +1,15 @@
+import {
+  UnmeteredQuotaGovernor,
+  clampSearchParams,
+  type CallOpts,
+  type ClientLimits,
+  type QuotaView,
+  type SearchParams,
+  type SearchResult,
+} from "@zammy/news-client";
 import type { FixtureStore } from "./fixture-store.js";
-import { normalizeSightings } from "./normalize.js";
-import { clampSearchParams, type SearchParams } from "./raw.js";
-import { UnmeteredQuotaGovernor, type QuotaView } from "./quota.js";
-import type {
-  CallOpts,
-  ClientLimits,
-  CurrentsClient,
-  LatestNewsParams,
-  SearchResult,
-} from "./client.js";
+import { PROVIDER, normalizeSightings } from "./normalize.js";
+import type { CurrentsClient, LatestNewsParams } from "./client.js";
 
 /**
  * Fixture-backed client (`CURRENTS_MODE=fixture`).
@@ -25,6 +26,8 @@ import type {
  * narrower than the real one. Development and tests are what this is for.
  */
 export class FixtureCurrentsClient implements CurrentsClient {
+  readonly provider = PROVIDER;
+  readonly coverageProvider = PROVIDER;
   private readonly governor: UnmeteredQuotaGovernor;
 
   constructor(
