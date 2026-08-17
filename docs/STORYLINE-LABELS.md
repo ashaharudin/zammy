@@ -191,13 +191,96 @@ prompt carries that clause and live output is what will judge it; ADR-0011 says
 the prompt iterates and the contract does not. `storyline-label.test.ts` states
 this as a passing test rather than leaving it to be found as a bug.
 
+## The label as merge evidence
+
+A label is presentation, not identity — but two labels *agreeing* turned out to
+be the only usable evidence for a merge the token rules cannot reach. ADR-0011's
+"Labels" section carries the amendment; this is what the archive said.
+
+**The problem.** The merge is the only cure ADR-0011 gives err-narrow formation,
+and it needs a group that straddles two arcs. That fails exactly where it is
+needed most. On 2026-08-17 the archive held the Strait of Hormuz coverage as
+**25 live arcs** whose entire shared vocabulary was `{hormuz, strait, iran}`:
+
+| token | df | share of a 17,028-article fortnight | anchor ceiling |
+| --- | --- | --- | --- |
+| `hormuz` | 422 | 2.5% | 34 (0.2%) |
+| `strait` | 363 | 2.1% | 34 |
+| `iran` | 703 | 4.1% | 34 |
+
+Mass 10.7 against a floor of 20, and not one token able to anchor. No group can
+bridge them, so no bridge is recorded and nothing merges. The story's own name
+had outgrown the rule meant to recognize it.
+
+**The labeler had already solved it.** Six of those arcs were independently given
+the identical name "Strait of Hormuz Crisis".
+
+**What agreement alone would have cost.** The same archive also gave three arcs
+the label "Q2 2026 Financial Results" — CVB Financial, Mitsui, Mayfair Gold,
+Westaim, unrelated companies reporting earnings. Their spans overlap, so ADR-0010's
+date-span disambiguator does not separate them. This is the "garbage in, plausible
+out" failure recorded above, arriving where it can do damage.
+
+**What separates them.** `properNounEvidence` — the corpus-case test this document
+rejected for label *validation* as too strict:
+
+| label | words with proper-noun evidence | verdict |
+| --- | --- | --- |
+| Strait of Hormuz Crisis | `hormuz` | merge |
+| Q2 2026 Financial Results | none | refused |
+
+"Hormuz" is never written lowercase in the coverage; "financial", "results" and
+"quarter" always are. The conservatism that made this test wrong for validation
+makes it right here: a refused merge leaves two storylines, which is the status
+quo, where a refused *label* leaves a storyline nameless.
+
+**The rule**, then — all four clauses, each refusing something the others cannot
+see:
+
+1. Both labels from the **model**. The bigram fallback named sixteen unrelated
+   arcs "Strait Hormuz"; that is agreement about vocabulary, which is the anchor
+   rule's business.
+2. Labels **equal** after casefolding, whitespace collapse and the `singular`
+   fold. Stopwords are deliberately *not* elided.
+3. The label contains a **grounded proper noun**, pooled over the cluster's whole
+   coverage.
+4. Spans **overlap or fall within `STORYLINE_LABEL_MERGE_GRACE_DAYS`**.
+
+Transitive within one label and nowhere else: three arcs chaining A–C–B collapse
+together, because C covers the gap and all three carry one name. The label is the
+boundary, which is what makes this bounded where ADR-0009's transitive token
+linking was not.
+
+**Measured on the dev archive** (2026-08-17, 258 model-labelled live storylines):
+
+| label | arcs | grounded names | outcome |
+| --- | --- | --- | --- |
+| Strait of Hormuz Crisis | 6 | `hormuz` | merged into one 31-group arc |
+| Q2 2026 Financial Results | 3 | none | **refused** |
+
+Two shared labels, one merge, one refusal — and the refusal is the load-bearing
+half. Yield is small here only because most of the archive is unlabelled (13,390
+of 13,648 live storylines have no model label); under the nightly label chore every
+promoted storyline carries one.
+
+`STORYLINE_LABEL_MERGE_GRACE_DAYS` is **unmeasured**: every arc of the one
+qualifying cluster overlaps every other, so 0 and 30 plan the identical merge. It
+needs an archive holding a story that stopped and restarted.
+
 ## Operating it
 
 ```bash
 pnpm label:storylines                  # label promoted storylines that need it
 pnpm label:storylines --dry-run        # say which, write nothing
 pnpm label:storylines --preview        # read-only quality/cost harness (dies in S9)
+pnpm merge:storyline-labels --dry-run  # what the label-agreement merge would do
+pnpm merge:storyline-labels            # merge it, and re-name the survivors
 ```
+
+The dry run prints every shared label with its grounded names and every arc's
+span, then the plan and the refusals. Merging has no inverse (ADR-0011 refuses
+split), so reading that output is the check — and the refusals are where a
+generic model label shows itself.
 
 With no `GEMINI_API_KEY` every path still runs; the model is simply never asked
 and `source` reads `bigram` throughout. Tests never reach the live API: the

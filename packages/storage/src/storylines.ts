@@ -255,6 +255,23 @@ export async function setStorylineLabel(
     .execute();
 }
 
+/** What a merge did, and what it left for the caller to re-examine. */
+export interface MergeResult {
+  merged: boolean;
+  /** The survivor, alias-resolved. Null only when the id names nothing. */
+  winnerId: string | null;
+  /**
+   * Storylines whose bridge evidence just moved onto the winner — the pairs
+   * `(winnerId, other)` whose independent-bridge count may have crossed K
+   * without any bridge being recorded. Empty when nothing merged.
+   *
+   * This exists because a merge is the one way a pair's evidence grows silently,
+   * and the K check is on the INSERT. The caller owns K, so the caller re-checks;
+   * see `cascadeMerge` in `storyline-linker.ts`.
+   */
+  repointed: string[];
+}
+
 /**
  * Merge the loser into the winner, leaving the loser's UUID as an alias.
  *
@@ -276,12 +293,33 @@ export async function setStorylineLabel(
 export async function mergeStorylines(
   db: Kysely<Database>,
   input: { winnerId: string; loserId: string } & Zoned,
-): Promise<{ merged: boolean; winnerId: string | null }> {
+): Promise<MergeResult> {
   return db.transaction().execute(async (trx) => {
     const winner = await resolveIn(trx, input.winnerId);
     const loser = await resolveIn(trx, input.loserId);
-    if (winner === null || loser === null) return { merged: false, winnerId: winner };
-    if (winner === loser) return { merged: false, winnerId: winner };
+    if (winner === null || loser === null) {
+      return { merged: false, winnerId: winner, repointed: [] };
+    }
+    if (winner === loser) return { merged: false, winnerId: winner, repointed: [] };
+
+    // The third storylines the loser was bridged to, read BEFORE the move below
+    // re-points them. Each becomes a pair whose evidence has just grown without
+    // a single bridge being recorded, and the K check the linker runs fires only
+    // on a fresh INSERT — so without this list those pairs reach K and no one
+    // ever looks. Measured: 31 pairs sat at or above K=2 in the dev archive,
+    // every one of them involving a storyline that had absorbed merges, and the
+    // bridge merge had never fired at all. Returning them is what lets the
+    // caller close the loop; storage does not know what K is.
+    const { rows: counterparts } = await sql<{ other: string }>`
+      select distinct
+             case when storyline_lo = ${loser}::uuid then storyline_hi else storyline_lo end
+               as other
+      from storyline_bridges
+      where (storyline_lo = ${loser}::uuid or storyline_hi = ${loser}::uuid)
+    `.execute(trx);
+    const repointed = counterparts
+      .map((row) => row.other)
+      .filter((other) => other !== winner);
 
     // Read before the mutation below erases it: whether the loser was dormant
     // decides whether this merge wakes the winner (see the wake at the end).
@@ -356,7 +394,7 @@ export async function mergeStorylines(
     // on exactly the stale story the marker exists to explain.
     if (loserStatus !== "dormant") await wake(trx, winner);
 
-    return { merged: true, winnerId: winner };
+    return { merged: true, winnerId: winner, repointed };
   });
 }
 
@@ -479,6 +517,99 @@ export async function readStorylineLabelInput(
       published: row.published,
     })),
   };
+}
+
+/** A storyline as the label-agreement merge reads one: a name and a span. */
+export interface LabelMergeRow {
+  id: string;
+  label: string;
+  /** Its earliest day slot. */
+  spanFrom: Date;
+  /** Its latest day slot. */
+  spanTo: Date;
+  groupCount: number;
+}
+
+/**
+ * Live, promoted, MODEL-labelled storylines with their coverage spans — the
+ * candidate set for the label-agreement merge (`storyline-label-merge.ts`).
+ *
+ * Three filters, and each one is a fact about the lifecycle rather than a rule
+ * the decision should own:
+ *
+ *  - `merged_into is null` — an alias is not a storyline.
+ *  - `status <> 'provisional'` — a storyline of one is invisible, and merging
+ *    two invisible things produces one invisible thing.
+ *  - `label_source` present and not `bigram` — the fallback extractor names
+ *    places and entities ("Strait Hormuz" for sixteen unrelated arcs), so its
+ *    labels agree on vocabulary rather than on events. Spelled as "not bigram"
+ *    instead of "equals the configured model" deliberately: a storyline named by
+ *    LAST month's model is still a storyline a model named, and an operator
+ *    switching models must not silently lose the whole candidate set.
+ *
+ * The span comes from `storyline_days`, which is the same precomputed coverage
+ * the timeline pages on — so this is an aggregate over a small table, not a walk
+ * over articles. Storylines with no day slots are excluded by the inner join:
+ * no coverage is no span, and a span is half of what makes this decision safe.
+ */
+export async function readLabelMergeCandidates(
+  db: Kysely<Database>,
+): Promise<LabelMergeRow[]> {
+  const { rows } = await sql<{
+    id: string;
+    label: string;
+    span_from: Date;
+    span_to: Date;
+    group_count: string;
+  }>`
+    select s.id,
+           s.label,
+           min(d.day_slot_published) as span_from,
+           max(d.day_slot_published) as span_to,
+           (select count(*) from storyline_groups g where g.storyline_id = s.id)
+             as group_count
+    from storylines s
+    join storyline_days d on d.storyline_id = s.id
+    where s.merged_into is null
+      and s.status <> 'provisional'
+      and s.label is not null
+      and s.label_source is not null
+      and s.label_source <> 'bigram'
+    group by s.id, s.label
+    order by s.id
+  `.execute(db);
+
+  return rows.map((row) => ({
+    id: row.id,
+    label: row.label,
+    spanFrom: row.span_from,
+    spanTo: row.span_to,
+    groupCount: Number(row.group_count),
+  }));
+}
+
+/**
+ * Every member article's title and description for a set of storylines — the
+ * corpus the label-agreement merge derives its proper-noun evidence from.
+ *
+ * Whole coverage, not one hero per group like the labeler's own input: the test
+ * this feeds (`properNounEvidence`) asks whether a word is EVER seen lowercase,
+ * so every sentence of prose is evidence and sampling one article per group
+ * would throw away most of it. Bounded by being asked only for the storylines
+ * that already agreed on a label — two clusters in the dev archive, not 258.
+ */
+export async function readStorylineCoverageText(
+  db: Kysely<Database>,
+  storylineIds: readonly string[],
+): Promise<Array<{ title: string; description: string | null }>> {
+  if (storylineIds.length === 0) return [];
+  const { rows } = await sql<{ title: string; description: string | null }>`
+    select a.title, a.description
+    from storyline_groups sg
+    join articles a on a.group_id = sg.group_id
+    where sg.storyline_id = any(${[...storylineIds]}::uuid[])
+  `.execute(db);
+  return rows;
 }
 
 /** Where a paged label pass has reached. Both halves, because `created_at`
@@ -772,11 +903,11 @@ export async function readCandidateStorylines(
 export async function recordBridge(
   db: Kysely<Database>,
   input: { storylineA: string; storylineB: string; groupId: string },
-): Promise<{ recorded: boolean }> {
+): Promise<{ recorded: boolean; pair: [lo: string, hi: string] | null }> {
   return db.transaction().execute(async (trx) => {
     const a = await resolveIn(trx, input.storylineA);
     const b = await resolveIn(trx, input.storylineB);
-    if (a === null || b === null || a === b) return { recorded: false };
+    if (a === null || b === null || a === b) return { recorded: false, pair: null };
 
     const [lo, hi] = a < b ? [a, b] : [b, a];
     const inserted = await trx
@@ -785,8 +916,47 @@ export async function recordBridge(
       .onConflict((conflict) => conflict.doNothing())
       .executeTakeFirst();
 
-    return { recorded: Number(inserted.numInsertedOrUpdatedRows ?? 0) > 0 };
+    // The RESOLVED pair, returned rather than left for the caller to re-derive.
+    // The caller holds the ids it retrieved candidates under, and a merge
+    // earlier in its own loop can have turned one of them into an alias — so
+    // counting under those ids asks about a pair this row was not written to,
+    // gets zero, and skips a merge that was due. One resolve, one answer.
+    return {
+      recorded: Number(inserted.numInsertedOrUpdatedRows ?? 0) > 0,
+      pair: [lo, hi],
+    };
   });
+}
+
+/**
+ * Live pairs already holding K or more independent bridges — the invariant
+ * "no two live storylines carry K bridges" stated as a query.
+ *
+ * The linker checks K when a bridge is INSERTED, which is the only moment it
+ * knows about. A pair can reach K without one: a merge re-points the loser's
+ * evidence onto the winner (`MergeResult.repointed`), and before that was
+ * returned nothing looked again. This is the sweep that finds whatever the live
+ * path still misses, and the repair for what it already missed — 31 stranded
+ * pairs in the dev archive, none of which any future insert would have revisited.
+ *
+ * Ordered by evidence first so a bounded run merges the best-attested pairs, and
+ * by the ids after it so two runs over the same data do the same thing.
+ */
+export async function readBridgedPairs(
+  db: Kysely<Database>,
+  input: { minBridges: number; limit: number },
+): Promise<Array<{ lo: string; hi: string; bridges: number }>> {
+  const { rows } = await sql<{ lo: string; hi: string; n: string }>`
+    select b.storyline_lo as lo, b.storyline_hi as hi, count(*) as n
+    from storyline_bridges b
+    join storylines l on l.id = b.storyline_lo and l.merged_into is null
+    join storylines h on h.id = b.storyline_hi and h.merged_into is null
+    group by b.storyline_lo, b.storyline_hi
+    having count(*) >= ${input.minBridges}
+    order by count(*) desc, b.storyline_lo, b.storyline_hi
+    limit ${input.limit}
+  `.execute(db);
+  return rows.map((row) => ({ lo: row.lo, hi: row.hi, bridges: Number(row.n) }));
 }
 
 /** How many INDEPENDENT groups bridge this pair — the K in "K bridges merge". */

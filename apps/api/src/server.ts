@@ -13,7 +13,9 @@ import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
 import { IngestQueue } from "./ingest-queue.js";
 import {
   ChoreQueue,
+  runBridgeSweepChore,
   runDormancyChore,
+  runLabelMergeChore,
   runLateCandidateChore,
   runRetentionChore,
   runStorylineLabelChore,
@@ -225,14 +227,32 @@ export async function buildApp(config: Config): Promise<App> {
     // then looks at — a membership change and its label in one night, rather
     // than a label that describes yesterday's membership.
     //
+    // The label-agreement merge runs LAST, after the label pass, because it is
+    // the only pass whose input is a label: a storyline named tonight should be
+    // a merge candidate tonight rather than tomorrow (ADR-0011's repair).
     storylines: async () => {
       await runDormancyChore(choreDeps);
+      // The bridge sweep before the late-candidate sweep: a pair that should be
+      // one storyline should be one before old groups are offered to it.
+      await runBridgeSweepChore({
+        ...choreDeps,
+        linker: deps.config.grouping.linker,
+        labeler,
+      });
       await runLateCandidateChore({
         ...choreDeps,
         linker: deps.config.grouping.linker,
         labeler,
       });
       await runStorylineLabelChore({ ...choreDeps, labeler });
+      await runLabelMergeChore({
+        ...choreDeps,
+        rules: {
+          graceDays: config.STORYLINE_LABEL_MERGE_GRACE_DAYS,
+          maxComponent: config.STORYLINE_LABEL_MERGE_MAX_COMPONENT,
+        },
+        labeler,
+      });
     },
   });
   await chores.scheduleNightlyRetention();

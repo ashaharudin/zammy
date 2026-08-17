@@ -167,6 +167,30 @@ const EnvSchema = z
      * turn was, and few enough that the prompt stays a flash-tier call.
      */
     STORYLINE_LABEL_SAMPLE: z.coerce.number().int().min(2).max(40).default(10),
+    /**
+     * Days of silence a shared label may bridge before the label-agreement merge
+     * stops treating two arcs as one story (`storyline-label-merge.ts`).
+     *
+     * UNMEASURED, and honestly so: the one qualifying cluster in the dev archive
+     * ("Strait of Hormuz Crisis", six arcs) has one member spanning the whole
+     * range, so every value from 0 upwards plans the identical merge. 7 is chosen
+     * on the argument rather than the data — an evolving situation goes quiet for
+     * a week and comes back, and ADR-0010 already makes the date span the
+     * disambiguator between two storylines that share a name. It needs an archive
+     * holding a story that stopped and restarted.
+     */
+    STORYLINE_LABEL_MERGE_GRACE_DAYS: z.coerce.number().int().min(0).default(7),
+    /**
+     * Safety valve on one label's component, in storylines — not a tuning knob.
+     * A model label that turned out both generic AND grounded would otherwise
+     * collapse an unbounded number of arcs in a single pass, which is the
+     * percolation shape ADR-0009's 1,179-group swallow taught this codebase to
+     * fear. A refused component is logged by name and left alone.
+     *
+     * 25 admits every real cluster measured (the largest is six) with an order of
+     * magnitude to spare, and still refuses a swallow.
+     */
+    STORYLINE_LABEL_MERGE_MAX_COMPONENT: z.coerce.number().int().min(2).default(25),
     // --- the v2 linker (ADR-0011); every default below is pinned from
     //     `pnpm measure:storylines-v2`, recorded in docs/STORYLINE-LINKING.md ---
     // There is deliberately NO storyline on/off switch here any more.

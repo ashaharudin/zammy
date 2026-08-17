@@ -106,6 +106,36 @@ drifts — "Fort Hood Crash" may become "Fort Hood Investigation" — and two
 storylines may share a label; when a collision is actually on screen, a quiet
 date-span disambiguator ("Fort Hood Crash · Mar 2026") separates them.
 
+**Amended (label-agreement merge).** A label is still not identity — nothing
+keys off one, and clicking still rides the UUID — but agreement between two
+labels is now **evidence**, and the merge acts on it. The reason is measured:
+the token-bridge merge below cannot reach a big running story, because the
+story's own name outgrows the anchor ceiling as its coverage climbs. The dev
+archive held the Strait of Hormuz coverage as 25 arcs whose entire shared
+vocabulary was `{hormuz, strait, iran}` — mass 10.7 against a floor of 20,
+every token at 2–2.5% of the corpus against a ceiling of 0.2% — so no group
+could bridge them and the cure never fired. Reshaping the ceiling does not fix
+it either (docs/STORYLINE-LINKING.md): every setting loose enough to collapse
+that cluster also builds a 315-group `com, investing` storyline and 58
+storylines with no profile at all.
+
+The labeler had already solved it. Six of those arcs were independently handed
+the identical name "Strait of Hormuz Crisis" by a model reading their
+headlines — the semantic judgement no df statistic can make. Two storylines
+merge when their **model** labels agree, the label contains a **grounded proper
+noun**, and their **spans overlap or nearly touch**. The date span stays the
+disambiguator it always was, which is what keeps two "Fort Hood Crash"es apart;
+the grounding guard is what keeps a *category* from passing as a name — the
+same archive labelled three unrelated earnings arcs "Q2 2026 Financial
+Results", with overlapping spans, and no word of it survives
+`properNounEvidence`. The bigram fallback is excluded outright: it named
+sixteen unrelated arcs "Strait Hormuz", which is agreement about vocabulary,
+not about events.
+
+Merging is transitive within one label and nowhere else, which is what bounds
+it where ADR-0009's transitive token linking was unbounded. See
+`storyline-label-merge.ts`.
+
 **ADR-0010's superset guarantee is deliberately dead.** It was load-bearing
 only while the phrase *was* the query. Clicking a label now opens the
 storyline itself by UUID — the label's words never execute as a search, so
