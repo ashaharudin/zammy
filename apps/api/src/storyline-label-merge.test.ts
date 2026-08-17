@@ -36,7 +36,7 @@ function arc(
 /** Names in the Hormuz coverage; everything else reads as a common word. */
 const HORMUZ_NAMES = new Set(["hormuz", "iran", "oman", "tehran", "trump"]);
 const isHormuzName = (word: string): boolean => HORMUZ_NAMES.has(word);
-/** The Q2 cluster grounds no name at all — every word appears lowercase. */
+/** The Q2 component grounds no name at all — every word appears lowercase. */
 const noNames = (): boolean => false;
 
 describe("normalizeLabel", () => {
@@ -97,26 +97,26 @@ describe("spansTouch", () => {
 
 describe("sharedLabels", () => {
   it("keeps only labels more than one storyline holds", () => {
-    const clusters = sharedLabels([
+    const components = sharedLabels([
       arc("a", "Strait of Hormuz Crisis", "2026-08-01", "2026-08-05"),
       arc("b", "Strait of Hormuz Crisis", "2026-08-04", "2026-08-09"),
       arc("c", "Fort Hood Crash", "2026-08-01", "2026-08-02"),
     ]);
-    expect([...clusters.keys()]).toEqual(["strait of hormuz crisi"]);
-    expect(clusters.get("strait of hormuz crisi")).toHaveLength(2);
+    expect([...components.keys()]).toEqual(["strait of hormuz crisi"]);
+    expect(components.get("strait of hormuz crisi")).toHaveLength(2);
   });
 
   it("groups labels that differ only by case or plural", () => {
-    const clusters = sharedLabels([
+    const components = sharedLabels([
       arc("a", "Hormuz Talks", "2026-08-01", "2026-08-05"),
       arc("b", "hormuz talk", "2026-08-04", "2026-08-09"),
     ]);
-    expect(clusters.size).toBe(1);
+    expect(components.size).toBe(1);
   });
 });
 
 describe("planLabelMerge", () => {
-  it("merges the Hormuz cluster into one storyline", () => {
+  it("merges the Hormuz component into one storyline", () => {
     // The six arcs as the archive held them on 2026-08-17.
     const arcs = [
       arc("a1865f16", "Strait of Hormuz Crisis", "2026-07-27", "2026-08-17", 3),
@@ -144,7 +144,7 @@ describe("planLabelMerge", () => {
     );
   });
 
-  it("refuses a cluster whose label names nothing", () => {
+  it("refuses a component whose label names nothing", () => {
     // "Q2 2026 Financial Results" over CVB Financial, Mitsui, Mayfair Gold and
     // Westaim. Overlapping spans, identical model label, three unrelated
     // companies — the boilerplate arc this guard exists to refuse.

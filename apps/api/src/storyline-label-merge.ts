@@ -19,7 +19,7 @@ import { singular } from "./grouping.js";
  *
  * Reshaping the anchor ceiling does not fix it, and that is measured too
  * (docs/STORYLINE-LINKING.md): every setting loose enough to collapse the
- * Hormuz cluster also builds a 315-group `com, investing` storyline and 58
+ * Hormuz component also builds a 315-group `com, investing` storyline and 58
  * storylines with no profile at all. The tokens cannot tell "Strait of Hormuz"
  * from "Donald Trump"; both are common, both are grounded, both are names.
  *
@@ -44,7 +44,7 @@ import { singular } from "./grouping.js";
  *    Mitsui, Mayfair Gold, Westaim, unrelated companies reporting earnings — and
  *    their spans overlap, so nothing about time separates them. `properNounEvidence`
  *    does: "Hormuz" is never seen lowercase in the coverage, while "financial",
- *    "results" and "quarter" are, so the Q2 cluster carries no name and is refused.
+ *    "results" and "quarter" are, so the Q2 component carries no name and is refused.
  *    docs/STORYLINE-LABELS.md rejected that same test for label VALIDATION as too
  *    strict, and it was right to — a conservative test there leaves a storyline
  *    nameless. Here the calculus inverts: refusing a merge leaves two storylines,
@@ -73,7 +73,7 @@ export interface LabelMergeRules {
    * story it is named for.
    *
    * UNMEASURED, and honestly so: in the dev archive every arc of the one
-   * qualifying cluster overlaps every other, so 0 and 30 plan the same merge and
+   * qualifying component overlaps every other, so 0 and 30 plan the same merge and
    * the knob is inert. It needs an archive holding a story that stopped and
    * restarted.
    */

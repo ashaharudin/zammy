@@ -215,7 +215,7 @@ describe("mergeAgreeingLabels", () => {
     expect(await resolveStoryline(db, small)).toBe(big);
   });
 
-  it("refuses a cluster whose label grounds no name", async () => {
+  it("refuses a component whose label grounds no name", async () => {
     const one = await labelledStoryline({
       label: "Q2 2026 Financial Results",
       articles: [earnings("02", "CVB Financial Corp", 1), earnings("05", "Mitsui", 2)],
@@ -273,7 +273,7 @@ describe("mergeAgreeingLabels", () => {
     expect(second.sharedLabels).toBe(0);
   });
 
-  it("collapses six arcs into one, as the archive's Hormuz cluster does", async () => {
+  it("collapses six arcs into one, as the archive's Hormuz component does", async () => {
     const ids: string[] = [];
     for (const [from, to] of [
       ["02", "17"],
