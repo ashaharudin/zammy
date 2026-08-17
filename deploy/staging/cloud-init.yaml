@@ -1,0 +1,418 @@
+#cloud-config
+# Staging VM bootstrap — OCI Always Free Ampere A1 (arm64), Ubuntu 24.04.
+# See docs/DEPLOYMENT-OCI.md §7 "Staging first, on Always Free".
+#
+# Pass this as the Instance's user_data at creation. It runs ONCE, on first boot,
+# and leaves a box that can run the stack but is not yet running it: no image has
+# been chosen and no secrets exist. `zammy-deploy <image@sha256:...>` is what
+# actually starts things, and CI hands it the digest.
+#
+# ── Deliberately contains no secrets ─────────────────────────────────────────
+# user_data is readable from the instance metadata service by any process on the
+# box, and via the API by anyone with instance-read permission. It is not a
+# secret store. So this file writes /opt/zammy/.env as a 0600 template with
+# placeholders, and an operator fills it in once over SSH. The eventual upgrade
+# is the same one §4 defers for production — instance principal reads from OCI
+# Vault at boot — and it replaces the manual step without changing anything else.
+#
+# ── What must exist outside this file ────────────────────────────────────────
+#   1. An NSG allowing the load balancer subnet → this instance on 3000, and
+#      nothing else inbound but SSH. This file adds the host-side rule; the NSG
+#      is Terraform's job (§3) and neither substitutes for the other.
+#   2. `docker login` against OCIR, once, as root — the api image is private.
+#      zammy-deploy fails with a readable message until that is done.
+
+package_update: true
+package_upgrade: true
+
+write_files:
+  # Written before Docker is installed so the daemon picks it up on first start.
+  # Unbounded json-file logs are the classic way to fill a 47 GB boot volume and
+  # take the stack down for reasons that look like anything but disk.
+  - path: /etc/docker/daemon.json
+    permissions: "0644"
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": { "max-size": "10m", "max-file": "3" }
+      }
+
+  - path: /opt/zammy/compose.yaml
+    permissions: "0644"
+    content: |
+      # Staging stack. NOT the production topology: OCI Database with PostgreSQL
+      # and OCI Cache are not in the Always Free tier, so both are containers on
+      # this VM. The api image is byte-identical to production's — only these
+      # environment variables differ, which is the discipline the whole plan
+      # rests on (DEPLOYMENT-OCI §1).
+      name: zammy
+
+      services:
+        postgres:
+          image: postgres:17-alpine
+          restart: unless-stopped
+          environment:
+            POSTGRES_USER: zammy
+            POSTGRES_DB: zammy
+            # `:?` so a missing secret fails at `compose up` with a named
+            # variable, rather than as an auth error three layers down.
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /opt/zammy/.env}
+          volumes:
+            - postgres-data:/var/lib/postgresql/data
+          # No published ports. Nothing outside this VM talks to Postgres, and
+          # the private data subnet it will live in one day has the same shape.
+          healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U zammy -d zammy"]
+            interval: 5s
+            timeout: 3s
+            retries: 10
+          deploy:
+            resources:
+              limits:
+                memory: 2G
+
+        redis:
+          # volatile-lru for the same reason as the dev compose file: cache keys
+          # carry TTLs and may be evicted freely, but the ingest queue's keys do
+          # not, and evicting one mid-job drops deferred work instead of retrying
+          # it (ARCHITECTURE 9.1, 11).
+          image: redis:7-alpine
+          restart: unless-stopped
+          command: ["redis-server", "--maxmemory", "512mb", "--maxmemory-policy", "volatile-lru"]
+          healthcheck:
+            test: ["CMD", "redis-cli", "ping"]
+            interval: 5s
+            timeout: 3s
+            retries: 10
+          deploy:
+            resources:
+              limits:
+                memory: 640M
+
+        api:
+          # Digest-pinned, written by zammy-deploy. Never a tag: a tag is a
+          # mutable pointer and "which image is staging running" must have an
+          # answer that survives the next push.
+          image: ${ZAMMY_API_IMAGE:?run zammy-deploy <image@sha256:...> instead of compose directly}
+          restart: unless-stopped
+          environment:
+            NODE_ENV: production
+            PORT: "3000"
+            LOG_LEVEL: ${LOG_LEVEL:-info}
+            DATABASE_URL: postgres://zammy:${POSTGRES_PASSWORD:?}@postgres:5432/zammy
+            # Plaintext redis:// on the compose network — staging has no TLS
+            # endpoint. Production's rediss:// path is verified but NOT exercised
+            # here (§2.4); staging being green says nothing about it.
+            REDIS_URL: redis://redis:6379
+            # live by default, so staging exercises the real upstream — the
+            # Cloudflare UA rule, the x-ratelimit-* headers, and the date_range
+            # ceiling are all things fixtures replay rather than enforce.
+            #
+            # The cost is quota: this key's 1000 calls/day are shared with whatever
+            # else uses it. Either give staging its own Currents key, or cap its
+            # share with CURRENTS_DAILY_CALL_LIMIT (see .env.template).
+            #
+            # Left as `:-` rather than required, because CURRENTS_MODE=fixture must
+            # stay a working escape hatch and no key is needed then. live without a
+            # key is caught by zammy-deploy before it pulls, and by @zammy/config
+            # at boot after that.
+            CURRENTS_MODE: ${CURRENTS_MODE:-live}
+            CURRENTS_API_KEY: ${CURRENTS_API_KEY:-}
+            CURRENTS_DAILY_CALL_LIMIT: ${CURRENTS_DAILY_CALL_LIMIT:-1000}
+            INTERACTIVE_RESERVE: ${INTERACTIVE_RESERVE:-250}
+            # Must be non-empty and should identify the deployment — Cloudflare
+            # 403s default library User-Agents (PROBE-FINDINGS 2).
+            CURRENTS_USER_AGENT: ${CURRENTS_USER_AGENT:?set CURRENTS_USER_AGENT in /opt/zammy/.env}
+            GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+            CORS_ORIGIN: ${CORS_ORIGIN:?set CORS_ORIGIN in /opt/zammy/.env}
+            FIXTURES_DIR: ./fixtures
+          ports:
+            # Bound on all interfaces because the load balancer reaches this
+            # instance by its private IP. Access is constrained by the NSG and by
+            # the DOCKER-USER rule this cloud-init installs — not by binding.
+            - "3000:3000"
+          depends_on:
+            postgres:
+              condition: service_healthy
+            redis:
+              condition: service_healthy
+          # Matches the dev compose file and the ≥15s window §4 asks for. The app
+          # drains on SIGTERM as PID 1; no init shim.
+          stop_grace_period: 15s
+          deploy:
+            resources:
+              limits:
+                memory: 2G
+
+      volumes:
+        postgres-data:
+
+  # Template only — no real values. Filled in once over SSH.
+  - path: /opt/zammy/.env.template
+    permissions: "0600"
+    owner: root:root
+    content: |
+      # Copy to /opt/zammy/.env (chmod 600) and fill in. Compose reads .env from
+      # this directory automatically; every name here is consumed by compose.yaml.
+
+      # Written by zammy-deploy — leave empty, it is not edited by hand.
+      ZAMMY_API_IMAGE=
+
+      # Any long random string; it never leaves this VM. e.g. openssl rand -hex 24
+      POSTGRES_PASSWORD=
+
+      # Identify the deployment. Non-empty is enforced at boot.
+      CURRENTS_USER_AGENT="zammy-staging/0.1 (+https://github.com/ashaharudin/zammy)"
+
+      # Same-origin once the LB path-routes /api/* and the web container (§4);
+      # until then, the staging hostname the browser actually uses.
+      CORS_ORIGIN=https://staging.example.com
+
+      # live is the default: staging talks to the real upstream. A key is then
+      # MANDATORY — @zammy/config refuses to boot with live and no key, on purpose.
+      # Set CURRENTS_MODE=fixture to run offline against the image's fixtures,
+      # which needs no key.
+      CURRENTS_MODE=live
+      CURRENTS_API_KEY=
+
+      # Optional guard on how much of the daily quota staging may spend. The free
+      # tier allows 1000 calls/day PER KEY, so if staging shares a key with
+      # anything else, it can starve it. Prefer a separate Currents key for
+      # staging; failing that, uncomment both lines together — INTERACTIVE_RESERVE
+      # must stay strictly below the limit or background ingestion can never run,
+      # and the process refuses to boot if it isn't.
+      # CURRENTS_DAILY_CALL_LIMIT=200
+      # INTERACTIVE_RESERVE=50
+
+      # Optional. Absent means storyline labels fall back to the bigram
+      # extractor, which renders fine — nothing blocks on it (ADR-0011).
+      GEMINI_API_KEY=
+
+      LOG_LEVEL=info
+
+  # Boot-time start that tolerates a not-yet-configured box. A first boot with no
+  # .env is the normal case, not a failure, and should not leave a red unit.
+  - path: /opt/zammy/bin/zammy-up
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      cd /opt/zammy
+      if [[ ! -f .env ]]; then
+        echo "zammy: /opt/zammy/.env absent — nothing to start yet."
+        echo "zammy: copy .env.template to .env, fill it in, then run zammy-deploy."
+        exit 0
+      fi
+      if ! grep -qE '^ZAMMY_API_IMAGE=.+' .env; then
+        echo "zammy: no image pinned yet — run: zammy-deploy <image@sha256:...>"
+        exit 0
+      fi
+      exec docker compose up -d --remove-orphans
+
+  # Migrations as a discrete step, never on boot (ARCHITECTURE 4, §5). Runs the
+  # SAME digest the api runs, with the command overridden — so "what migrated"
+  # and "what runs" cannot drift.
+  - path: /opt/zammy/bin/zammy-migrate
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      cd /opt/zammy
+      docker compose up -d postgres
+      # --no-deps: the api's own dependency conditions would pull Redis up too,
+      # and a migration has no business needing the queue.
+      exec docker compose run --rm --no-deps api \
+        node node_modules/@zammy/storage/dist/migrate-cli.js
+
+  - path: /opt/zammy/bin/zammy-deploy
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      # Deploy a digest: pull → migrate → roll → verify readiness.
+      # Usage: zammy-deploy <registry>/<ns>/<repo>@sha256:<hex>
+      set -euo pipefail
+
+      image="${1:-}"
+      if [[ -z "$image" ]]; then
+        echo "usage: zammy-deploy <image@sha256:...>" >&2
+        exit 64
+      fi
+      if [[ "$image" != *"@sha256:"* ]]; then
+        echo "refusing: deploy by digest, not by tag (got '$image')." >&2
+        echo "CI prints the digest in its job summary." >&2
+        exit 64
+      fi
+
+      cd /opt/zammy
+      if [[ ! -f .env ]]; then
+        echo "no /opt/zammy/.env — copy .env.template, fill it in, retry." >&2
+        exit 78
+      fi
+
+      # live mode with no key is a boot refusal, not a warning (@zammy/config
+      # rejects the combination rather than 401-ing on the first search). Catching
+      # it here costs one line and replaces a 30s readiness timeout plus a restart
+      # loop with a sentence. An absent CURRENTS_MODE means live, matching the
+      # default in compose.yaml — so absent-and-keyless must fail too.
+      read_env() {
+        sed -n "s/^[[:space:]]*$1=//p" .env | tail -1 | tr -d '\r' | sed 's/^"//; s/"$//'
+      }
+      mode="$(read_env CURRENTS_MODE)"
+      if [[ "${mode:-live}" == "live" && -z "$(read_env CURRENTS_API_KEY)" ]]; then
+        echo "CURRENTS_MODE is live (the default) but CURRENTS_API_KEY is empty." >&2
+        echo "The api refuses to boot in that state, by design." >&2
+        echo "Set the key in /opt/zammy/.env, or set CURRENTS_MODE=fixture to" >&2
+        echo "run offline against the image's fixtures." >&2
+        exit 78
+      fi
+
+      if ! docker pull "$image"; then
+        echo >&2
+        echo "pull failed. If this is an auth error, the OCIR repo is private:" >&2
+        echo "  sudo docker login <registry-domain>" >&2
+        echo "  username: <namespace>/<user>   password: an OCIR auth token" >&2
+        exit 69
+      fi
+
+      # Record the digest before rolling, so a failed roll leaves an .env that
+      # says what was attempted rather than what used to run.
+      if grep -q '^ZAMMY_API_IMAGE=' .env; then
+        sed -i "s|^ZAMMY_API_IMAGE=.*|ZAMMY_API_IMAGE=${image}|" .env
+      else
+        printf 'ZAMMY_API_IMAGE=%s\n' "$image" >> .env
+      fi
+
+      echo "==> data stores"
+      docker compose up -d postgres redis
+
+      echo "==> migrations (discrete step, same digest)"
+      /opt/zammy/bin/zammy-migrate
+
+      echo "==> rolling api"
+      docker compose up -d --no-deps api
+
+      echo "==> waiting for readiness"
+      # Asserts status == "ready", not merely HTTP 200. /readyz returns 200 with
+      # status "degraded" when only Redis is down (health.ts) — by design, since
+      # Redis is survivable — which means a 200 alone would let a broken queue
+      # deploy silently. This is the check DEPLOYMENT-OCI §2.4 asks for.
+      for attempt in $(seq 1 30); do
+        body="$(curl -fsS --max-time 5 http://127.0.0.1:3000/readyz 2>/dev/null || true)"
+        if [[ -n "$body" ]] && printf '%s' "$body" | python3 -c '
+      import json, sys
+      d = json.load(sys.stdin)
+      sys.exit(0 if d.get("status") == "ready" else 1)
+      '; then
+          echo "ready after ${attempt}s: $body"
+          exit 0
+        fi
+        sleep 1
+      done
+
+      echo >&2
+      echo "NOT ready after 30s. Last /readyz body:" >&2
+      echo "${body:-<no response>}" >&2
+      echo "Logs: docker compose -f /opt/zammy/compose.yaml logs --tail=50 api" >&2
+      exit 1
+
+  - path: /etc/systemd/system/zammy.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=zammy staging stack (docker compose)
+      Requires=docker.service
+      After=docker.service network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      WorkingDirectory=/opt/zammy
+      ExecStart=/opt/zammy/bin/zammy-up
+      ExecStop=/usr/bin/docker compose down
+      TimeoutStartSec=0
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # The free tier has no managed backups, so staging gets the cheap version. Not
+  # PITR and not a substitute for §4's production requirement — but it means a
+  # staging database is worth having data in.
+  - path: /etc/cron.daily/zammy-pgdump
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      set -e
+      cd /opt/zammy || exit 0
+      [ -f .env ] || exit 0
+      mkdir -p /var/backups/zammy
+      out="/var/backups/zammy/zammy-$(date +%F).sql.gz"
+      docker compose exec -T postgres pg_dump -U zammy zammy | gzip > "$out"
+      find /var/backups/zammy -name 'zammy-*.sql.gz' -mtime +7 -delete
+
+  - path: /opt/zammy/README
+    permissions: "0644"
+    content: |
+      zammy staging — provisioned by deploy/staging/cloud-init.yaml
+
+      First-run, once:
+        sudo cp /opt/zammy/.env.template /opt/zammy/.env
+        sudo chmod 600 /opt/zammy/.env
+        sudo vi /opt/zammy/.env          # POSTGRES_PASSWORD, CORS_ORIGIN, UA,
+                                         # and CURRENTS_API_KEY — required,
+                                         # because CURRENTS_MODE defaults to live
+        sudo docker login <ocir-domain>  # the api image is private
+
+      Every deploy (CI prints the digest in its job summary):
+        sudo zammy-deploy <registry>/<ns>/zammy/api@sha256:<hex>
+
+      Operating:
+        docker compose -f /opt/zammy/compose.yaml ps
+        docker compose -f /opt/zammy/compose.yaml logs -f api
+        curl -s localhost:3000/readyz | python3 -m json.tool
+        sudo systemctl status zammy
+
+      What staging does NOT prove: managed Postgres/Cache, private endpoints,
+      PITR, rediss:// against a real TLS endpoint, or multi-instance rolling
+      deploys. See docs/DEPLOYMENT-OCI.md §7.
+
+runcmd:
+  # ── Docker from Docker's own apt repo ──────────────────────────────────────
+  # Not the distro package and not the snap: this box's only job is running
+  # containers, and compose v2 as a daemon plugin is what the scripts assume.
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - |
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+      > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  - systemctl enable --now docker
+
+  - usermod -aG docker ubuntu
+  - ln -sf /opt/zammy/bin/zammy-deploy /usr/local/bin/zammy-deploy
+  - ln -sf /opt/zammy/bin/zammy-migrate /usr/local/bin/zammy-migrate
+
+  # ── Host firewall ─────────────────────────────────────────────────────────
+  # DOCKER-USER, not INPUT. Docker's published ports are DNAT'd and traverse
+  # FORWARD, so an INPUT rule looks correct, tests clean against the host, and
+  # filters nothing that reaches a container. Oracle's Ubuntu images ship a
+  # default-REJECT INPUT chain, which is why that mistake survives review.
+  #
+  # Replace 10.0.0.0/16 with the VCN CIDR if it differs. This is defence in
+  # depth behind the NSG, not a replacement for it.
+  - iptables -I DOCKER-USER -p tcp --dport 3000 -s 10.0.0.0/16 -j ACCEPT
+  - iptables -A DOCKER-USER -p tcp --dport 3000 -j DROP
+  - netfilter-persistent save || true
+
+  # Enabled, not started: there is no .env and no image yet. zammy-up is written
+  # to no-op cleanly in that state, so the unit is green on a fresh box and the
+  # first real start is the operator's deploy.
+  - systemctl daemon-reload
+  - systemctl enable zammy.service
+
+final_message: |
+  zammy staging bootstrapped in $UPTIME seconds.
+  Next: fill /opt/zammy/.env, `docker login` to OCIR, then
+  `sudo zammy-deploy <image@sha256:...>`. See /opt/zammy/README.

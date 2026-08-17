@@ -1,6 +1,7 @@
 # Deployment plan — Oracle Cloud Infrastructure (OCI)
 
-**Status: planned, not started.** OCI is now the deployment target. AWS (the original target,
+**Status: pre-flight nearly complete; no OCI resources provisioned yet.** The first environment is
+**staging on the Always Free tier** (§7); production follows. OCI is now the deployment target. AWS (the original target,
 ARCHITECTURE 4.1) remains an option but not an immediate goal — nothing in this plan may leak
 OCI-specific behaviour into application code, so the AWS mapping stays a Terraform rewrite away.
 The discipline that made the AWS plan cheap to hold is the same one that makes this swap cheap:
@@ -37,21 +38,54 @@ with Cloudflare later; that is additive, not structural.
 
 ## 2. Pre-flight — work that must land before any OCI work
 
-1. **Fix the api Dockerfile `deps` stage.** It copies the manifests for `shared`, `config`,
-   `currents-client`, and `api` — but not `packages/storage/package.json`, and `@zammy/api` now
-   depends on `@zammy/storage`. `pnpm install --frozen-lockfile` in that stage fails against the
-   lockfile's importer list. The image is the deploy artifact; it must build before anything else
-   here matters.
-2. **Pick the CPU architecture.** OCI's Ampere (arm64) shapes are markedly cheaper than x86 and
-   `node:22-alpine` is multi-arch, but the image has only ever been built for the host arch.
-   Decide (recommend **arm64**), build and test that image once locally, and pin `--platform` in CI
-   so the choice is explicit rather than whatever the builder happened to be.
+Status as of 2026-08-14: 1, 2 and 4 are done; 3 is drafted and waiting on tenancy credentials.
+
+1. ~~**Fix the api Dockerfile `deps` stage.**~~ ✅ **Done** (`01a0e5e`). It now copies
+   `packages/storage/package.json`, and the deploy-tree import guard resolves all four `@zammy/*`
+   packages at build time — so the failure is closed, not merely hidden.
+2. ~~**Pick the CPU architecture.**~~ ✅ **Decided: arm64** — and it was never really a choice, since
+   the Ampere shapes this plan targets are arm64-only. Verified 2026-08-14 by building the image for
+   `linux/arm64` (192 MB, node 22 arm64, import guard green). Pinned not by a `--platform` flag but
+   by the CI runner label (`ubuntu-24.04-arm`, native arm64), which is harder to forget.
 3. **CI publishes to OCIR.** Build on push to `main`, tag with the git SHA, push to a private OCIR
    repo. Terraform deploys by digest, never by `latest` — the README already documents the stale-
    image failure mode this prevents locally; it is worse in production.
-4. **Verify `rediss://` support.** OCI Cache endpoints are TLS-only (**verify**). Confirm the Redis
-   client accepts a `rediss://` URL end to end; if it does not, that is an application fix that
-   must precede the move.
+   🚧 **Drafted** at `.github/workflows/ci.yml`; needs the tenancy credentials listed below before
+   it can run.
+4. ~~**Verify `rediss://` support.**~~ ✅ **Verified 2026-08-14, no application change needed.**
+   Tested against a TLS-only Redis 7 with the plaintext port disabled, exercising the real
+   construction path — a bare URL string with no TLS options, as in `server.ts`, `ingest-queue.ts`
+   and `chores.ts`. ioredis negotiated TLSv1.3 (`authorized: true`) and completed a set/get
+   roundtrip; a BullMQ queue and worker over the same URL enqueued and completed a job. Plaintext
+   `redis://` against that server and `rediss://` against an untrusted certificate both failed, as
+   they should. `REDIS_URL` is validated as a non-empty string only, so no schema gate blocks it.
+   **One condition:** this works because the certificate chains to a root Node already trusts. If an
+   OCI Cache endpoint presents an Oracle private CA, the bare URL fails — with the unhelpful message
+   `Connection is closed.`, no mention of TLS. The remedy stays out of application code
+   (`NODE_EXTRA_CA_CERTS` as a container environment variable), so §8 holds either way, but
+   **verify** the endpoint's chain before Phase 2 rather than during it.
+
+   ⚠️ **A TLS misconfiguration will not fail a deploy.** Redis down is survivable by design:
+   `/readyz` returns **200** with `status: "degraded"` when only Redis is failing (`health.ts`), and
+   a boot-time Redis error is logged as a warning and swallowed (`server.ts`). A bad `rediss://` URL
+   therefore yields healthy LB checks, instances taking traffic, and an ingest queue that silently
+   does nothing. Phase 2's acceptance check must assert `status == "ready"` and inspect
+   `checks.redis` — both are already in the `/readyz` payload — not merely assert HTTP 200.
+
+### What CI needs from the tenancy
+
+Repository **variables** (not secret): `OCI_REGISTRY` (e.g. `ocir.us-ashburn-1.oci.oraclecloud.com`;
+the legacy `<region-key>.ocir.io` form still resolves), `OCI_NAMESPACE` (the tenancy object-storage
+namespace), `OCI_REPOSITORY` (e.g. `zammy/api`).
+
+Repository **secrets**: `OCI_USERNAME` — `<namespace>/<user>`, or
+`<namespace>/oracleidentitycloudservice/<user>` on a federated tenancy — and `OCI_AUTH_TOKEN`, an
+auth token generated under User settings → Tokens and keys. Not the console password; OCIR does not
+accept it.
+
+Create the target repo as **private** in OCIR first: a push to a non-existent repo auto-creates it
+as private under most tenancy defaults, but relying on a default for image visibility is not a
+decision anyone should discover later.
 
 ## 3. Network layout
 
@@ -159,9 +193,9 @@ state managed for you); decide when the CI pipeline is being written, it changes
 
 | Phase | Delivers | New work outside IaC |
 |---|---|---|
-| **0. Pre-flight** | buildable arm64 image in OCIR, CI publish | Dockerfile fix (§2.1), CI workflow |
-| **1. Ground** | VCN, subnets, NSGs, gateways, Vault, state bucket | — |
-| **2. Data** | PostgreSQL + OCI Cache, private endpoints | `rediss://` verification (§2.4) |
+| **0. Pre-flight** | buildable arm64 image in OCIR, CI publish | Dockerfile fix ✅, CI workflow ✅ drafted, OCIR credentials ⬜ |
+| **1. Ground** | VCN, subnets, NSGs, gateways, Vault, state bucket | staging VM cloud-init ✅ drafted |
+| **2. Data** | PostgreSQL + OCI Cache, private endpoints | `rediss://` verification ✅ (§2.4); assert `/readyz` says `ready`, not just 200 |
 | **3. api** | Container Instances, LB `/api/*` routing, migration job, first end-to-end deploy | — |
 | **4. web** | static container, path routing, domain + TLS on the LB | `apps/web/Dockerfile` |
 | **5. Ops** | OCI Logging for container stdout, Monitoring alarms (LB unhealthy-backend count, 5xx rate, api restart count), backup verification | — |
@@ -169,11 +203,58 @@ state managed for you); decide when the CI pipeline is being written, it changes
 Phase 3 is the milestone that proves the shape: image → migrate → roll → healthy behind the LB.
 Everything after is accretion.
 
-A note on the **Always Free tier**: OCI's free Ampere allowance (4 OCPU / 24 GB) can run the entire
-Compose stack on one VM. That is a legitimate zero-cost *staging* environment, and a tempting
-production shortcut. Resist the shortcut — it recreates the pet-server failure modes the
-architecture spent effort avoiding — but a free always-on staging box is worth having and costs
-one cloud-init script.
+A note on the **Always Free tier**: OCI's free Ampere allowance still runs the entire Compose stack
+on one VM. That is a legitimate zero-cost *staging* environment, and a tempting production
+shortcut. Resist the shortcut — it recreates the pet-server failure modes the architecture spent
+effort avoiding — but a free always-on staging box is worth having and costs one cloud-init script.
+It is also where this plan now starts: see the staging note below.
+
+### Staging first, on Always Free
+
+**Staging is the first environment we build.** Phases 1–3 are executed against the free tier before
+any paid production footprint exists. The image is the same image; only environment variables
+differ, which is the whole point of the discipline in §1.
+
+The allowance, verified against Oracle's Always Free reference 2026-08-14:
+
+| Resource | Always Free | Note |
+|---|---|---|
+| Ampere A1 compute | **2 OCPU / 12 GB** (1,500 OCPU-hrs, 9,000 GB-hrs per month) | **halved from 4/24 on 2026-06-15** |
+| Block volume | 200 GB total, 47 GB minimum boot volume | 5 backups |
+| Flexible Load Balancer | 1, fixed 10 Mbps | enough to mirror the §4 path-routing topology |
+| OCI Database with PostgreSQL | **not included** | staging runs `postgres:17-alpine` on the VM |
+| OCI Cache | **not included** | staging runs `redis:7-alpine` on the VM |
+
+⚠️ Oracle cut the Ampere allowance in half on 2026-06-15 without a public announcement, and gave
+existing tenancies until **2026-08-18** to shrink or have over-limit resources terminated. Anything
+sized against the old 4 OCPU / 24 GB figure — including earlier drafts of this document — is wrong.
+2 OCPU / 12 GB still runs the stack comfortably (the Compose limits total under 1 GB), but **verify**
+the tenancy is inside the new limit before building on it.
+
+The VM bootstrap is `deploy/staging/cloud-init.yaml` — pass it as the instance's `user_data`. It
+installs Docker, writes the staging compose file, a `.env` template and the `zammy-deploy` /
+`zammy-migrate` helpers, and enables a systemd unit that starts the stack on boot. It contains **no
+secrets**: `user_data` is readable from the instance metadata service and via the API, so the `.env`
+is filled in once over SSH. Swapping that for an instance principal reading OCI Vault is the same
+upgrade §4 defers for production, and it changes nothing else.
+
+Staging runs **`CURRENTS_MODE=live`**, so it exercises the real upstream — the Cloudflare
+User-Agent rule, the `x-ratelimit-*` headers and the 7-day `date_range` ceiling are things fixtures
+replay rather than enforce. The cost is quota: the free tier's 1000 calls/day are **per key**, so
+staging sharing production's key can starve it. Give staging its own Currents key, or cap its share
+with `CURRENTS_DAILY_CALL_LIMIT` (and `INTERACTIVE_RESERVE` below it, or the process refuses to
+boot). A live mode with no key is also a boot refusal — `zammy-deploy` checks for it before pulling.
+
+`zammy-deploy` implements the §5/§6 sequence on one host — pull the digest, run migrations as a
+discrete step with the *same* digest, roll the api, then poll `/readyz` until `status == "ready"`.
+It refuses an image reference that is not digest-pinned.
+
+**What staging therefore does not prove.** Postgres and Redis are containers on the VM, not managed
+services, so a green staging says nothing about: managed-service private endpoints (§3), PITR
+(§4), `rediss://` against a real TLS endpoint (§2.4 — staging talks plaintext `redis://` over the
+VM's loopback), or the multi-instance rolling deploy (§6), since the free tier affords one app
+instance. Those first execute in production. Staging proves the *shape* — image → migrate → roll →
+healthy behind the LB — and that is worth having on day one.
 
 ## 8. What this plan deliberately does not do
 
