@@ -57,11 +57,17 @@ export interface GeminiOptions {
    * published figure and the default in config; raise it with the plan.
    *
    * Enforced HERE rather than in each caller because the ceiling belongs to the
-   * KEY, and five things in this process share one: the live ingest tail, the
-   * late-candidate sweep, the nightly drift chore, the backfill and the
-   * operator CLI. A pace set per caller is a pace the sixth caller forgets, and
-   * retries — which are requests the callers cannot see — would be uncounted by
-   * all five.
+   * KEY, and five callers share one: the live ingest tail, the late-candidate
+   * sweep, the nightly drift chore, the backfill and the operator CLI. A pace
+   * set per caller is a pace the sixth caller forgets, and retries — which are
+   * requests the callers cannot see — would be uncounted by all five.
+   *
+   * The scope of that enforcement is one CLIENT, so one PROCESS: the server's
+   * three callers share the instance it builds, and each CLI builds its own. A
+   * CLI run against a live server therefore puts two pacers on the key and up
+   * to 2x this number through it — see STORYLINE-BACKFILL.md, "Operating it",
+   * for the `--label-rate` lever, and the 429 cooldown below for what catches
+   * it when nobody pulls that lever.
    *
    * 0 disables the pacer, for tests that assert on retry behaviour and have no
    * clock to spend on it.
@@ -185,23 +191,53 @@ export function createGeminiClient(options: GeminiOptions): TextGenerator {
   /** Set by a 429 that carried `Retry-After`: nothing goes out before this. */
   let cooldownUntil = 0;
 
+  /** Hold a slot, keeping `sent` sorted so the window arithmetic stays a lookup. */
+  function reserve(at: number): void {
+    const after = sent.findIndex((when) => when > at);
+    if (after < 0) sent.push(at);
+    else sent.splice(after, 0, at);
+  }
+
+  /** Give a held slot back, for a caller that will not spend it after all. */
+  function release(at: number): void {
+    const held = sent.indexOf(at);
+    if (held >= 0) sent.splice(held, 1);
+  }
+
+  function tooLong(wait: number): string {
+    return `rate limited locally (${Math.round(wait / 1000)}s wait exceeds the ${Math.round(maxRateWaitMs / 1000)}s cap)`;
+  }
+
   /**
    * Take the next slot, waiting for it if one is not free yet.
    *
    * Slots are RESERVED BEFORE the wait, not after it, and that is the whole
    * concurrency story — no mutex, no queue object. Two callers arriving in the
    * same tick each read a window that already contains the other's reservation,
-   * so they stack rather than colliding. Reservations are non-decreasing, which
-   * is what keeps `sent` sorted and the arithmetic below an index lookup.
+   * so they stack rather than colliding.
+   *
+   * The wait is then a LOOP rather than one sleep, because the frontier can move
+   * while a waiter sleeps towards it: another call's 429 sets `cooldownUntil`,
+   * and a waiter that computed its ready time before the 429 arrived would wake
+   * inside the cooldown and send the exact request the cooldown exists to stop.
+   * So on waking we compare the cooldown against our reservation again, move the
+   * reservation if it grew, and sleep the remainder — as many times as it takes.
+   * A relocation re-derives the WINDOW slot too, not just the cooldown: every
+   * waiter parked at bare `cooldownUntil` would fire in the same tick the
+   * cooldown expires — a burst past the ceiling that re-earns exactly the 429
+   * the cooldown answered. Re-deriving queues a relocated waiter behind callers
+   * who reserved while it slept, and behind them is where the ceiling says a
+   * relocated send belongs. An UNMOVED waiter keeps its settled slot: its window
+   * was honest when it reserved, and later arrivals reserved after it.
    *
    * Returns the reason to give up, or null to proceed.
    */
   async function admit(signal: AbortSignal | undefined): Promise<string | null> {
     if (maxRequestsPerMinute <= 0) return null;
 
-    const at = now();
+    const arrivedAt = now();
     // Reservations in the future are not expired, however far ahead they sit.
-    const cutoff = at - WINDOW_MS;
+    const cutoff = arrivedAt - WINDOW_MS;
     if (sent.length > 0 && sent[0]! <= cutoff) sent = sent.filter((when) => when > cutoff);
 
     // The oldest request that would still be inside the window if we sent now.
@@ -210,20 +246,39 @@ export function createGeminiClient(options: GeminiOptions): TextGenerator {
       sent.length >= maxRequestsPerMinute
         ? sent[sent.length - maxRequestsPerMinute]! + WINDOW_MS
         : 0;
-    const readyAt = Math.max(at, windowSlot, cooldownUntil);
-    const wait = readyAt - at;
+    let readyAt = Math.max(arrivedAt, windowSlot, cooldownUntil);
+    if (readyAt - arrivedAt > maxRateWaitMs) return tooLong(readyAt - arrivedAt);
 
-    if (wait > maxRateWaitMs) {
-      return `rate limited locally (${Math.round(wait / 1000)}s wait exceeds the ${Math.round(maxRateWaitMs / 1000)}s cap)`;
-    }
+    reserve(readyAt);
 
-    sent.push(readyAt);
-    if (wait > 0) {
-      await sleep(wait);
+    while (readyAt > now()) {
+      await sleep(readyAt - now());
       // Only after an actual wait: a caller who arrived already aborted is the
       // fetch signal's business, and short-circuiting it here would skip the
       // request the abort path is written against.
-      if (signal?.aborted) return "aborted";
+      if (signal?.aborted) {
+        // The slot was never spent, and a reservation nobody sends against
+        // holds a live caller back for up to a window.
+        release(readyAt);
+        return "aborted";
+      }
+      if (cooldownUntil > readyAt) {
+        release(readyAt);
+        // Floor at the cooldown, then re-derive the window over the OTHER
+        // reservations (ours is released) — see the relocation note above.
+        const slot =
+          sent.length >= maxRequestsPerMinute
+            ? sent[sent.length - maxRequestsPerMinute]! + WINDOW_MS
+            : 0;
+        readyAt = Math.max(cooldownUntil, slot);
+        // The cap is on the wait this caller has been asked to sit through in
+        // total, so a relocation mid-wait can push it past the cap the same
+        // way a long `Retry-After` does on arrival.
+        if (readyAt - arrivedAt > maxRateWaitMs) {
+          return tooLong(readyAt - arrivedAt);
+        }
+        reserve(readyAt);
+      }
     }
     return null;
   }

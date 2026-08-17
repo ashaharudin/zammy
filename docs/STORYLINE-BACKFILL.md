@@ -160,10 +160,18 @@ Three things worth keeping:
   spacing setting was never the thing keeping the run legal. And that is
   precisely why parallelising is the dangerous half of the advice: four workers
   at 8.5/min each is 34/min, over the ceiling, and the arithmetic that saved
-  the serial run does not survive. The client now paces the key itself
-  (`GEMINI_MAX_RPM`, default 15), so a parallelised pass is throttled rather
-  than rejected — it simply cannot beat ~15/min without raising the plan, which
-  puts the floor for a full relabel at ~3 hours.
+  the serial run does not survive. The client now paces itself
+  (`GEMINI_MAX_RPM`, default 15), so a parallelised pass inside ONE process is
+  throttled rather than rejected — workers sharing the CLI's client cannot beat
+  ~15/min between them, which puts the floor for a full relabel at ~3 hours.
+
+  That is a per-process guarantee, not a per-key one. The pacer is one instance
+  per client, and this CLI builds its own — so a relabel run while the server is
+  live is two pacers at 15/min on the same key, ~30/min, and the API rather than
+  the pacer is what says no. Either run the campaign against a quiet server, or
+  give the pass `--label-rate=7` (and expect ~6 hours) so the two windows add up
+  to the ceiling instead of doubling it. See STORYLINE-LABELS.md, "The rate
+  limit, and where it is enforced".
 
 ## Operating it
 
@@ -178,9 +186,10 @@ pnpm backfill:storylines --label-rate=8     # model calls per minute; slower onl
 ```
 
 `--label-rate` defaults to `GEMINI_MAX_RPM` (15) and is useful only to go
-SLOWER. The client enforces the ceiling on the key regardless of what the pass
-asks for, so a higher number buys a queue inside the pacer rather than a faster
-run.
+SLOWER. Asking for more than the client's own ceiling buys a queue inside its
+pacer rather than a faster run. Going slower is the real use: this run's pacer
+knows nothing about the server's, so `--label-rate=7` is how an operator keeps
+the two of them under one 15/min ceiling on a shared key.
 
 `--restart` is the only flag that discards state.
 
