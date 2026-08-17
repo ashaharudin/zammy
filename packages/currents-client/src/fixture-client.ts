@@ -27,6 +27,7 @@ import type { CurrentsClient, LatestNewsParams } from "./client.js";
  */
 export class FixtureCurrentsClient implements CurrentsClient {
   readonly provider = PROVIDER;
+  readonly coverageProvider = PROVIDER;
   private readonly governor: UnmeteredQuotaGovernor;
 
   constructor(

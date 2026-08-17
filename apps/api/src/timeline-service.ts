@@ -638,8 +638,9 @@ interface FillBudget {
 type FillOutcome =
   | { kind: "completed"; callsMade: number }
   | { kind: "deferred"; resumePage: number; callsMade: number }
-  /** `oldestSeen`: the frontier the fetched pages reached — null only when
-   * normalization dropped everything. */
+  /** `oldestSeen`: the frontier the fetched pages reached, over the
+   * coverage-bearing provider's sightings alone (ADR-0012) — null when
+   * normalization dropped everything that provider sent. */
   | { kind: "truncated"; callsMade: number; oldestSeen: Date | null }
   /** §9.4: the topic's daily cap is spent. Stop deepening; resume tomorrow. */
   | { kind: "capped"; callsMade: number };
@@ -722,7 +723,13 @@ async function fillSegment(
     // so a reader waiting on this fill cannot be failed by it.
     await groupCreatedArticles(groupingDepsFor(deps), ingested.createdArticles);
 
+    // Coverage-bearing sightings only (ADR-0012). The composite merges in
+    // supplement sightings, and a supplement that is sparser in this window
+    // reaches OLDER than the primary's 100-cap frontier — folding one in would
+    // move `oldestSeen` back and record coverage over a span the coverage-
+    // bearing provider never fetched, permanently hiding its articles there.
     for (const sighting of result.sightings) {
+      if (sighting.provider !== deps.currents.coverageProvider) continue;
       const published = new Date(sighting.published);
       if (oldestSeen === null || published < oldestSeen) oldestSeen = published;
     }

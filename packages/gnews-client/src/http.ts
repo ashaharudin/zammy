@@ -61,6 +61,7 @@ export interface HttpGnewsClientOptions {
 
 export class HttpGnewsClient implements GnewsClient {
   readonly provider = PROVIDER;
+  readonly coverageProvider = PROVIDER;
   readonly limits: ClientLimits;
   private readonly baseUrl: string;
   private readonly apiKey: string;

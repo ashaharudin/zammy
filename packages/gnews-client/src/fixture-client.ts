@@ -26,6 +26,7 @@ import type { GnewsClient } from "./client.js";
  */
 export class FixtureGnewsClient implements GnewsClient {
   readonly provider = PROVIDER;
+  readonly coverageProvider = PROVIDER;
   private readonly governor: UnmeteredQuotaGovernor;
 
   constructor(

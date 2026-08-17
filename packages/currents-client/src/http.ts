@@ -75,6 +75,7 @@ export interface HttpCurrentsClientOptions {
 
 export class HttpCurrentsClient implements CurrentsClient {
   readonly provider = PROVIDER;
+  readonly coverageProvider = PROVIDER;
   readonly limits: ClientLimits;
   private readonly baseUrl: string;
   private readonly apiKey: string;

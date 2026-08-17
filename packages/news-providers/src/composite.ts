@@ -70,6 +70,10 @@ interface Contribution {
 export class CompositeNewsClient implements CurrentsClient {
   readonly provider = "composite";
   readonly limits: ClientLimits;
+  /** Coverage claims are the primary's alone, whoever that is (ADR-0012). */
+  get coverageProvider(): string {
+    return this.primary.coverageProvider;
+  }
   private readonly logger: ClientLogger | undefined;
 
   constructor(

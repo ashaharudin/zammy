@@ -81,6 +81,14 @@ export interface NewsClient {
   /** Which upstream this client speaks to. `"composite"` when it fans out. */
   readonly provider: string;
   /**
+   * The provider whose fetches back coverage claims (ADR-0012). A single client
+   * is its own; the composite answers with its primary's. Callers recording
+   * coverage from sightings must consider only sightings carrying this name —
+   * a supplement's sightings are breadth, and treating one as the coverage
+   * frontier claims spans the coverage-bearing provider never fetched.
+   */
+  readonly coverageProvider: string;
+  /**
    * The tier limits this client enforces.
    *
    * Exposed so callers cannot page against a different idea of the cap than the
