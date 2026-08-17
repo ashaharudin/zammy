@@ -1,7 +1,7 @@
 # Zammy
 
 A news aggregator: keywords in, a time-ordered timeline of headlines out, with a landing-page
-wordcloud of the last 24 hours' most-referenced topics. Backed by
+wordcloud of the storylines the last 24 hours updated. Backed by
 [Currents API](https://currentsapi.services), and optionally [GNews](https://gnews.io) alongside it.
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the design, and why it is shaped this way.

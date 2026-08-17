@@ -5,10 +5,11 @@
  * d3-cloud does not shrink, wrap or warn about a word that does not fit. It
  * measures each word into a collision box, and `place()` rejects any candidate
  * position whose box crosses the board edge; a word that never places is simply
- * absent from the array handed to `.on("end")`. Since font size is assigned by
- * RANK — the top-scoring term always gets `FONT_MAX` — the word most likely to
- * disappear is the one the cloud most wants to show. It stays in the accessible
- * list either way, so the two views disagree with nothing signalling why.
+ * absent from the array handed to `.on("end")`. Since the busiest storyline on
+ * the board always takes the top of the font range (see `cloudFont`), the word
+ * most likely to disappear is the one the cloud most wants to show. It stays in
+ * the accessible list either way, so the two views disagree with nothing
+ * signalling why.
  *
  * Measured against d3-cloud 1.2.9: on an empty 700px board any term past 20
  * characters is unplaceable above ~55px, and `artificial intelligence` (23)

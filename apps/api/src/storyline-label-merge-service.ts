@@ -7,7 +7,7 @@ import {
   type Database,
 } from "@zammy/storage";
 import { singular } from "./grouping.js";
-import { properNounEvidence } from "./term-scoring.js";
+import { properNounEvidence } from "./headline-tokens.js";
 import { labelStoryline, type LabelerDeps } from "./storyline-label-service.js";
 import {
   labelWords,

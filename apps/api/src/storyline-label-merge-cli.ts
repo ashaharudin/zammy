@@ -7,7 +7,7 @@ import {
 import { sql } from "kysely";
 import { createGeminiClient, type TextGenerator } from "./gemini.js";
 import { singular } from "./grouping.js";
-import { properNounEvidence } from "./term-scoring.js";
+import { properNounEvidence } from "./headline-tokens.js";
 import {
   labelWords,
   sharedLabels,

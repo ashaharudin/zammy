@@ -6,6 +6,7 @@ import * as storyTokenDf from "./migrations/0008-story-token-df.js";
 import * as storylineBridges from "./migrations/0009-storyline-bridges.js";
 import * as labelDrift from "./migrations/0010-storyline-label-drift.js";
 import * as labelSource from "./migrations/0011-storyline-label-source.js";
+import * as dropTermCloud from "./migrations/0014-drop-term-cloud.js";
 import { createTestDatabase, type TestDatabase } from "./test-support.js";
 
 /**
@@ -56,6 +57,13 @@ describe("migrateToLatest", () => {
       "storyline_bridges",
     ]) {
       expect(tables).toContain(expected);
+    }
+
+    // And the term cloud's three tables must NOT: 0002 and 0005 create them,
+    // 0014 drops them, and a migration order that left one standing would leave
+    // the schema disagreeing with `Database` (ADR-0013).
+    for (const gone of ["trending_terms", "term_snapshots", "term_baseline"]) {
+      expect(tables).not.toContain(gone);
     }
   });
 
@@ -138,6 +146,34 @@ describe("migrateToLatest", () => {
 
     await storyTokenDf.up(harness.db);
     expect(await hasStoryDfTables()).toBe(2);
+  });
+
+  it("restores and re-drops the term cloud's tables cleanly", async () => {
+    // 0014's `down` is the one rollback in this file that cannot return what it
+    // took: the schema comes back EMPTY, because a week of hourly baseline
+    // observations is not derivable from anything left standing (ADR-0013). What
+    // is tested is that the rollback lands on a usable schema and that going
+    // forward again drops all three — a `down` that recreated two of them would
+    // leave the next `up` half-applying.
+    const termTables = async () => {
+      const { rows } = await sql<{ n: string }>`
+        select count(*) as n from information_schema.tables
+        where table_schema = 'public'
+          and table_name in ('trending_terms', 'term_snapshots', 'term_baseline')
+      `.execute(harness.db);
+      return Number(rows[0]?.n ?? 0);
+    };
+
+    await dropTermCloud.down(harness.db);
+    expect(await termTables()).toBe(3);
+    // Restored empty, and writable — the state the tables were in at launch.
+    await sql`
+      insert into term_baseline (language, term, mean_df, updated_at)
+      values ('en', 'kelowna', 1.5, now())
+    `.execute(harness.db);
+
+    await dropTermCloud.up(harness.db);
+    expect(await termTables()).toBe(0);
   });
 
   it("is a no-op the second time", async () => {

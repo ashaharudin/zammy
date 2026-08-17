@@ -1,36 +1,52 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import cloud from "d3-cloud";
-import type { TrendingResponse, TrendingTerm } from "@zammy/shared";
+import type { TrendingResponse, TrendingStoryline } from "@zammy/shared";
 import { fetchTrending } from "./api.js";
+import { cloudDetail, windowPhrase } from "./cloudLabels.js";
+import { FONT_MIN, fontSizes } from "./cloudFont.js";
 import { layoutSeed } from "./layoutSeed.js";
 import { MONO } from "./theme.js";
-import { maxPlaceableFont } from "./wordFit.js";
 
 /**
- * The landing-page wordcloud (ARCHITECTURE 10.5): the last 24 hours' most-referenced
- * topics, sized by unique articles, each word a real <button> that runs the
- * search — the cloud feeds the demand-driven loop.
+ * The landing-page wordcloud (ARCHITECTURE 10.5): the STORYLINES the last 24
+ * hours updated, drawn as their labels — sized by how many articles each gained
+ * inside the window, coloured by how recently it moved, each word a real
+ * <button> that runs the search.
  *
- * Accessibility is not optional here (§10.5): a wordcloud is close to
- * unusable for screen readers, so the same data renders as an ordered list —
- * always present for assistive tech, toggleable visible for everyone. Font
- * size is decorative; the article count is the accessible signal.
+ * Two channels, one question each (ADR-0013). Size answers "how much is
+ * happening", colour answers "how recently" — which is why nothing here sorts
+ * or scores: the response arrives most recently updated first, so the palette
+ * reads straight off the array index and the words the reader's eye lands on
+ * first are the freshest.
+ *
+ * The click runs the LABEL AS A SEARCH, and this is the one place in the app
+ * that does. Everywhere else a label opens its storyline by UUID (ADR-0010,
+ * ADR-0011, and `StorylinePills`), because a label names one specific arc and
+ * the UUID is exact. The cloud is the exception on purpose: it is also the cold
+ * -start answer (§9.3), and a click that opens a storyline mints no topic and
+ * feeds the demand-driven loop nothing.
+ *
+ * Accessibility is not optional here (§10.5): a wordcloud is close to unusable
+ * for screen readers, so the same data renders as an ordered list — always
+ * present for assistive tech, toggleable visible for everyone. Size and colour
+ * are decorative; the counts and the update time are the accessible signal.
  */
 
 const POLL_INTERVAL_MS = 1500;
-const POLL_MAX = 40; // the 12–24 call sample takes ~10–20s; stop asking after ~60s
+const POLL_MAX = 40; // the sample takes ~10–20s; stop asking after ~60s
 
 const LAYOUT_WIDTH = 700;
 const LAYOUT_HEIGHT = 340;
-const FONT_MIN = 12;
-const FONT_MAX = 56;
 
 /**
- * Warm→cool ramp keyed to score rank: the hottest topics burn red, the tail
- * cools to blue — a second visual channel alongside font size. Decorative
- * only (the cloud is aria-hidden); the list view keeps plain --fg because
- * mid-ramp hues (the yellow especially) don't clear body-text contrast.
+ * Warm→cool ramp keyed to RECENCY: what moved minutes ago burns red, what has
+ * been quiet since yesterday morning cools to blue. Under the term cloud this
+ * ramp keyed to score rank, which conflated volume with freshness; here it is
+ * the channel that answers "how recently", and font size answers "how much".
+ *
+ * Decorative only (the cloud is aria-hidden); the list view keeps plain --fg
+ * because mid-ramp hues (the yellow especially) don't clear body-text contrast.
  */
 const PALETTE = [
   "#F94144",
@@ -45,20 +61,26 @@ const PALETTE = [
   "#277DA1",
 ] as const;
 
-/** Score rank → palette bucket. */
-function rankColors(terms: readonly TrendingTerm[]): Map<string, string> {
-  const ranked = [...terms].sort((a, b) => b.score - a.score);
+/**
+ * Recency rank → palette bucket. The array's own order IS the rank (§10.4
+ * returns most recently updated first), so this needs no comparison — and the
+ * cloud and the list therefore cannot disagree about which word is freshest.
+ */
+function rankColors(storylines: readonly TrendingStoryline[]): Map<string, string> {
   return new Map(
-    ranked.map((t, i) => [
-      t.term,
-      PALETTE[Math.min(PALETTE.length - 1, Math.floor((i / ranked.length) * PALETTE.length))]!,
+    storylines.map((storyline, index) => [
+      storyline.id,
+      PALETTE[
+        Math.min(PALETTE.length - 1, Math.floor((index / storylines.length) * PALETTE.length))
+      ]!,
     ]),
   );
 }
 
 /**
- * One cloud per language (§10.1): terms are ranked inside a language's own
- * corpus, so the language is part of the query key, not a filter applied after.
+ * One cloud per language (§10.1): a storyline enters a language's cloud through
+ * the articles that covered it in that language, so the language is part of the
+ * query key, not a filter applied after.
  */
 export function useTrending(language: string) {
   const pollsUsed = useRef(0);
@@ -86,34 +108,10 @@ export function useTrending(language: string) {
 }
 
 interface PlacedWord {
-  term: TrendingTerm;
+  storyline: TrendingStoryline;
   x: number;
   y: number;
   size: number;
-}
-
-/**
- * Font ∝ sqrt(score), clamped — linear makes the top term absurd (§10.5).
- *
- * The second clamp is by LENGTH, and it is not cosmetic: a word too wide for
- * the board is dropped by d3-cloud without a word of complaint, and the term
- * at risk is always the highest-scoring one, because rank is what assigns
- * FONT_MAX. Sizing it down keeps it in the cloud (see wordFit.ts).
- */
-function fontSizes(terms: readonly TrendingTerm[]): Map<string, number> {
-  const roots = terms.map((t) => Math.sqrt(Math.max(t.score, 0)));
-  const min = Math.min(...roots);
-  const max = Math.max(...roots);
-  const span = max - min || 1;
-  return new Map(
-    terms.map((t, i) => [
-      t.term,
-      Math.min(
-        FONT_MIN + ((roots[i]! - min) / span) * (FONT_MAX - FONT_MIN),
-        maxPlaceableFont(t.term.length, LAYOUT_WIDTH, FONT_MIN),
-      ),
-    ]),
-  );
 }
 
 /** Deterministic per language (see layoutSeed): no reshuffle per poll. */
@@ -182,31 +180,38 @@ export function TrendingCloud({
   const scale = Math.min(1, sectionWidth / contentWidth);
 
   const data: TrendingResponse | undefined = trending.data;
-  const terms = data?.terms ?? [];
+  const storylines = data?.storylines ?? [];
   const warming = data !== undefined && data.meta.ingest.state === "in_progress";
-  const colors = rankColors(terms);
+  const colors = rankColors(storylines);
+  // Empty bounds only when there is no data, in which case there are no words
+  // to label; `windowHours` falls back to 24 rather than rendering NaN.
+  const bounds = data ?? { windowStart: "", windowEnd: "" };
 
   useEffect(() => {
-    if (terms.length === 0) {
+    if (storylines.length === 0) {
       setPlaced([]);
       return;
     }
-    const sizes = fontSizes(terms);
+    const sizes = fontSizes(storylines, LAYOUT_WIDTH);
+    // d3-cloud identifies a word by its `text`, so the layout is keyed on the
+    // label while everything else here is keyed on the UUID. Labels are
+    // deliberately non-unique (ADR-0011) — the API keeps one word per label so
+    // this mapping stays one-to-one (see `dedupeByLabel`).
+    const byLabel = new Map(storylines.map((s) => [s.label, s]));
     const layout = cloud()
       .size([LAYOUT_WIDTH, LAYOUT_HEIGHT])
-      .words(terms.map((t) => ({ text: t.term, size: sizes.get(t.term) })))
+      .words(storylines.map((s) => ({ text: s.label, size: sizes.get(s.id) })))
       .padding(3)
       .rotate(0)
       .font(MONO)
       .fontSize((d) => d.size ?? FONT_MIN)
       .random(seededRandom(layoutSeed({ language: data?.language ?? "" })))
       .on("end", (words) => {
-        const byTerm = new Map(terms.map((t) => [t.term, t]));
         setPlaced(
           words.flatMap((w) => {
-            const term = w.text === undefined ? undefined : byTerm.get(w.text);
-            return term && w.x !== undefined && w.y !== undefined && w.size !== undefined
-              ? [{ term, x: w.x, y: w.y, size: w.size }]
+            const storyline = w.text === undefined ? undefined : byLabel.get(w.text);
+            return storyline && w.x !== undefined && w.y !== undefined && w.size !== undefined
+              ? [{ storyline, x: w.x, y: w.y, size: w.size }]
               : [];
           }),
         );
@@ -216,14 +221,18 @@ export function TrendingCloud({
       layout.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.language, JSON.stringify(terms.map((t) => t.term))]);
+  }, [data?.language, JSON.stringify(storylines.map((s) => s.label))]);
 
   if (trending.isError) return null; // the landing page still works as a search box
 
   return (
     <section
       ref={sectionRef}
-      aria-label="Topics from the last 24 hours"
+      aria-label={
+        data
+          ? `Storylines updated in ${windowPhrase(data)}`
+          : "Storylines updated in the last 24 hours"
+      }
       style={{ width: "100%", maxWidth: "760px" }}
     >
       <div
@@ -243,11 +252,11 @@ export function TrendingCloud({
         <span>
           {warming
             ? "gathering the latest news…"
-            : data !== undefined && terms.length === 0
-              ? "nothing trending in this language yet"
+            : data !== undefined && storylines.length === 0
+              ? "no storylines have moved in this language yet"
               : ""}
         </span>
-        {terms.length > 0 && (
+        {storylines.length > 0 && (
           <button
             onClick={() => setAsList(!asList)}
             aria-pressed={asList}
@@ -313,10 +322,10 @@ export function TrendingCloud({
           >
             {placed.map((word) => (
               <button
-                key={word.term.term}
+                key={word.storyline.id}
                 tabIndex={-1}
-                onClick={() => onSearch(word.term.term)}
-                title={`${word.term.uniqueArticles} articles`}
+                onClick={() => onSearch(word.storyline.label)}
+                title={cloudDetail(word.storyline, bounds)}
                 style={{
                   position: "absolute",
                   left: `calc(50% + ${word.x}px)`,
@@ -329,11 +338,11 @@ export function TrendingCloud({
                   fontSize: `${word.size}px`,
                   lineHeight: 1,
                   whiteSpace: "nowrap",
-                  color: colors.get(word.term.term) ?? "var(--fg)",
+                  color: colors.get(word.storyline.id) ?? "var(--fg)",
                   padding: 0,
                 }}
               >
-                {word.term.term}
+                {word.storyline.label}
               </button>
             ))}
           </div>
@@ -344,9 +353,10 @@ export function TrendingCloud({
       )}
 
       {/* The accessible equivalent (§10.5): always in the tree for assistive
-          tech; the toggle above makes it visible for everyone. The COUNT is
-          the signal — font size never carries meaning alone. */}
-      {terms.length > 0 && (
+          tech; the toggle above makes it visible for everyone. The COUNTS and
+          the update time are the signal — size and colour never carry meaning
+          alone, and recency is the whole ordering here. */}
+      {storylines.length > 0 && (
         <ol
           className={asList ? undefined : "sr-only"}
           style={
@@ -364,10 +374,10 @@ export function TrendingCloud({
               : undefined
           }
         >
-          {terms.map((term) => (
-            <li key={term.term} style={{ marginBottom: "0.3rem" }}>
+          {storylines.map((storyline) => (
+            <li key={storyline.id} style={{ marginBottom: "0.3rem" }}>
               <button
-                onClick={() => onSearch(term.term)}
+                onClick={() => onSearch(storyline.label)}
                 style={{
                   border: "none",
                   background: "none",
@@ -379,10 +389,10 @@ export function TrendingCloud({
                   textDecoration: "underline",
                 }}
               >
-                {term.term}
+                {storyline.label}
               </button>{" "}
               <span style={{ color: "var(--fg-faint)" }}>
-                — {term.uniqueArticles} article{term.uniqueArticles === 1 ? "" : "s"}
+                — {cloudDetail(storyline, bounds)}
               </span>
             </li>
           ))}

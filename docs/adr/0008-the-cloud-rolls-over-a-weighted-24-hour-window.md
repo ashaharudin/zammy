@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: partly superseded by ADR-0013 (the window still rolls and still ends at now; the weighted terms, the snapshot history and the baseline it describes are gone)
 ---
 
 # The cloud rolls over a weighted 24-hour window

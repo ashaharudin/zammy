@@ -28,11 +28,19 @@ Read: `readStoryDf` / `readTrailingCorpus`. Maintained on ingest by
 `groupCreatedArticles`, the same place `story_tokens` are written. Rebuilt by
 `rebuildStoryDf`. Pruned nightly with the retention chore.
 
-## It stands alone, it does not converge with `term_baseline`
+## It stands alone, it did not converge with `term_baseline`
 
-ADR-0011 left this open. The answer is: separate tables, and the reasons are
-that the two infrastructures disagree about all three of vocabulary, unit, and
+ADR-0011 left this open. The answer was: separate tables, and the reasons were
+that the two infrastructures disagreed about all three of vocabulary, unit, and
 clock.
+
+**The question closed itself.** `term_baseline` and `term_snapshots` were dropped
+with the term cloud in [ADR-0013](adr/0013-the-cloud-names-recently-updated-storylines.md)
+— the landing page draws storyline labels now, and a storyline needs no
+perennial-vocabulary suppressor — so these two tables are the only rolling-df
+infrastructure left. The comparison is kept because it is the record of *why*
+they were not merged, and because anything that later wants a trailing mean over
+cloud vocabulary will land on exactly these three disagreements again.
 
 | | `term_baseline` / `term_snapshots` | trailing corpus |
 | --- | --- | --- |

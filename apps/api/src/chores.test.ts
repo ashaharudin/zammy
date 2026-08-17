@@ -53,7 +53,6 @@ const deps = (): ChoreDeps => ({
   db,
   config: {
     retentionDays: 400,
-    baselineWindowDays: 30,
     storyDfWindowDays: 14,
     storylineDormancyDays: 90,
     timeZone: "UTC",

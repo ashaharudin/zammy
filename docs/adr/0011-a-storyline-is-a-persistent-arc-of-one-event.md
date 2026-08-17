@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted (ADR-0013 makes the landing-page cloud one exception to "a label's words never execute as a search"; everything else here stands)
 ---
 
 # A storyline is a persistent arc of one event, paged as storyline-days
@@ -144,6 +144,13 @@ nothing requires them to appear in any member article, and the ~20% yield
 ceiling that guarantee imposed goes with it: every promoted storyline has a
 label.
 
+*Amended by [ADR-0013](0013-the-cloud-names-recently-updated-storylines.md): the
+landing-page cloud does run a label as a search, and accepts exactly the cost
+this paragraph describes — the keyword match reaches headlines, not the arc, so
+the result is not a superset of the storyline it was clicked from. The timeline
+gutter and the surfaced pills still open the storyline by UUID, which is what
+makes the cloud an exception rather than a reversal.*
+
 This is the repo's first external model dependency. It is confined to the one
 place heuristics demonstrably cannot meet the bar — the adjacent-bigram
 extractor cannot reliably produce "names the event at a glance" — it runs at
@@ -256,8 +263,9 @@ prevention; prevention over cure.
 - **Non-English storylines** inherit the group layer's English-stopword
   degradation, now compounded by an English-tuned label prompt. Recorded, not
   fixed.
-- **Trailing-corpus df infrastructure** may converge with `term_baseline` or
-  stand alone; an implementation question, not a design one.
+- **Trailing-corpus df infrastructure** stands alone — settled by ADR-0013,
+  which dropped `term_baseline` outright, so there is nothing left to converge
+  with.
 
 ## Amended 2026-08-14: the label contract widens to two to five words
 

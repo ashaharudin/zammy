@@ -2,29 +2,48 @@ import { z } from "zod";
 import { ResponseMeta } from "./timeline.js";
 
 /**
- * One word in the landing-page cloud (ARCHITECTURE 10).
+ * One word in the landing-page cloud (ARCHITECTURE 10): a STORYLINE the window
+ * updated, drawn as its label.
  *
- * `uniqueArticles` is the displayed number and the size input. `sourceCount` is
- * the breadth gate: a term needs >= 2 distinct source domains to appear at all,
- * because a single outlet publishing eight near-identical advisories is not a
- * topic of the day. Without that gate the probe's naive scorer returned a cloud
- * made entirely of one Jenkins CVE burst (PROBE-FINDINGS 6b).
+ * The cloud used to carry extracted terms scored against a trailing baseline;
+ * it now carries the storylines whose coverage moved inside the last
+ * TREND_WINDOW_HOURS, most recently updated first
+ * ([ADR-0013](../../docs/adr/0013-the-cloud-names-recently-updated-storylines.md)).
+ * What that changes about the fields here: `label` is generated once per arc and
+ * reused, so nothing about it is per-window, while every count except `size`
+ * describes the window and the window only.
+ *
+ * `sourceCount` is the breadth gate that survives from the term cloud, and it
+ * is deliberately measured over the WHOLE arc: a storyline needs >= 2 distinct
+ * source domains to appear at all, because one outlet filing eight advisories
+ * is not what several newsrooms are covering (PROBE-FINDINGS 6b, where the
+ * naive scorer returned a cloud made entirely of one Jenkins CVE burst).
  */
-export const TrendingTerm = z.object({
-  term: z.string().min(1),
-  isBigram: z.boolean(),
-  /** Distinct ARTICLES, never sightings — the 50x-repeated page counts once. */
-  uniqueArticles: z.int().min(1),
-  /** Distinct source domains. Gate: >= 2. */
+export const TrendingStoryline = z.object({
+  /** The storyline's UUID — identity, and the only stable key here (ADR-0011). */
+  id: z.string().min(1),
+  /**
+   * The 2–5 words naming the arc. Never null in this contract: an unlabelled
+   * storyline is a valid thing to RENDER in a timeline but has no word to draw
+   * here, so it is filtered out rather than shown as "unlabelled storyline".
+   */
+  label: z.string().min(1),
+  /** Distinct member ARTICLES published inside the window — the size input. */
+  windowArticles: z.int().min(1),
+  /** Distinct member articles over the whole arc, all time. */
+  size: z.int().min(1),
+  /** Distinct source domains over the whole arc. Gate: >= 2. */
   sourceCount: z.int().min(2),
-  score: z.number(),
+  /** The newest member article inside the window — the recency channel (§10.3). */
+  lastUpdated: z.iso.datetime(),
 });
-export type TrendingTerm = z.infer<typeof TrendingTerm>;
+export type TrendingStoryline = z.infer<typeof TrendingStoryline>;
 
 /**
- * The most terms any caller may ask for. Exported because the API caches ONE
+ * The most words any caller may ask for. Exported because the API caches ONE
  * ranked list per language and serves every caller a prefix of it, so this is
- * also the length it computes and stores (§10.4).
+ * also what it reads and caches regardless of the asked-for limit (§10.4) —
+ * at most this many, since one word per label can shorten the list afterwards.
  */
 export const TRENDING_LIMIT_MAX = 100;
 
@@ -44,7 +63,8 @@ export const TrendingResponse = z.object({
   windowStart: z.iso.datetime(),
   windowEnd: z.iso.datetime(),
   language: z.string(),
-  terms: z.array(TrendingTerm),
+  /** Most recently updated first — the order the palette and the list read. */
+  storylines: z.array(TrendingStoryline),
   meta: ResponseMeta,
 });
 export type TrendingResponse = z.infer<typeof TrendingResponse>;

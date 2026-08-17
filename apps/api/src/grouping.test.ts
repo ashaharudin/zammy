@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { contentTokens } from "./term-scoring.js";
+import { contentTokens } from "./headline-tokens.js";
 import {
   chooseGroup,
   rankedMatches,

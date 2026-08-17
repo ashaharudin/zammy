@@ -1,20 +1,9 @@
 import { TRENDING_LIMIT_MAX, type TrendingResponse } from "@zammy/shared";
-import {
-  hourBucket,
-  ingestSightings,
-  readTermBaseline,
-  readTrendingTerms,
-  readWindowCorpus,
-  recordTermSnapshot,
-  refreshTermBaseline,
-  replaceTrendingTerms,
-  upsertTopic,
-} from "@zammy/storage";
+import { ingestSightings, readTrendingStorylines, upsertTopic } from "@zammy/storage";
 import { fingerprintOf } from "./canonical.js";
 import { groupCreatedArticles, groupingDepsFor } from "./grouping-service.js";
 import { samplePendingId, type SampleJob } from "./ingest-queue.js";
 import { readCachedPage, writeCachedPage } from "./page-cache.js";
-import { scoreTerms } from "./term-scoring.js";
 import type { TimelineDeps } from "./timeline-service.js";
 
 /**
@@ -30,6 +19,13 @@ import type { TimelineDeps } from "./timeline-service.js";
  * The window rolls with `now` rather than resetting at midnight (ADR-0008), so
  * nothing here is keyed by day: one live cloud per language, one lock, one
  * cache entry, and no period that can be closed or asked about after the fact.
+ *
+ * What the cloud NAMES is storylines, not extracted terms (ADR-0013), and the
+ * consequence for this file is that the sample no longer computes a cloud. It
+ * ingests and groups, the linker attaches what it created, and the read
+ * aggregates `storylines` directly — so the two halves below are now
+ * independent: the sample feeds the corpus, and nothing has to run for the
+ * window to have rolled.
  */
 
 export interface TrendingConfig {
@@ -41,9 +37,6 @@ export interface TrendingConfig {
   sampleRefreshMinutes: number;
   /** How far back the cloud looks, in hours (§10.1, default 24). */
   windowHours: number;
-  /** Recency half-life in hours (§10.3, default 8). */
-  halfLifeHours: number;
-  baselineWindowDays: number;
 }
 
 export interface TrendingDeps extends TimelineDeps {
@@ -68,7 +61,7 @@ const cacheKeyFor = (deps: TrendingDeps, language: string): string =>
 const sampleLockFor = (deps: TrendingDeps, language: string): string =>
   `${deps.queue.name}:lock:sample:${language}`;
 
-/** The window ending at `now`, as the corpus read and the response want it. */
+/** The window ending at `now`, as the storyline read and the response want it. */
 function windowBounds(now: Date, windowHours: number): { from: Date; to: Date } {
   return { from: new Date(now.getTime() - windowHours * 3_600_000), to: now };
 }
@@ -78,14 +71,14 @@ export async function readTrending(
   query: { language: string; limit: number },
 ): Promise<TrendingResponse> {
   const now = deps.now();
-  const { from } = windowBounds(now, deps.trending.windowHours);
+  const { from, to } = windowBounds(now, deps.trending.windowHours);
   const cacheKey = cacheKeyFor(deps, query.language);
 
   const cached = await readCachedPage<TrendingResponse>(deps.redis, cacheKey);
   if (cached) {
     return {
       ...cached,
-      terms: cached.terms.slice(0, query.limit),
+      storylines: cached.storylines.slice(0, query.limit),
       meta: { ...cached.meta, servedFrom: "cache" },
     };
   }
@@ -108,16 +101,19 @@ export async function readTrending(
       await deps.queue.enqueueSample({ kind: "sample", language: query.language });
     }
   } catch {
-    // Redis down: no sample this visit; the stored cloud still serves (§11).
+    // Redis down: no sample this visit; the stored corpus still answers (§11).
   }
 
   // The FULL ranked list, not this caller's slice: the cache key names a
   // language and nothing else, so a `?limit=4` request would otherwise cache
-  // a four-term cloud and every reader behind it would see one for the next
-  // fifteen minutes. Terms are ordered by score then term (§10.5), so every
-  // limit is a prefix of the same list and readers never disagree about rank.
-  const terms = await readTrendingTerms(deps.db, {
+  // a four-word cloud and every reader behind it would see one for the next
+  // fifteen minutes. Storylines come back most recently updated first (§10.4),
+  // so every limit is a prefix of the same list and readers never disagree
+  // about what leads.
+  const storylines = await readTrendingStorylines(deps.db, {
     language: query.language,
+    from,
+    to,
     limit: TRENDING_LIMIT_MAX,
   });
   const pendingJobs = await deps.queue.pendingCount(
@@ -127,14 +123,15 @@ export async function readTrending(
 
   const response: TrendingResponse = {
     windowStart: from.toISOString(),
-    windowEnd: now.toISOString(),
+    windowEnd: to.toISOString(),
     language: query.language,
-    terms: terms.map((t) => ({
-      term: t.term,
-      isBigram: t.isBigram,
-      uniqueArticles: t.dfArticles,
-      sourceCount: t.dfDomains,
-      score: t.score,
+    storylines: dedupeByLabel(storylines).map((storyline) => ({
+      id: storyline.id,
+      label: storyline.label,
+      windowArticles: storyline.windowArticles,
+      size: storyline.size,
+      sourceCount: storyline.sourceCount,
+      lastUpdated: storyline.lastUpdated.toISOString(),
     })),
     meta: {
       servedFrom: "store",
@@ -149,33 +146,52 @@ export async function readTrending(
   // growing under the front end's poll (§6.5), and an empty "complete" can
   // be a lock-race artifact on the very first concurrent visitors — freezing
   // that for 15 minutes would blank the landing page it exists to fill.
-  if (state === "complete" && response.terms.length > 0) {
+  if (state === "complete" && response.storylines.length > 0) {
     await writeCachedPage(deps.redis, cacheKey, response, TRENDING_CACHE_TTL_MS);
   }
 
-  return { ...response, terms: response.terms.slice(0, query.limit) };
+  return { ...response, storylines: response.storylines.slice(0, query.limit) };
 }
 
 /**
- * Queue-consumer handler for the §10.1 breadth sample. Idempotent end to end
- * — category fetches upsert into ordinary topics, the cloud is replaced
- * wholesale, the snapshot upserts on its hour — so BullMQ's at-least-once
- * redelivery after a deploy is safe.
+ * One word per label, keeping the most recently updated claimant.
+ *
+ * Labels are deliberately non-unique (ADR-0011): two storylines may be named
+ * the same thing, and the dev archive holds three called "Trump
+ * Administration". A timeline can tell them apart, because a pill has room for
+ * a date qualifier; a cloud cannot — it would simply draw the same word twice,
+ * at two sizes, in two colours, and a reader clicking either gets the same
+ * search. So the cloud is a set of WORDS, and the freshest claimant keeps it.
+ *
+ * The rows arrive most-recently-updated first, so "first wins" IS "freshest
+ * wins" and this needs no comparison of its own.
+ */
+function dedupeByLabel<T extends { label: string }>(rows: readonly T[]): T[] {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = row.label.toLocaleLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * Queue-consumer handler for the §10.1 breadth sample: ingest a page of
+ * `/v2/latest-news`, group what it creates, and let the linker do the rest.
+ *
+ * Idempotent end to end — category fetches upsert into ordinary topics,
+ * re-ingested articles collapse into their existing rows (§7.4), and grouping
+ * re-derives rather than re-homing — so BullMQ's at-least-once redelivery after
+ * a deploy is safe.
+ *
+ * It no longer computes anything for the cloud. Under the term design this
+ * handler scored the window and replaced `trending_terms`; the cloud is a
+ * query over storylines now (ADR-0013), and what makes a storyline appear in it
+ * is the linker running on the write path, which `groupCreatedArticles` already
+ * calls. So this job's only product is corpus.
  */
 export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Promise<void> {
-  const now = deps.now();
-  const { from, to } = windowBounds(now, deps.trending.windowHours);
-
-  // Fold the snapshot history into the baseline BEFORE scoring. The refresh
-  // reads only snapshots older than one window, so the corpus about to be
-  // scored cannot contribute to what suppresses it (§10.3).
-  await refreshTermBaseline(deps.db, {
-    language: job.language,
-    now,
-    windowHours: deps.trending.windowHours,
-    baselineWindowDays: deps.trending.baselineWindowDays,
-  });
-
   // Corpus source 2: ONE /v2/latest-news call carrying the whole curated
   // category list (PROBE-FINDINGS 6c) — comma-joined, page shared across
   // categories. Sampled sightings ingest under the keyword-less all-category
@@ -203,12 +219,12 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
         { priority: "background" },
       );
     } catch (error) {
-      // Quota or upstream trouble: keep what we have and still recompute —
-      // the window's stored articles beat a blank cloud, and the next visitor
-      // past the freshness window tries again (§11).
+      // Quota or upstream trouble: the window's stored storylines still make a
+      // cloud, and the next visitor past the freshness window tries again
+      // (§11). Nothing is left half-computed, because nothing is computed.
       deps.log?.warn(
         { err: error },
-        "latest-news sample failed; scoring with the stored corpus only",
+        "latest-news sample failed; the cloud stands on the stored corpus",
       );
       break;
     }
@@ -222,40 +238,18 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
     });
     deps.metrics?.articlesIngested(ingested.articlesCreated);
     // The sample is a write path into `articles` like any other, so it owes
-    // grouping the same call the timeline fill makes (§14.3). It is also the
-    // most syndication-dense source we have — one latest-news page spans every
-    // category and outlet — and an article ingested here without tokens is
-    // both un-groupable itself and invisible as a candidate to every article
+    // grouping the same call the timeline fill makes (§14.3) — and grouping is
+    // what runs the linker, so this is also the only thing that puts a sampled
+    // story into a storyline the cloud can name. It is the most
+    // syndication-dense source we have: one latest-news page spans every
+    // category and outlet, and an article ingested here without tokens is both
+    // un-groupable itself and invisible as a candidate to every article
     // ingested after it.
     await groupCreatedArticles(groupingDepsFor(deps), ingested.createdArticles);
     if (result.isLastPage) break;
   }
 
-  // Recompute over BOTH corpus sources — the sample and everything user
-  // searches already stored inside the window (§10.1).
-  const corpus = await readWindowCorpus(deps.db, { language: job.language, from, to });
-  const baseline = await readTermBaseline(deps.db, job.language);
-  const scored = scoreTerms(corpus, baseline, {
-    now,
-    halfLifeHours: deps.trending.halfLifeHours,
-  });
-
-  await replaceTrendingTerms(deps.db, {
-    language: job.language,
-    windowStart: from,
-    windowEnd: to,
-    terms: scored,
-  });
-
-  // Record what this recompute saw, at RAW counts, under the hour it ran:
-  // tomorrow's baseline is made of these rows and nothing else (§10.3).
-  await recordTermSnapshot(deps.db, {
-    language: job.language,
-    bucketHour: hourBucket(now),
-    terms: scored,
-  });
-
-  // Next poll must see the fresh cloud, not a pre-sample cache entry.
+  // Next poll must see the storylines this sample grew, not a pre-sample entry.
   try {
     await deps.redis.del(cacheKeyFor(deps, job.language));
   } catch {
