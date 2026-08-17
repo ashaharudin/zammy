@@ -6,6 +6,7 @@ import {
 } from "@zammy/storage";
 import { sql } from "kysely";
 import { createGeminiClient, type TextGenerator } from "./gemini.js";
+import { singular } from "./grouping.js";
 import { properNounEvidence } from "./term-scoring.js";
 import {
   labelWords,
@@ -35,10 +36,29 @@ const dryRun = args.includes("--dry-run");
 
 const config = loadConfig();
 const db = createDb(config.DATABASE_URL);
+/**
+ * A numeric flag, or exit. `Number("abc")` is NaN and NaN fails the comparison
+ * it lands in — which for `--grace` fails safe (`spansTouch` refuses) and for
+ * `--max-component` fails OPEN: `component.length > NaN` is false, so the
+ * anti-swallow valve silently stops guarding on the one run where the operator
+ * typed the flag wrong. A merge has no inverse, so a bad flag stops the run.
+ */
+function numericFlag(name: string, fallback: number): number {
+  const raw = flag(name);
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    console.error(`--${name}=${raw} is not a non-negative number`);
+    process.exit(1);
+  }
+  return value;
+}
+
 const rules = {
-  graceDays: Number(flag("grace") ?? config.STORYLINE_LABEL_MERGE_GRACE_DAYS),
-  maxComponent: Number(
-    flag("max-component") ?? config.STORYLINE_LABEL_MERGE_MAX_COMPONENT,
+  graceDays: numericFlag("grace", config.STORYLINE_LABEL_MERGE_GRACE_DAYS),
+  maxComponent: numericFlag(
+    "max-component",
+    config.STORYLINE_LABEL_MERGE_MAX_COMPONENT,
   ),
 };
 
@@ -132,7 +152,10 @@ async function report(): Promise<void> {
       db,
       arcs.map((arc) => arc.id),
     );
-    const evidence = properNounEvidence(coverage);
+    // Folded on both sides, exactly as the planner does it — a report that
+    // printed different grounded names from the run it explains is worse than
+    // no report. See `planLabelMerges`.
+    const evidence = properNounEvidence(coverage, singular);
     const names = labelWords(label).filter((word) => evidence(word));
     const day = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 

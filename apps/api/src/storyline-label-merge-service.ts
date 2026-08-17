@@ -6,6 +6,7 @@ import {
   readStorylineCoverageText,
   type Database,
 } from "@zammy/storage";
+import { singular } from "./grouping.js";
 import { properNounEvidence } from "./term-scoring.js";
 import { labelStoryline, type LabelerDeps } from "./storyline-label-service.js";
 import {
@@ -100,11 +101,12 @@ export async function planLabelMerges(
       deps.db,
       arcs.map((arc) => arc.id),
     );
-    // `properNounEvidence` answers for a SURFACE form; label words arrive folded
-    // by `normalizeLabel`, and the fold is `singular` — the same one the corpus
-    // side of the system uses — so a plural label word and its corpus evidence
-    // meet on the same spelling.
-    const evidence = properNounEvidence(coverage);
+    // `properNounEvidence` answers for a SURFACE form by default; label words
+    // arrive folded by `normalizeLabel`, whose fold is `singular`. So the corpus
+    // side is folded the same way and the two meet on one spelling — unfolded,
+    // "Hamas" would be recorded as `hamas` and asked for as `hama`, and every
+    // name ending in `s` would be refused as no name at all.
+    const evidence = properNounEvidence(coverage, singular);
     const isName = (word: string): boolean => evidence(word);
 
     const planned = planLabelMerge(label, arcs, isName, deps.rules);

@@ -521,6 +521,50 @@ describe("bridges a merge re-points", () => {
     expect(await countBridges(db, { storylineA: survivor!, storylineB: third })).toBe(0);
   });
 
+  it("re-checks a pair whose count crosses K LATER in the same cascade", async () => {
+    // FOURTH's two bridges reach the survivor on different hops: one when MID
+    // is absorbed, the second when THIRD is. A cascade that remembers the
+    // first, below-K answer never asks again and leaves the pair for the
+    // nightly sweep to repair a day late — the count does grow mid-cascade.
+    const FOURTH = ["kelowna", "vineyard", "frost", "harvest", "riesling"];
+    await seedCorpus({ rare: [...LEFT, ...MID, ...THIRD, ...FOURTH] });
+    let left = "";
+    let mid = "";
+    let third = "";
+    let fourth = "";
+    for (let i = 0; i < 4; i += 1) {
+      left = (await linkGroup(deps(), await group({ tokens: LEFT }))).storylineId;
+      mid = (await linkGroup(deps(), await group({ tokens: MID }))).storylineId;
+      third = (await linkGroup(deps(), await group({ tokens: THIRD }))).storylineId;
+      fourth = (await linkGroup(deps(), await group({ tokens: FOURTH }))).storylineId;
+    }
+    // LEFT must win the first merge — more coverage wins — because the pair
+    // this test is about is (survivor, FOURTH), and it is MID's bridges that
+    // have to be the ones re-pointed onto the survivor.
+    for (let i = 0; i < 10; i += 1) {
+      left = (await linkGroup(deps(), await group({ tokens: LEFT }))).storylineId;
+    }
+
+    // One bridge on every pair but LEFT-MID: nothing reaches K on an insert.
+    await linkGroup(deps(), await group({ tokens: [...LEFT, ...THIRD] }));
+    await linkGroup(deps(), await group({ tokens: [...MID, ...THIRD] }));
+    await linkGroup(deps(), await group({ tokens: [...MID, ...FOURTH] }));
+    await linkGroup(deps(), await group({ tokens: [...THIRD, ...FOURTH] }));
+    expect(await countBridges(db, { storylineA: left, storylineB: fourth })).toBe(0);
+    expect(await countBridges(db, { storylineA: mid, storylineB: fourth })).toBe(1);
+    expect(await countBridges(db, { storylineA: third, storylineB: fourth })).toBe(1);
+
+    await linkGroup(deps(), await group({ tokens: [...LEFT, ...MID] }));
+    await linkGroup(deps(), await group({ tokens: [...LEFT, ...MID] }));
+
+    // Hop one absorbs MID and lifts THIRD to K; hop two absorbs THIRD, and the
+    // bridge it carries is FOURTH's second — asked again, FOURTH merges too.
+    const survivor = await resolveStoryline(db, left);
+    expect(await resolveStoryline(db, mid)).toBe(survivor);
+    expect(await resolveStoryline(db, third)).toBe(survivor);
+    expect(await resolveStoryline(db, fourth)).toBe(survivor);
+  });
+
   it("leaves a re-pointed pair alone while it is still under K", async () => {
     const { left, mid, third } = await threeStorylines();
 

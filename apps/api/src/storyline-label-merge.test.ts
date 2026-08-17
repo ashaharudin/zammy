@@ -230,6 +230,25 @@ describe("planLabelMerge", () => {
     ]);
   });
 
+  it("shuts the valve on a maxComponent that is not a number", () => {
+    // `Number("abc")` is NaN, and `length > NaN` is false — the valve would
+    // pass everything on exactly the run where the operator typed the flag
+    // wrong. The CLI rejects the flag outright; this is the second lock.
+    const arcs = Array.from({ length: 6 }, (_, index) =>
+      arc(`s${index}`, "Hormuz Crisis", "2026-08-01", "2026-08-30"),
+    );
+
+    const { plans, refusals } = planLabelMerge("hormuz crisi", arcs, isHormuzName, {
+      graceDays: 7,
+      maxComponent: Number.NaN,
+    });
+
+    expect(plans).toEqual([]);
+    expect(refusals).toEqual([
+      { label: "hormuz crisi", storylines: 6, reason: "component too large" },
+    ]);
+  });
+
   it("never plans a component of one", () => {
     const arcs = [
       arc("alone", "Hormuz Crisis", "2026-08-01", "2026-08-03"),
