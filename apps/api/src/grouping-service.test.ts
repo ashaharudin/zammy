@@ -46,6 +46,8 @@ function sighting(overrides: {
   return {
     id: `00000000-0000-4000-8000-${String(uuid).padStart(12, "0")}`,
     url,
+    provider: "currents",
+    providerSightingId: url,
     dedupKey: deriveDedupKey(url),
     title: overrides.title,
     description: null,

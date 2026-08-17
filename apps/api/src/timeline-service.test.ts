@@ -1,10 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  CurrentsQuotaError,
+  NewsQuotaError,
   type CallOpts,
   type SearchParams,
   type SearchResult,
+  type Sighting,
 } from "@zammy/currents-client";
 import type { TimelineEntry } from "@zammy/shared";
 import { hexToBytea, readCoverage, recordCoverage, upsertTopic } from "@zammy/storage";
@@ -13,7 +14,7 @@ import { subtractCoverage } from "./coverage-gaps.js";
 import { refreshLockKey, tryAcquire } from "./single-flight.js";
 import { processSegmentJob, readTimeline } from "./timeline-service.js";
 import { storyTokens } from "./storyline.js";
-import { createTestHarness, type TestHarness } from "./test-support.js";
+import { CountingClient, createTestHarness, type TestHarness } from "./test-support.js";
 
 /**
  * The query planner (ARCHITECTURE 6.3): how a page gets filled. Offline
@@ -146,6 +147,56 @@ describe("truncation — a full final page means hidden history, not success", (
     // Postgres: the ASSERTIONS are load-independent now, the runtime is not.
     // A generous timeout is the honest way to say that (as the sibling above).
   }, 30_000);
+
+  it("ignores a supplement's older sightings when recording the frontier", async () => {
+    // ADR-0012: coverage is a claim about what the coverage-bearing provider
+    // fetched. A supplement that is sparser in the window reaches OLDER than
+    // the primary's 100-cap frontier on the same pages; folding its sightings
+    // into `oldestSeen` would record coverage over a span the primary never
+    // fetched, permanently hiding every primary article there.
+    harness = await createTestHarness({ syncFillDeadlineMs: 10_000 }, NOW);
+
+    // Far older than any frontier five primary pages can reach, yet inside the
+    // window — the position that maximally widens the forged claim.
+    const supplementPublished = "2026-08-01T01:00:00.000Z";
+    const supplement: Sighting = {
+      id: "11111111-1111-4111-8111-111111111111",
+      provider: "gnews",
+      providerSightingId: "synthetic-supplement-1",
+      url: "https://supplement.example/older-story",
+      dedupKey: randomBytes(32).toString("hex"),
+      title: "A story only the supplement carried",
+      description: null,
+      author: null,
+      imageUrl: null,
+      language: "en",
+      categories: [],
+      sourceCategories: [],
+      sourceDomain: "supplement.example",
+      published: supplementPublished,
+      raw: {},
+    };
+    class SupplementingClient extends CountingClient {
+      override async search(params: SearchParams, opts?: CallOpts): Promise<SearchResult> {
+        const page = await super.search(params, opts);
+        return { ...page, sightings: [...page.sightings, supplement] };
+      }
+    }
+    const deps = {
+      ...harness.deps,
+      currents: new SupplementingClient(harness.counting),
+    };
+
+    await readTimeline(deps, broadQuery(), { limit: 100 });
+
+    // The frontier must come from the primary's own sightings: coverage may
+    // not begin at the supplement's older story.
+    const covered = await readCoverage(deps.db, broadQuery().fingerprint);
+    expect(covered.length).toBe(1);
+    expect(covered[0]!.from.getTime()).toBeGreaterThan(
+      new Date(supplementPublished).getTime() + 1,
+    );
+  });
 
   it("the consumer walks the frontier to full coverage without refetching", async () => {
     harness = await createTestHarness({}, NOW);
@@ -281,7 +332,7 @@ describe("quota exhaustion is a designed-for state, not an incident", () => {
     await readTimeline(harness.deps, climateQuery(), { limit: 25 });
     const search = harness.counting.search.bind(harness.counting);
     harness.counting.search = async (_p: SearchParams, _o?: CallOpts): Promise<SearchResult> => {
-      throw new CurrentsQuotaError("daily limit exhausted");
+      throw new NewsQuotaError("daily limit exhausted");
     };
 
     // A wider window forces a new gap, whose fill now hits the quota wall.

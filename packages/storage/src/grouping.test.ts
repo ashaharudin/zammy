@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { deriveDedupKey, type Sighting } from "@zammy/currents-client";
+import { deriveDedupKey, type Sighting } from "@zammy/news-client";
 import { ingestSightings, upsertTopic } from "./ingest.js";
 import { migrateToLatest } from "./migrator.js";
 import {
@@ -46,6 +46,8 @@ function story(overrides: {
   return {
     id: `00000000-0000-4000-8000-${String(counter).padStart(12, "0")}`,
     url: overrides.url,
+    provider: "currents",
+    providerSightingId: overrides.url,
     dedupKey: deriveDedupKey(overrides.url),
     title: overrides.title,
     description: null,

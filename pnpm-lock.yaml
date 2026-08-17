@@ -30,6 +30,12 @@ importers:
       '@zammy/currents-client':
         specifier: workspace:*
         version: link:../../packages/currents-client
+      '@zammy/news-client':
+        specifier: workspace:*
+        version: link:../../packages/news-client
+      '@zammy/news-providers':
+        specifier: workspace:*
+        version: link:../../packages/news-providers
       '@zammy/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -132,12 +138,72 @@ importers:
 
   packages/currents-client:
     dependencies:
+      '@zammy/news-client':
+        specifier: workspace:*
+        version: link:../news-client
       '@zammy/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
         specifier: ^4.0.0
         version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.5
+        version: 3.2.7(@types/node@22.20.1)
+
+  packages/gnews-client:
+    dependencies:
+      '@zammy/news-client':
+        specifier: workspace:*
+        version: link:../news-client
+      zod:
+        specifier: ^4.0.0
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.5
+        version: 3.2.7(@types/node@22.20.1)
+
+  packages/news-client:
+    dependencies:
+      zod:
+        specifier: ^4.0.0
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.5
+        version: 3.2.7(@types/node@22.20.1)
+
+  packages/news-providers:
+    dependencies:
+      '@zammy/currents-client':
+        specifier: workspace:*
+        version: link:../currents-client
+      '@zammy/gnews-client':
+        specifier: workspace:*
+        version: link:../gnews-client
+      '@zammy/news-client':
+        specifier: workspace:*
+        version: link:../news-client
     devDependencies:
       '@types/node':
         specifier: ^22.10.0
@@ -167,9 +233,9 @@ importers:
 
   packages/storage:
     dependencies:
-      '@zammy/currents-client':
+      '@zammy/news-client':
         specifier: workspace:*
-        version: link:../currents-client
+        version: link:../news-client
       '@zammy/shared':
         specifier: workspace:*
         version: link:../shared
@@ -186,6 +252,9 @@ importers:
       '@types/pg':
         specifier: ^8.11.10
         version: 8.20.4
+      '@zammy/currents-client':
+        specifier: workspace:*
+        version: link:../currents-client
       typescript:
         specifier: ^5.7.2
         version: 5.9.3

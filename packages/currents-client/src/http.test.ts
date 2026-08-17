@@ -1,16 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  CurrentsAuthError,
-  CurrentsCallerAbortedError,
-  CurrentsCircuitOpenError,
-  CurrentsInvalidQueryError,
-  CurrentsQuotaError,
-  CurrentsSchemaError,
-  CurrentsTimeoutError,
-  CurrentsUpstreamError,
-} from "./errors.js";
+  NewsAuthError,
+  NewsCallerAbortedError,
+  NewsCircuitOpenError,
+  NewsInvalidQueryError,
+  NewsQuotaError,
+  NewsSchemaError,
+  NewsTimeoutError,
+  NewsUpstreamError,
+} from "@zammy/news-client";
 import { HttpCurrentsClient } from "./http.js";
-import { InProcessQuotaGovernor } from "./quota.js";
+import { InProcessQuotaGovernor } from "@zammy/news-client";
 import { makeClient, quotaHeaders, rawSighting, stubFetch } from "./test-support.js";
 
 /**
@@ -101,7 +101,7 @@ describe("query construction", () => {
 
     await expect(
       client.search({ keywords: ["climate"], pageNumber: 6 }),
-    ).rejects.toBeInstanceOf(CurrentsInvalidQueryError);
+    ).rejects.toBeInstanceOf(NewsInvalidQueryError);
     expect(calls).toHaveLength(0);
   });
 
@@ -179,7 +179,7 @@ describe("quota observation", () => {
     const client = makeClient({ fetch });
 
     await expect(client.search({ keywords: ["x"] })).rejects.toBeInstanceOf(
-      CurrentsAuthError,
+      NewsAuthError,
     );
     expect((await client.quota()).dailyRemaining).toBe(500);
   });
@@ -203,7 +203,7 @@ describe("quota observation", () => {
 
     await client.search({ keywords: ["x"] });
     await expect(client.search({ keywords: ["x"] })).rejects.toBeInstanceOf(
-      CurrentsQuotaError,
+      NewsQuotaError,
     );
     expect(calls).toHaveLength(1);
   });
@@ -221,7 +221,7 @@ describe("quota observation", () => {
 
     await expect(
       client.search({ keywords: ["x"] }, { priority: "background" }),
-    ).rejects.toBeInstanceOf(CurrentsQuotaError);
+    ).rejects.toBeInstanceOf(NewsQuotaError);
   });
 });
 
@@ -249,7 +249,7 @@ describe("retries", () => {
     const client = makeClient({ fetch });
 
     await expect(client.search({ keywords: ["x"] })).rejects.toBeInstanceOf(
-      CurrentsUpstreamError,
+      NewsUpstreamError,
     );
     expect(calls).toHaveLength(3);
   });
@@ -279,7 +279,7 @@ describe("retries", () => {
     const client = makeClient({ fetch });
 
     await expect(client.search({ keywords: ["x"] })).rejects.toBeInstanceOf(
-      CurrentsInvalidQueryError,
+      NewsInvalidQueryError,
     );
     expect(calls).toHaveLength(1);
   });
@@ -291,7 +291,7 @@ describe("retries", () => {
     const client = makeClient({ fetch });
 
     await expect(client.search({ keywords: ["x"] })).rejects.toBeInstanceOf(
-      CurrentsAuthError,
+      NewsAuthError,
     );
     expect(calls).toHaveLength(1);
   });
@@ -309,7 +309,7 @@ describe("retries", () => {
     const client = makeClient({ fetch });
 
     await expect(client.search({ keywords: ["x"] })).rejects.toBeInstanceOf(
-      CurrentsQuotaError,
+      NewsQuotaError,
     );
     expect(calls).toHaveLength(1);
   });
@@ -365,7 +365,7 @@ describe("retries", () => {
 });
 
 describe("deadlines", () => {
-  it("maps our own timeout to CurrentsTimeoutError", async () => {
+  it("maps our own timeout to NewsTimeoutError", async () => {
     const { fetch } = stubFetch([
       { throws: Object.assign(new Error("The operation was aborted"), { name: "TimeoutError" }) },
       { throws: Object.assign(new Error("The operation was aborted"), { name: "TimeoutError" }) },
@@ -374,7 +374,7 @@ describe("deadlines", () => {
     const client = makeClient({ fetch });
 
     await expect(client.search({ keywords: ["x"] })).rejects.toBeInstanceOf(
-      CurrentsTimeoutError,
+      NewsTimeoutError,
     );
   });
 
@@ -391,7 +391,7 @@ describe("deadlines", () => {
 
     await expect(
       client.search({ keywords: ["x"] }, { signal: controller.signal }),
-    ).rejects.toBeInstanceOf(CurrentsCallerAbortedError);
+    ).rejects.toBeInstanceOf(NewsCallerAbortedError);
     expect(calls).toHaveLength(1);
   });
 
@@ -418,14 +418,14 @@ describe("circuit breaker", () => {
 
     for (let i = 0; i < 3; i += 1) {
       await expect(client.search({ keywords: ["x"] })).rejects.toBeInstanceOf(
-        CurrentsUpstreamError,
+        NewsUpstreamError,
       );
     }
 
     // Fourth call must not reach the network at all: while open we serve stale
     // rather than making users wait for a call we expect to fail.
     await expect(client.search({ keywords: ["x"] })).rejects.toBeInstanceOf(
-      CurrentsCircuitOpenError,
+      NewsCircuitOpenError,
     );
     expect(calls).toHaveLength(3);
   });
@@ -439,13 +439,13 @@ describe("circuit breaker", () => {
     });
 
     await expect(client.search({ keywords: ["x"] })).rejects.toBeInstanceOf(
-      CurrentsUpstreamError,
+      NewsUpstreamError,
     );
     const error = await client.search({ keywords: ["x"] }).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(CurrentsCircuitOpenError);
-    // Subclass of CurrentsUpstreamError on purpose: same degradation, distinct metric.
-    expect(error).toBeInstanceOf(CurrentsUpstreamError);
-    expect((error as CurrentsCircuitOpenError).kind).toBe("circuit_open");
+    expect(error).toBeInstanceOf(NewsCircuitOpenError);
+    // Subclass of NewsUpstreamError on purpose: same degradation, distinct metric.
+    expect(error).toBeInstanceOf(NewsUpstreamError);
+    expect((error as NewsCircuitOpenError).kind).toBe("circuit_open");
   });
 
   it("does NOT open on a 401 — upstream is up, our key is wrong", async () => {
@@ -463,7 +463,7 @@ describe("circuit breaker", () => {
 
     for (let i = 0; i < 4; i += 1) {
       await expect(client.search({ keywords: ["x"] })).rejects.toBeInstanceOf(
-        CurrentsAuthError,
+        NewsAuthError,
       );
     }
     // Suppressing these would replace a precise diagnosis with a vague one.
@@ -484,10 +484,10 @@ describe("circuit breaker", () => {
     });
 
     await expect(client.search({ keywords: ["x"] })).rejects.toBeInstanceOf(
-      CurrentsUpstreamError,
+      NewsUpstreamError,
     );
     await expect(client.search({ keywords: ["x"] })).rejects.toBeInstanceOf(
-      CurrentsCircuitOpenError,
+      NewsCircuitOpenError,
     );
 
     now += 30_001;
@@ -505,7 +505,7 @@ describe("response validation and secrecy", () => {
     const client = makeClient({ fetch });
 
     await expect(client.search({ keywords: ["x"] })).rejects.toBeInstanceOf(
-      CurrentsSchemaError,
+      NewsSchemaError,
     );
   });
 
@@ -638,7 +638,7 @@ describe("latestNews — the /v2 breadth-sample endpoint (PROBE-FINDINGS 6c)", (
     await expect(
       client.latestNews({ categories: ["technology"] }),
     ).rejects.toMatchObject({
-      name: "CurrentsInvalidQueryError",
+      name: "NewsInvalidQueryError",
       fieldErrors: { category: expect.stringContaining("technology") },
     });
     expect(calls).toHaveLength(0);
@@ -661,7 +661,7 @@ describe("per-call date range ceiling (observed live 2026-08-11)", () => {
         endDate: new Date("2026-08-09T00:00:01Z"), // 8 days and change
       }),
     ).rejects.toMatchObject({
-      name: "CurrentsInvalidQueryError",
+      name: "NewsInvalidQueryError",
       fieldErrors: { date_range: expect.stringContaining("7") },
     });
     expect(calls).toHaveLength(0);

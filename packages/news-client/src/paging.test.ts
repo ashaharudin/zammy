@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { collectPages } from "./paging.js";
 import { emptyStats } from "./normalize.js";
-import type { CallOpts, CurrentsClient, SearchResult } from "./client.js";
-import type { SearchParams } from "./raw.js";
+import type { CallOpts, NewsClient, SearchResult } from "./client.js";
+import type { SearchParams } from "./search-params.js";
 import type { QuotaView } from "./quota.js";
 
 /**
@@ -14,16 +14,22 @@ import type { QuotaView } from "./quota.js";
  * history behind the cap with no error anywhere to report it.
  */
 
-const limits = { maxPageSize: 20, maxRetrievableResults: 100, maxLookbackDays: 30 };
+const limits = {
+  maxPageSize: 20,
+  maxRetrievableResults: 100,
+  maxLookbackDays: 30,
+  maxRangeDays: 7,
+};
 
 /** A client whose page sizes are scripted, so page-boundary logic is exact. */
-function scriptedClient(rawCounts: number[], errorAt?: number): CurrentsClient & {
+function scriptedClient(rawCounts: number[], errorAt?: number): NewsClient & {
   requests: SearchParams[];
 } {
   const requests: SearchParams[] = [];
 
-  const client: CurrentsClient & { requests: SearchParams[] } = {
+  const client: NewsClient & { requests: SearchParams[] } = {
     requests,
+    provider: "scripted",
     limits,
     async search(params: SearchParams, _opts?: CallOpts): Promise<SearchResult> {
       requests.push(params);
@@ -39,6 +45,8 @@ function scriptedClient(rawCounts: number[], errorAt?: number): CurrentsClient &
       return {
         sightings: Array.from({ length: rawCount }, (_, item) => ({
           id: "00000000-0000-4000-8000-000000000000",
+          provider: "scripted",
+          providerSightingId: `p${index}-${item}`,
           url: `https://example.com/p${index}-${item}`,
           dedupKey: `${index}-${item}`.padStart(64, "0"),
           title: "t",
@@ -50,6 +58,7 @@ function scriptedClient(rawCounts: number[], errorAt?: number): CurrentsClient &
           sourceCategories: [],
           sourceDomain: "example.com",
           published: "2026-08-04T00:00:00.000Z",
+          raw: {},
         })),
         requestedAt: new Date(),
         rawCount,
@@ -59,18 +68,6 @@ function scriptedClient(rawCounts: number[], errorAt?: number): CurrentsClient &
         quota: null,
         adjustments: [],
       };
-    },
-    async latestNews() {
-      throw new Error("not used");
-    },
-    async availableLanguages() {
-      return {};
-    },
-    async availableRegions() {
-      return {};
-    },
-    async availableCategories() {
-      return [];
     },
     async quota(): Promise<QuotaView> {
       return { dailyRemaining: 1000, burstRemaining: 60, resetAt: null, observed: null };

@@ -45,6 +45,57 @@ const EnvSchema = z
     CURRENTS_DAILY_CALL_LIMIT: z.coerce.number().int().min(1).default(1000),
     CURRENTS_BURST_CALL_LIMIT: z.coerce.number().int().min(1).default(60),
 
+    // --- second provider: GNews (ARCHITECTURE 5.6) ---
+    /**
+     * Off by default. A second provider changes what gets ingested and how the
+     * budget is spent, so it is an explicit decision — and with it off, the
+     * factory returns the Currents client bare and nothing about the system's
+     * behaviour changes.
+     */
+    GNEWS_ENABLED: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+    GNEWS_MODE: z.enum(["live", "fixture"]).default("fixture"),
+    GNEWS_API_KEY: z.string().trim().optional(),
+    GNEWS_BASE_URL: z.url().default("https://gnews.io/api/v4"),
+    /** Optional: falls back to CURRENTS_USER_AGENT, which is already required. */
+    GNEWS_USER_AGENT: z.string().trim().optional(),
+
+    // --- GNews limits, from the published Free plan (gnews.io/pricing) ---
+    // 100 requests/day, 10 articles/request, 30 days of history.
+    GNEWS_MAX_PAGE_SIZE: z.coerce.number().int().min(1).max(100).default(10),
+    /**
+     * GNews allows 1000 articles of paging, but on 100 calls a day that ceiling
+     * is theoretical: ten pages is already a tenth of the daily budget spent on
+     * one window. Kept at 100 so a single segment cannot drain the day, and
+     * raised by config on a paid plan.
+     */
+    GNEWS_MAX_RETRIEVABLE_RESULTS: z.coerce.number().int().min(10).default(100),
+    GNEWS_MAX_LOOKBACK_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+    /**
+     * GNews documents no per-call range ceiling, unlike the Currents 7 days, so
+     * this is set to the lookback: no artificial slicing. The composite narrows
+     * to whichever provider is stricter anyway.
+     */
+    GNEWS_MAX_RANGE_DAYS: z.coerce.number().int().min(1).default(30),
+    GNEWS_DAILY_CALL_LIMIT: z.coerce.number().int().min(1).default(100),
+    /**
+     * The Free plan documents 1 request per second — a different *shape* of
+     * window from the Currents 60-per-60s, hence the separate window setting.
+     * A burst refusal makes GNews sit a call out rather than failing it, so this
+     * paces the supplement instead of stalling the fan-out.
+     */
+    GNEWS_BURST_CALL_LIMIT: z.coerce.number().int().min(1).default(1),
+    GNEWS_BURST_WINDOW_MS: z.coerce.number().int().min(1).default(1000),
+    /**
+     * Proportionally the same quarter of the budget CURRENTS_INTERACTIVE_RESERVE
+     * holds back, sized for 100 calls rather than 1000. Reusing the Currents
+     * value of 250 here would exceed the whole daily limit and silently make
+     * GNews interactive-only.
+     */
+    GNEWS_INTERACTIVE_RESERVE: z.coerce.number().int().min(0).default(25),
+
     // --- ingestion budget (ARCHITECTURE 6.3, 9.4) ---
     SYNC_FILL_DEADLINE_MS: z.coerce.number().int().min(100).max(10_000).default(1200),
     MAX_SYNC_UPSTREAM_CALLS: z.coerce.number().int().min(1).max(5).default(5),
@@ -385,6 +436,41 @@ const EnvSchema = z
       });
     }
 
+    // The same three checks again for the second provider, and only when it is
+    // switched on — an unset GNEWS_API_KEY is the normal state, not a mistake,
+    // right up until someone sets GNEWS_ENABLED=true.
+    if (env.GNEWS_ENABLED && env.GNEWS_MODE === "live" && !env.GNEWS_API_KEY) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["GNEWS_API_KEY"],
+        message:
+          "GNEWS_API_KEY is required when GNEWS_ENABLED=true and GNEWS_MODE=live. " +
+          "Use GNEWS_MODE=fixture to develop offline against ./fixtures, or " +
+          "GNEWS_ENABLED=false to run on Currents alone.",
+      });
+    }
+
+    if (env.GNEWS_ENABLED && env.GNEWS_INTERACTIVE_RESERVE >= env.GNEWS_DAILY_CALL_LIMIT) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["GNEWS_INTERACTIVE_RESERVE"],
+        message:
+          `GNEWS_INTERACTIVE_RESERVE (${env.GNEWS_INTERACTIVE_RESERVE}) must be below ` +
+          `GNEWS_DAILY_CALL_LIMIT (${env.GNEWS_DAILY_CALL_LIMIT}), ` +
+          "or background ingestion can never draw on this provider.",
+      });
+    }
+
+    if (env.GNEWS_MAX_RETRIEVABLE_RESULTS % env.GNEWS_MAX_PAGE_SIZE !== 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["GNEWS_MAX_RETRIEVABLE_RESULTS"],
+        message:
+          `GNEWS_MAX_RETRIEVABLE_RESULTS (${env.GNEWS_MAX_RETRIEVABLE_RESULTS}) ` +
+          `must be a multiple of GNEWS_MAX_PAGE_SIZE (${env.GNEWS_MAX_PAGE_SIZE}).`,
+      });
+    }
+
     // Retention shorter than the upstream lookback means we would delete articles
     // we could still re-fetch — harmless. Retention LONGER is the valuable case,
     // because beyond the lookback our store is the only copy (ARCHITECTURE 7.5).
@@ -427,14 +513,23 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
 }
 
 /**
- * Config with the API key removed, safe for logs and error reports.
- * The key must never appear in output (ARCHITECTURE 5.5).
+ * Config with every API key removed, safe for logs and error reports.
+ * A key must never appear in output (ARCHITECTURE 5.5) — and a second provider
+ * means a second key, so this list grows with the providers.
  */
 export function redactConfig(config: Config): Record<string, unknown> {
-  const { CURRENTS_API_KEY, GEMINI_API_KEY, DATABASE_URL, REDIS_URL, ...rest } = config;
+  const {
+    CURRENTS_API_KEY,
+    GNEWS_API_KEY,
+    GEMINI_API_KEY,
+    DATABASE_URL,
+    REDIS_URL,
+    ...rest
+  } = config;
   return {
     ...rest,
     CURRENTS_API_KEY: CURRENTS_API_KEY ? "[redacted]" : null,
+    GNEWS_API_KEY: GNEWS_API_KEY ? "[redacted]" : null,
     GEMINI_API_KEY: GEMINI_API_KEY ? "[redacted]" : null,
     DATABASE_URL: redactUrlCredentials(DATABASE_URL),
     REDIS_URL: redactUrlCredentials(REDIS_URL),

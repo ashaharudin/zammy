@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { HttpCurrentsClient, type FetchLike, type HttpCurrentsClientOptions } from "./http.js";
-import { InProcessQuotaGovernor } from "./quota.js";
+import { InProcessQuotaGovernor, type FetchLike } from "@zammy/news-client";
+import { HttpCurrentsClient, type HttpCurrentsClientOptions } from "./http.js";
 
 /**
  * Test doubles for the client. Not part of the published surface — excluded from

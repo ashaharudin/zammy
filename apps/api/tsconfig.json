@@ -19,6 +19,12 @@
     },
     {
       "path": "../../packages/storage"
+    },
+    {
+      "path": "../../packages/news-client"
+    },
+    {
+      "path": "../../packages/news-providers"
     }
   ],
   "exclude": [

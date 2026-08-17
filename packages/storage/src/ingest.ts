@@ -1,5 +1,5 @@
 import { sql, type Kysely } from "kysely";
-import type { Sighting } from "@zammy/currents-client";
+import type { Sighting } from "@zammy/news-client";
 import { hexToBytea, type Database } from "./database.js";
 import { lowerGroupPosition } from "./grouping.js";
 
@@ -131,6 +131,7 @@ export async function ingestSightings(
           categories: sighting.categories,
           source_category: sighting.sourceCategories,
           source_domain: sighting.sourceDomain,
+          provider: sighting.provider,
           published,
           latest_seen: published,
           // 0, not the DEFAULT 1: step 3 increments per genuinely-new
@@ -152,6 +153,7 @@ export async function ingestSightings(
           article_id: article.id,
           dedup_key: dedupKey,
           published,
+          provider: sighting.provider,
           raw: JSON.stringify(sighting.raw),
         })
         .onConflict((oc) => oc.column("id").doNothing())
@@ -178,6 +180,10 @@ export async function ingestSightings(
             categories: sql`case when ${published} < published then ${sighting.categories}::text[] else categories end`,
             source_category: sql`case when ${published} < published then ${sighting.sourceCategories}::text[] else source_category end`,
             source_domain: sql`case when ${published} < published then ${sighting.sourceDomain} else source_domain end`,
+            // Handed over with the rest of the display fields, so `provider`
+            // keeps meaning "whoever reported the earliest emission" even when
+            // the second provider is the one that reached further back.
+            provider: sql`case when ${published} < published then ${sighting.provider} else provider end`,
           })
           .where("id", "=", article.id)
           .execute();

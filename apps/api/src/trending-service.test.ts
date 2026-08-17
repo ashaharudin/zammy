@@ -87,6 +87,8 @@ async function storeArticles(
     sightings: articles.map((a, index) => ({
       id: randomUUID(),
       url: `https://${a.domain}/seeded-${index}`,
+      provider: "currents",
+      providerSightingId: `https://${a.domain}/seeded-${index}`,
       dedupKey: deriveDedupKey(`https://${a.domain}/seeded-${index}`),
       title: a.title,
       description: a.prose,

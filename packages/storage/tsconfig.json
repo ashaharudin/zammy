@@ -4,7 +4,20 @@
     "rootDir": "./src",
     "outDir": "./dist"
   },
-  "include": ["src/**/*.ts"],
-  "references": [{ "path": "../shared" }, { "path": "../currents-client" }],
-  "exclude": ["**/*.test.ts", "src/test-support.ts", "dist"]
+  "include": [
+    "src/**/*.ts"
+  ],
+  "references": [
+    {
+      "path": "../shared"
+    },
+    {
+      "path": "../news-client"
+    }
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "src/test-support.ts",
+    "dist"
+  ]
 }

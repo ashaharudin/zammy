@@ -1,28 +1,36 @@
-import { CurrentsQuotaError } from "./errors.js";
+import { NewsQuotaError } from "./errors.js";
 
 /**
- * Quota governance — header-driven (ARCHITECTURE 5.4).
+ * Quota governance (ARCHITECTURE 5.4).
  *
- * The probe found `x-ratelimit-*` on every response, so quota can be *observed*
- * rather than guessed. Two limits with different shapes, so two governors:
+ * Two limits with different shapes, so the governor tracks both, and one budget
+ * per provider — each has its own key, its own tier, and its own reset:
  *
- *   burst — 60 requests / 60s. Exceeding it stalls everything for up to a minute.
- *   daily — 1000 requests, resets midnight UTC. The strategic budget, split into
- *           an interactive reserve and a background allowance so a queued backfill
- *           can never starve a live user search.
+ *   burst — a short window. 60/60s on Currents; 1/s on GNews Free, where
+ *           exceeding it earns a 429 rather than a stall.
+ *   daily — resets midnight UTC. 1000 on Currents Free, 100 on GNews Free. The
+ *           strategic budget, split into an interactive reserve and a background
+ *           allowance so a queued backfill can never starve a live user search.
  *
  * Every call is pre-flight checked and refused locally when exhausted — cheaper
  * and kinder than earning a real 429, which costs a request to learn something we
  * already knew.
+ *
+ * Where the numbers come from differs by provider, which is why observation is
+ * optional rather than assumed. Currents reports `x-ratelimit-*` on every
+ * response, so its budget is *observed*. GNews reports nothing and answers an
+ * exhausted day with a 403, so its budget is *counted* locally and corrected the
+ * moment that 403 arrives. The governor treats a missing observation as "no new
+ * information", never as "no limit".
  */
 
-/** What a response's `x-ratelimit-*` headers said, and when. */
+/** A provider's rate-limit state at a moment, however we learned it. */
 export interface QuotaSnapshot {
   limit: number;
   remaining: number;
   burstLimit: number;
   burstRemaining: number;
-  /** When the daily window resets. Null when upstream omitted the header. */
+  /** When the daily window resets. Null when the provider did not say. */
   resetTime: Date | null;
   observedAt: Date;
 }
@@ -51,65 +59,16 @@ export interface QuotaView {
 
 export interface QuotaGovernor {
   /**
-   * Pre-flight check. Throws `CurrentsQuotaError` when the call must not be made,
-   * and records the spend when it may. Async because the Redis-backed
-   * implementation that replaces this one in Phase 3 must be.
+   * Pre-flight check. Throws `NewsQuotaError` when the call must not be made,
+   * and records the spend when it may. Async so a shared, out-of-process
+   * implementation can satisfy this interface without changing any caller —
+   * see `InProcessQuotaGovernor` for why one is still wanted.
    */
   reserve(priority: CallPriority): Promise<void>;
-  /** Fold a response's observed headers back in. */
+  /** Fold an observation back in, however the adapter obtained it. */
   observe(snapshot: QuotaSnapshot): Promise<void>;
   /** Current best knowledge, for `/readyz`, metrics, and `meta.degraded`. */
   peek(): Promise<QuotaView>;
-}
-
-const HEADER = {
-  limit: "x-ratelimit-limit",
-  remaining: "x-ratelimit-remaining",
-  burstLimit: "x-ratelimit-burst-limit",
-  burstRemaining: "x-ratelimit-burst-remaining",
-  resetTime: "x-ratelimit-reset-time",
-} as const;
-
-/**
- * Parse `x-ratelimit-*` into a snapshot, bounded by config.
- *
- * Returns null when the headers are absent or unusable, which the governor treats
- * as "no new information" rather than as "no limit" — the difference between a
- * degraded observation path and a quota overrun.
- *
- * `resetTime` is a normal ISO-8601 timestamp with an offset, so `new Date()` is
- * correct here. That is NOT true of sighting `published` values, which use a
- * different format entirely — see `parsePublished`.
- */
-export function parseQuotaHeaders(
-  headers: Headers,
-  bounds: Pick<QuotaBounds, "dailyLimit" | "burstLimit">,
-  observedAt: Date = new Date(),
-): QuotaSnapshot | null {
-  const limit = readInt(headers, HEADER.limit);
-  const remaining = readInt(headers, HEADER.remaining);
-  if (limit === null && remaining === null) return null;
-
-  const burstLimit = readInt(headers, HEADER.burstLimit);
-  const burstRemaining = readInt(headers, HEADER.burstRemaining);
-
-  // Config bounds the observed limit rather than the reverse: a plan upgrade is a
-  // config change, and a header claiming a limit we have not budgeted for must
-  // not silently raise our spend.
-  const effectiveLimit = Math.min(limit ?? bounds.dailyLimit, bounds.dailyLimit);
-  const effectiveBurstLimit = Math.min(
-    burstLimit ?? bounds.burstLimit,
-    bounds.burstLimit,
-  );
-
-  return {
-    limit: effectiveLimit,
-    remaining: clamp(remaining ?? effectiveLimit, 0, effectiveLimit),
-    burstLimit: effectiveBurstLimit,
-    burstRemaining: clamp(burstRemaining ?? effectiveBurstLimit, 0, effectiveBurstLimit),
-    resetTime: readDate(headers, HEADER.resetTime),
-    observedAt,
-  };
 }
 
 export interface InProcessQuotaOptions extends QuotaBounds {
@@ -121,14 +80,32 @@ export interface InProcessQuotaOptions extends QuotaBounds {
 /**
  * Single-process quota governor.
  *
- * Correct for local development and for a single Fargate task. Two or more tasks
- * share the upstream budget but not this state, so Phase 3 replaces it with a
- * Redis-backed implementation of the same interface (ARCHITECTURE 5.4) — the
- * client does not change, because the client must not know about our cache.
+ * Correct for local development and for a single task that stays up. It is not
+ * merely a stub: it enforces the reserve and the burst window, and it folds in
+ * observations, which account for spend by *any* client sharing the key.
  *
- * Until then this is not merely a stub: it enforces the reserve and the burst
- * window, and it folds in observed headers, which account for spend by *any*
- * client sharing the key. That makes it safe, just less precise under fan-out.
+ * It holds its count in memory, though, and that has two consequences worth
+ * knowing before trusting the numbers it reports:
+ *
+ *   **Replicas do not share it.** Two tasks share the upstream budget but not
+ *   this state, so each believes it has the whole allowance.
+ *
+ *   **A restart forgets the day's spend.** Every process starts at the full
+ *   limit, and with hot reload in development the count barely accumulates.
+ *
+ * How badly that bites depends on the provider, which is the part that is easy
+ * to miss. A provider that reports its budget in headers self-corrects on the
+ * very next response — Currents restarts optimistic and is right again one call
+ * later. A provider that reports nothing cannot: GNews sends no rate-limit
+ * headers, so an in-memory count that restarts is simply wrong until the day's
+ * budget runs out and a 403 arrives, which is precisely the outcome pre-flight
+ * refusal exists to avoid.
+ *
+ * ARCHITECTURE 5.4 describes the fix — a Redis-held snapshot shared by the API
+ * and worker, keyed per provider. It is designed and NOT built; no delivery
+ * phase carries it (§13). The interface is ready for it: three async methods,
+ * and `createNewsClient` already accepts per-provider governors through
+ * `deps.quota`, so it is a contained change rather than a migration.
  */
 export class InProcessQuotaGovernor implements QuotaGovernor {
   private readonly bounds: QuotaBounds;
@@ -165,7 +142,7 @@ export class InProcessQuotaGovernor implements QuotaGovernor {
     // The reserve exists so background backfill can never starve a live search —
     // the failure mode that would otherwise appear only on the busiest day.
     if (priority === "background" && daily <= this.bounds.interactiveReserve) {
-      throw new CurrentsQuotaError(
+      throw new NewsQuotaError(
         `background call refused: ${daily} daily calls remain, at or below the ` +
           `interactive reserve of ${this.bounds.interactiveReserve}`,
         this.nextDailyReset(now),
@@ -173,7 +150,7 @@ export class InProcessQuotaGovernor implements QuotaGovernor {
     }
 
     if (daily <= 0) {
-      throw new CurrentsQuotaError(
+      throw new NewsQuotaError(
         "daily quota exhausted; refusing locally rather than earning a 429",
         this.nextDailyReset(now),
       );
@@ -181,7 +158,7 @@ export class InProcessQuotaGovernor implements QuotaGovernor {
 
     if (burst <= 0) {
       const oldest = this.burstCalls[0] ?? now;
-      throw new CurrentsQuotaError(
+      throw new NewsQuotaError(
         `burst limit of ${this.bounds.burstLimit} calls per ` +
           `${this.burstWindowMs}ms reached`,
         new Date(oldest + this.burstWindowMs),
@@ -281,20 +258,6 @@ function utcDayKey(epochMs: number): string {
   return new Date(epochMs).toISOString().slice(0, 10);
 }
 
-function readInt(headers: Headers, name: string): number | null {
-  const raw = headers.get(name);
-  if (raw === null) return null;
-  const value = Number.parseInt(raw.trim(), 10);
-  return Number.isFinite(value) ? value : null;
-}
-
-function readDate(headers: Headers, name: string): Date | null {
-  const raw = headers.get(name);
-  if (!raw) return null;
-  const value = new Date(raw.trim());
-  return Number.isNaN(value.getTime()) ? null : value;
-}
-
-function clamp(value: number, min: number, max: number): number {
+export function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }

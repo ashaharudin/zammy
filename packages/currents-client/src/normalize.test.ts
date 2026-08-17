@@ -1,15 +1,10 @@
 import { readFileSync } from "node:fs";
-import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  canonicalizeUrl,
-  deriveDedupKey,
   normalizeSighting,
   normalizeSightings,
-  normalizeImage,
   parsePublished,
-  sourceDomain,
 } from "./normalize.js";
 import { RawSighting } from "./raw.js";
 import { FIXTURES_DIR, rawSighting } from "./test-support.js";
@@ -133,106 +128,10 @@ describe("dedup keys over the duplication fixture", () => {
   });
 });
 
-describe("canonicalizeUrl", () => {
-  it("is the exact input to the dedup key", () => {
-    const url = canonicalizeUrl("https://example.com/story")!;
-    expect(deriveDedupKey(url)).toBe(
-      createHash("sha256").update(url).digest("hex"),
-    );
-  });
-
-  it("strips the fragment", () => {
-    expect(canonicalizeUrl("https://example.com/story#comments")).toBe(
-      "https://example.com/story",
-    );
-  });
-
-  it("strips tracking parameters but keeps meaningful ones", () => {
-    expect(
-      canonicalizeUrl("https://example.com/story?utm_source=x&id=7&fbclid=abc"),
-    ).toBe("https://example.com/story?id=7");
-  });
-
-  it("drops a dangling question mark once the last tracking param goes", () => {
-    expect(canonicalizeUrl("https://example.com/story?utm_source=x")).toBe(
-      "https://example.com/story",
-    );
-  });
-
-  it("trims the trailing slash so /story and /story/ are one article", () => {
-    expect(canonicalizeUrl("https://example.com/story/")).toBe(
-      canonicalizeUrl("https://example.com/story"),
-    );
-  });
-
-  it("lowercases scheme and host but not the path", () => {
-    // Paths are case-sensitive on most servers; hosts never are.
-    expect(canonicalizeUrl("HTTPS://Example.COM/Story")).toBe(
-      "https://example.com/Story",
-    );
-  });
-
-  it("accepts protocol-relative URLs", () => {
-    expect(canonicalizeUrl("//example.com/story")).toBe("https://example.com/story");
-  });
-
-  it("rejects anything that is not http(s)", () => {
-    expect(canonicalizeUrl("javascript:alert(1)")).toBeNull();
-    expect(canonicalizeUrl("ftp://example.com/x")).toBeNull();
-    expect(canonicalizeUrl("not a url")).toBeNull();
-    expect(canonicalizeUrl("")).toBeNull();
-  });
-
-  it("does NOT strip www, because over-collapsing destroys sightings", () => {
-    expect(canonicalizeUrl("https://www.example.com/story")).not.toBe(
-      canonicalizeUrl("https://example.com/story"),
-    );
-  });
-});
-
-describe("sourceDomain", () => {
-  it("strips www, unlike the dedup key", () => {
-    expect(sourceDomain("https://www.news24.com/x")).toBe("news24.com");
-  });
-
-  it("keeps three labels for registries that sell at the third level", () => {
-    expect(sourceDomain("https://www.perthnow.com.au/x")).toBe("perthnow.com.au");
-    expect(sourceDomain("https://news.bbc.co.uk/x")).toBe("bbc.co.uk");
-  });
-
-  it("takes two labels otherwise, collapsing subdomains onto one source", () => {
-    expect(sourceDomain("https://timesofindia.indiatimes.com/x")).toBe(
-      "indiatimes.com",
-    );
-    expect(sourceDomain("https://news.rthk.hk/x")).toBe("rthk.hk");
-    expect(sourceDomain("https://www.cbc.ca/x")).toBe("cbc.ca");
-  });
-
+describe("sourceDomain over recorded payloads", () => {
   it("resolves every recorded sighting to a domain", () => {
     const { sightings } = normalizeSightings(allRaw);
     expect(sightings.every((sighting) => sighting.sourceDomain !== null)).toBe(true);
-  });
-});
-
-describe("normalizeImage", () => {
-  it("nulls the values upstream uses for absence", () => {
-    expect(normalizeImage("None")).toBeNull();
-    expect(normalizeImage("none")).toBeNull();
-    expect(normalizeImage("null")).toBeNull();
-    expect(normalizeImage("")).toBeNull();
-    expect(normalizeImage("   ")).toBeNull();
-    expect(normalizeImage(null)).toBeNull();
-    expect(normalizeImage(undefined)).toBeNull();
-  });
-
-  it("https-prefixes protocol-relative image URLs", () => {
-    expect(normalizeImage("//cdn.example.com/a.jpg")).toBe(
-      "https://cdn.example.com/a.jpg",
-    );
-  });
-
-  it("nulls an unparseable value rather than passing it through", () => {
-    expect(normalizeImage("not-a-url")).toBeNull();
   });
 });
 
