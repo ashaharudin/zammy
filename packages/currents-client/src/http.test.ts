@@ -116,6 +116,18 @@ describe("query construction", () => {
     expect(url.searchParams.get("start_date")).toBe("2026-07-05T12:00:00+00:00");
     expect(result.adjustments.join(" ")).toMatch(/30-day lookback/);
   });
+
+  it("tags a clamp refusal with the provider, so a log line can attribute it", async () => {
+    // The clamp runs before the query is built, so its refusals are the ones
+    // most likely to escape the tagging block and reach log lines, metrics and
+    // `meta.degraded` as `provider: "unknown"`.
+    const { fetch, calls } = stubFetch([]);
+
+    await expect(
+      makeClient({ fetch }).search({ keywords: ["climate"], pageNumber: 6 }),
+    ).rejects.toMatchObject({ provider: "currents" });
+    expect(calls).toHaveLength(0);
+  });
 });
 
 describe("end-of-results signalling", () => {

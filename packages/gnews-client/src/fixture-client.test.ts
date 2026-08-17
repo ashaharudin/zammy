@@ -62,6 +62,14 @@ describe("it refuses what the live client refuses", () => {
   it("rejects a keyword-less sweep", async () => {
     await expect((await client()).search({})).rejects.toBeInstanceOf(NewsInvalidQueryError);
   });
+
+  it("tags a clamp refusal with the provider, so a log line can attribute it", async () => {
+    // Fixture mode must refuse exactly as live does, tag included — otherwise
+    // the mode most development runs in reports `provider: "unknown"`.
+    await expect(
+      (await client()).search({ keywords: ["x"], pageSize: 10, pageNumber: 99 }),
+    ).rejects.toMatchObject({ provider: "gnews" });
+  });
 });
 
 describe("paging and quota", () => {

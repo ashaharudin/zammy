@@ -38,7 +38,18 @@ export class FixtureGnewsClient implements GnewsClient {
   }
 
   async search(params: SearchParams, _opts: CallOpts = {}): Promise<SearchResult> {
-    const { params: clamped, adjustments } = clampSearchParams(params, this.limits);
+    // The clamp is inside the tagging block: its refusals — a pageNumber past
+    // the retrievable cap, a range past the per-call ceiling — belong to this
+    // provider as much as the unservable-query refusal below. Left outside,
+    // they reach log lines, metrics and `meta.degraded` as `provider:
+    // "unknown"`. Fixture mode must refuse exactly as live does, tag included.
+    let clamped: SearchParams;
+    let adjustments: string[];
+    try {
+      ({ params: clamped, adjustments } = clampSearchParams(params, this.limits));
+    } catch (error) {
+      throw tagProvider(error, PROVIDER);
+    }
 
     const unservable = unservableReason(clamped);
     if (unservable) {

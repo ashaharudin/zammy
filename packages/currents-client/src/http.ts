@@ -133,16 +133,29 @@ export class HttpCurrentsClient implements CurrentsClient {
   }
 
   async search(params: SearchParams, opts: CallOpts = {}): Promise<SearchResult> {
-    const { params: clamped, adjustments } = clampSearchParams(
-      params,
-      this.limits,
-      new Date(this.transport.now()),
-    );
+    // The clamp is inside the tagging block: it refuses a pageNumber past the
+    // retrievable cap and a range past the per-call ceiling, and those refusals
+    // belong to this provider as much as any the query construction raises.
+    // Left outside, they reach log lines, metrics and `meta.degraded` as
+    // `provider: "unknown"` — see `tagProvider` in @zammy/news-client.
+    let clamped: SearchParams;
+    let adjustments: string[];
+    let query: URLSearchParams;
+    try {
+      ({ params: clamped, adjustments } = clampSearchParams(
+        params,
+        this.limits,
+        new Date(this.transport.now()),
+      ));
+      query = toQueryParams(clamped, { maxPageSize: this.limits.maxPageSize });
+    } catch (error) {
+      throw tagProvider(error, PROVIDER);
+    }
+
     if (adjustments.length) {
       this.transport.logger?.warn({ adjustments }, "clamped search params to tier limits");
     }
 
-    const query = toQueryParams(clamped, { maxPageSize: this.limits.maxPageSize });
     const response = await this.request("/search", query, opts);
 
     return this.toSearchResult(
