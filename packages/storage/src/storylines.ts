@@ -604,7 +604,7 @@ export async function readLabelMergeCandidates(
  * this feeds (`properNounEvidence`) asks whether a word is EVER seen lowercase,
  * so every sentence of prose is evidence and sampling one article per group
  * would throw away most of it. Bounded by being asked only for the storylines
- * that already agreed on a label — two clusters in the dev archive, not 258.
+ * that already agreed on a label — two components in the dev archive, not 258.
  */
 export async function readStorylineCoverageText(
   db: Kysely<Database>,

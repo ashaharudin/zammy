@@ -101,20 +101,29 @@ refused").
 
 The free tier publishes **15 requests per minute**, and the ceiling is on the
 KEY. That is the whole reason the pacer lives in `gemini.ts` and not in the
-callers: five things in one process label storylines —
+callers: five things label storylines —
 
-| caller | when |
-| --- | --- |
-| the ingest tail (`labelLinkedStorylines`) | promotion and merge, off the §6.3 deadline |
-| the late-candidate sweep | nightly, before the drift pass |
-| the drift chore (`labelPass`) | nightly |
-| `pnpm backfill:storylines` | an operator, on the whole archive |
-| `pnpm label:storylines` | an operator, on what needs it |
+| caller | where it runs | when |
+| --- | --- | --- |
+| the ingest tail (`labelLinkedStorylines`) | the server | promotion and merge, off the §6.3 deadline |
+| the late-candidate sweep | the server | nightly, before the drift pass |
+| the drift chore (`labelPass`) | the server | nightly |
+| `pnpm backfill:storylines` | its own process | an operator, on the whole archive |
+| `pnpm label:storylines` | its own process | an operator, on what needs it |
 
 — and before this they were paced separately or not at all. The two nightly
 passes spaced at 60/min, four times the ceiling; the ingest tail and the sweep
 had no spacing whatsoever; and **retries were invisible to all four**, so a bad
 minute at the API multiplied the real rate by up to 3.
+
+**The pacer's scope is one client, and therefore one process.** The three server
+callers share the instance built in `server.ts`; each CLI builds its own. So the
+ceiling is enforced on the key as long as one process is talking to it, and is
+NOT enforced across processes: a CLI run alongside a live server is two pacers
+each admitting `GEMINI_MAX_RPM`, so up to 2x the ceiling (3x with two CLIs).
+What holds the key in that case is the 429 path below rather than the window,
+and the operator's lever is `--label-rate` — see STORYLINE-BACKFILL.md,
+"Operating it".
 
 One pacer inside the client fixes the category of bug rather than four
 instances of it. It is a sliding 60-second window, not a per-minute counter — a
@@ -125,9 +134,15 @@ tick stack instead of both reading a window with room in it.
 Three properties worth knowing:
 
 - **A 429 holds the whole client back.** Earning one despite the pacer means
-  something else is on the key (a second task, an operator's laptop), so
-  `Retry-After` becomes a cooldown every waiter respects, not just the call
-  that earned it.
+  something else is on the key (a second task, an operator's laptop, the CLI in
+  the paragraph above), so `Retry-After` becomes a cooldown every waiter
+  respects, not just the call that earned it. "Every waiter" includes the ones
+  ALREADY ASLEEP when the 429 lands: a waiter re-reads the cooldown on waking
+  and sleeps again if it moved, because one that only checked before sleeping
+  would wake up inside the cooldown and send the request the cooldown exists to
+  stop. The cost is that held waiters resume together at the cooldown's end
+  rather than re-spacing across the window; the window then paces everything
+  after them.
 - **The queue is bounded.** Past `GEMINI_MAX_RATE_WAIT_MS` (2 minutes, ~30 deep
   at 15/min) a call gives up and takes the bigram fallback — the same move it
   already makes for a 503. Without this the ingest tail would grow an unbounded
@@ -290,7 +305,7 @@ see:
    rule's business.
 2. Labels **equal** after casefolding, whitespace collapse and the `singular`
    fold. Stopwords are deliberately *not* elided.
-3. The label contains a **grounded proper noun**, pooled over the cluster's whole
+3. The label contains a **grounded proper noun**, pooled over the component's whole
    coverage.
 4. Spans **overlap or fall within `STORYLINE_LABEL_MERGE_GRACE_DAYS`**.
 
@@ -312,7 +327,7 @@ of 13,648 live storylines have no model label); under the nightly label chore ev
 promoted storyline carries one.
 
 `STORYLINE_LABEL_MERGE_GRACE_DAYS` is **unmeasured**: every arc of the one
-qualifying cluster overlaps every other, so 0 and 30 plan the identical merge. It
+qualifying component overlaps every other, so 0 and 30 plan the identical merge. It
 needs an archive holding a story that stopped and restarted.
 
 ## Operating it

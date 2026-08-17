@@ -251,7 +251,7 @@ const EnvSchema = z
      * Days of silence a shared label may bridge before the label-agreement merge
      * stops treating two arcs as one story (`storyline-label-merge.ts`).
      *
-     * UNMEASURED, and honestly so: the one qualifying cluster in the dev archive
+     * UNMEASURED, and honestly so: the one qualifying component in the dev archive
      * ("Strait of Hormuz Crisis", six arcs) has one member spanning the whole
      * range, so every value from 0 upwards plans the identical merge. 7 is chosen
      * on the argument rather than the data — an evolving situation goes quiet for
@@ -267,7 +267,7 @@ const EnvSchema = z
      * percolation shape ADR-0009's 1,179-group swallow taught this codebase to
      * fear. A refused component is logged by name and left alone.
      *
-     * 25 admits every real cluster measured (the largest is six) with an order of
+     * 25 admits every real component measured (the largest is six) with an order of
      * magnitude to spare, and still refuses a swallow.
      */
     STORYLINE_LABEL_MERGE_MAX_COMPONENT: z.coerce.number().int().min(2).default(25),

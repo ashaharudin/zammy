@@ -42,8 +42,9 @@ persistent collection of groups, identified by UUID and unbounded in time: an on
 its whole arc. Paged by day regardless: each day it has coverage it takes one timeline slot holding
 that day's articles, its earliest as the hero. A group may belong to several storylines. Every
 group is born a provisional storyline of one, invisible as such; a second group's attachment
-promotes it. Formation errs narrow, and bridged storylines merge automatically, the loser's UUID
-kept as an alias.
+promotes it. Formation errs narrow, and storylines merge automatically — either bridged (K
+independent groups qualifying for both) or label-agreement (two model labels agreeing, grounded,
+spans overlapping or near-touching) — the loser's UUID kept as an alias.
 _Avoid_: cluster, thread, saga, topic
 
 **Representative**:
@@ -102,5 +103,8 @@ are told apart by date span. Also the landing-page cloud's word (ADR-0013), most
 first. Where the label is clicked decides what the click does, and there are exactly two answers: in
 the timeline and its surfaced pills it opens the storyline itself by UUID, its words never executed
 as a search; in the cloud, and only there, it IS the search, because the cloud's other job is to
-mint topics for a reader who has not typed anything yet.
+mint topics for a reader who has not typed anything yet. Agreement between two labels is also merge
+evidence: storylines independently given the same grounded label, with overlapping or near-touching
+spans, merge on that agreement alone, since a big running story can outgrow what the token bridge
+can reach.
 _Avoid_: term, keyword, phrase, tag, title
