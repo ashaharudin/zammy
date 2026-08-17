@@ -104,7 +104,8 @@ Oracle Cloud (OCI) is the deployment target — see
 ElastiCache, [ARCHITECTURE 4.1](docs/ARCHITECTURE.md)) remains an option but not an immediate
 goal. Docker Compose here is the local development environment, not a deploy target; the same
 image runs everywhere, differing only by environment variables. Infrastructure-as-code arrives
-with Phase 6.
+with Phase 1 of the OCI plan ([DEPLOYMENT-OCI §7](docs/DEPLOYMENT-OCI.md)); the AWS variant it
+replaces was delivery Phase 6 in [ARCHITECTURE §13](docs/ARCHITECTURE.md) — a different numbering.
 
 ## Conventions worth knowing
 
