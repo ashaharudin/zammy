@@ -34,7 +34,32 @@ export interface TestHarness {
   redis: Redis;
   queue: IngestQueue;
   metrics: Metrics;
+  /** The clock behind `deps.now()`. Advance it to age the world on purpose. */
+  clock: TestClock;
   teardown: () => Promise<void>;
+}
+
+/**
+ * The one clock the harness runs on, and the reason the sync-fill deadline
+ * reads `deps.now()` rather than `Date.now()`: time passes here only when a
+ * test says so, so "how many upstream calls fit the deadline" is a property of
+ * the plan and not of how loaded the machine was. Anchored to a fixed instant
+ * when one is given, otherwise to the real clock — a test that never advances
+ * it sees exactly the behaviour it saw before this existed.
+ */
+export interface TestClock {
+  now: () => Date;
+  advance: (ms: number) => void;
+}
+
+export function createTestClock(fixed?: Date): TestClock {
+  let offsetMs = 0;
+  return {
+    now: () => new Date((fixed ? fixed.getTime() : Date.now()) + offsetMs),
+    advance: (ms: number) => {
+      offsetMs += ms;
+    },
+  };
 }
 
 export async function createTestHarness(
@@ -61,7 +86,8 @@ export async function createTestHarness(
     { maxPageSize: 20, maxRetrievableResults: 100, maxLookbackDays: 30, maxRangeDays: 7 },
     { dailyLimit: 1000, burstLimit: 60 },
   );
-  const counting = new CountingClient(fixtureClient);
+  const clock = createTestClock(now);
+  const counting = new CountingClient(fixtureClient, clock);
 
   const redis = new Redis(REDIS_URL);
   const queue = new IngestQueue(REDIS_URL, {
@@ -107,7 +133,7 @@ export async function createTestHarness(
       },
       ...configOverrides,
     },
-    now: now ? () => now : () => new Date(),
+    now: () => clock.now(),
   };
 
   return {
@@ -116,6 +142,7 @@ export async function createTestHarness(
     redis,
     queue,
     metrics,
+    clock,
     teardown: async () => {
       await queue.obliterate();
       await queue.close();
@@ -167,10 +194,18 @@ export class CountingClient implements CurrentsClient {
   priorities: Array<CallOpts["priority"]> = [];
   /** Date span of each search call, ms — the per-call range ceiling's witness. */
   ranges: number[] = [];
-  /** Artificial per-call latency, for exercising the wall-clock deadline. */
+  /**
+   * Artificial per-call latency, for exercising the wall-clock deadline. It is
+   * charged to the harness clock rather than slept through: the fill's deadline
+   * reads that clock, so a test buys a precise number of calls instead of
+   * betting that real ones land before a real deadline.
+   */
   delayMs = 0;
 
-  constructor(private readonly inner: CurrentsClient) {}
+  constructor(
+    private readonly inner: CurrentsClient,
+    private readonly clock: TestClock,
+  ) {}
 
   get limits() {
     return this.inner.limits;
@@ -182,9 +217,7 @@ export class CountingClient implements CurrentsClient {
     if (params.startDate && params.endDate) {
       this.ranges.push(params.endDate.getTime() - params.startDate.getTime());
     }
-    if (this.delayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, this.delayMs));
-    }
+    if (this.delayMs > 0) this.clock.advance(this.delayMs);
     return this.inner.search(params, opts);
   }
 
