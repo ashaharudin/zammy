@@ -12,6 +12,9 @@ import { createGeminiClient, type FetchLike } from "./gemini.js";
  * 503 is worth asking again, a 400 is not, and every failure mode arrives as
  * `ok: false` rather than as a throw — because the caller's next move is the
  * same fallback in all of them.
+ *
+ * The pacer's suite below is wider, because a rate limit is a claim about
+ * WALL-CLOCK and the only honest way to test one is against a clock you own.
  */
 
 const RESPONSES = JSON.parse(
@@ -219,5 +222,304 @@ describe("the Gemini client", () => {
 
     expect(result).toEqual({ ok: false, reason: "aborted" });
     expect(calls).toHaveLength(1);
+  });
+});
+
+/**
+ * The pacer (the free tier publishes 15 requests/minute, per key).
+ *
+ * Tested on a VIRTUAL clock — `sleep` advances `now` and nothing else does — so
+ * the assertions are about how much time the client insisted on spending rather
+ * than about how long the suite takes to run. A rate-limit test that really
+ * waits a minute is a rate-limit test nobody runs.
+ */
+describe("the Gemini client's rate limiter", () => {
+  /** A clock the client moves only by sleeping. */
+  function clock() {
+    let at = 0;
+    return {
+      now: () => at,
+      sleep: async (ms: number) => {
+        at += ms;
+      },
+      advance: (ms: number) => {
+        at += ms;
+      },
+      elapsed: () => at,
+    };
+  }
+
+  /** Like `recorder`, but stamps each request with the virtual time it went out. */
+  function paced(now: () => number, ...responses: Array<Response | Error>) {
+    const at: number[] = [];
+    let index = 0;
+    const fetch: FetchLike = async () => {
+      at.push(now());
+      const next = responses[Math.min(index, responses.length - 1)];
+      index += 1;
+      if (next instanceof Error) throw next;
+      return next!.clone();
+    };
+    return { fetch, at };
+  }
+
+  it("spaces requests so the per-minute ceiling is never exceeded", async () => {
+    const time = clock();
+    const { fetch, at } = paced(time.now, jsonResponse(RESPONSES.ok));
+    const client = createGeminiClient({
+      ...OPTIONS,
+      fetch,
+      sleep: time.sleep,
+      now: time.now,
+      maxRequestsPerMinute: 3,
+    });
+
+    for (let i = 0; i < 4; i += 1) {
+      expect(await client.generate({ prompt: "name this story" })).toEqual({
+        ok: true,
+        text: "Fort Hood Crash",
+      });
+    }
+
+    // Three go out at once; the fourth waits for the first to age out.
+    expect(at).toEqual([0, 0, 0, 60_000]);
+  });
+
+  it("slides the window rather than tumbling it", async () => {
+    // The failure this rules out: a counter that resets on the minute admits a
+    // full limit at :59 and another at :01 — twice the ceiling, in the two
+    // seconds most likely to be a burst.
+    const time = clock();
+    const { fetch, at } = paced(time.now, jsonResponse(RESPONSES.ok));
+    const client = createGeminiClient({
+      ...OPTIONS,
+      fetch,
+      sleep: time.sleep,
+      now: time.now,
+      maxRequestsPerMinute: 2,
+    });
+
+    await client.generate({ prompt: "one" });
+    time.advance(30_000);
+    await client.generate({ prompt: "two" });
+    await client.generate({ prompt: "three" });
+
+    // The third waits on the FIRST request's own minute, not on a shared one.
+    expect(at).toEqual([0, 30_000, 60_000]);
+  });
+
+  it("counts retries against the ceiling, not just first attempts", async () => {
+    // The day every call retries is the day the ceiling matters most, and a
+    // client that paced only first attempts would send 3x the limit on it.
+    const time = clock();
+    const { fetch, at } = paced(
+      time.now,
+      jsonResponse(RESPONSES.overloaded, 503),
+      jsonResponse(RESPONSES.overloaded, 503),
+      jsonResponse(RESPONSES.ok),
+    );
+    const client = createGeminiClient({
+      ...OPTIONS,
+      fetch,
+      sleep: time.sleep,
+      now: time.now,
+      maxRequestsPerMinute: 2,
+      maxRetries: 2,
+      backoffBaseMs: 0,
+    });
+
+    expect(await client.generate({ prompt: "name this story" })).toEqual({
+      ok: true,
+      text: "Fort Hood Crash",
+    });
+    expect(at).toEqual([0, 0, 60_000]);
+  });
+
+  it("gives up on the model rather than queueing past the wait cap", async () => {
+    // An unbounded queue is the live tail's failure mode: a promotion burst
+    // outruns 15/min and every waiter holds its members in memory. Past the cap
+    // the caller takes the bigram fallback, which is what it does for a 503.
+    const time = clock();
+    const { fetch, at } = paced(time.now, jsonResponse(RESPONSES.ok));
+    const client = createGeminiClient({
+      ...OPTIONS,
+      fetch,
+      sleep: time.sleep,
+      now: time.now,
+      maxRequestsPerMinute: 1,
+      maxRateWaitMs: 10_000,
+    });
+
+    await client.generate({ prompt: "one" });
+    const second = await client.generate({ prompt: "two" });
+
+    expect(second.ok).toBe(false);
+    expect((second as { reason: string }).reason).toMatch(/^rate limited locally/);
+    // Refused locally, so it cost no request and no wall-clock.
+    expect(at).toEqual([0]);
+    expect(time.elapsed()).toBe(0);
+  });
+
+  it("holds the whole client back for a 429's Retry-After", async () => {
+    // A 429 despite the pacer means something else is on this key. The header
+    // is the only number in the exchange that accounts for both of us, and it
+    // has to outlive the call that earned it.
+    const time = clock();
+    const { fetch, at } = paced(
+      time.now,
+      new Response(JSON.stringify({ error: {} }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": "45" },
+      }),
+      jsonResponse(RESPONSES.ok),
+    );
+    const client = createGeminiClient({
+      ...OPTIONS,
+      fetch,
+      sleep: time.sleep,
+      now: time.now,
+      maxRequestsPerMinute: 100,
+      maxRetries: 0,
+      backoffBaseMs: 0,
+    });
+
+    expect(await client.generate({ prompt: "one" })).toEqual({ ok: false, reason: "http 429" });
+    // A different call, well under the window's ceiling — and still held.
+    expect(await client.generate({ prompt: "two" })).toEqual({
+      ok: true,
+      text: "Fort Hood Crash",
+    });
+    expect(at).toEqual([0, 45_000]);
+  });
+
+  it("also reads Retry-After as an HTTP-date", async () => {
+    const time = clock();
+    const { fetch, at } = paced(
+      time.now,
+      new Response(JSON.stringify({ error: {} }), {
+        status: 429,
+        headers: { "retry-after": new Date(20_000).toUTCString() },
+      }),
+      jsonResponse(RESPONSES.ok),
+    );
+    const client = createGeminiClient({
+      ...OPTIONS,
+      fetch,
+      sleep: time.sleep,
+      now: time.now,
+      maxRetries: 0,
+      backoffBaseMs: 0,
+    });
+
+    await client.generate({ prompt: "one" });
+    await client.generate({ prompt: "two" });
+
+    expect(at).toEqual([0, 20_000]);
+  });
+
+  it("stacks concurrent callers instead of letting them collide", async () => {
+    // Slots are reserved before the wait, so two callers arriving in the same
+    // tick each see the other's reservation. The live tail and the nightly
+    // chore share one client and can overlap.
+    //
+    // Asserted on the WAITS rather than on when each fetch went out: the fake
+    // clock is shared, so a caller that jumps it forward drags the stamps of
+    // the callers still suspended behind it. What the pacer actually decides is
+    // who waits and for how long.
+    const time = clock();
+    const waits: number[] = [];
+    const { fetch, at } = paced(time.now, jsonResponse(RESPONSES.ok));
+    const client = createGeminiClient({
+      ...OPTIONS,
+      fetch,
+      now: time.now,
+      sleep: async (ms) => {
+        waits.push(ms);
+        time.advance(ms);
+      },
+      maxRequestsPerMinute: 2,
+    });
+
+    const results = await Promise.all([
+      client.generate({ prompt: "one" }),
+      client.generate({ prompt: "two" }),
+      client.generate({ prompt: "three" }),
+    ]);
+
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect(at).toHaveLength(3);
+    // Two admitted free, and exactly one made to wait out the window — where a
+    // pacer that reserved after sleeping would have let all three straight
+    // through, each having read a window with room in it.
+    expect(waits).toEqual([60_000]);
+  });
+
+  it("abandons a long wait when the caller aborts during it", async () => {
+    const time = clock();
+    const controller = new AbortController();
+    const { fetch, at } = paced(time.now, jsonResponse(RESPONSES.ok));
+    const client = createGeminiClient({
+      ...OPTIONS,
+      fetch,
+      now: time.now,
+      sleep: async (ms) => {
+        time.advance(ms);
+        controller.abort();
+      },
+      maxRequestsPerMinute: 1,
+    });
+
+    await client.generate({ prompt: "one" });
+    const second = await client.generate({ prompt: "two", signal: controller.signal });
+
+    expect(second).toEqual({ ok: false, reason: "aborted" });
+    expect(at).toEqual([0]);
+  });
+
+  it("keeps the failure that caused a retry when the pacer blocks the retry", async () => {
+    // A 429 with a long Retry-After puts the retry past the wait cap. The
+    // operator needs to read "429, and we did not ask again", not a bare
+    // "rate limited locally" that hides who said no first.
+    const time = clock();
+    const { fetch } = paced(
+      time.now,
+      new Response(JSON.stringify({ error: {} }), {
+        status: 429,
+        headers: { "retry-after": "600" },
+      }),
+      jsonResponse(RESPONSES.ok),
+    );
+    const client = createGeminiClient({
+      ...OPTIONS,
+      fetch,
+      sleep: time.sleep,
+      now: time.now,
+      maxRetries: 1,
+      backoffBaseMs: 0,
+      maxRateWaitMs: 120_000,
+    });
+
+    const result = await client.generate({ prompt: "name this story" });
+
+    expect(result.ok).toBe(false);
+    expect((result as { reason: string }).reason).toBe(
+      "http 429 (rate limited locally (600s wait exceeds the 120s cap))",
+    );
+  });
+
+  it("can be switched off, for callers that pace themselves", async () => {
+    const time = clock();
+    const { fetch, at } = paced(time.now, jsonResponse(RESPONSES.ok));
+    const client = createGeminiClient({
+      ...OPTIONS,
+      fetch,
+      sleep: time.sleep,
+      now: time.now,
+      maxRequestsPerMinute: 0,
+    });
+
+    for (let i = 0; i < 5; i += 1) await client.generate({ prompt: "name this story" });
+
+    expect(at).toEqual([0, 0, 0, 0, 0]);
   });
 });

@@ -56,7 +56,15 @@ export interface BackfillOptions {
   skipLabels?: boolean;
   /** Skip the linking pass and label what is already there. */
   labelsOnly?: boolean;
-  /** Ceiling on label calls per minute. The model is the only rate limit here. */
+  /**
+   * Spacing for label calls, in calls per minute. Defaults to the provider's
+   * free-tier ceiling; callers with a paid key pass `GEMINI_MAX_RPM`.
+   *
+   * Belt to the client's braces, not the enforcement. `createGeminiClient` is
+   * what makes the ceiling true — it sees the retries this layer cannot — and
+   * this spacing exists so a 3,000-storyline pass arrives paced rather than
+   * arriving all at once and queueing inside the pacer.
+   */
   labelRatePerMinute?: number;
   /** Ceiling on how many storylines the label pass will touch. */
   maxLabels?: number;
@@ -273,7 +281,8 @@ async function link(
  * storylines is 3,000 calls, and a full-archive run is exactly when an API's
  * per-minute ceiling is met. The limit is wall-clock spacing rather than a
  * token bucket — the simplest thing that cannot burst, for a pass with no
- * deadline.
+ * deadline. The client paces too, and has the last word; this spacing is what
+ * keeps the pass from handing it a queue thousands deep.
  *
  * Exported because the nightly drift chore IS this pass, bounded: same
  * candidates, same drift rule, same spacing (ADR-0011's third trigger). A second
@@ -287,7 +296,9 @@ export async function labelPass(
   sleep: (ms: number) => Promise<void>,
 ): Promise<BackfillReport["labelled"]> {
   const tally = { model: 0, bigram: 0, none: 0, skipped: 0 };
-  const rate = options.labelRatePerMinute ?? 60;
+  // The free tier's published ceiling. Was 60 — four times the limit, which
+  // the client now refuses to send regardless of what this says.
+  const rate = options.labelRatePerMinute ?? 15;
   // Only the MODEL is rate-limited, because it is the only thing here with a
   // per-minute ceiling and a bill. With no generator configured every label
   // comes from the bigram extractor — pure CPU — and spacing those would have

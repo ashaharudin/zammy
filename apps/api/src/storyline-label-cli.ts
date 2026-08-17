@@ -38,11 +38,15 @@ const generator: TextGenerator | null = config.GEMINI_API_KEY
       baseUrl: config.GEMINI_BASE_URL,
       thinkingLevel: config.GEMINI_THINKING_LEVEL,
       timeoutMs: config.GEMINI_TIMEOUT_MS,
+      maxRequestsPerMinute: config.GEMINI_MAX_RPM,
+      // An operator watching a CLI is the one caller that would rather wait
+      // than take a bigram label, and `--limit` already bounds the run.
+      maxRateWaitMs: 900_000,
     })
   : null;
 
 console.log(
-  `model: ${generator ? `${config.GEMINI_MODEL} (live)` : "none — GEMINI_API_KEY unset, fallback only"}`,
+  `model: ${generator ? `${config.GEMINI_MODEL} (live, ${config.GEMINI_MAX_RPM}/min)` : "none — GEMINI_API_KEY unset, fallback only"}`,
 );
 
 try {

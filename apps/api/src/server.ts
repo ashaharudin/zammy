@@ -138,6 +138,11 @@ export async function buildApp(config: Config): Promise<App> {
           baseUrl: config.GEMINI_BASE_URL,
           thinkingLevel: config.GEMINI_THINKING_LEVEL,
           timeoutMs: config.GEMINI_TIMEOUT_MS,
+          // Built once and shared by the live tail, the sweep and the nightly
+          // chore — which is the point. One client is one pacer, and the
+          // ceiling is on the key they share.
+          maxRequestsPerMinute: config.GEMINI_MAX_RPM,
+          maxRateWaitMs: config.GEMINI_MAX_RATE_WAIT_MS,
         })
       : null,
     sampleSize: config.STORYLINE_LABEL_SAMPLE,
@@ -232,7 +237,11 @@ export async function buildApp(config: Config): Promise<App> {
         linker: deps.config.grouping.linker,
         labeler,
       });
-      await runStorylineLabelChore({ ...choreDeps, labeler });
+      await runStorylineLabelChore({
+        ...choreDeps,
+        labeler,
+        labelRatePerMinute: config.GEMINI_MAX_RPM,
+      });
     },
   });
   await chores.scheduleNightlyRetention();

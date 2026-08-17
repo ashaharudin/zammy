@@ -154,6 +154,34 @@ const EnvSchema = z
      */
     GEMINI_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(20_000),
     /**
+     * The tier's published request ceiling, per minute. THE KNOB: 15 is the
+     * free tier's figure; a paid tier raises it and this is the one number to
+     * change.
+     *
+     * It is a ceiling on the KEY, not on a caller, which is why it is enforced
+     * inside the client (`gemini.ts`) rather than at each of the five places
+     * that label something. The label passes also take it as their spacing, so
+     * a backfill paces itself instead of queueing behind the client's pacer,
+     * but the client is what makes the limit true.
+     *
+     * Overshooting costs more than the 429 it earns: labels are a background
+     * chore with a deterministic fallback, so a burst that trips the limit
+     * turns a batch of model labels into a batch of bigram ones — which are
+     * sticky until the drift trigger fires. Slow is free here.
+     */
+    GEMINI_MAX_RPM: z.coerce.number().int().min(1).max(10_000).default(15),
+    /**
+     * How long a label may wait for a rate-limit slot before giving up on the
+     * model and taking the fallback. Bounds the pacer's queue, which the live
+     * ingest tail would otherwise grow without limit during a promotion burst.
+     */
+    GEMINI_MAX_RATE_WAIT_MS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(900_000)
+      .default(120_000),
+    /**
      * Relabel when membership has multiplied by this since the label was made
      * (ADR-0011's drift trigger, "membership doubled"). A label describes the
      * coverage it was shown; at twice the groups it is describing a minority of
