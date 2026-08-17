@@ -170,11 +170,17 @@ try {
   // replay merges pairs one at a time exactly as live ingest does, so a merge
   // can re-point a third storyline's bridges onto the survivor with nothing
   // left looking once the loop moves on (docs/STORYLINE-LINKING.md). Skipped
-  // for `--labels-only`, which links nothing and gives the sweep nothing to find.
+  // for `--labels-only`, which links nothing and gives the sweep nothing to
+  // find — and skipped on Ctrl-C: the operator asked to stop, and a multi-pass
+  // sweep plus relabels is not "the next group boundary". The nightly chore
+  // catches up on whatever a stopped run left.
   let bridgeReport: Awaited<ReturnType<typeof runBridgeSweep>> | null = null;
-  if (!labelsOnly) {
+  if (!labelsOnly && !stopping) {
     bridgeReport = await runBridgeSweep({ db, config: linkerConfig, log });
-    if (generator && bridgeReport.survivors.length > 0) {
+    // `!skipLabels`: --no-labels promises no model calls, and the post-sweep
+    // relabel is a model call per survivor — the sweep's merges still happen,
+    // their labels wait for the nightly drift pass or a --labels-only run.
+    if (generator && !skipLabels && bridgeReport.survivors.length > 0) {
       await labelLinkedStorylines(
         { db, labeler, log },
         bridgeReport.survivors.map((winnerId) => ({

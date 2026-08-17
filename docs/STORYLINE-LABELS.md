@@ -290,7 +290,7 @@ see:
    rule's business.
 2. Labels **equal** after casefolding, whitespace collapse and the `singular`
    fold. Stopwords are deliberately *not* elided.
-3. The label contains a **grounded proper noun**, pooled over the cluster's whole
+3. The label contains a **grounded proper noun**, pooled over the component's whole
    coverage.
 4. Spans **overlap or fall within `STORYLINE_LABEL_MERGE_GRACE_DAYS`**.
 
@@ -312,7 +312,7 @@ of 13,648 live storylines have no model label); under the nightly label chore ev
 promoted storyline carries one.
 
 `STORYLINE_LABEL_MERGE_GRACE_DAYS` is **unmeasured**: every arc of the one
-qualifying cluster overlaps every other, so 0 and 30 plan the identical merge. It
+qualifying component overlaps every other, so 0 and 30 plan the identical merge. It
 needs an archive holding a story that stopped and restarted.
 
 ## Operating it

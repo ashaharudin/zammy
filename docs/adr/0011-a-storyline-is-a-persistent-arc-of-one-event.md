@@ -113,10 +113,11 @@ the token-bridge merge below cannot reach a big running story, because the
 story's own name outgrows the anchor ceiling as its coverage climbs. The dev
 archive held the Strait of Hormuz coverage as 25 arcs whose entire shared
 vocabulary was `{hormuz, strait, iran}` — mass 10.7 against a floor of 20,
-every token at 2–2.5% of the corpus against a ceiling of 0.2% — so no group
+every token at 2.1–4.1% of a 17,028-article fortnight against a ceiling of
+0.2% — so no group
 could bridge them and the cure never fired. Reshaping the ceiling does not fix
 it either (docs/STORYLINE-LINKING.md): every setting loose enough to collapse
-that cluster also builds a 315-group `com, investing` storyline and 58
+that component also builds a 315-group `com, investing` storyline and 58
 storylines with no profile at all.
 
 The labeler had already solved it. Six of those arcs were independently handed
