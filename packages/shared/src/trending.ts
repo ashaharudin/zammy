@@ -34,7 +34,7 @@ export const TrendingStoryline = z.object({
   size: z.int().min(1),
   /** Distinct source domains over the whole arc. Gate: >= 2. */
   sourceCount: z.int().min(2),
-  /** The newest member article inside the window — the recency channel (§10.5). */
+  /** The newest member article inside the window — the recency channel (§10.3). */
   lastUpdated: z.iso.datetime(),
 });
 export type TrendingStoryline = z.infer<typeof TrendingStoryline>;
@@ -42,7 +42,8 @@ export type TrendingStoryline = z.infer<typeof TrendingStoryline>;
 /**
  * The most words any caller may ask for. Exported because the API caches ONE
  * ranked list per language and serves every caller a prefix of it, so this is
- * also the length it computes and stores (§10.4).
+ * also what it reads and caches regardless of the asked-for limit (§10.4) —
+ * at most this many, since one word per label can shorten the list afterwards.
  */
 export const TRENDING_LIMIT_MAX = 100;
 

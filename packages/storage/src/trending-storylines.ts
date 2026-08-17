@@ -58,8 +58,8 @@ const MIN_SOURCE_DOMAINS = 2;
  *  - **Aliases** (`merged_into is not null`) are pointers, not storylines. The
  *    survivor carries the coverage and the label.
  *  - **Provisional** storylines are storylines-of-one — the ordinary timeline
- *    slot, not a story (ADR-0011's Lifecycle). Offering one as a topic of the
- *    day says a single group is an event.
+ *    slot, not a story (ADR-0011's Lifecycle). Offering one says a single group
+ *    is an event.
  *  - **Unlabelled** storylines have no word to draw. `findSurfacedStorylines`
  *    learned this the hard way with eight pills reading "unlabelled storyline"
  *    while the backfill's label pass was still running; a cloud of them would

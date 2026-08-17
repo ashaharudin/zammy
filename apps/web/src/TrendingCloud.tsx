@@ -4,9 +4,9 @@ import cloud from "d3-cloud";
 import type { TrendingResponse, TrendingStoryline } from "@zammy/shared";
 import { fetchTrending } from "./api.js";
 import { cloudDetail, windowPhrase } from "./cloudLabels.js";
+import { FONT_MIN, fontSizes } from "./cloudFont.js";
 import { layoutSeed } from "./layoutSeed.js";
 import { MONO } from "./theme.js";
-import { maxPlaceableFont } from "./wordFit.js";
 
 /**
  * The landing-page wordcloud (ARCHITECTURE 10.5): the STORYLINES the last 24
@@ -38,8 +38,6 @@ const POLL_MAX = 40; // the sample takes ~10–20s; stop asking after ~60s
 
 const LAYOUT_WIDTH = 700;
 const LAYOUT_HEIGHT = 340;
-const FONT_MIN = 12;
-const FONT_MAX = 56;
 
 /**
  * Warm→cool ramp keyed to RECENCY: what moved minutes ago burns red, what has
@@ -114,33 +112,6 @@ interface PlacedWord {
   x: number;
   y: number;
   size: number;
-}
-
-/**
- * Font ∝ sqrt(articles inside the window), clamped — linear makes the busiest
- * storyline absurd (§10.5). The window's count and not the arc's: a storyline
- * running since March would otherwise be the biggest word on the board every
- * day for a month, whatever happened today.
- *
- * The second clamp is by LENGTH, and it is not cosmetic: a word too wide for
- * the board is dropped by d3-cloud without a word of complaint, and labels are
- * two to five WORDS rather than one, so this bound is now routinely met rather
- * than being the guard it was for terms (see wordFit.ts).
- */
-function fontSizes(storylines: readonly TrendingStoryline[]): Map<string, number> {
-  const roots = storylines.map((s) => Math.sqrt(Math.max(s.windowArticles, 0)));
-  const min = Math.min(...roots);
-  const max = Math.max(...roots);
-  const span = max - min || 1;
-  return new Map(
-    storylines.map((storyline, i) => [
-      storyline.id,
-      Math.min(
-        FONT_MIN + ((roots[i]! - min) / span) * (FONT_MAX - FONT_MIN),
-        maxPlaceableFont(storyline.label.length, LAYOUT_WIDTH, FONT_MIN),
-      ),
-    ]),
-  );
 }
 
 /** Deterministic per language (see layoutSeed): no reshuffle per poll. */
@@ -221,7 +192,7 @@ export function TrendingCloud({
       setPlaced([]);
       return;
     }
-    const sizes = fontSizes(storylines);
+    const sizes = fontSizes(storylines, LAYOUT_WIDTH);
     // d3-cloud identifies a word by its `text`, so the layout is keyed on the
     // label while everything else here is keyed on the UUID. Labels are
     // deliberately non-unique (ADR-0011) — the API keeps one word per label so

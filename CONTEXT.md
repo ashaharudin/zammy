@@ -1,7 +1,7 @@
 # Zammy
 
 A news aggregator. Users search keywords and get a time-ordered timeline of headlines;
-a landing-page cloud shows what the day's news is mostly about. Content comes from the
+a landing-page cloud names the storylines the rolling window updated. Content comes from the
 Currents API, which re-emits the same story many times over — a quirk that shapes most
 of the language below — and optionally from GNews alongside it.
 

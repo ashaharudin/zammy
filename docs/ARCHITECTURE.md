@@ -889,8 +889,10 @@ modern; keywords in, timeline out.
 - **Storyline label** — every slot of a labelled storyline hangs its two-or-three-word label in the
   gutter on the far side of the rail, and clicking it opens the **storyline view**: the timeline
   filtered to that UUID, the label as a dismissible chip, the search box empty, typing exits
-  (ADR-0011). The label's words are never executed as a search — labels are deliberately non-unique,
-  so only the UUID identifies the story. When two same-label storylines are on screen together a
+  (ADR-0011). Here the label's words are never executed as a search — labels are deliberately
+  non-unique, so only the UUID identifies the story. The landing-page cloud is the one place that
+  does run them (§10.5, ADR-0013), and it is the exception precisely because it has no UUID-shaped
+  job: it exists to mint a topic for a reader who has not typed anything. When two same-label storylines are on screen together a
   quiet date qualifier separates them, at the coarsest precision that actually does: month, escalating
   to the day when namesakes share one. A provisional storyline-of-one carries no label and renders
   as the plain article slot. Left of the spine on purpose: the right-hand column is the reader's
@@ -1277,8 +1279,10 @@ thing that makes two readers a few minutes apart see the same cloud.
 
 `d3-cloud` for spiral layout and collision handling; hand-rolling that is a poor use of effort.
 
-- Font size ∝ **`sqrt(windowArticles)`**, clamped to a `[12px, 56px]` range. Linear scaling makes
-  the busiest storyline absurd and the tail illegible.
+- Font size from **`sqrt(windowArticles)`**, ramped across the board into a `[12px, 56px]` range.
+  Linear scaling makes the busiest storyline absurd and the tail illegible. The ramp is relative to
+  the board's own extremes, so a board where every storyline gained the same count — a thin window,
+  or a young deployment — draws every word at the middle of the range rather than at either end.
 - **And clamped again by LENGTH**, because d3-cloud drops a word too wide for the board instead of
   shrinking it — silently. Under the term cloud this was a guard that no recorded corpus could
   trip; a label is two to five WORDS, so it is now routinely load-bearing. Measured:

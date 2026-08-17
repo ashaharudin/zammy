@@ -16,6 +16,11 @@ const STOCK_EXAMPLES = ["ai regulation", "wildfires", "interest rates"];
  * the cloud's palette reads, so the placeholder names what the reader's eye is
  * already being drawn to. It offers the LABELS because the box is a search box
  * and the cloud's own click runs a label as a search too.
+ *
+ * Case-folded, unlike the same label on the board: this is ghost text standing
+ * in for what the reader would TYPE, next to two stock examples that are
+ * lowercase for the same reason. It costs nothing — `canonicalize` lowercases
+ * keywords, so the placeholder and the cloud's click land on one topic.
  */
 export function searchPlaceholder(storylines: readonly TrendingStoryline[]): string {
   const examples =

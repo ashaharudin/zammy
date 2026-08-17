@@ -107,7 +107,7 @@ export async function readTrending(
   // The FULL ranked list, not this caller's slice: the cache key names a
   // language and nothing else, so a `?limit=4` request would otherwise cache
   // a four-word cloud and every reader behind it would see one for the next
-  // fifteen minutes. Storylines come back most recently updated first (§10.5),
+  // fifteen minutes. Storylines come back most recently updated first (§10.4),
   // so every limit is a prefix of the same list and readers never disagree
   // about what leads.
   const storylines = await readTrendingStorylines(deps.db, {

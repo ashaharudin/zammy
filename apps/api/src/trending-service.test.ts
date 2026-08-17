@@ -397,3 +397,39 @@ describe("the window rolls (§10.1, ADR-0008)", () => {
     expect(after.storylines[0]!.windowArticles).toBe(3);
   }, 30_000);
 });
+
+describe("one word per label (§10.2)", () => {
+  it("keeps the freshest claimant when two arcs are named the same thing", async () => {
+    // Labels are deliberately non-unique (ADR-0011) and the dev archive holds
+    // three called "Trump Administration". A pill has room for the date
+    // qualifier that tells them apart; a cloud would simply draw the same word
+    // twice, at two sizes, in two colours, both running the same search.
+    harness = await createTestHarness({}, NOW);
+    const deps = trendingDeps(harness);
+
+    await seedStoryline(harness, "Hormuz Strait Crisis", [
+      { title: "Tanker Struck In The Hormuz Strait", domain: "a.com", ageHours: 18 },
+      { title: "Insurers Withdraw From Hormuz Routes", domain: "b.com", ageHours: 19 },
+    ]);
+    const fresher = await seedStoryline(harness, "hormuz strait crisis", [
+      { title: "Second Tanker Hit Near Hormuz", domain: "c.com", ageHours: 2 },
+      { title: "Convoy Escorts Ordered For Hormuz", domain: "d.com", ageHours: 3 },
+    ]);
+    await seedStoryline(harness, "Truro Verdict", [
+      { title: "Verdict Delivered In The Truro Case", domain: "a.com", ageHours: 6 },
+      { title: "Appeal Expected After The Truro Ruling", domain: "b.com", ageHours: 7 },
+    ]);
+
+    const cloud = await readTrending(deps, { language: "en", limit: 50 });
+
+    // The word appears once, spelled as its freshest claimant spells it, and
+    // the arc it points at is that claimant — not the older namesake, whose
+    // articles are not folded in either.
+    expect(cloud.storylines.map((s) => s.label)).toEqual([
+      "hormuz strait crisis",
+      "Truro Verdict",
+    ]);
+    expect(cloud.storylines[0]!.id).toBe(fresher);
+    expect(cloud.storylines[0]!.windowArticles).toBe(2);
+  }, 30_000);
+});
