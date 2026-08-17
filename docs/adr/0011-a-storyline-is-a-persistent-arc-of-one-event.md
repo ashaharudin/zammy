@@ -106,7 +106,7 @@ drifts — "Fort Hood Crash" may become "Fort Hood Investigation" — and two
 storylines may share a label; when a collision is actually on screen, a quiet
 date-span disambiguator ("Fort Hood Crash · Mar 2026") separates them.
 
-**Amended (label-agreement merge).** A label is still not identity — nothing
+**Amended 2026-08-17 (label-agreement merge).** A label is still not identity — nothing
 keys off one, and clicking still rides the UUID — but agreement between two
 labels is now **evidence**, and the merge acts on it. The reason is measured:
 the token-bridge merge below cannot reach a big running story, because the

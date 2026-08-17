@@ -28,13 +28,13 @@ import {
  *
  *  - **Two reads, not 258.** Candidates first (a small aggregate), then coverage
  *    text ONLY for labels more than one storyline holds. In the dev archive that
- *    is two clusters of 42 and 14 articles rather than every labelled arc.
- *  - **Grounding evidence per CLUSTER, from both sides' coverage.** A word is a
+ *    is two components of 42 and 14 articles rather than every labelled arc.
+ *  - **Grounding evidence per COMPONENT, from both sides' coverage.** A word is a
  *    name if the arcs that agreed on it never write it lowercase. Pooling the
- *    cluster is the point: one arc might never use a word in prose at all, and
+ *    component is the point: one arc might never use a word in prose at all, and
  *    the question is about the story, not about one arc's writing style.
- *  - **Never throws for one cluster's sake**, the posture every storyline pass
- *    here takes. A cluster that fails leaves its arcs where they stood, and the
+ *  - **Never throws for one component's sake**, the posture every storyline pass
+ *    here takes. A component that fails leaves its arcs where they stood, and the
  *    next run tries again.
  *
  * Relabelling the survivor is not decoration. Merging is one of ADR-0011's three
@@ -91,11 +91,11 @@ export async function planLabelMerges(
     groupCount: row.groupCount,
   }));
 
-  const clusters = sharedLabels(candidates);
+  const components = sharedLabels(candidates);
   const plans: LabelMergePlan[] = [];
   const refusals: LabelMergeRefusal[] = [];
 
-  for (const [label, arcs] of clusters) {
+  for (const [label, arcs] of components) {
     const coverage = await readStorylineCoverageText(
       deps.db,
       arcs.map((arc) => arc.id),
@@ -112,7 +112,7 @@ export async function planLabelMerges(
     refusals.push(...planned.refusals);
   }
 
-  return { plans, refusals, sharedLabels: clusters.size };
+  return { plans, refusals, sharedLabels: components.size };
 }
 
 /**
@@ -156,7 +156,7 @@ export async function mergeAgreeingLabels(
       report.failures += 1;
       deps.log?.warn(
         { err: error, label: plan.label, winnerId: plan.winnerId },
-        "label-agreement merge failed for one cluster; its arcs stand where they stood",
+        "label-agreement merge failed for one component; its arcs stand where they stood",
       );
       continue;
     }
@@ -204,14 +204,14 @@ export async function mergeAgreeingLabels(
     // supplies, and seeing it is how anyone knows the guard is load-bearing.
     deps.log?.info(
       { label: refusal.label, storylines: refusal.storylines, reason: refusal.reason },
-      "label-agreement merge refused a cluster",
+      "label-agreement merge refused a component",
     );
   }
 
   return report;
 }
 
-/** The label words that carried a cluster, for a dry run's explanation. */
+/** The label words that carried a component, for a dry run's explanation. */
 export function groundedWords(
   label: string,
   isName: (word: string) => boolean,

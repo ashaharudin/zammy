@@ -1,7 +1,9 @@
 import { loadConfig } from "@zammy/config";
-import { createDb } from "@zammy/storage";
+import { createDb, readStorylineStats } from "@zammy/storage";
 import { createGeminiClient, type TextGenerator } from "./gemini.js";
 import { backfillStorylines } from "./storyline-backfill.js";
+import { runBridgeSweep, type LinkerConfig } from "./storyline-linker.js";
+import { labelLinkedStorylines } from "./storyline-label-service.js";
 
 /**
  * `pnpm backfill:storylines [--restart] [--labels-only] [--no-labels]
@@ -20,6 +22,13 @@ import { backfillStorylines } from "./storyline-backfill.js";
  * progress is derived from `storyline_groups` rather than recorded in a
  * checkpoint that could fall out of step with the work. `--restart` is the
  * only thing that discards state, and it says so.
+ *
+ * Runs the bridge sweep (`runBridgeSweep`) once linking finishes, the same
+ * backstop the nightly chore runs (docs/STORYLINE-LINKING.md's "the merge that
+ * never fired"): a chronological replay merges pairs one at a time exactly as
+ * live ingest does, so a merge can re-point a third storyline's bridges onto
+ * the survivor with nothing left looking once the loop moves on. Skipped for
+ * `--labels-only`, which does no linking and has nothing for the sweep to find.
  */
 
 const args = process.argv.slice(2);
@@ -80,6 +89,35 @@ console.log(
     `labels: ${skipLabels ? "skipped" : generator ? config.GEMINI_MODEL : "fallback only (no GEMINI_API_KEY)"}`,
 );
 
+const linkerConfig: LinkerConfig = {
+  // Explicitly on: the flag gates the LIVE write path, and refusing to
+  // run the backfill because the live path is still dark would be
+  // exactly backwards — the backfill is what has to happen first.
+  enabled: true,
+  rules: {
+    anchorMaxShare: config.STORYLINE_ANCHOR_MAX_SHARE,
+    anchorDfFloor: config.STORYLINE_ANCHOR_DF_FLOOR,
+    massThreshold: config.STORYLINE_MASS_THRESHOLD_V2,
+    dormancyDays: config.STORYLINE_DORMANCY_DAYS,
+    dormantStrictness: config.STORYLINE_DORMANT_STRICTNESS,
+  },
+  mergeBridges: config.STORYLINE_MERGE_BRIDGES,
+  storyDf: {
+    windowDays: config.STORYLINE_DF_WINDOW_DAYS,
+    timeZone: config.APP_TIMEZONE,
+  },
+  timeZone: config.APP_TIMEZONE,
+};
+const log = { warn: (obj: object, msg: string) => console.warn(msg, JSON.stringify(obj)) };
+const labeler = {
+  generator,
+  // Recorded on every model-produced label, so a relabel campaign can
+  // tell "already upgraded" from "still on the fallback" and resume.
+  modelId: config.GEMINI_MODEL,
+  sampleSize: config.STORYLINE_LABEL_SAMPLE,
+  driftFactor: config.STORYLINE_LABEL_DRIFT_FACTOR,
+};
+
 try {
   const startedAt = Date.now();
   let lastPrinted = 0;
@@ -87,34 +125,9 @@ try {
   const report = await backfillStorylines(
     {
       db,
-      config: {
-        // Explicitly on: the flag gates the LIVE write path, and refusing to
-        // run the backfill because the live path is still dark would be
-        // exactly backwards — the backfill is what has to happen first.
-        enabled: true,
-        rules: {
-          anchorMaxShare: config.STORYLINE_ANCHOR_MAX_SHARE,
-          anchorDfFloor: config.STORYLINE_ANCHOR_DF_FLOOR,
-          massThreshold: config.STORYLINE_MASS_THRESHOLD_V2,
-          dormancyDays: config.STORYLINE_DORMANCY_DAYS,
-          dormantStrictness: config.STORYLINE_DORMANT_STRICTNESS,
-        },
-        mergeBridges: config.STORYLINE_MERGE_BRIDGES,
-        storyDf: {
-          windowDays: config.STORYLINE_DF_WINDOW_DAYS,
-          timeZone: config.APP_TIMEZONE,
-        },
-        timeZone: config.APP_TIMEZONE,
-      },
-      log: { warn: (obj, msg) => console.warn(msg, JSON.stringify(obj)) },
-      labeler: {
-        generator,
-        // Recorded on every model-produced label, so a relabel campaign can
-        // tell "already upgraded" from "still on the fallback" and resume.
-        modelId: config.GEMINI_MODEL,
-        sampleSize: config.STORYLINE_LABEL_SAMPLE,
-        driftFactor: config.STORYLINE_LABEL_DRIFT_FACTOR,
-      },
+      config: linkerConfig,
+      log,
+      labeler,
     },
     {
       restart,
@@ -151,7 +164,35 @@ try {
     },
   );
 
-  const { stats } = report;
+  let { stats } = report;
+
+  // The bridge sweep, same backstop the nightly chore runs: a chronological
+  // replay merges pairs one at a time exactly as live ingest does, so a merge
+  // can re-point a third storyline's bridges onto the survivor with nothing
+  // left looking once the loop moves on (docs/STORYLINE-LINKING.md). Skipped
+  // for `--labels-only`, which links nothing and gives the sweep nothing to find.
+  let bridgeReport: Awaited<ReturnType<typeof runBridgeSweep>> | null = null;
+  if (!labelsOnly) {
+    bridgeReport = await runBridgeSweep({ db, config: linkerConfig, log });
+    if (generator && bridgeReport.survivors.length > 0) {
+      await labelLinkedStorylines(
+        { db, labeler, log },
+        bridgeReport.survivors.map((winnerId) => ({
+          groupId: "",
+          storylineId: winnerId,
+          attached: false,
+          attachedTo: [],
+          promoted: [],
+          bridged: [],
+          merged: [{ winnerId, loserId: winnerId }],
+        })),
+      );
+    }
+    // Stats printed below must reflect what the sweep just merged, not the
+    // snapshot backfillStorylines took before it ran.
+    stats = await readStorylineStats(db);
+  }
+
   const pct = (part: number, whole: number): string =>
     whole > 0 ? `${((part / whole) * 100).toFixed(2)}%` : "—";
 
@@ -159,6 +200,13 @@ try {
   console.log(`  linked this run   ${report.linked} groups` +
     `${report.failures ? `  (${report.failures} failed)` : ""}`);
   console.log(`  attached          ${report.attached}   merges ${report.merges}`);
+  if (bridgeReport) {
+    console.log(
+      `  bridge sweep      found ${bridgeReport.found}   merged ${bridgeReport.merged}` +
+        `${bridgeReport.failures ? `  (${bridgeReport.failures} failed)` : ""}` +
+        `${bridgeReport.incomplete ? "  INCOMPLETE — re-run to finish" : ""}`,
+    );
+  }
   console.log(`\n  storylines        ${stats.storylines}   (+${stats.aliases} aliases)`);
   console.log(
     `  promoted          ${stats.promoted}  ${pct(stats.promoted, stats.storylines)} of storylines`,

@@ -24,7 +24,7 @@ import {
  * `--dry-run` is the point of this file. The pass merges storylines and merging
  * has no inverse (ADR-0011 refuses split), so the plan must be readable before it
  * is written — and reading it is also how the precision guard gets checked: a
- * dry run prints every cluster it REFUSED and why, which is where a generic
+ * dry run prints every component it REFUSED and why, which is where a generic
  * model label shows itself.
  */
 
@@ -121,13 +121,13 @@ async function report(): Promise<void> {
     spanToMs: row.spanTo.getTime(),
     groupCount: row.groupCount,
   }));
-  const clusters = sharedLabels(candidates);
+  const components = sharedLabels(candidates);
   console.log(
     `\n${rows.length} model-labelled live storylines · ` +
-      `${clusters.size} labels held by more than one`,
+      `${components.size} labels held by more than one`,
   );
 
-  for (const [label, arcs] of clusters) {
+  for (const [label, arcs] of components) {
     const coverage = await readStorylineCoverageText(
       db,
       arcs.map((arc) => arc.id),

@@ -130,6 +130,45 @@ measure them, and it should.
 16,000-article window is 32, so the floor of 10 only binds for a language whose
 fortnight holds under ~5,000 articles. The archive has no such language.
 
+## The anchor ceiling cannot reach a big running story
+
+Found 2026-08-17, chasing a search for `hormuz` that returned three separate
+"Strait of Hormuz Crisis" storylines. The dev archive held that coverage as
+**25 live arcs** whose entire shared vocabulary was `{hormuz, strait, iran}` —
+mass 10.7 against a floor of 20, every token at 2.1–4.1% of a 17,028-article
+fortnight against a 0.2% ceiling. No group could bridge them: the story's own
+name had outgrown the rule meant to recognize it, so no bridge was ever
+recorded and the K-bridge cure never fired.
+
+Reshaping the ceiling does not fix it either — replayed over all 22,154
+groups:
+
+| share | mass | hormuz arcs | biggest arc | largest storyline | empty-profile arcs |
+| --- | --- | --- | --- | --- | --- |
+| **0.002** | **20** | **71** | 13g | 77 (0.35%) | 0 |
+| 0.005 | 16 | 56 | 31g | 109 (0.49%) | 2 |
+| 0.01 | 12 | 27 | 36g | 208 (0.94%) | 10 |
+| 0.02 | 8 | 9 | 168g | 315 (1.42%) | 58 |
+
+Every setting loose enough to collapse the Hormuz component also builds a
+315-group `com, investing` storyline and 58 storylines where no token is
+shared by half the members — the entity-and-beat failure ADR-0011 already
+forbids, just tripped by a different knob. A coherence floor on the candidate
+profile does not rescue it either: at 0.02/8 it pushed thin arcs from 281 to
+1,344, because a group refused at its best candidate just lands in a worse
+one.
+
+This is what the label-agreement merge (ADR-0011's amendment,
+`storyline-label-merge.ts`) exists to reach. The labeler had already told the
+Hormuz component apart from the Q2-earnings component sharing the same
+failure shape: six of the 25 arcs were independently handed the identical
+name "Strait of Hormuz Crisis" by a model reading their headlines — the
+semantic judgement no df statistic can make. Run against the dev archive:
+`sharedLabels 2 · planned 1 · merged 5 · refused 1` — the Hormuz six
+collapsed into one 31-group arc spanning 2026-07-27 → 2026-08-17, relabelled
+"Hormuz Strait Crisis"; the Q2 component refused for carrying no grounded
+name.
+
 ## The merge that never fired
 
 Found 2026-08-17, against the live dev archive rather than the sweep — and the
