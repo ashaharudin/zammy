@@ -256,7 +256,11 @@ export async function runStorylineLabelChore(
     labeler: Omit<LabelerDeps, "db">;
     /** Ceiling on storylines one night will relabel. */
     maxLabels?: number;
-    /** Model calls per minute. Only the model is paced; the fallback is CPU. */
+    /**
+     * Model calls per minute. Only the model is paced; the fallback is CPU.
+     * Defaults to the free tier's ceiling; `GEMINI_MAX_RPM` is the knob, and
+     * the server passes it through.
+     */
     labelRatePerMinute?: number;
     sleep?: (ms: number) => Promise<void>;
   },
@@ -266,7 +270,7 @@ export async function runStorylineLabelChore(
     deps.labeler,
     {
       maxLabels: deps.maxLabels ?? 500,
-      labelRatePerMinute: deps.labelRatePerMinute ?? 60,
+      labelRatePerMinute: deps.labelRatePerMinute ?? 15,
     },
     deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
   );

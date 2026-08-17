@@ -97,6 +97,54 @@ the old day-bounded model re-formed its storylines every day. At ~110 labels/day
 (~1,200/day) and is deliberately not a model call (ADR-0011, "Considered and
 refused").
 
+## The rate limit, and where it is enforced
+
+The free tier publishes **15 requests per minute**, and the ceiling is on the
+KEY. That is the whole reason the pacer lives in `gemini.ts` and not in the
+callers: five things in one process label storylines —
+
+| caller | when |
+| --- | --- |
+| the ingest tail (`labelLinkedStorylines`) | promotion and merge, off the §6.3 deadline |
+| the late-candidate sweep | nightly, before the drift pass |
+| the drift chore (`labelPass`) | nightly |
+| `pnpm backfill:storylines` | an operator, on the whole archive |
+| `pnpm label:storylines` | an operator, on what needs it |
+
+— and before this they were paced separately or not at all. The two nightly
+passes spaced at 60/min, four times the ceiling; the ingest tail and the sweep
+had no spacing whatsoever; and **retries were invisible to all four**, so a bad
+minute at the API multiplied the real rate by up to 3.
+
+One pacer inside the client fixes the category of bug rather than four
+instances of it. It is a sliding 60-second window, not a per-minute counter — a
+counter that resets on the minute admits a full limit at :59 and another at :01
+— and slots are reserved before the wait, so two callers arriving in the same
+tick stack instead of both reading a window with room in it.
+
+Three properties worth knowing:
+
+- **A 429 holds the whole client back.** Earning one despite the pacer means
+  something else is on the key (a second task, an operator's laptop), so
+  `Retry-After` becomes a cooldown every waiter respects, not just the call
+  that earned it.
+- **The queue is bounded.** Past `GEMINI_MAX_RATE_WAIT_MS` (2 minutes, ~30 deep
+  at 15/min) a call gives up and takes the bigram fallback — the same move it
+  already makes for a 503. Without this the ingest tail would grow an unbounded
+  queue during a promotion burst, each waiter holding its members in memory.
+  The cost is a sticky bigram label: the baseline is stamped either way, so
+  drift will not re-ask until membership doubles. `--relabel` is the repair.
+  The CLIs raise the cap to 15 minutes instead, because a backfill would rather
+  wait than settle for a bigram.
+- **Serially, latency binds before the limit does.** At ~7.1s per call a single
+  pass sustains ~8.5 labels/min, comfortably under 15. The ceiling only binds
+  on a parallelised pass — which is exactly what STORYLINE-BACKFILL.md
+  recommends for a full relabel, and why the pacer has to be in the client that
+  such a pass would share.
+
+`GEMINI_MAX_RPM` is the knob. Raise it with the plan and every path above
+follows, including the nightly passes, which take it as their spacing.
+
 ## What the model produces, measured
 
 20 day-bounded storylines, live, at the defaults above: **17 model labels, 3

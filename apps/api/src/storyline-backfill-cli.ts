@@ -52,6 +52,11 @@ const generator: TextGenerator | null = config.GEMINI_API_KEY
       baseUrl: config.GEMINI_BASE_URL,
       thinkingLevel: config.GEMINI_THINKING_LEVEL,
       timeoutMs: config.GEMINI_TIMEOUT_MS,
+      maxRequestsPerMinute: config.GEMINI_MAX_RPM,
+      // A backfill has no deadline and thousands of labels to place; falling
+      // back to a bigram because the queue was busy would be the worst trade
+      // available. It waits.
+      maxRateWaitMs: 900_000,
     })
   : null;
 
@@ -121,7 +126,10 @@ try {
       ...(num("batch") !== undefined ? { batchSize: num("batch")! } : {}),
       ...(num("max-groups") !== undefined ? { maxGroups: num("max-groups")! } : {}),
       ...(num("max-labels") !== undefined ? { maxLabels: num("max-labels")! } : {}),
-      labelRatePerMinute: num("label-rate", 60)!,
+      // Defaults to the configured ceiling, so the pass paces itself instead of
+      // piling into the client's pacer and waiting there. `--label-rate` can
+      // only go SLOWER usefully: the client enforces the ceiling regardless.
+      labelRatePerMinute: num("label-rate", config.GEMINI_MAX_RPM)!,
       onProgress: (progress) => {
         // One line per 2s at most: a backfill is long enough that progress
         // matters and long enough that a line per batch is a wall of text.
