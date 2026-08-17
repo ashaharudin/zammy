@@ -228,7 +228,12 @@ export function planLabelMerge(
       }
     }
     if (component.length < 2) continue;
-    if (component.length > rules.maxComponent) {
+    // A valve that cannot be read is a valve that is shut. `NaN` loses every
+    // comparison, so `length > NaN` is false and a garbled `--max-component`
+    // would silently let the swallow this valve exists to stop straight
+    // through — the one direction it must never fail in.
+    const maxComponent = Number.isFinite(rules.maxComponent) ? rules.maxComponent : 0;
+    if (component.length > maxComponent) {
       refusals.push({ label, storylines: component.length, reason: "component too large" });
       continue;
     }
