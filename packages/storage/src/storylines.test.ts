@@ -519,6 +519,46 @@ describe("storylines in storage", () => {
       expect(await readGroupStorylines(harness.db, groupB)).toEqual([a.id]);
     });
 
+    it("survives two concurrent merges of the same pair in opposite directions", async () => {
+      // The ingest cascade and the nightly sweeps can nominate the same pair at
+      // the same moment with opposite winners. Un-serialized, both resolve
+      // against pre-merge state and both commit, writing merged_into on BOTH
+      // rows — a cycle every `merged_into is null` read excludes, so the
+      // storyline vanishes. The advisory lock in mergeStorylines makes the
+      // second merge resolve after the first commits and no-op.
+      const groupA = await group("2026-08-12T09:00:00.000Z", ["dam", "breach"]);
+      const groupB = await group("2026-08-12T10:00:00.000Z", ["dam", "evacuation"]);
+      const a = await createProvisionalStoryline(harness.db, {
+        groupId: groupA,
+        timeZone: ZONE,
+      });
+      const b = await createProvisionalStoryline(harness.db, {
+        groupId: groupB,
+        timeZone: ZONE,
+      });
+
+      const [forward, backward] = await Promise.all([
+        mergeStorylines(harness.db, { winnerId: a.id, loserId: b.id, timeZone: ZONE }),
+        mergeStorylines(harness.db, { winnerId: b.id, loserId: a.id, timeZone: ZONE }),
+      ]);
+
+      // Exactly one direction wins; the other arrives late and no-ops.
+      expect([forward.merged, backward.merged].filter(Boolean)).toHaveLength(1);
+      // Both callers were told the same survivor, and it is still readable.
+      expect(forward.winnerId).toBe(backward.winnerId);
+      const survivor = await resolveStoryline(harness.db, forward.winnerId!);
+      expect(survivor).not.toBeNull();
+      expect(await resolveStoryline(harness.db, a.id)).toBe(survivor);
+      expect(await resolveStoryline(harness.db, b.id)).toBe(survivor);
+      // One row survives un-merged; the other aliases to it. Never a cycle.
+      const rows = await harness.db
+        .selectFrom("storylines")
+        .select(["id", "merged_into"])
+        .where("id", "in", [a.id, b.id])
+        .execute();
+      expect(rows.filter((row) => row.merged_into === null)).toHaveLength(1);
+    });
+
     it("refuses a merge naming a storyline this database never held", async () => {
       const groupId = await group("2026-08-11T09:00:00.000Z", ["quarry", "fire"]);
       const real = await createProvisionalStoryline(harness.db, { groupId, timeZone: ZONE });

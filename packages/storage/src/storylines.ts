@@ -295,6 +295,14 @@ export async function mergeStorylines(
   input: { winnerId: string; loserId: string } & Zoned,
 ): Promise<MergeResult> {
   return db.transaction().execute(async (trx) => {
+    // One merge at a time, globally. Alias resolution is a plain read and the
+    // two UPDATEs land on different rows, so under READ COMMITTED two
+    // overlapping merges both resolve against pre-merge state and both commit:
+    // A→B racing B→A writes merged_into on BOTH rows — a cycle that every
+    // `merged_into is null` read excludes, vanishing a live storyline. Merges
+    // are rare (ingest cascade, nightly sweeps), so serializing them is free;
+    // resolving AFTER the lock is what makes the second merge see the first.
+    await sql`select pg_advisory_xact_lock(hashtext('zammy.storyline-merge'))`.execute(trx);
     const winner = await resolveIn(trx, input.winnerId);
     const loser = await resolveIn(trx, input.loserId);
     if (winner === null || loser === null) {
