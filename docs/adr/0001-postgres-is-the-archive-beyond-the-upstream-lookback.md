@@ -4,6 +4,11 @@ status: accepted
 
 # Postgres is the archive beyond the upstream 30-day lookback
 
+> Amended 2026-08-17: the deployment target moved from AWS to OCI
+> ([DEPLOYMENT-OCI](../DEPLOYMENT-OCI.md)). Where this ADR says "RDS", read "the managed
+> production Postgres" — DEPLOYMENT-OCI §4 carries the backup and PITR requirement forward
+> onto OCI Database with PostgreSQL, unchanged.
+
 Currents API refuses any `start_date` older than 30 days (verified: 29 days returns
 200, 31 days returns `400 "Max lookback is 30 days"`). Articles we stored more than
 30 days ago therefore cannot be re-fetched from anywhere, which makes production

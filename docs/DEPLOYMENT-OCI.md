@@ -80,9 +80,16 @@ Status as of 2026-08-14: 1, 2 and 4 are done; 3 is drafted and waiting on tenanc
 
 ### What CI needs from the tenancy
 
-Repository **variables** (not secret): `OCI_REGISTRY` (e.g. `ocir.us-ashburn-1.oci.oraclecloud.com`;
-the legacy `<region-key>.ocir.io` form still resolves), `OCI_NAMESPACE` (the tenancy object-storage
-namespace), `OCI_REPOSITORY` (e.g. `zammy/api`).
+Repository-level **variables** (not environment-level — `ci.yml` declares no `environment:`, so
+environment-scoped values would be invisible to it):
+
+- `OCI_REGISTRY` = **`ocir.ca-toronto-1.oci.oraclecloud.com`** (the legacy `yyz.ocir.io` form still
+  resolves). Keep the registry in the same region as the instances that pull from it; cross-region
+  pulls work but buy egress and latency on every deploy.
+- `OCI_NAMESPACE` — the tenancy's object-storage namespace, an auto-generated string rather than the
+  tenancy name. Profile → Tenancy, same page as Home Region.
+- `OCI_REPOSITORY` — e.g. `zammy/api`. Create it **private** first; a push to a non-existent repo
+  auto-creates it, but under a tenancy default rather than a decision.
 
 Repository **secrets**: `OCI_USERNAME` — `<namespace>/<user>`, or
 `<namespace>/oracleidentitycloudservice/<user>` on a federated tenancy — and `OCI_AUTH_TOKEN`, an
@@ -247,6 +254,9 @@ It is also where this plan now starts: see the staging note below.
 any paid production footprint exists. The image is the same image; only environment variables
 differ, which is the whole point of the discipline in §1.
 
+This runs in **`ca-toronto-1`**, the tenancy's home region — a requirement, not a preference: Always
+Free resources are offered only there (§9.1).
+
 The allowance, verified against Oracle's Always Free reference 2026-08-14:
 
 | Resource | Always Free | Note |
@@ -300,7 +310,21 @@ healthy behind the LB — and that is worth having on day one.
 
 ## 9. Open questions
 
-1. **Region** — pick by latency to users; also constrains which shapes/services are available.
+1. ~~**Region**~~ ✅ **Resolved 2026-08-17: Canada Southeast (Toronto)** — identifier `ca-toronto-1`,
+   region key `yyz`. It is also the tenancy's **home region**, which is the part that matters: Always
+   Free resources exist only in the home region, so the §7 staging plan is actually available rather
+   than merely priced. (OCI labels both Toronto and Montreal "Canada Southeast"; Montreal is
+   `ca-montreal-1` / `yul`. The identifier, not the label, is what goes in config.)
+
+   Two consequences to carry forward:
+
+   - **One availability domain.** `ca-toronto-1` has a single AD, so there is no second AD to retry
+     into when free-tier Ampere capacity is unavailable — a routine, transient condition rather than
+     a misconfiguration. Asking for less than the full 2 OCPU / 12 GB is likelier to be granted, and
+     the stack's own limits total under 3 GB, so a smaller shape runs it comfortably.
+   - **Service availability is now checkable, not hypothetical.** Before Phase 2, **verify** that OCI
+     Database with PostgreSQL is offered in `ca-toronto-1` — regional service coverage varies, and a
+     single-AD region is exactly where a gap would show up. Same for the Phase 4 Flexible LB.
 2. **Domain and DNS** — where is the zone hosted, and does TLS terminate on the OCI LB with an OCI
    Certificates cert or a Let's Encrypt cert managed in CI?
 3. ~~**OCI Cache vs. container Redis**~~ ✅ **Resolved 2026-08-17: container Redis** (§4). The

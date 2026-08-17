@@ -147,12 +147,23 @@ Three things worth keeping:
 - **`European Athletics 2026` and `Clacton by-election`** exercise S4's two
   contract fixes — digits admitted, internal hyphens kept — in the first twenty
   live labels.
-- **Latency, not the rate limit, binds.** 142s for 20 labels is **7.1s each**,
-  matching S4's measurement, at a 500ms spacing setting. A full relabel of
-  2,782 storylines is therefore **~5.5 hours serially** for ~$0.59. Whoever
-  runs the production relabel should parallelise the pass first; the archive
-  is left on fallback labels deliberately rather than spending five hours to
-  prove a point the rehearsal already proved.
+- **Latency, not the rate limit, binds — serially.** 142s for 20 labels is
+  **7.1s each**, matching S4's measurement. A full relabel of 2,782 storylines
+  is therefore **~5.5 hours serially** for ~$0.59. Whoever runs the production
+  relabel should parallelise the pass first; the archive is left on fallback
+  labels deliberately rather than spending five hours to prove a point the
+  rehearsal already proved.
+
+  Two caveats on that rehearsal, both about the ceiling. It ran at a 500ms
+  spacing — **120 calls/min, eight times the free tier's 15** — and got away
+  with it only because 7.1s of latency held the real rate near 8.5/min. The
+  spacing setting was never the thing keeping the run legal. And that is
+  precisely why parallelising is the dangerous half of the advice: four workers
+  at 8.5/min each is 34/min, over the ceiling, and the arithmetic that saved
+  the serial run does not survive. The client now paces the key itself
+  (`GEMINI_MAX_RPM`, default 15), so a parallelised pass is throttled rather
+  than rejected — it simply cannot beat ~15/min without raising the plan, which
+  puts the floor for a full relabel at ~3 hours.
 
 ## Operating it
 
@@ -163,8 +174,13 @@ pnpm backfill:storylines --no-labels        # link only
 pnpm backfill:storylines --labels-only      # label what is already linked
 pnpm backfill:storylines --max-groups=500   # rehearse on a slice
 pnpm backfill:storylines --labels-only --relabel   # re-name everything
-pnpm backfill:storylines --label-rate=30    # model calls per minute
+pnpm backfill:storylines --label-rate=8     # model calls per minute; slower only
 ```
+
+`--label-rate` defaults to `GEMINI_MAX_RPM` (15) and is useful only to go
+SLOWER. The client enforces the ceiling on the key regardless of what the pass
+asks for, so a higher number buys a queue inside the pacer rather than a faster
+run.
 
 `--restart` is the only flag that discards state.
 
@@ -186,11 +202,13 @@ select label_source, count(*) from storylines
 where merged_into is null and label is not null group by 1;
 ```
 
-The label pass is
-rate-limited by wall-clock spacing because a full archive is precisely when an
-API's per-minute ceiling is met — 3,000 promoted storylines is 3,000 calls —
-and both the ordinary pass and a relabel campaign are resumable — the first via
-the drift clock, the second via provenance.
+The label pass spaces its calls by wall clock because a full archive is
+precisely when an API's per-minute ceiling is met — 3,000 promoted storylines is
+3,000 calls. The spacing is politeness, not the guarantee: the Gemini client
+paces the key itself and sees the retries this pass cannot
+(docs/STORYLINE-LABELS.md, "The rate limit"). Both the ordinary pass and a
+relabel campaign are resumable — the first via the drift clock, the second via
+provenance.
 
 ### It refuses to run against an empty trailing corpus
 
