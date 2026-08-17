@@ -127,6 +127,18 @@ describe("queries GNews cannot express are refused locally", () => {
       provider: "gnews",
     });
   });
+
+  it("tags a clamp refusal too, so a log line can attribute it", async () => {
+    // The clamp refuses a page past the retrievable cap. It runs before the
+    // query is built, so it is the refusal most likely to escape the tagging
+    // block and reach `meta.degraded` as `provider: "unknown"`.
+    const { fetch, calls } = stubFetch([]);
+
+    await expect(
+      makeClient({ fetch }).search({ keywords: ["x"], pageSize: 10, pageNumber: 99 }),
+    ).rejects.toMatchObject({ provider: "gnews" });
+    expect(calls).toHaveLength(0);
+  });
 });
 
 describe("end of results", () => {

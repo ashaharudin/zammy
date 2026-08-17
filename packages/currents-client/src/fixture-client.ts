@@ -1,6 +1,7 @@
 import {
   UnmeteredQuotaGovernor,
   clampSearchParams,
+  tagProvider,
   type CallOpts,
   type ClientLimits,
   type QuotaView,
@@ -39,7 +40,19 @@ export class FixtureCurrentsClient implements CurrentsClient {
   }
 
   async search(params: SearchParams, _opts: CallOpts = {}): Promise<SearchResult> {
-    const { params: clamped, adjustments } = clampSearchParams(params, this.limits);
+    // The clamp is inside the tagging block: its refusals — a pageNumber past
+    // the retrievable cap, a range past the per-call ceiling — are this
+    // provider's, and left untagged they reach log lines, metrics and
+    // `meta.degraded` as `provider: "unknown"`. Fixture mode must refuse
+    // exactly as live does, tag included.
+    let clamped: SearchParams;
+    let adjustments: string[];
+    try {
+      ({ params: clamped, adjustments } = clampSearchParams(params, this.limits));
+    } catch (error) {
+      throw tagProvider(error, PROVIDER);
+    }
+
     const pageSize = clamped.pageSize ?? this.limits.maxPageSize;
     const raw = this.store.search(clamped, { maxPageSize: this.limits.maxPageSize });
     const { sightings, stats } = normalizeSightings(raw);

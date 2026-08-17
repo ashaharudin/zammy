@@ -109,22 +109,30 @@ export class HttpGnewsClient implements GnewsClient {
   }
 
   async search(params: SearchParams, opts: CallOpts = {}): Promise<SearchResult> {
-    const { params: clamped, adjustments } = clampSearchParams(
-      params,
-      this.limits,
-      new Date(this.transport.now()),
-    );
-    if (adjustments.length) {
-      this.transport.logger?.warn({ adjustments }, "clamped search params to tier limits");
-    }
-
     // Throws before any call is spent when the query names something GNews
     // cannot filter on — see `unservableReason`.
+    //
+    // The clamp is inside the tagging block too: it refuses a pageNumber past
+    // the retrievable cap and a range past the per-call ceiling, and those
+    // refusals belong to this provider as much as the ones `toQueryParams`
+    // raises. Left outside, they reach log lines, metrics and `meta.degraded`
+    // as `provider: "unknown"` — see `tagProvider` in @zammy/news-client.
+    let clamped: SearchParams;
+    let adjustments: string[];
     let query: URLSearchParams;
     try {
+      ({ params: clamped, adjustments } = clampSearchParams(
+        params,
+        this.limits,
+        new Date(this.transport.now()),
+      ));
       query = toQueryParams(clamped, { maxPageSize: this.limits.maxPageSize });
     } catch (error) {
       throw tagProvider(error, PROVIDER);
+    }
+
+    if (adjustments.length) {
+      this.transport.logger?.warn({ adjustments }, "clamped search params to tier limits");
     }
 
     const pageSize = clamped.pageSize ?? this.limits.maxPageSize;

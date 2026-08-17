@@ -86,6 +86,14 @@ describe("the factory hides which client you got", () => {
     );
   });
 
+  it("tags that refusal with the provider, so a log line can attribute it", async () => {
+    // Fixture mode must refuse exactly as live does, tag included — otherwise
+    // the mode most development runs in reports `provider: "unknown"`.
+    await expect(client.search({ pageNumber: 6, pageSize: 20 })).rejects.toMatchObject({
+      provider: "currents",
+    });
+  });
+
   it("clamps to tier limits exactly as the live client does", async () => {
     const result = await client.search({ pageSize: 500 });
     expect(result.sightings.length).toBeLessThanOrEqual(20);
