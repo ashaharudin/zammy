@@ -114,14 +114,18 @@ Three things follow:
   story — so a model shown two unrelated articles invents a name, `validateLabel`
   refuses it, and the storyline stands under a bigram label. The 382 declines are
   that verdict arriving as a formatting failure.
-- **Not yet shipped, and the reason is a measurement, not a doubt.** Acting on
-  the verdict *dissolves* storylines rather than declining to build them, so what
-  decides it is the false-positive rate on the named set, and that number needs a
-  run this repo's free-tier key cannot finish in a day (500 requests per model per
-  day; the campaign exhausts it). `storyline-coherence.ts` is the pure,
-  tested half — a prompt that stops asserting the conclusion, and a **three-way**
-  reply that never lets "the model did not answer" act like "the model said no".
-  `pnpm measure:storyline-coherence` is the resumable run.
+- **Measured 2026-08-18 on the configured model, and it holds — at two groups
+  only.** Over the hand-judged sets it refuses 75 of 88 declined (85.2%) and 27 of
+  86 named; reading all 27 shows ~22 are coincidence piles the *namer* papered
+  over, so the true cost is 1–5 of 86. That makes it the first candidate here that
+  is not a bidirectional trade. It also means the `named` set is contaminated and
+  the reported failure is **larger than 382**. But over the 21 named arcs at ≥20
+  groups the same verdict refuses **9, seven of them genuine events** — a mature
+  arc's breadth reads as incoherence. So the verdict may be consulted **only where
+  the storyline is not yet real**: a promotion whose winner was a
+  provisional-of-one, never `merge` (which already carries K bridges plus label
+  agreement) and never `drift`. `storyline-coherence.ts` is the pure, tested half;
+  `pnpm measure:storyline-coherence` reproduces the matrix.
 
 When it is wired, the gate must **defer** a formation rather than revert one. On
 the fresh path the arriving group's birth storyline is absorbed by

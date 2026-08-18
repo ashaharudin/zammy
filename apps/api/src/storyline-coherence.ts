@@ -153,3 +153,40 @@ export function readCoherenceReply(
   if (label !== null) return { kind: "named", label };
   return { kind: "unusable", reason: `contract: ${normalized.slice(0, 80)}` };
 }
+
+/**
+ * May an `incoherent` verdict act on THIS storyline? Measured, and the answer is
+ * almost always no.
+ *
+ * The verdict's accuracy depends entirely on how much coverage it is shown.
+ * docs/STORYLINE-LINKING.md, "…and on mature arcs it must never run": at two
+ * groups it refuses 85.2% of the declined set for a true cost of 1–5 in 86, but
+ * over the archive's 21 named arcs of 20 groups or more it refuses **nine, seven
+ * of them genuine events** — including `el-sayed / michigan / primary / senate`,
+ * which the anchor-share section holds up as the model of event-shaped coverage.
+ * A mature arc spans rumour, reaction, analysis and adjacent players, and the
+ * prompt's own disqualifiers ("share only a person, a place, a team, a market")
+ * make that breadth read as incoherence.
+ *
+ * So the gate is scoped to the moment a storyline becomes real and no other:
+ *
+ *  - `promotion` where the winner **was a provisional-of-one** — two singletons
+ *    becoming a storyline. This is the formation the piles come from, and the
+ *    only case with a formation left to withhold.
+ *  - `promotion` onto an established arc, `merge`, `drift`: no. A join to a
+ *    30-group arc is not a formation; `merge` already costs K independent bridges
+ *    plus label agreement; and `drift` fires on every doubling of membership,
+ *    which is precisely where the 43% was measured.
+ *
+ * This is a function rather than a comment because the labeler already fires on
+ * all three triggers (`labelLinkedStorylines`), so the unscoped wiring — pass the
+ * coherence prompt wherever a label is made — is both the obvious implementation
+ * and the one that dissolves 43% of the archive's mature arcs.
+ */
+export function mayRefuseFormation(input: {
+  trigger: "promotion" | "merge" | "drift";
+  /** Member groups the winning storyline held BEFORE this arrival. */
+  groupCountBefore: number;
+}): boolean {
+  return input.trigger === "promotion" && input.groupCountBefore === 1;
+}

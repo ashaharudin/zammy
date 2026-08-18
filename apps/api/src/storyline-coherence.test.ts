@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   INCOHERENT_SENTINEL,
   buildCoherencePrompt,
+  mayRefuseFormation,
   readCoherenceReply,
 } from "./storyline-coherence.js";
 import type { LabelMember } from "./storyline-label.js";
@@ -145,5 +146,30 @@ describe("readCoherenceReply", () => {
 
     expect(reply).toMatchObject({ kind: "unusable" });
     if (reply.kind === "unusable") expect(reply.reason).toContain("I cannot determine this");
+  });
+});
+
+describe("mayRefuseFormation", () => {
+  it("allows a refusal only where two singletons are becoming a storyline", () => {
+    expect(mayRefuseFormation({ trigger: "promotion", groupCountBefore: 1 })).toBe(true);
+  });
+
+  it("refuses to act on a join to an ESTABLISHED arc", () => {
+    // Measured: over the archive's 21 named arcs of >=20 groups the verdict
+    // rejects nine, seven of them genuine events. A mature arc's breadth reads
+    // as incoherence, so the gate must not see one.
+    expect(mayRefuseFormation({ trigger: "promotion", groupCountBefore: 12 })).toBe(false);
+  });
+
+  it("never acts on a merge — that evidence is K bridges plus label agreement", () => {
+    expect(mayRefuseFormation({ trigger: "merge", groupCountBefore: 1 })).toBe(false);
+  });
+
+  it("never acts on drift, which is exactly where the 43% was measured", () => {
+    // `labelStoryline` fires on drift at every doubling of membership. Wiring
+    // the verdict there unscoped is the implementation that dissolves mature
+    // arcs, so the guard rejects it even at a group count that looks like a
+    // formation.
+    expect(mayRefuseFormation({ trigger: "drift", groupCountBefore: 1 })).toBe(false);
   });
 });

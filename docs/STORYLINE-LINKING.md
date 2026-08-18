@@ -446,28 +446,85 @@ the labelling campaign exhausts it — this investigation hit the wall mid-run.
 An implementation that read silence as a refusal would dissolve the archive on a
 quiet Tuesday.
 
-**Not yet shipped, and honestly so.** Acting on the verdict *dissolves*
-storylines rather than declining to build them, so the number that decides it is
-not how many piles it catches but how many real arcs it takes along. That number
-is not measured yet:
+### The verdict, measured (2026-08-18)
+
+Run on **`gemini-3.1-flash-lite`, the configured model**, once the free-tier day
+rolled over:
 
 ```bash
-pnpm measure:storyline-coherence --size=2 --per-set=88   # resumable; ~500/day
+pnpm measure:storyline-coherence --size=2 --per-set=88   # resumable; 500/day/model
 pnpm measure:storyline-coherence --report                # matrix, no calls
 ```
 
-What one quota-limited partial run said (`gemini-3.7-flash`, the sibling model
-whose daily bucket was still open):
+**At two groups — where formation happens — it works.**
 
 | set | answered | NOT ONE STORY |
 | --- | --- | --- |
-| declined | 11 | **10 (90.9%)** |
-| named | **1** | 1 |
+| declined | 88 | **75 (85.2%)** |
+| named | 86 | 27 (31.4%) |
 
-The left column is encouraging and the right column is one sample, which decides
-nothing. Both sets are also the *same* judgement the campaign made, so a model
-agreeing with itself is the floor on this measurement rather than the ceiling.
-Finish the run before wiring the verdict to a write path.
+The 31.4% is **not** a 31.4% loss, and finding that out required reading all 27.
+The named set is contaminated, because naming is an easier question than
+coherence and the shipped prompt *tells* the model the coverage is one story —
+so the namer produced a plausible label by describing whichever article it found
+most nameable. Adjudicated by one unblinded reader (me), the 27 break down as
+**~22 coincidence piles the namer papered over, ~4 borderline entity-or-beat, and
+1 clear error** (`bdfc89eb`, two UFC 330 build-up pieces). Several are not
+judgement calls:
+
+| campaign label | what the two articles actually are |
+| --- | --- |
+| "Philadelphia House Horror" | *"You're gonna need a better shark"* + the Philly house of horrors |
+| "European Climate Court Case" | a Russian climate case + *"20 SPECTACULAR EUROPEAN LANDMARKS FOR YOUR BUCKET LIST"* |
+| "Calgary Zoo Bear Escape" | a house fire 7 children escaped + a grizzly escaping Calgary Zoo |
+| "Trump Tariff Loophole Closure" | a tariff court ruling + Zac Brown Band giving away a cruise |
+| "Obama Retirement Advice" | an Obama quote-of-the-day + a Reddit *"feeling broke"* thread |
+
+So the true false-positive cost at two groups is **1–5 of 86 (1.2%–5.8%)**, not 27.
+The gate is the first candidate in this whole investigation that is not a
+bidirectional trade.
+
+The 13 declined it *named* cut the same way: ~3 are storylines the **campaign**
+got wrong (`56ce166f`, the Maple Ridge bear attack covered twice; `66cb6c4d`,
+the US-Iran deal expiring; `30111d24`, two near-duplicate winery listicles), and
+~7 are genuine misses (two Diddy stories, two Star Trek pieces, two market
+week-ahead columns).
+
+**Second-order finding, and the more important one.** If ~26% of the sampled
+two-group *named* storylines are piles, the reported failure is materially
+**larger than 382** — and the `NAMED-INTACT` column above preserves a set that
+itself contains piles. It remains the right metric for comparing settings, since
+the contamination is constant across them; it is not clean ground truth, and no
+future reader should treat it as one.
+
+### …and on mature arcs it must never run
+
+The same verdict, over **all 21 named arcs at 20 groups or more** — the "check
+what a change destroys" test:
+
+| refused | arc |
+| --- | --- |
+| — | Tropical Storm Lala (97g), Trump Secret Plane Swap (93g), FedEx St Jude Championship (86g), Strait of Hormuz Crisis (47g), USS Lincoln Conditions Inquiry (43g), European Total Solar Eclipse (41g), Infantino FIFA Leadership Crisis (37g) |
+| **REFUSED, correctly** | Y Intercept Hong Kong Filings (31g), Canadian Q2 Earnings Season (25g) — *the known boilerplate residue* |
+| **REFUSED, wrongly** | Adley Rutschman Red Sox Trade (35g), Google Pixel Tag Launch (30g), Lok Sabha Session Logjam (26g), Michigan Senate Democratic Primary (25g), Albanese Melon Controversy (23g), Air Canada Stock Surge (22g), El-Sayed Michigan Senate Race (22g) |
+
+**9 of 21 refused — 43%.** Two of those are the residue this document already
+records and the gate is right about them. Seven are genuine event arcs, and one
+of them, `el-sayed / michigan / primary / senate`, is a profile the anchor-share
+section holds up as the *model* of event-shaped coverage.
+
+The mechanism is not mysterious: a ten-headline sample of a 35-group arc spans
+rumour, reaction, analysis and adjacent players, and the prompt's disqualifier
+list — "share only a person, a place, a team, a market" — makes the model
+suspicious of exactly the breadth a mature arc earns. Precision at formation is
+bought with recall on long arcs.
+
+This is a **load-bearing constraint on the wiring, not a reason to abandon the
+gate**, because the gate only ever needed the two-group moment. But note what it
+rules out: `labelStoryline` fires on `promotion`, `merge` AND `drift`, and drift
+fires on every doubling of membership. Wiring the verdict into that call
+unscoped would put it on mature arcs and dissolve 43% of them. **The verdict may
+be consulted only where the storyline is not yet real.**
 
 ### One thing the write path must not do
 
@@ -479,3 +536,8 @@ the merge until the verdict arrives, then perform it or drop it — so the state
 that would need unwinding is never created. A refusal must also be recorded
 durably, or the nightly late-candidate sweep re-offers the same pair and spends
 a model call refusing it every night.
+
+And it must be scoped to the two-group moment, per the 43% above: a `promotion`
+where the winner was a provisional-of-one, and nothing else. `merge` already
+carries K independent bridges plus label agreement, `drift` runs on arcs the
+verdict is measurably bad at, and neither has a formation to defer.
