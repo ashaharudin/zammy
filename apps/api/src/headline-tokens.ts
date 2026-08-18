@@ -56,8 +56,29 @@ function splitTokens(text: string): string[] {
   return text
     .normalize("NFKC")
     .split(/[^\p{L}\p{N}'-]+/u)
-    .map((token) => token.replaceAll(/^['-]+|['-]+$/g, "").replace(/'s$/iu, ""))
+    .map(trimWordPunctuation)
     .filter((token) => token.length > 0);
+}
+
+/**
+ * Strip the punctuation that WRAPS a word rather than belongs to it: edge quotes
+ * and hyphens first, then a possessive `'s`.
+ *
+ * Exported, and the only definition of this fold, because two callers must arrive
+ * at the same spelling for the same word and once did not. This file folds CORPUS
+ * words; the label-agreement merge folds LABEL words (`normalizeLabel`). The
+ * corpus reduced "Dillard's" to `dillard` here, while the label reached `dillard'`
+ * there — `singular` drops the final `s` and leaves the apostrophe stranded — so
+ * `properNounEvidence` was asked for a token the corpus could never hold and
+ * refused a real name as no name at all. Measured on the dev archive: two arcs of
+ * one earnings story, both labelled "Dillard's Tariff Refund Earnings", refused
+ * with "no grounded name" while `dillard` sat capitalized in the coverage.
+ *
+ * The same trap waits for a plural possessive — "Workers' Rights" leaves
+ * `workers'` — which is why the edge strip runs here too and not only the `'s`.
+ */
+export function trimWordPunctuation(token: string): string {
+  return token.replaceAll(/^['-]+|['-]+$/g, "").replace(/'s$/iu, "");
 }
 
 /**

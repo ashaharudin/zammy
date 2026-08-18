@@ -1,4 +1,5 @@
 import { singular } from "./grouping.js";
+import { trimWordPunctuation } from "./headline-tokens.js";
 
 /**
  * The label-agreement merge (ADR-0011's merge repair, reached through the name
@@ -126,12 +127,19 @@ export interface LabelMergeRefusal {
  * storyline. The plural fold is `singular` rather than a second stemmer for the
  * reason grouping shares its own: two stemmers disagreeing about what a word is
  * would make two layers disagree about what a story is.
+ *
+ * Possessives are trimmed with the corpus tokenizer's own fold rather than a
+ * second regex, for that same reason and on live evidence: `singular` alone turned
+ * "Dillard's" into `dillard'` while the coverage held `dillard`, and the grounding
+ * gate refused a real name because the two sides never met. See
+ * `trimWordPunctuation`.
  */
 export function normalizeLabel(label: string): string {
   return label
     .normalize("NFKC")
     .toLowerCase()
     .split(/\s+/)
+    .map(trimWordPunctuation)
     .filter((word) => word.length > 0)
     .map(singular)
     .join(" ");

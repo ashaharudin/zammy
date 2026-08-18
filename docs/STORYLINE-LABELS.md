@@ -297,6 +297,19 @@ rejected for label *validation* as too strict:
 makes it right here: a refused merge leaves two storylines, which is the status
 quo, where a refused *label* leaves a storyline nameless.
 
+**Both sides must fold a word the same way**, and for a while they did not. The
+gate compares label words against corpus words, and the corpus tokenizer strips a
+possessive (`Dillard's` → `dillard`) while `normalizeLabel` only ran `singular` —
+which drops the final `s` and leaves the apostrophe stranded, reaching `dillard'`.
+The gate was therefore asked for a token the corpus could never hold, and refused
+a real name as no name at all. Measured: two arcs of one earnings story, both
+labelled "Dillard's Tariff Refund Earnings", refused for "no grounded name" while
+`dillard` sat capitalized in their own coverage. Fixed by giving both callers one
+fold (`trimWordPunctuation`) rather than a second regex — the same reason the two
+layers share `singular`. Any possessive label was affected, not just this one, and
+a plural possessive ("Workers' Rights" → `workers'`) fails the same way if only
+`'s` is stripped.
+
 **The rule**, then — all four clauses, each refusing something the others cannot
 see:
 
