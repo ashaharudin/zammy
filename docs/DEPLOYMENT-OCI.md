@@ -1,6 +1,8 @@
 # Deployment plan — Oracle Cloud Infrastructure (OCI)
 
-**Status: pre-flight nearly complete; no OCI resources provisioned yet.** The first environment is
+**Status: pre-flight complete (2026-08-18); nothing in this plan is provisioned yet beyond the two OCIR
+repositories.** The tenancy is not empty, though — an unrelated `oci-dev-tools` quickstart stack is
+running in it and collides with §3 (see §9). The first environment is
 **staging on the Always Free tier** (§7); production follows. OCI is now the deployment target. AWS (the original target,
 ARCHITECTURE 4.1) remains an option but not an immediate goal — nothing in this plan may leak
 OCI-specific behaviour into application code, so the AWS mapping stays a Terraform rewrite away.
@@ -38,7 +40,7 @@ with Cloudflare later; that is additive, not structural.
 
 ## 2. Pre-flight — work that must land before any OCI work
 
-Status as of 2026-08-14: 1, 2 and 4 are done; 3 is drafted and waiting on tenancy credentials.
+Status as of 2026-08-18: all four are done. Nothing in this section blocks provisioning any more.
 
 1. ~~**Fix the api Dockerfile `deps` stage.**~~ ✅ **Done** (`01a0e5e`). It now copies
    `packages/storage/package.json`, and the deploy-tree import guard resolves all four `@zammy/*`
@@ -47,11 +49,20 @@ Status as of 2026-08-14: 1, 2 and 4 are done; 3 is drafted and waiting on tenanc
    the Ampere shapes this plan targets are arm64-only. Verified 2026-08-14 by building the image for
    `linux/arm64` (192 MB, node 22 arm64, import guard green). Pinned not by a `--platform` flag but
    by the CI runner label (`ubuntu-24.04-arm`, native arm64), which is harder to forget.
-3. **CI publishes to OCIR.** Build on push to `main`, tag with the git SHA, push to a private OCIR
-   repo. Terraform deploys by digest, never by `latest` — the README already documents the stale-
-   image failure mode this prevents locally; it is worse in production.
-   🚧 **Drafted** at `.github/workflows/ci.yml`; needs the tenancy credentials listed below before
-   it can run.
+3. ~~**CI publishes to OCIR.**~~ ✅ **Done — first image published 2026-08-18.** Build on push to
+   `main`, tag with the git SHA, push to a private OCIR repo. Terraform deploys by digest, never by
+   `latest` — the README already documents the stale-image failure mode this prevents locally; it is
+   worse in production. The tenancy credentials below are now set on the repository, and the
+   `publish image to OCIR` job in `.github/workflows/ci.yml` has run green end to end on `main`
+   (run `32179012381`, commit `d7929cd`), pushing
+
+   ```
+   ocir.ca-toronto-1.oci.oraclecloud.com/yzj9bnmurdga/zammy/api@sha256:f9505b8dbc7a1c12548aaed56070d7064d671a8fe8a4d2a9a65181cde88ea927
+   ```
+
+   So the digest Phase 1 hands to Terraform is a real object now, not a placeholder — and the job's
+   `digest`/`image` outputs are the supported way to read it, rather than reconstructing the
+   reference by hand.
 4. ~~**Verify `rediss://` support.**~~ ✅ **Verified 2026-08-14, no application change needed.**
    Tested against a TLS-only Redis 7 with the plaintext port disabled, exercising the real
    construction path — a bare URL string with no TLS options, as in `server.ts`, `ingest-queue.ts`
@@ -86,8 +97,8 @@ environment-scoped values would be invisible to it):
 - `OCI_REGISTRY` = **`ocir.ca-toronto-1.oci.oraclecloud.com`** (the legacy `yyz.ocir.io` form still
   resolves). Keep the registry in the same region as the instances that pull from it; cross-region
   pulls work but buy egress and latency on every deploy.
-- `OCI_NAMESPACE` — the tenancy's object-storage namespace, an auto-generated string rather than the
-  tenancy name. Profile → Tenancy, same page as Home Region.
+- `OCI_NAMESPACE` = **`yzj9bnmurdga`** — the tenancy's object-storage namespace, an auto-generated
+  string rather than the tenancy name. Profile → Tenancy, same page as Home Region.
 - `OCI_REPO_PREFIX` = **`zammy`** — the grouping only, not the component. The job appends `/api`
   itself; Phase 4's web job will append `/web`.
 
@@ -97,6 +108,12 @@ is literally named `oracleidentitycloudservice`. The console's Profile menu disp
 `<domain>/<user>` portion for federated users, so it can be read off rather than guessed. And
 `OCI_AUTH_TOKEN`, an auth token generated under User settings → Tokens and keys — not the console
 password, which OCIR does not accept.
+
+**All five are set** as of 2026-08-17 — the three variables above plus both secrets — and the push
+recorded in item 3 proves the pair actually authenticates, which listing them cannot. Note what
+`OCI_AUTH_TOKEN` is *not*: it is registry-scoped, so it can push and pull images and nothing else.
+Terraform and any `oci` CLI use will need a separate API signing key, which does not exist yet and
+should not be a repository secret shared with the build.
 
 #### Repository naming
 
@@ -116,6 +133,12 @@ line per job; the alternative is a class of mistake that is invisible in the dif
 Create both repositories as **private** in OCIR before the first push. A push to a non-existent repo
 auto-creates it, but visibility then comes from a tenancy default rather than a decision, and
 reserving `zammy/web` now costs nothing.
+
+✅ **Both exist and both are private**, verified against the tenancy 2026-08-18. They were created
+2026-08-17 at 20:33 and 20:34 UTC — *before* the first push at 22:10 — so visibility was a decision,
+not a tenancy default, and `zammy/web` is reserved. `zammy/api` holds 4 distinct digests across 5
+tags; `ecb7fc9` and `d7929cd` resolve to the same digest, which is the reproducible build working as
+intended rather than a mis-tag.
 
 ## 3. Network layout
 
@@ -249,10 +272,10 @@ state managed for you); decide when the CI pipeline is being written, it changes
 
 | Phase | Delivers | New work outside IaC |
 |---|---|---|
-| **0. Pre-flight** | buildable arm64 image in OCIR, CI publish | Dockerfile fix ✅, CI workflow ✅ drafted, OCIR credentials ⬜ |
-| **1. Ground** | VCN, subnets, NSGs, gateways, Vault, state bucket | staging VM cloud-init ✅ drafted |
+| **0. Pre-flight** | buildable arm64 image in OCIR, CI publish | ✅ **complete** — Dockerfile fix, CI workflow, OCIR credentials, first digest pushed (§2) |
+| **1. Ground** | VCN, subnets, NSGs, gateways, Vault, state bucket | delete the `oci-dev-tools` stack first (§9.5) ⬜; budget + spend alert (§9.6) ⬜; staging VM cloud-init ✅ drafted |
 | **2. Data** | PostgreSQL private endpoint + one shared Redis Container Instance | assert `/readyz` says `ready`, not just 200 (`rediss://` ✅ verified but unused — §4) |
-| **3. api** | Container Instances, LB `/api/*` routing, migration job, first end-to-end deploy | — |
+| **3. api** | Container Instances, LB `/api/*` routing, migration job, first end-to-end deploy | seed the database from the dev archive once, after the first migrate (§7) ⬜ |
 | **4. web** | static container, path routing, domain + TLS on the LB | `apps/web/Dockerfile`, plus an `image` job publishing to `zammy/web` |
 | **5. Ops** | OCI Logging for container stdout, Monitoring alarms (LB unhealthy-backend count, 5xx rate, api restart count), backup verification | — |
 
@@ -287,8 +310,68 @@ The allowance, verified against Oracle's Always Free reference 2026-08-14:
 ⚠️ Oracle cut the Ampere allowance in half on 2026-06-15 without a public announcement, and gave
 existing tenancies until **2026-08-18** to shrink or have over-limit resources terminated. Anything
 sized against the old 4 OCPU / 24 GB figure — including earlier drafts of this document — is wrong.
-2 OCPU / 12 GB still runs the stack comfortably (the Compose limits total under 1 GB), but **verify**
+2 OCPU / 12 GB still runs the stack comfortably — the *staging* compose limits total **4.62 GiB**
+(`postgres` 2G + `redis` 640M + `api` 2G), not the "under 1 GB" an earlier draft of this line claimed by
+reading the dev compose file (512M + 320M) instead of `deploy/staging/cloud-init.yaml` — but **verify**
 the tenancy is inside the new limit before building on it.
+
+✅ **Checked 2026-08-18 — nothing to shrink: A1 usage is zero.** `standard-a1-core-regional-count`
+reports 0 of its limit used, likewise memory, and the only running instance is the x86 micro of §9.5.
+The deadline above passes today with no exposure.
+
+🚩 **But the check turned up something that undercuts the premise of this section: the tenancy's A1
+limits are `16` cores / `96 GB` regional — four to eight times the free allowance, not equal to it.**
+Always Free tenancies are capped at the allowance; these are Pay-As-You-Go defaults, which is strong
+evidence the tenancy has been **upgraded to PAYG** rather than sitting on Always Free. *(Inferred from
+the limits — the CLI exposes no direct "is this account free tier" field, so confirm it in the console
+under Billing & Cost Management → Upgrade and Payment; an account still on Always Free shows an
+upgrade offer.)* If it is upgraded, two things in this section change and one gets worse:
+
+- **The free allowance still applies** — Always Free resources stay free on an upgraded account — so
+  "zero-cost staging" remains achievable exactly as described, provided the shapes stay inside it.
+- **Nothing enforces it any more.** On Always Free the limit *is* the guardrail: an over-sized create
+  simply fails. At 16/96 the same request succeeds and bills. The 2 OCPU / 12 GB figure becomes a
+  number someone has to honour by hand, in every Terraform shape block, forever.
+- **This is the strongest argument for §9.6.** A budget with a spend alert is no longer a nice-to-have
+  guardrail duplicating the limits — with the limits raised, it is the *only* thing standing between a
+  mistyped `ocpus = 16` and a bill.
+
+#### Does staging actually fit? Checked line by line, 2026-08-18
+
+Against the allowance above and `deploy/staging/cloud-init.yaml` as written:
+
+| Allowance | What staging needs | Verdict |
+|---|---|---|
+| 12 GB memory | 4.62 GiB of container limits + OS | ✅ ~7 GB spare |
+| 2 OCPU | no CPU limits set; three containers | ✅ |
+| **1,500 OCPU-hrs / 9,000 GB-hrs per month** | 2 OCPU / 12 GB running 24×7 | ⚠️ **99.2%** — see below |
+| 200 GB block, 47 GB min boot | one boot volume; `postgres-data` on it, Docker logs capped at 10m×3, corpus pruned nightly (TRAILING-CORPUS: ~135k rows) | ✅ ample |
+| 1 Flexible LB @ 10 Mbps | staging uses one — the api publishes `3000` for the LB to reach by private IP | ⚠️ consumes the only free one |
+| Managed PostgreSQL / Cache not included | `postgres:17-alpine` + `redis:7-alpine` as containers | ✅ as designed |
+| arm64 | both images publish `linux/arm64` manifests; the api image is built arm64 (§2.2) | ✅ verified |
+
+Two of those need a decision rather than a note.
+
+⚠️ **A 2 OCPU / 12 GB VM running all month is 99.2% of the allowance, not comfortably inside it.** A
+31-day month is 744 hours: 2 × 744 = **1,488 of 1,500** OCPU-hrs and 12 × 744 = **8,928 of 9,000**
+GB-hrs. The slack is 12 OCPU-hrs — *six hours of a second 2-OCPU VM per month*. So rebuilding the
+staging box, if the replacement boots before the original is terminated, spends a meaningful fraction
+of the month's remaining allowance, and there is no room at all for a second instance to test
+anything. Worse in combination with the PAYG finding above: the overflow does not fail the create, it
+bills.
+
+The fix is to size *memory* down, not OCPU — GB-hrs is the binding constraint, so 1 OCPU / 12 GB still
+sits at 99.2%. **1 OCPU / 8 GB** is the recommendation: 744/1,500 OCPU-hrs (49.6%) and 5,952/9,000
+GB-hrs (66.1%), real headroom on both, and still ~3 GB clear of the 4.62 GiB of container limits.
+**verify** at create time that the shape accepts that combination — the CLI reports A1.Flex's default
+as 1 OCPU / 6 GB, and the per-OCPU memory bound is Oracle's to enforce.
+
+⚠️ **Staging's load balancer is the only free one.** The allowance is one Flexible LB, and the compose
+comment ("the load balancer reaches this instance by its private IP") means staging claims it. Nothing
+is wrong with that — but production's LB in §4 is then a paid resource from the moment it exists, and
+that cost belongs in the Phase 4 decision rather than arriving as a surprise. Reusing one LB across
+both environments by path or hostname is possible and worse: it couples staging traffic to
+production's data plane, which is exactly what having a staging environment is meant to avoid.
 
 The VM bootstrap is `deploy/staging/cloud-init.yaml` — pass it as the instance's `user_data`. It
 installs Docker, writes the staging compose file, a `.env` template and the `zammy-deploy` /
@@ -307,6 +390,64 @@ boot). A live mode with no key is also a boot refusal — `zammy-deploy` checks 
 `zammy-deploy` implements the §5/§6 sequence on one host — pull the digest, run migrations as a
 discrete step with the *same* digest, roll the api, then poll `/readyz` until `status == "ready"`.
 It refuses an image reference that is not digest-pinned.
+
+#### Seed the first staging deployment from the dev database
+
+An empty staging database proves the deploy *shape* and nothing about the read paths — storylines,
+trending, the trailing corpus and every ranking decision need a populated corpus to say anything at
+all, and growing one from live ingest takes weeks at 1000 calls/day. The dev archive already is that
+corpus, so **import it once as part of the first staging deploy** (Phase 3), then let staging run live
+from that point. This is a seed, not a sync: there is no ongoing replication and none is wanted.
+
+Measured on the running dev stack 2026-08-18: **163 MB total**, 28,475 articles spanning 2026-07-14 →
+2026-08-18 in one language, and the sightings are real provider data (`currents` 29,054, `gnews` 483)
+rather than fixture replay — which is what makes the import worth doing rather than generating
+synthetic rows. 163 MB is nothing against the boot volume.
+
+**Use a logical dump, never a copy of `/var/lib/postgresql/data`.** Same Postgres major version or
+not, the dev box and the A1 staging VM are different CPU architectures, and `PGDATA` is not a
+supported transport across them. `pg_dump` is.
+
+The order matters, because schema and data come from different places — the schema from the image
+being deployed, the data from the dump:
+
+1. **`zammy-migrate` first**, so the schema is whatever the deployed digest says it is. Then confirm
+   the dump's origin matches: dev's `kysely_migration` head is `0015-storyline-formation-refusals`,
+   and restoring dev data into an image built before `0015` (or after a later `0016`) fails on columns
+   that do not exist yet or are missing. Compare the head on both sides before starting, not after.
+2. **Dump data only, and exclude the migration ledger** — `kysely_migration` and
+   `kysely_migration_lock` are Kysely's bookkeeping, already correct on the target from step 1, and
+   restoring dev's copies over them desynchronises the ledger from the schema:
+
+   ```
+   docker exec zammy-postgres-1 pg_dump -U zammy -d zammy -Fc --data-only \
+     --exclude-table=kysely_migration --exclude-table=kysely_migration_lock > zammy-dev.dump
+   ```
+
+3. **Restore on the VM** into the staging `postgres` container. Custom format lets `pg_restore` order
+   the inserts around foreign keys; `--disable-triggers` covers what ordering cannot:
+
+   ```
+   docker exec -i zammy-postgres-1 pg_restore -U zammy -d zammy --data-only \
+     --disable-triggers --no-owner --no-privileges < zammy-dev.dump
+   ```
+
+4. ⚠️ **Advance the sequences afterwards.** A data-only restore does not, and there are two:
+   `articles_id_seq` and `fetch_log_id_seq`. Left at 1, the first live ingest after the import fails
+   on a duplicate primary key — a failure that looks like an ingest bug and is not one:
+
+   ```
+   select setval('articles_id_seq',  (select max(id) from articles));
+   select setval('fetch_log_id_seq', (select max(id) from fetch_log));
+   ```
+
+5. **Expect the first nightly prune to delete some of it.** Retention is 30 days with topic-hit
+   protection, and the imported corpus reaches ~35 days back, so the oldest slice goes on the first
+   run of the chore. That is the retention policy working, not data loss — but it means row counts
+   taken the morning after will not match the dump, and anyone comparing them needs to know why first.
+
+Importing consumes no Currents quota, which is the other reason to prefer it over waiting for live
+ingest to fill the window.
 
 **What staging therefore does not prove.** Postgres and Redis are containers on the VM, not managed
 services, so a green staging says nothing about: managed-service private endpoints (§3), PITR
@@ -339,9 +480,15 @@ healthy behind the LB — and that is worth having on day one.
      into when free-tier Ampere capacity is unavailable — a routine, transient condition rather than
      a misconfiguration. Asking for less than the full 2 OCPU / 12 GB is likelier to be granted, and
      the stack's own limits total under 3 GB, so a smaller shape runs it comfortably.
-   - **Service availability is now checkable, not hypothetical.** Before Phase 2, **verify** that OCI
-     Database with PostgreSQL is offered in `ca-toronto-1` — regional service coverage varies, and a
-     single-AD region is exactly where a gap would show up. Same for the Phase 4 Flexible LB.
+   - ~~**Service availability is now checkable, not hypothetical.**~~ ✅ **Checked against the tenancy
+     2026-08-18 — all three are offered in `ca-toronto-1`.** OCI Database with PostgreSQL offers
+     versions 13 through 18, so the §1 claim of PG 17 holds with 18 already available as a later
+     upgrade; its shapes are `VM.Standard3.Flex` (Intel) and `VM.Standard.E5.Flex` (AMD), no Ampere
+     option — which matters not at all, since the arm64 decision is about *our* image and the managed
+     database does not run it. The load balancer offers the `flexible` shape Phase 4 wants, and
+     `VM.Standard.A1.Flex` (Ampere, arm64) is listed for compute. Listed is not the same as
+     *capacity available at create time* — the free-tier Ampere retry problem in the bullet above is
+     unaffected by this.
 2. **Domain and DNS** — where is the zone hosted, and does TLS terminate on the OCI LB with an OCI
    Certificates cert or a Let's Encrypt cert managed in CI?
 3. ~~**OCI Cache vs. container Redis**~~ ✅ **Resolved 2026-08-17: container Redis** (§4). The
@@ -350,3 +497,52 @@ healthy behind the LB — and that is worth having on day one.
 4. **Gemini egress** — labels are optional by design, but confirm the NAT egress path and the
    pinned model are reachable/valid from the chosen region on day one, or labels silently fall back
    to the bigram extractor and nobody notices.
+5. **An unrelated `oci-dev-tools` stack is already in the tenancy, and it squats §3's address space.**
+   Found 2026-08-18: a VCN `oci-dev-tools-vcn` at **`10.0.0.0/16`** with one subnet `10.0.1.0/24`, an
+   NSG, and a **running** `VM.Standard.E2.1.Micro` instance (x86, so unrelated to anything here) with
+   a public IP, created 2026-08-17 by an OCI quickstart — freeform tag `Reference: oci-dev-tools`.
+   ➡️ **Decided 2026-08-18: delete the stack** — before Phase 1 writes any Terraform, and by hand
+   rather than by importing it into state. It settles both of the problems it created:
+
+   - **The CIDR.** `10.0.0.0/16` is the obvious default a fresh VCN would claim, and deleting frees it
+     so Phase 1 can take the natural range instead of documenting a detour. Coexisting was the
+     alternative: not fatal between separate VCNs, but it forecloses peering later and makes every
+     route table ambiguous to read.
+   - **Its NSG allows SSH (tcp/22) from `0.0.0.0/0`**, plus ICMP from anywhere, on an instance with a
+     public IP — the quickstart's default rather than a considered choice, and not the posture §3
+     describes for anything here. Nothing of ours is exposed by it, but it is an internet-reachable
+     host in the same tenancy as the production data stores to come, and deletion removes it rather
+     than leaving a rule to remember.
+
+   **Before deleting, confirm the box is genuinely unused** — it was created from a personal login
+   (`ashaharudin@me.com`), so this plan is not the authority on whether something else depends on it.
+   Then delete in dependency order, since OCI refuses a VCN that still has children: terminate the
+   instance → delete the subnet → detach and delete the internet gateway and any route table and NSG
+   → delete the VCN. Two things that outlive the obvious steps and should be checked explicitly: the
+   instance's **boot volume**, which survives termination unless it is deleted along with it and keeps
+   billing quietly, and the **reserved public IP**, if the quickstart made it reserved rather than
+   ephemeral.
+
+   Also noted while looking: **no compartment** exists other than the tenancy root — the OCIR
+   repositories and everything above live directly in it. Worth deciding deliberately rather than by
+   default, but it is not blocking: a compartment can hold new resources without moving the OCIR
+   repositories, and both can move later.
+6. **No budget or spending alert exists.** ➡️ **Decided 2026-08-18: add one before Phase 1**, on the
+   tenancy root so nothing can be created outside its scope. This is the cheapest guardrail in the
+   whole plan and the only one that catches the failure the Always Free tier invites — not a runaway
+   bill, but a *single* resource that quietly is not free. Everything §7 provisions is meant to cost
+   nothing, so the useful threshold is low: a small monthly amount with an alert rule on **actual**
+   spend at a low percentage means the first dollar sends mail. Specifically:
+
+   - **Alert on actual, not forecast.** Forecast rules need a spend history to extrapolate from; on a
+     tenancy sitting at or near zero they either stay silent or swing wildly. Actual spend crossing a
+     couple of dollars is unambiguous.
+   - **The email is the point.** A budget with no alert rule attached records a number and notifies
+     nobody — which is the default state this item is fixing. Send it somewhere read daily, not to the
+     console.
+   - **Two shapes to watch**, because both are easy to reach by accident: an Ampere allocation past the
+     free **2 OCPU / 12 GB** (§7 — *not* the old 4/24), and the managed PostgreSQL of §1, which has no
+     free tier at all and is the largest line item Phase 2 introduces.
+
+   A budget alert is a smoke detector: it fires after the spend has started, not before, so it does
+   not replace checking a shape's price before creating it.
