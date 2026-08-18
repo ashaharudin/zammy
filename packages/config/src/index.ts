@@ -10,6 +10,43 @@ import { z } from "zod";
 
 const NonEmpty = z.string().trim().min(1);
 
+/**
+ * A `redis://` or `rediss://` URL — not merely a non-empty string.
+ *
+ * Redis being *unreachable* is survivable on purpose: `/readyz` reports
+ * `degraded` and keeps serving, because cache and queue both heal on reconnect
+ * (health.ts, ARCHITECTURE 11). A *malformed* URL is a different animal. It can
+ * never heal, and nothing downstream surfaces it: the boot failure is a warning
+ * the app deliberately swallows (server.ts), and a load balancer watching
+ * `/readyz` sees HTTP 200 and routes traffic to an instance whose ingest queue
+ * silently does nothing (DEPLOYMENT-OCI §2.4).
+ *
+ * Three things are checked, because each fails silently in its own way:
+ * `http://cache:6379` parses fine and is just as dead, `redis//cache:6379`
+ * parses as a relative path, and `redis:6379` — a colon short of a URL — carries
+ * the right protocol with *no host*, which ioredis resolves to localhost. The
+ * last is the worst of the three: it connects, to the wrong Redis.
+ *
+ * So a typo is a boot refusal, like every other piece of config the process
+ * cannot work without. What stays survivable is the case that deserves to be:
+ * a well-formed URL pointing at something that is not answering yet.
+ */
+const RedisUrl = NonEmpty.refine(
+  (value) => {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      return false;
+    }
+    if (url.protocol !== "redis:" && url.protocol !== "rediss:") return false;
+    // `redis:6379` has the protocol but no host; ioredis would quietly use
+    // localhost, so it is a wrong-target bug rather than a connection failure.
+    return url.hostname !== "";
+  },
+  "must be a redis:// or rediss:// URL with a host",
+);
+
 const EnvSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -17,7 +54,7 @@ const EnvSchema = z
     LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
 
     DATABASE_URL: NonEmpty,
-    REDIS_URL: NonEmpty,
+    REDIS_URL: RedisUrl,
 
     // --- upstream ---
     CURRENTS_MODE: z.enum(["live", "fixture"]).default("fixture"),
