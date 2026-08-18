@@ -29,6 +29,7 @@ export function CommandBar({
   onSearch,
   onClear,
   onOpenStorylineView,
+  onLeaveStorylineView,
   qualifiers,
 }: {
   topic: TopicQuery;
@@ -38,6 +39,8 @@ export function CommandBar({
   onSearch: (topic: TopicQuery, options?: { replace?: boolean }) => void;
   onClear: () => void;
   onOpenStorylineView: (storylineId: string) => void;
+  /** The keywords typed to leave the view, or null for a dismissed chip. */
+  onLeaveStorylineView: (typed: string | null) => void;
   /** storyline id → the date that separates it from its namesakes on screen. */
   qualifiers: Map<string, string>;
 }) {
@@ -87,8 +90,13 @@ export function CommandBar({
           // Typing exits the storyline view, and drops the ADR-0010 seed for
           // the same reason: both are provenance for what the reader was
           // looking at, and neither belongs to what they type next.
+          if (!q.trim()) return;
+          // Leaving the VIEW is its own transition (leaveStorylineView): the
+          // view stood between this search and the one that opened it, and it
+          // is that earlier search the reader's Back belongs to.
+          if (view) return onLeaveStorylineView(q.trim());
           const { storyline: _held, ...carried } = topic;
-          if (q.trim()) onSearch({ ...carried, q: q.trim() });
+          onSearch({ ...carried, q: q.trim() });
         }}
         style={{
           maxWidth: "var(--page-max)",
@@ -117,10 +125,7 @@ export function CommandBar({
         {view && (
           <StorylineChip
             label={viewLabel}
-            onDismiss={() => {
-              const { storyline: _left, ...carried } = topic;
-              onSearch({ ...carried, q: "" });
-            }}
+            onDismiss={() => onLeaveStorylineView(null)}
           />
         )}
         <input
@@ -180,8 +185,8 @@ export function CommandBar({
 
 /**
  * The storyline view's subject, as a dismissible chip in the prompt row
- * (ADR-0011). Dismissing returns to the hero: the view has no keywords behind
- * it to fall back to, so there is nothing else it could mean.
+ * (ADR-0011). Dismissing steps back out to the search the view was opened
+ * from, and to the hero only where there was none — a shared link.
  *
  * Renders "storyline" when the label is null — a promoted storyline whose
  * label generation failed is still a storyline, and the chip is what tells the

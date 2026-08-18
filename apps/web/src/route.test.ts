@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseRoute, routeSearch } from "./route.js";
+import {
+  leaveStorylineView,
+  openStorylineView,
+  parseRoute,
+  routeSearch,
+} from "./route.js";
 
 /**
  * The URL as the single source of truth for what the app is showing (§8.2).
@@ -86,5 +91,96 @@ describe("routeSearch", () => {
     };
 
     expect(parseRoute(routeSearch(route))).toEqual(route);
+  });
+});
+
+/**
+ * ADR-0011's storyline view is opened FROM somewhere — usually a search. The
+ * URL records that origin so leaving the view returns the reader to it rather
+ * than dropping them on the hero (§8.2: the URL is what the app is showing,
+ * including where it will go back to).
+ */
+describe("the origin behind a storyline view", () => {
+  it("reads the search the view was opened from", () => {
+    expect(
+      parseRoute("?storyline=0192f3c4-5d6e-7f80-9123-456789abcdef&from=Trump"),
+    ).toEqual({
+      q: null,
+      filters: { language: undefined, country: undefined, category: undefined },
+      storyline: "0192f3c4-5d6e-7f80-9123-456789abcdef",
+      from: "Trump",
+    });
+  });
+
+  it("writes the origin beside the view, so a reload still knows the way back", () => {
+    expect(
+      routeSearch({
+        q: null,
+        filters: { language: "en" },
+        storyline: "0192f3c4-5d6e-7f80-9123-456789abcdef",
+        from: "Trump",
+      }),
+    ).toBe("?lang=en&storyline=0192f3c4-5d6e-7f80-9123-456789abcdef&from=Trump");
+  });
+
+  it("drops an origin with no view to leave", () => {
+    // Only the storyline VIEW can be left. A plain search is already where the
+    // reader would return to, so an origin riding along says nothing.
+    expect(parseRoute("?q=wildfires&from=Trump")).toEqual({
+      q: "wildfires",
+      filters: { language: undefined, country: undefined, category: undefined },
+    });
+  });
+});
+
+describe("leaveStorylineView", () => {
+  const view = {
+    q: null,
+    filters: { language: "en", country: undefined, category: undefined },
+    storyline: "0192f3c4-5d6e-7f80-9123-456789abcdef",
+    from: "Trump",
+  };
+
+  it("dismissing the chip returns to the search the view was opened from", () => {
+    expect(leaveStorylineView(view, null)).toEqual({
+      route: { q: "Trump", filters: { language: "en", country: undefined, category: undefined } },
+      replace: false,
+    });
+  });
+
+  it("typing a search replaces the view, so Back lands on the origin", () => {
+    // The view is a step off the reader's path, not a stop on it. Left behind
+    // in history it would sit between the new search and the search that
+    // opened it, and Back would walk them into a storyline they had left.
+    expect(leaveStorylineView(view, "Iran")).toEqual({
+      route: { q: "Iran", filters: { language: "en", country: undefined, category: undefined } },
+      replace: true,
+    });
+  });
+
+  it("falls back to the hero when the view was opened by a shared link", () => {
+    // Nothing behind it to return to — but the filters the recipient's browser
+    // settled on are still theirs, and the hero holds them.
+    const { from: _shared, ...linked } = view;
+    expect(leaveStorylineView(linked, null)).toEqual({
+      route: { q: null, filters: { language: "en", country: undefined, category: undefined } },
+      replace: false,
+    });
+  });
+});
+
+describe("openStorylineView", () => {
+  it("records the search being left, so the view knows the way back", () => {
+    expect(
+      openStorylineView(
+        { q: "Trump", filters: { language: "en", country: "US", category: undefined } },
+        "0192f3c4-5d6e-7f80-9123-456789abcdef",
+      ),
+    ).toEqual({
+      q: null,
+      filters: { language: "en", country: "US", category: undefined },
+      storyline: "0192f3c4-5d6e-7f80-9123-456789abcdef",
+      from: "Trump",
+    });
   });
 });

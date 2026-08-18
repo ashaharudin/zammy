@@ -2,7 +2,13 @@ import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { STORYLINE_UUID } from "@zammy/shared";
 import type { TopicFilters } from "./api.js";
 import { Hero } from "./Hero.js";
-import { parseRoute, routeSearch, type Route } from "./route.js";
+import {
+  leaveStorylineView,
+  openStorylineView,
+  parseRoute,
+  routeSearch,
+  type Route,
+} from "./route.js";
 import { TimelinePage } from "./TimelinePage.js";
 
 /**
@@ -92,6 +98,14 @@ function TopicApp() {
         navigate({ q: q || null, filters, ...(storyline ? { storyline } : {}) }, options)
       }
       onClear={() => navigate({ q: null, filters: route.filters })}
+      // Entering and leaving the storyline view are transitions of the ROUTE,
+      // not searches: only here is the search being left still in hand to be
+      // recorded, and to be returned to.
+      onOpenStoryline={(storylineId) => navigate(openStorylineView(route, storylineId))}
+      onLeaveStoryline={(typed) => {
+        const { route: next, replace } = leaveStorylineView(route, typed);
+        navigate(next, { replace });
+      }}
     />
   );
 }
