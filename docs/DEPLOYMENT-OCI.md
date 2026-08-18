@@ -78,13 +78,24 @@ Status as of 2026-08-18: all four are done. Nothing in this section blocks provi
    current plan exercises this. It is recorded so that adopting OCI Cache later stays a `REDIS_URL`
    change plus a CA check, not a discovery.
 
-   ⚠️ **An unreachable Redis will not fail a deploy — whatever the cause.** Redis down is survivable
+   ✅ **Partly fixed 2026-08-18: a malformed `REDIS_URL` is now a boot refusal.** `@zammy/config`
+   validated it as a non-empty string, so `http://cache:6379`, `redis//cache:6379` and `redis:6379`
+   all passed — the last being the worst, since it carries the right protocol with no host and ioredis
+   resolves that to *localhost*: it connects, to the wrong Redis, and reports itself healthy. It is now
+   required to parse as a `redis://` or `rediss://` URL **with a host**, which turns the one cause that
+   can never heal into the boot refusal every other unusable setting already gets (ARCHITECTURE 12).
+   The survivable case is untouched on purpose: a well-formed URL pointing at something not answering
+   yet still degrades and keeps serving.
+
+   ⚠️ **The rest of this hazard stands, for the causes configuration cannot see.** Redis down is survivable
    by design: `/readyz` returns **200** with `status: "degraded"` when only Redis is failing
    (`health.ts`), and a boot-time Redis error is logged as a warning and swallowed (`server.ts`). So
-   a wrong `REDIS_URL`, an NSG that forgot the cache port, or a Redis container that never started
-   all yield healthy LB checks, instances taking traffic, and an ingest queue that silently does
-   nothing. This applies more to a self-run container than it did to a managed endpoint, since there
-   are more ways for it to simply not be there. Phase 2's acceptance check must assert
+   an NSG that forgot the cache port, or a Redis container that never started, both yield healthy LB
+   checks, instances taking traffic, and an ingest queue that silently does nothing. Config validation
+   cannot help here — the URL is correct, the thing it names is absent — and it must not: taking every
+   instance out of rotation over a survivable dependency would turn degradation into an outage. This
+   applies more to a self-run container than it did to a managed endpoint, since there are more ways
+   for it to simply not be there. Phase 2's acceptance check must assert
    `status == "ready"` and inspect `checks.redis` — both already in the `/readyz` payload — not
    merely assert HTTP 200. Empirically confirmed 2026-08-14: with Redis stopped, `/readyz` returned
    200 and `degraded`, and the `zammy-deploy` gate blocked on it.

@@ -20,6 +20,35 @@ describe("loadConfig", () => {
     ).toThrow(ConfigError);
   });
 
+  // Redis being unreachable is survivable and stays that way (health.ts reports
+  // `degraded` and keeps serving). A URL that can never resolve to a Redis at
+  // all is not survivable — it is a deploy defect that otherwise hides behind an
+  // HTTP 200 forever (DEPLOYMENT-OCI §2.4).
+  it("accepts both redis:// and rediss:// URLs", () => {
+    for (const url of [
+      "redis://localhost:6379",
+      "rediss://cache.example.internal:6380",
+      "redis://:password@10.0.2.5:6379/0",
+    ]) {
+      expect(() =>
+        loadConfig({ ...base, REDIS_URL: url } as NodeJS.ProcessEnv),
+      ).not.toThrow();
+    }
+  });
+
+  it("refuses a REDIS_URL that is not a redis URL, rather than degrading forever", () => {
+    for (const url of [
+      "redis//localhost:6379", // missing colon — parses as a relative path
+      "http://cache:6379", // parses fine, and is just as dead
+      "localhost:6379", // host:port, no scheme
+      "redis:6379", // right protocol, no host — ioredis would use localhost
+    ]) {
+      expect(() =>
+        loadConfig({ ...base, REDIS_URL: url } as NodeJS.ProcessEnv),
+      ).toThrow(/redis:\/\/ or rediss:\/\//);
+    }
+  });
+
   it("requires an API key in live mode", () => {
     expect(() =>
       loadConfig({ ...base, CURRENTS_MODE: "live" } as NodeJS.ProcessEnv),
