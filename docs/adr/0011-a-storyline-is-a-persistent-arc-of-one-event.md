@@ -90,6 +90,62 @@ linking runs per group (~1,200/day), and cheap-and-measurable beats
 better-and-opaque at that volume while auto-merge exists to heal its
 misses.
 
+**Token evidence has now been measured insufficient (2026-08-18).** The
+condition this paragraph set has been met, and the record is
+docs/STORYLINE-LINKING.md, "What the anchor rule cannot see". The labelling
+campaign left a set hand-judged in both directions — 382 storylines a model was
+shown and could not name, against 1,189 it named — and against it *no*
+rearrangement of the token evidence separates the two: thirty-one settings
+across five independent families (overlap size, rarity, lexical class,
+provenance, temporal concentration), each destroying more model-named arcs than
+it prevents unnameable piles, confirmed by a nine-setting replay over the whole
+archive at under one pile per arc in every direction. The anchor's premise is
+"there is a name here" and its implementation is "this token is rare"; the
+archive says those are different propositions, because `ogbah` and `biweekly`
+are equally rare in a fortnight.
+
+Three things follow:
+
+- The failure is **not** the one auto-merge heals. The label-agreement merge
+  cures over-narrow formation; this is over-broad formation, and ADR-0011 builds
+  no split, so it has no cure at all today.
+- The verdict is **already being computed and discarded**. A promotion makes one
+  model call, and the Labels prompt below opens by asserting the coverage is one
+  story — so a model shown two unrelated articles invents a name, `validateLabel`
+  refuses it, and the storyline stands under a bigram label. The 382 declines are
+  that verdict arriving as a formatting failure.
+- **Measured 2026-08-18 on the configured model, and it holds — at two groups
+  only.** Over the hand-judged sets it refuses 75 of 88 declined (85.2%) and 27 of
+  86 named; reading all 27 shows ~22 are coincidence piles the *namer* papered
+  over, so the true cost is 1–5 of 86. That makes it the first candidate here that
+  is not a bidirectional trade. It also means the `named` set is contaminated and
+  the reported failure is **larger than 382**. But over the 21 named arcs at ≥20
+  groups the same verdict refuses **9, seven of them genuine events** — a mature
+  arc's breadth reads as incoherence. So the verdict may be consulted **only where
+  the storyline is not yet real**: a promotion whose winner was a
+  provisional-of-one, never `merge` (which already carries K bridges plus label
+  agreement) and never `drift`. `storyline-coherence.ts` is the pure, tested half;
+  `pnpm measure:storyline-coherence` reproduces the matrix.
+
+**Wired 2026-08-18**, and the shape is the one the measurement forced. The gate
+**defers** a formation rather than reverting one. On
+the fresh path the arriving group's birth storyline is absorbed by
+merge-with-alias, so undoing a promotion is exactly the split refused above; the
+merge waits for the verdict instead (`LinkOutcome.pendingFormation` →
+`resolveFormation`), and refusals are recorded durably in
+`storyline_formation_refusals` — keyed on GROUPS, since a provisional
+storyline-of-one is an identity a group is merely wearing — or the nightly
+late-candidate sweep would re-offer the pair and pay for a refusal every night.
+
+It costs no extra model call: the promotion label was already one, and a model
+that can name the story has thereby said it is one. Only an explicit refusal
+acts; an unavailable, slow, out-of-quota or contract-breaking model performs the
+withheld merge and falls back to bigrams, which is the pre-gate outcome exactly.
+`STORYLINE_COHERENCE_GATE` can stop it without a deploy, and it is inert with no
+`GEMINI_API_KEY`. The backfill does not gate — thousands of formations against a
+500-a-day ceiling — so it rebuilds what the token evidence says and leaves
+verdicts to the live path.
+
 ## Labels
 
 A storyline carries a persistent, **non-unique** display label of two or three

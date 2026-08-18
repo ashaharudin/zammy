@@ -46,6 +46,9 @@ try {
             dormantStrictness: config.STORYLINE_DORMANT_STRICTNESS,
           },
           mergeBridges: config.STORYLINE_MERGE_BRIDGES,
+          // Linking is off in this CLI (`enabled: false`); the gate has nothing
+          // to gate.
+          coherenceGate: false,
           storyDf: {
             windowDays: config.STORYLINE_DF_WINDOW_DAYS,
             timeZone: config.APP_TIMEZONE,

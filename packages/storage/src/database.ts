@@ -268,6 +268,18 @@ export interface StorylineBridgesTable {
   observed_at: Generated<Date>;
 }
 
+/**
+ * A formation a coherence verdict refused (migration 0015): these two groups are
+ * not one story. Canonically ordered, and keyed on GROUPS rather than storyline
+ * UUIDs because a provisional storyline-of-one can be merged away while the
+ * groups the verdict read are still there.
+ */
+export interface StorylineFormationRefusalsTable {
+  group_lo: string;
+  group_hi: string;
+  refused_at: Generated<Date>;
+}
+
 export interface Database {
   sightings: SightingsTable;
   articles: ArticlesTable;
@@ -281,6 +293,7 @@ export interface Database {
   story_token_days: StoryTokenDaysTable;
   story_corpus_days: StoryCorpusDaysTable;
   storyline_bridges: StorylineBridgesTable;
+  storyline_formation_refusals: StorylineFormationRefusalsTable;
 }
 
 /**

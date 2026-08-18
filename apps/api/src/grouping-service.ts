@@ -229,6 +229,9 @@ export async function groupCreatedArticles(
         {
           db: deps.db,
           labeler: deps.labeler,
+          // Deferred formations are resolved in this tail, and performing the
+          // merge the linker withheld recomputes day slots.
+          formations: { timeZone: deps.config.linker.timeZone },
           ...(deps.log ? { log: deps.log } : {}),
         },
         outcomes,

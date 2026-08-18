@@ -1228,3 +1228,78 @@ function toStoryline(row: {
     createdAt: row.created_at,
   };
 }
+
+/**
+ * Record that a coherence verdict refused to form a storyline out of these two
+ * groups (migration 0015).
+ *
+ * Idempotent by primary key: the backfill replays every formation from scratch,
+ * and a second refusal of the same pair is the same fact, not a new one.
+ *
+ * Canonically ordered here rather than by the caller, so there is one place that
+ * decides which id is `lo` — the lesson `recordBridge` learned, where counting
+ * under an unordered pair silently returned zero.
+ */
+export async function recordFormationRefusal(
+  db: Kysely<Database>,
+  input: { groupA: string; groupB: string },
+): Promise<void> {
+  if (input.groupA === input.groupB) return;
+  const [lo, hi] =
+    BigInt(input.groupA) < BigInt(input.groupB)
+      ? [input.groupA, input.groupB]
+      : [input.groupB, input.groupA];
+  await db
+    .insertInto("storyline_formation_refusals")
+    .values({ group_lo: lo, group_hi: hi })
+    .onConflict((conflict) => conflict.doNothing())
+    .execute();
+}
+
+/**
+ * Every group this one has been refused a formation with — either side of the
+ * pair.
+ *
+ * Read once per linking decision that is about to FORM something, and never for
+ * a join to an established arc: a refusal is about two singletons, and the gate
+ * that produced it is measurably wrong about mature coverage
+ * (docs/STORYLINE-LINKING.md, "…and on mature arcs it must never run").
+ */
+export async function readFormationRefusals(
+  db: Kysely<Database>,
+  groupId: string,
+): Promise<Set<string>> {
+  const rows = await db
+    .selectFrom("storyline_formation_refusals")
+    .select(["group_lo", "group_hi"])
+    .where((eb) => eb.or([eb("group_lo", "=", groupId), eb("group_hi", "=", groupId)]))
+    .execute();
+  const partners = new Set<string>();
+  for (const row of rows) {
+    partners.add(row.group_lo === groupId ? row.group_hi : row.group_lo);
+  }
+  return partners;
+}
+
+/**
+ * The single member of a storyline that has exactly one — the group a
+ * provisional-of-one is wearing an identity for. Null when it holds none or
+ * several.
+ *
+ * The gate needs this to ask its question in the durable currency: "have these
+ * two GROUPS already been refused?". Returning null for a storyline of two or
+ * more is not a failure but the answer — there is no formation to refuse,
+ * because the storyline is already real.
+ */
+export async function readSoleGroup(
+  db: Kysely<Database>,
+  storylineId: string,
+): Promise<string | null> {
+  const rows = await db
+    .selectFrom("storyline_groups")
+    .select("group_id")
+    .where("storyline_id", "=", storylineId)
+    .limit(2)
+    .execute();
+  return rows.length === 1 ? rows[0]!.group_id : null;
+}

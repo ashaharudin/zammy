@@ -327,6 +327,39 @@ const EnvSchema = z
      */
     STORYLINE_MERGE_BRIDGES: z.coerce.number().int().min(1).default(2),
     /**
+     * Withhold a FORMATION — two singleton groups becoming a real storyline —
+     * until a model has been asked whether they cover one story (ADR-0011's
+     * amendment). Off restores the pre-gate behaviour exactly: the linker merges
+     * synchronously and the label is asked for afterwards.
+     *
+     * MEASURED, and it is the first lever here that is not a bidirectional
+     * trade. docs/STORYLINE-LINKING.md records thirty-one token thresholds
+     * across five families, every one destroying more model-named arcs than it
+     * prevents unnameable piles; the verdict catches 85.2% of the declined set
+     * at two groups for a true cost of 1-5 in 86.
+     *
+     * Three things keep it safe, and none of them is this flag:
+     *  - only an EXPLICIT "not one story" refuses. An unavailable, slow or
+     *    out-of-quota model forms the storyline, exactly as today — the dev key's
+     *    ceiling is 500 requests a day and the labelling campaign exhausts it, so
+     *    silence-as-refusal would dissolve the archive on a quiet Tuesday.
+     *  - it fires ONLY where the winner was a provisional-of-one
+     *    (`mayRefuseFormation`). The same verdict wrongly refuses 43% of the
+     *    archive's arcs at 20 groups or more, so it never sees one.
+     *  - it DEFERS rather than reverts, because a promotion undone is the split
+     *    ADR-0011 refuses to build.
+     *
+     * The flag exists anyway because this is the one linking decision that
+     * depends on an external model, and an operator who suspects the prompt has
+     * regressed needs a way to stop it that is not a deploy. It has no effect
+     * without a GEMINI_API_KEY — with no model there is no verdict to wait for,
+     * and deferring would only lose formations.
+     */
+    STORYLINE_COHERENCE_GATE: z
+      .enum(["true", "false"])
+      .default("true")
+      .transform((value) => value === "true"),
+    /**
      * Days without coverage after which a storyline leaves the normal candidate
      * set. UNMEASURED, and honestly so: the dev archive is 31 days, so 30, 90
      * and 365 replay identically — nothing in it is ever dormant. ADR-0011's

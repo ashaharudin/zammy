@@ -232,3 +232,354 @@ precisely the percolation K exists to prevent. Re-linking now records bridges
 (idempotent by primary key) and leaves the group where it lives. Retroactive
 attachment of an already-homed group is S5's concern; the backfill replays from
 scratch, so every group is born fresh there.
+
+## What the anchor rule cannot see
+
+Found 2026-08-18, chasing 2-group storylines built out of vocabulary
+coincidence: an off-duty officer shot outside a Pennsylvania lounge joined to a
+Los Angeles father shot by an off-duty ICE officer (`73dbc49f`, "Fatally
+Shot"); a £90 ticket for a Lidl EV charger joined to a new charger at The Lodge
+in Canberra (`8899bfdf`, "Charging Ev"); Stephen Curry's Golden State
+**Warriors** joined to Nigeria's El-Kanemi **Warriors** (`cd876389`, 4 groups).
+
+**The anchor rule is not the defect, and no rearrangement of the token evidence
+is the fix.** That is a measured claim, and this section is the measurement.
+
+Dev archive, 2026-08-18: **27,733 articles in 23,004 groups over 35 days**;
+3,135 live non-provisional storylines, largest 97 groups.
+
+### The evaluation set the campaign left behind
+
+The labelling campaign is what makes this measurable. Asked to name every
+storyline the bigram fallback had labelled or left bare, a model named 1,189 and
+declined 382. Those 382 are **339 live rows carrying `label_source = 'bigram'`
+plus 43 that have since merged away**, and reading them confirms the report:
+they are dominated by two unrelated articles sharing a word.
+
+So the linker finally has a labelled set in *both* directions — the thing this
+document's own anchor-share finding says it never had ("a sweep table cannot
+tell you whether a storyline is coherent").
+
+| set | meaning | live | at 2 groups |
+| --- | --- | --- | --- |
+| **declined** (`bigram`) | a model saw it and could not name it | 339 | 88 |
+| **named** (a model id) | a model named it; holds every large correct arc | 1,189 | 164 |
+| unjudged (`null`) | never offered to a model — no verdict, no set | 1,608 | 774 |
+
+`scoreJudged` (`storyline-judged.ts`) scores a replay against both, and
+`measure:storylines-v2` now prints them as `PILES-FORMED` and `NAMED-INTACT`
+on every row of the grid. Baselines are **relative**: the replay substitutes
+storage and models neither the label-agreement merge nor the nightly bridge
+sweep, both of which built the archive's biggest arcs, so it reassembles about a
+third of the named sets exactly. Compare candidates against the pinned row in
+the same harness; the absolute figure is not a grade.
+
+### The reported shape was wrong
+
+The hypothesis was that these piles rest on a **single** anchor, and that
+requiring a second piece of evidence at formation — the equivalent of
+`STORYLINE_MERGE_BRIDGES=2`, which formation indeed lacks — would remove them.
+Both named examples refute it on their own evidence:
+
+| storyline | shared tokens (df) | ceiling | mass | sub-ceiling anchors |
+| --- | --- | --- | --- | --- |
+| `73dbc49f` | fatally(10) shot(100) **off-duty(3)** officer(153) outside(84) | 31 | 30.9 | **2** |
+| `8899bfdf` | **charging(10) ev(13) charger(8)** | 17 | 20.1 | **3** |
+
+Neither is thin evidence. Both clear every threshold in the design comfortably,
+with room to spare, and the second one's *entire* shared vocabulary is anchors.
+The declined set as a whole carries a median of 1 and a mean of 1.94 sub-ceiling
+anchors; the named set carries 2 and 2.49. The distributions overlap almost
+completely.
+
+### Thirty-one settings, five families, one result
+
+Every candidate discriminator was scored the same way over the 88 declined and
+164 named storylines at 2 groups, where formation is unambiguous — the later
+group's profile against the earlier group's, under the corpus as it stood on the
+later group's day. A useful rule blocks the left column and spares the right.
+
+Fourteen of the thirty-one are shown; the omitted ones are further
+parameter values of the same families, and none of them behaves differently.
+
+| candidate rule | blocks declined | **destroys named** |
+| --- | --- | --- |
+| ≥2 sub-ceiling anchors *(the hypothesis)* | 46 (52.3%) | **45 (27.4%)** |
+| ≥3 sub-ceiling anchors | 68 (77.3%) | **101 (61.6%)** |
+| ≥5 shared tokens | 60 (68.2%) | **68 (41.5%)** |
+| overlap coefficient ≥ 0.30 | 62 (70.5%) | **67 (40.9%)** |
+| Jaccard ≥ 0.15 | 63 (71.6%) | **75 (45.7%)** |
+| mass ≥ 25 | 61 (69.3%) | **50 (30.5%)** |
+| rarest anchor df ≤ 5 | 49 (55.7%) | **62 (37.8%)** |
+| anchor is a proper noun (`properNounEvidence`) | 67 (76.1%) | **81 (49.4%)** |
+| any shared token is a proper noun | 49 (55.7%) | **55 (33.5%)** |
+| anchor appears in both TITLES | 53 (60.2%) | **61 (37.2%)** |
+| proper-noun anchor in both titles | 79 (89.8%) | **110 (67.1%)** |
+| the two groups are not from one domain | 35 (39.8%) | **35 (21.3%)** |
+| an anchor concentrated in ≤2 days of the window | 64 (72.7%) | **80 (48.8%)** |
+| an anchor with df/days-present ≥ 1.5 | 12 (13.6%) | **29 (17.7%)** |
+
+**Not one of them separates the sets.** The ratio sits near 2:1 across every
+family — overlap size, rarity, lexical class, provenance, temporal
+concentration — and the last row is worse than doing nothing. Requiring a second
+anchor, specifically, buys 46 piles for 45 real storylines.
+
+### Confirmed on the whole archive, not just the pairs
+
+Replayed over all 23,004 groups (`--days=40`, K=2), the same trade appears in
+the grid, and the direction is unambiguous:
+
+| share | mass | largest | share% | piles formed | named intact | groups kept | piles per arc destroyed |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **0.002** | **20** | **76** | **0.330** | **245/338 (72.5%)** | **362/1189 (30.4%)** | **63.1%** | — *(pinned)* |
+| 0.002 | 25 | 58 | 0.252 | 162 (47.9%) | 230 (19.3%) | 55.6% | **0.63** |
+| 0.002 | 30 | 46 | 0.200 | 127 (37.6%) | 158 (13.3%) | 46.4% | **0.58** |
+| 0.001 | 20 | 75 | 0.326 | 224 (66.3%) | 324 (27.2%) | 57.1% | **0.55** |
+| 0.0005 | 20 | 75 | 0.326 | 193 (57.1%) | 299 (25.1%) | 53.1% | **0.83** |
+| 0.003 | 20 | 81 | 0.352 | 244 (72.2%) | 370 (31.1%) | 64.8% | *looser: −1 pile, +8 arcs* |
+
+Every tightening destroys **more real storylines than it prevents piles** —
+under one pile per arc, in all four directions tested. The looser setting is
+marginally better on both counts, which is the same finding the anchor-share
+section already recorded from the other side.
+
+**Percolation was never the binding constraint here.** The largest storyline is
+76 groups, 0.330% of the corpus, and no candidate in this investigation moved it
+past 0.4%. ADR-0009's alarm is quiet; this failure is invisible to it.
+
+### The two cheaper hypotheses, also refuted
+
+**A content-quality floor on anchoring articles.** `50e2a392` ("Snow Melt") is
+two Buffalo News stubs whose whole body is "Click here to view this item from
+buffalonews.com", and it is a genuine anecdote — but it is an anecdote:
+
+| | declined (338) | named (1,189) |
+| --- | --- | --- |
+| holds a "click here to view this item" stub | **1 (0.3%)** | 0 |
+| holds any article with an empty or <40-char description | 10 (3.0%) | **143 (12.0%)** |
+| holds an article with no description at all | 5 (1.5%) | **112 (9.4%)** |
+
+Content-free bodies are **four times more common in the storylines the model
+could name**. A floor here removes one pile and puts 143 real storylines at
+risk. Refused.
+
+**Source chrome in `story_tokens`.** This one is real and worth recording.
+Site furniture reaches the linker's vocabulary — `pennlive`, `com` from a title
+suffix; `buffalonew`, `click`, `view` from a stub; `welcome hill defense natsec
+beacon` is the *entire* shared evidence of `d5444871`, two unrelated Hill
+newsletters linked by their own masthead; `c101eb76` is two `r/Stocks` daily
+threads sharing 20 tokens of template. Stripping each article's own
+source-identity tokens, replayed over the whole archive:
+
+| | largest | piles formed | named intact | groups kept |
+| --- | --- | --- | --- | --- |
+| pinned | 76 | 245 | 362 | 63.1% |
+| source identity stripped | 77 | **235 (−10)** | **352 (−10)** | 62.9% |
+
+Ten piles for ten real storylines — 1:1, the same trade as every threshold, for
+the price of re-deriving `story_tokens` across the archive and rebuilding
+`story_token_days`. Not shipped. (It may still be right on other grounds; it is
+not a fix for *this*.)
+
+Wire and journal boilerplate is likewise real and likewise a minority: 41 of the
+338 declined storylines (12.1%) are built entirely from press-release, filings,
+analyst-note or preprint domains, against 24 of 1,189 named (2.0%). The domain
+skew is sharp — marketbeat 5.20% of declined member articles against 1.22% of
+named, globenewswire 4.66% against 0.57%, frontiersin.org 2.80% against 0.28%,
+akipress 2.00% against 0.07%, hkexnews 1.27% against 0.03% — and this is the
+**known residue** the anchor-share section already recorded, grown but not new.
+
+### What the declined set is actually made of
+
+Reading it is what explains why no statistic works. Four categories, and only
+the last is "coincidence" in the sense the report assumed:
+
+- **an entity two stories share.** `1175e940` — Diddy countersues a producer,
+  Diddy pays his lawyers $8M. `718f3ed2` — two unrelated Marco Rubio stories.
+  `f4ba18f9` — two Star Trek episodes. `4335e242` — Gaza rubble removal and Gaza
+  beekeepers. This is exactly what ADR-0011 forbids: *"'Trump Iran War' is a
+  storyline; 'Donald Trump' is not."*
+- **a beat or a market.** Two skincare listicles (`4bd2f6d0`), two watch
+  launches (`8afb34f8`), two `fool.ca` dividend columns (`4611d35f`).
+- **a source's recurring template.** The Hill newsletters, `r/Stocks` daily
+  threads, two `bizjournals` winery listicles sharing 19 template tokens.
+- **a turn of phrase.** "cordoned" joining two unrelated police cordons
+  (`712d234f`); "off-duty"/"fatally"; "charging"/"ev"/"charger".
+
+Every one of these is a *semantic* distinction — same happening versus same
+subject — and document frequency cannot make it. A name specific to one event
+and an ordinary word that is merely infrequent in news both sit at df 2–30:
+`ogbah`, `doubleverify`, `myer` alongside `biweekly`, `wearable`, `psychologist`,
+`cross-border`, `monoculture`. The anchor's premise is "there is a name here";
+its implementation is "this token is rare"; the archive says those are different
+propositions.
+
+### Where the fix belongs
+
+ADR-0011 wrote the answer down in advance. The linking seam "is explicitly where
+an LLM verdict could slot in later if token evidence proves insufficient", and
+it does not ship "while auto-merge exists to heal its misses". **The evidence
+above is that proof, and the misses in question are not the kind a merge
+heals** — the label-agreement merge cures over-narrow formation, and this is the
+opposite failure.
+
+The verdict is also, already, being computed and thrown away. A promotion makes
+exactly one model call. A model shown two unrelated articles and *told* they
+cover one story — the shipped prompt opens "These headlines all cover ONE news
+story" — either invents a name or writes a sentence, `validateLabel` refuses it,
+and the storyline keeps a bigram label and stands. The 382 declines ARE the
+verdict, arriving as a formatting failure and discarded as one.
+
+`storyline-coherence.ts` is the pure half: a prompt that stops asserting the
+conclusion and offers the decline, and `readCoherenceReply`, which returns
+**three** cases and never collapses them.
+
+| reply | meaning | what may act on it |
+| --- | --- | --- |
+| `named` | a usable, grounded label | use the name |
+| `incoherent` | the model explicitly said NOT ONE STORY | **the only case that may refuse a formation** |
+| `unusable` | unavailable, timed out, out of quota, contract broken | keep the storyline; bigram fallback — today's behaviour, unchanged |
+
+That three-way split is the whole safety argument, and it is not theoretical:
+the dev key is free tier, its ceiling is **500 requests per day per model**, and
+the labelling campaign exhausts it — this investigation hit the wall mid-run.
+An implementation that read silence as a refusal would dissolve the archive on a
+quiet Tuesday.
+
+### The verdict, measured (2026-08-18)
+
+Run on **`gemini-3.1-flash-lite`, the configured model**, once the free-tier day
+rolled over:
+
+```bash
+pnpm measure:storyline-coherence --size=2 --per-set=88   # resumable; 500/day/model
+pnpm measure:storyline-coherence --report                # matrix, no calls
+```
+
+**At two groups — where formation happens — it works.**
+
+| set | answered | NOT ONE STORY |
+| --- | --- | --- |
+| declined | 88 | **75 (85.2%)** |
+| named | 86 | 27 (31.4%) |
+
+The 31.4% is **not** a 31.4% loss, and finding that out required reading all 27.
+The named set is contaminated, because naming is an easier question than
+coherence and the shipped prompt *tells* the model the coverage is one story —
+so the namer produced a plausible label by describing whichever article it found
+most nameable. Adjudicated by one unblinded reader (me), the 27 break down as
+**~22 coincidence piles the namer papered over, ~4 borderline entity-or-beat, and
+1 clear error** (`bdfc89eb`, two UFC 330 build-up pieces). Several are not
+judgement calls:
+
+| campaign label | what the two articles actually are |
+| --- | --- |
+| "Philadelphia House Horror" | *"You're gonna need a better shark"* + the Philly house of horrors |
+| "European Climate Court Case" | a Russian climate case + *"20 SPECTACULAR EUROPEAN LANDMARKS FOR YOUR BUCKET LIST"* |
+| "Calgary Zoo Bear Escape" | a house fire 7 children escaped + a grizzly escaping Calgary Zoo |
+| "Trump Tariff Loophole Closure" | a tariff court ruling + Zac Brown Band giving away a cruise |
+| "Obama Retirement Advice" | an Obama quote-of-the-day + a Reddit *"feeling broke"* thread |
+
+So the true false-positive cost at two groups is **1–5 of 86 (1.2%–5.8%)**, not 27.
+The gate is the first candidate in this whole investigation that is not a
+bidirectional trade.
+
+The 13 declined it *named* cut the same way: ~3 are storylines the **campaign**
+got wrong (`56ce166f`, the Maple Ridge bear attack covered twice; `66cb6c4d`,
+the US-Iran deal expiring; `30111d24`, two nearly identical winery listicles), and
+~7 are genuine misses (two Diddy stories, two Star Trek pieces, two market
+week-ahead columns).
+
+**Second-order finding, and the more important one.** If ~26% of the sampled
+two-group *named* storylines are piles, the reported failure is materially
+**larger than 382** — and the `NAMED-INTACT` column above preserves a set that
+itself contains piles. It remains the right metric for comparing settings, since
+the contamination is constant across them; it is not clean ground truth, and no
+future reader should treat it as one.
+
+### …and on mature arcs it must never run
+
+The same verdict, over **all 21 named arcs at 20 groups or more** — the "check
+what a change destroys" test:
+
+| refused | arc |
+| --- | --- |
+| — | Tropical Storm Lala (97g), Trump Secret Plane Swap (93g), FedEx St Jude Championship (86g), Strait of Hormuz Crisis (47g), USS Lincoln Conditions Inquiry (43g), European Total Solar Eclipse (41g), Infantino FIFA Leadership Crisis (37g) |
+| **REFUSED, correctly** | Y Intercept Hong Kong Filings (31g), Canadian Q2 Earnings Season (25g) — *the known boilerplate residue* |
+| **REFUSED, wrongly** | Adley Rutschman Red Sox Trade (35g), Google Pixel Tag Launch (30g), Lok Sabha Session Logjam (26g), Michigan Senate Democratic Primary (25g), Albanese Melon Controversy (23g), Air Canada Stock Surge (22g), El-Sayed Michigan Senate Race (22g) |
+
+**9 of 21 refused — 43%.** Two of those are the residue this document already
+records and the gate is right about them. Seven are genuine event arcs, and one
+of them, `el-sayed / michigan / primary / senate`, is a profile the anchor-share
+section holds up as the *model* of event-shaped coverage.
+
+The mechanism is not mysterious: a ten-headline sample of a 35-group arc spans
+rumour, reaction, analysis and adjacent players, and the prompt's disqualifier
+list — "share only a person, a place, a team, a market" — makes the model
+suspicious of exactly the breadth a mature arc earns. Precision at formation is
+bought with recall on long arcs.
+
+This is a **load-bearing constraint on the wiring, not a reason to abandon the
+gate**, because the gate only ever needed the two-group moment. But note what it
+rules out: `labelStoryline` fires on `promotion`, `merge` AND `drift`, and drift
+fires on every doubling of membership. Wiring the verdict into that call
+unscoped would put it on mature arcs and dissolve 43% of them. **The verdict may
+be consulted only where the storyline is not yet real.**
+
+### The write path, as built
+
+Wired 2026-08-18. `STORYLINE_COHERENCE_GATE=true` by default, and inert without a
+`GEMINI_API_KEY` — with no model there is no verdict to wait for, and deferring
+would only lose formations.
+
+**It DEFERS, it does not revert.** On the fresh path the arriving group's birth
+storyline is absorbed by **merge-with-alias** (`storyline-linker.ts`), so undoing
+a promotion is the split ADR-0011 deliberately does not build. Where the winner
+is still a provisional-of-one the linker therefore withholds the merge, reports
+`pendingFormation`, and returns; the state that would need unwinding is never
+created. Everything else about that decision is unchanged, including the bridges
+— "this group qualified for both of these" is a fact about those storylines
+whatever happens to the formation, and suppressing it would leave the K-bridge
+merge blind.
+
+`resolveFormation` (`storyline-formation.ts`) runs in the tail that already
+labels — off the latency path, started and not awaited — and spends **no extra
+model call**: the promotion label was already one call, and a model that can name
+the story has thereby said it is one.
+
+| verdict | what happens |
+| --- | --- |
+| explicit `NOT ONE STORY` | a refusal is recorded; both groups keep their own provisional storylines and keep rendering as ordinary slots |
+| a usable name | the withheld merge is performed, the storyline promoted, and that name written (`label_source` = the model id) |
+| **anything else** | the withheld merge is performed, promoted, bigram fallback — **exactly the pre-gate outcome** |
+
+The third row is the one production depends on. A 429, a timeout, a spent daily
+quota or a contract-breaking answer must all form the storyline: the archive's own
+key has a 500-request DAILY ceiling that the labelling campaign exhausts, and a
+gate reading silence as a refusal would dissolve storylines on a quiet Tuesday
+rather than on evidence.
+
+Three more properties, each measured or argued above:
+
+- **Scoped to the two-group moment.** `mayRefuseFormation` admits a `promotion`
+  whose winner held one group and nothing else, per the 43% false-refusal rate on
+  mature arcs. `resolveFormation` re-checks it at resolution time too, because
+  another arrival may have attached while the tail was queued — a formation that
+  is no longer a formation is simply performed, unjudged.
+- **Refusals are durable, and keyed on GROUPS** (migration 0015,
+  `storyline_formation_refusals`). Without that the nightly late-candidate sweep
+  re-offers the pair and buys the same refusal every night. Groups rather than
+  UUIDs because a provisional storyline-of-one is an identity a group is wearing:
+  it can be merged away, and a refusal keyed on it would then name nothing.
+  A refusal bars only that FORMATION — not the group from ever joining that arc
+  once it is real and wide, which is a different question the gate is bad at.
+- **The backfill does not gate.** A budget decision, not a doubt: replaying the
+  archive produces thousands of formations at one call each. It rebuilds what the
+  token evidence says and leaves verdicts to the live path. Refusals survive it,
+  being keyed on groups.
+
+The sweep is deliberately unchanged and still measures the **token** decision. It
+has no model and cannot have one — a grid of 30 settings over 23,000 groups is
+hundreds of thousands of decisions — so `PILES-FORMED` and `NAMED-INTACT` answer
+"what would the anchor rule build", which is still the question when a threshold
+moves.

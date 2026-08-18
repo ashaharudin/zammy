@@ -305,6 +305,41 @@ describe("the nightly late-candidate sweep", () => {
     expect(await readGroupStorylines(db, march)).toEqual([marchStoryline.id]);
   });
 
+  it("resolves a formation it re-offered and the gate withheld", async () => {
+    // A withheld formation is the one outcome that changes nothing tonight —
+    // no attach, no merge; the merge IS the thing withheld — so a filter on
+    // "did it change something" silently drops it from the labelling pass.
+    // That pass holds the only production caller of `resolvePendingFormations`
+    // this sweep has, and this sweep is the promised retry for a formation the
+    // ingest tail lost: dropped here, the pair is re-withheld and re-dropped
+    // every night, forever.
+    await seedCorpus("2026-08-13");
+    const a = await group(YESTERDAY);
+    const b = await group(YESTERDAY);
+    const bornA = await createProvisionalStoryline(db, { groupId: a, ...TZ });
+    const bornB = await createProvisionalStoryline(db, { groupId: b, ...TZ });
+    const generate = async () => ({ ok: true as const, text: "Hurricane Fausto" });
+
+    const report = await runLateCandidateChore({
+      ...deps(),
+      linker: { ...LINKER, coherenceGate: true },
+      labeler: { generator: { generate }, sampleSize: 10, driftFactor: 2, now: () => NOW },
+    });
+
+    // Both singletons were offered, both offers withheld the same formation,
+    // and the labelling pass then performed it: one real storyline holding
+    // both groups, wearing the verdict's name.
+    expect(report.offered).toBe(2);
+    const homesA = await readGroupStorylines(db, a);
+    expect(homesA).toHaveLength(1);
+    expect(await readGroupStorylines(db, b)).toEqual(homesA);
+    expect([bornA.id, bornB.id]).toContain(homesA[0]);
+    expect(await readStoryline(db, homesA[0]!)).toMatchObject({
+      status: "active",
+      label: "Hurricane Fausto",
+    });
+  });
+
   it("labels what it changed, the way the ingest path labels what IT changed", async () => {
     // A sweep attach or merge is the same event as a live one; without this,
     // the identical change keeps a stale label at 4am and gets a fresh one at

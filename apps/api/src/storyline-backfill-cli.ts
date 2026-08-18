@@ -102,6 +102,13 @@ const linkerConfig: LinkerConfig = {
     dormantStrictness: config.STORYLINE_DORMANT_STRICTNESS,
   },
   mergeBridges: config.STORYLINE_MERGE_BRIDGES,
+  // The backfill does NOT gate formations, and that is a budget decision rather
+  // than a doubt: replaying the archive produces thousands of them, one model
+  // call each, against a ceiling of 500 a day. It rebuilds what the token
+  // evidence says and leaves the verdicts to the live path — which is also why
+  // a backfill does not erase existing refusals, since those are keyed on GROUPS
+  // and survive any amount of storyline churn.
+  coherenceGate: false,
   storyDf: {
     windowDays: config.STORYLINE_DF_WINDOW_DAYS,
     timeZone: config.APP_TIMEZONE,

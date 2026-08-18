@@ -200,7 +200,16 @@ export async function runLateCandidateChore(
         );
         tally.attachedTo += outcome.attachedTo.length;
         tally.merges += outcome.merged.length;
-        if (outcome.attachedTo.length > 0 || outcome.merged.length > 0) {
+        // A withheld formation travels too: its attachedTo and merged are both
+        // empty — the merge is the thing being withheld — and dropping it here
+        // would leave labelLinkedStorylines' resolvePendingFormations as the
+        // retry this sweep is supposed to be. The pair would be re-withheld and
+        // re-dropped every night, forever.
+        if (
+          outcome.attachedTo.length > 0 ||
+          outcome.merged.length > 0 ||
+          outcome.pendingFormation !== undefined
+        ) {
           changed.push(outcome);
         }
       } catch (error) {
@@ -220,11 +229,16 @@ export async function runLateCandidateChore(
 
   // Label what the sweep changed — awaited, because 3am has no reader waiting
   // and never-throws is already labelLinkedStorylines' own contract. Only the
-  // outcomes that changed something travel: most offers are no-ops and carry
-  // no trigger anyway.
+  // outcomes that changed something — or withheld a formation — travel: most
+  // offers are no-ops and carry no trigger anyway.
   if (deps.labeler && changed.length > 0) {
     await labelLinkedStorylines(
-      { db: deps.db, labeler: deps.labeler, log: deps.log },
+      {
+        db: deps.db,
+        labeler: deps.labeler,
+        log: deps.log,
+        formations: { timeZone: deps.config.timeZone },
+      },
       changed,
     );
   }

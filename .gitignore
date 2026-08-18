@@ -15,3 +15,8 @@ coverage/
 .vite/
 .idea/
 .vscode/
+
+# `pnpm measure:storyline-coherence` transcripts — resumable working state for a
+# run that spans days on a free-tier key. The RESULT belongs in
+# docs/STORYLINE-LINKING.md, not in the tree.
+storyline-coherence*.jsonl

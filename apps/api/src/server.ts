@@ -189,6 +189,10 @@ export async function buildApp(config: Config): Promise<App> {
             dormantStrictness: config.STORYLINE_DORMANT_STRICTNESS,
           },
           mergeBridges: config.STORYLINE_MERGE_BRIDGES,
+          // No model, no verdict to wait for — deferring would only lose
+          // formations to a tail that can never resolve them.
+          coherenceGate:
+            config.STORYLINE_COHERENCE_GATE && Boolean(config.GEMINI_API_KEY),
           storyDf: {
             windowDays: config.STORYLINE_DF_WINDOW_DAYS,
             timeZone: config.APP_TIMEZONE,

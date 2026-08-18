@@ -16,6 +16,7 @@ import {
   type LabelTrigger,
 } from "./storyline-label.js";
 import type { LinkOutcome } from "./storyline-linker.js";
+import { resolvePendingFormations, type FormationDeps } from "./storyline-formation.js";
 
 /**
  * The labeler's service half (ADR-0011): read the members, ask the model, check
@@ -69,9 +70,37 @@ export async function labelLinkedStorylines(
     db: Kysely<Database>;
     labeler: Omit<LabelerDeps, "db">;
     log?: { warn: (obj: object, msg: string) => void };
+    /**
+     * Present when the outcomes may carry withheld formations to resolve
+     * (`LinkOutcome.pendingFormation`) — the ingest tail and the late-candidate
+     * sweep. The timezone is what a resolution needs: performing the merge the
+     * linker withheld recomputes day slots, which are bucketed by calendar.
+     * Callers whose outcomes are synthetic merge shapes (the bridge sweeps) have
+     * no formations to resolve and rightly omit this.
+     */
+    formations?: { timeZone: string };
   },
   outcomes: readonly LinkOutcome[],
 ): Promise<void> {
+  // FORMATIONS FIRST (ADR-0011's amendment). A deferred formation is a promotion
+  // that has not happened yet: the storyline is still provisional, so nothing in
+  // the trigger pass below would name it, and the verdict that permits it is the
+  // same model call that names it. Resolving afterwards would either label a
+  // storyline that turned out not to exist or spend a second call on one that
+  // does.
+  if (deps.formations !== undefined) {
+    const formationDeps: FormationDeps = {
+      db: deps.db,
+      generator: deps.labeler.generator,
+      modelId: deps.labeler.modelId,
+      sampleSize: deps.labeler.sampleSize,
+      timeZone: deps.formations.timeZone,
+      now: deps.labeler.now,
+      logger: deps.labeler.logger,
+    };
+    await resolvePendingFormations(formationDeps, outcomes);
+  }
+
   const rank: Record<LabelTrigger, number> = { drift: 0, promotion: 1, merge: 2 };
   const triggers = new Map<string, LabelTrigger>();
   const propose = (storylineId: string, trigger: LabelTrigger): void => {

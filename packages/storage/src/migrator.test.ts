@@ -6,6 +6,7 @@ import * as storyTokenDf from "./migrations/0008-story-token-df.js";
 import * as storylineBridges from "./migrations/0009-storyline-bridges.js";
 import * as labelDrift from "./migrations/0010-storyline-label-drift.js";
 import * as labelSource from "./migrations/0011-storyline-label-source.js";
+import * as formationRefusals from "./migrations/0015-storyline-formation-refusals.js";
 import * as dropTermCloud from "./migrations/0014-drop-term-cloud.js";
 import { createTestDatabase, type TestDatabase } from "./test-support.js";
 
@@ -183,5 +184,45 @@ describe("migrateToLatest", () => {
 
     expect(error).toBeUndefined();
     expect(results).toEqual([]);
+  });
+
+  it("reverts and re-applies cleanly, and holds the pair ordering it claims", async () => {
+    const exists = async () => {
+      const { rows } = await sql<{ n: string }>`
+        select count(*) as n from information_schema.tables
+        where table_schema = 'public' and table_name = 'storyline_formation_refusals'
+      `.execute(harness.db);
+      return Number(rows[0]?.n ?? 0) === 1;
+    };
+
+    expect(await exists()).toBe(true);
+    await formationRefusals.down(harness.db);
+    expect(await exists()).toBe(false);
+    await formationRefusals.up(harness.db);
+    expect(await exists()).toBe(true);
+
+    // The CHECK is the invariant `recordFormationRefusal` relies on to make a
+    // symmetric refusal one row: an unordered pair must be impossible to write,
+    // or the same refusal could be stored twice and neither read would find both.
+    await expect(
+      sql`insert into storyline_formation_refusals (group_lo, group_hi) values (9, 8)`.execute(
+        harness.db,
+      ),
+    ).rejects.toThrow();
+
+    await sql`insert into storyline_formation_refusals (group_lo, group_hi) values (8, 9)`.execute(
+      harness.db,
+    );
+    // Idempotent by primary key: the backfill replays every formation.
+    await sql`
+      insert into storyline_formation_refusals (group_lo, group_hi) values (8, 9)
+      on conflict do nothing
+    `.execute(harness.db);
+    const { rows } = await sql<{ n: string }>`
+      select count(*) as n from storyline_formation_refusals
+    `.execute(harness.db);
+    expect(Number(rows[0]!.n)).toBe(1);
+
+    await sql`delete from storyline_formation_refusals`.execute(harness.db);
   });
 });
