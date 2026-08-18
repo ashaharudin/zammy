@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { singular } from "./grouping.js";
+import { properNounEvidence } from "./headline-tokens.js";
 import {
   labelWords,
   normalizeLabel,
@@ -165,6 +167,58 @@ describe("planLabelMerge", () => {
     expect(refusals).toEqual([
       { label: "q2 2026 financial result", storylines: 3, reason: "no grounded name" },
     ]);
+  });
+
+  it("folds a possessive to the spelling the corpus tokenizer produces", () => {
+    // The `dillard'` refusal, measured on the dev archive: two arcs of one
+    // earnings story, both labelled "Dillard's Tariff Refund Earnings", refused
+    // for "no grounded name" while `dillard` sat capitalized in the coverage.
+    // `singular` alone dropped the final `s` and left the apostrophe stranded,
+    // so the grounding gate asked for a token the corpus could never hold.
+    expect(labelWords("Dillard's Tariff Refund Earnings")).toEqual([
+      "dillard",
+      "tariff",
+      "refund",
+      "earning",
+    ]);
+
+    // Both sides of the comparison must land on one spelling, so assert the
+    // corpus side reaches the same word rather than trusting that it does.
+    const evidence = properNounEvidence(
+      [
+        {
+          title: "Tariff refunds boost bottom line",
+          description: "Little Rock-based Dillard's beat estimates as tariff refunds landed.",
+        },
+      ],
+      singular,
+    );
+    expect(evidence("dillard")).toBe(true);
+    expect(labelWords("Dillard's Earnings")[0]).toBe("dillard");
+  });
+
+  it("grounds a possessive label and merges the component it was refusing", () => {
+    const arcs = [
+      arc("first", "Dillard's Tariff Refund Earnings", "2026-08-11", "2026-08-13"),
+      arc("second", "Dillard's Tariff Refund Earnings", "2026-08-12", "2026-08-14"),
+    ];
+
+    const { plans, refusals } = planLabelMerge(
+      normalizeLabel("Dillard's Tariff Refund Earnings"),
+      arcs,
+      (word) => word === "dillard",
+      RULES,
+    );
+
+    expect(refusals).toEqual([]);
+    expect(plans).toHaveLength(1);
+    expect(plans[0]!.loserIds).toEqual(["second"]);
+  });
+
+  it("trims a plural possessive too, which the 's rule alone would miss", () => {
+    // "Workers' Rights" leaves `workers'` if only `'s` is stripped, and
+    // `singular` will not touch a word ending in an apostrophe.
+    expect(labelWords("Workers' Rights March")).toEqual(["worker", "right", "march"]);
   });
 
   it("keeps two same-named stories apart when their spans do not touch", () => {
