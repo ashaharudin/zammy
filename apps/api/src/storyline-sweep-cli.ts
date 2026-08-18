@@ -4,6 +4,7 @@ import { zonedDayKey } from "./app-day.js";
 import { storyTokens } from "./storyline.js";
 import { replayLinker, type ReplayGroup } from "./storyline-replay.js";
 import type { Corpus, LinkRules } from "./storyline-link.js";
+import { judgedSetOf, scoreJudged, type JudgedStoryline } from "./storyline-judged.js";
 
 /**
  * `pnpm measure:storylines-v2 [--days=N]` — the ADR-0011 threshold sweep.
@@ -133,6 +134,67 @@ try {
   };
   const corpusAt = (group: ReplayGroup): Corpus => corpusFor(group.language, group.dayKey);
 
+  // ---- the hand-judged sets (docs/STORYLINE-LINKING.md, "What the anchor rule
+  //      cannot see") ----
+  //
+  // The columns below are the sweep's answer to "check what a change DESTROYS,
+  // not just what it prevents". Every threshold in this design trades the two
+  // directions off against each other, and until the labelling campaign there
+  // was nothing to weigh the trade against but an operator reading samples.
+  //
+  // `declined` are storylines a model was shown and could not name — dominated
+  // by two unrelated articles sharing a word, and the thing a candidate change
+  // is trying to stop. `named` are the ones it named, including every large
+  // correct arc in the archive, and a candidate change must leave them standing.
+  const judgedRows = await db
+    .selectFrom("storylines")
+    .innerJoin("storyline_groups", "storyline_groups.storyline_id", "storylines.id")
+    .select([
+      "storylines.id as id",
+      "storylines.label as label",
+      "storylines.label_source as labelSource",
+      "storyline_groups.group_id as groupId",
+    ])
+    .where("storylines.merged_into", "is", null)
+    .where("storylines.status", "<>", "provisional")
+    .where("storylines.label_source", "is not", null)
+    .execute();
+
+  type Gathering = { id: string; label: string | null; groupIds: string[] };
+  const judged: Record<"declined" | "named", Map<string, Gathering>> = {
+    declined: new Map(),
+    named: new Map(),
+  };
+  for (const row of judgedRows) {
+    const set = judgedSetOf(row.labelSource);
+    if (set === null) continue;
+    const held = judged[set].get(row.id);
+    if (held) held.groupIds.push(row.groupId);
+    else judged[set].set(row.id, { id: row.id, label: row.label, groupIds: [row.groupId] });
+  }
+  const declined: JudgedStoryline[] = [...judged.declined.values()];
+  const named: JudgedStoryline[] = [...judged.named.values()];
+  // Only groups the replay was actually offered count — a judged arc reaching
+  // back past `--days` must not be charged to the rule under test.
+  const known = (groupId: string): boolean => byGroup.has(groupId);
+  console.log(
+    `hand-judged sets: ${declined.length} declined (unnameable), ${named.length} named`,
+  );
+
+  /** The two directions and the alarm, for one replay. */
+  const judgedColumns = (result: { built: { groupIds: string[] }[] }): string => {
+    const bad = scoreJudged(result.built, declined, known);
+    const good = scoreJudged(result.built, named, known);
+    const pct = (part: number, whole: number): string =>
+      whole === 0 ? "  n/a" : `${((100 * part) / whole).toFixed(1).padStart(5)}%`;
+    return (
+      `${String(bad.formed).padStart(5)}/${String(bad.n).padEnd(4)} ${pct(bad.formed, bad.n)}  ` +
+      `${String(good.intact).padStart(5)}/${String(good.n).padEnd(4)} ${pct(good.intact, good.n)}  ` +
+      `${pct(good.groupsTogether, good.groupsTotal)}`
+    );
+  };
+  const JUDGED_HEADER = " PILES-FORMED       NAMED-INTACT       kept";
+
   // ---- the sweep ----
   const SHARES = [0.001, 0.002, 0.003, 0.005, 0.01, 0.02];
   const MASSES = [8, 12, 16, 20, 25];
@@ -145,7 +207,8 @@ try {
   if (!focusOnly) {
   console.log("\nanchor+mass sweep (K=2, dormancy 90d):");
   console.log(
-    "share   mass  storylines  promoted  attached  merges  LARGEST  share%   p50  p99  daySlots",
+    "share   mass  storylines  promoted  attached  merges  LARGEST  share%   p50  p99  daySlots" +
+      JUDGED_HEADER,
   );
   for (const anchorMaxShare of SHARES) {
     for (const massThreshold of MASSES) {
@@ -158,7 +221,8 @@ try {
           `${String(result.largestStoryline).padStart(7)}  ` +
           `${(result.largestShare * 100).toFixed(2).padStart(6)}  ` +
           `${String(result.p50).padStart(4)} ${String(result.p99).padStart(4)}  ` +
-          `${String(result.daySlots).padStart(8)}`,
+          `${String(result.daySlots).padStart(8)}  ` +
+          judgedColumns(result),
       );
     }
   }

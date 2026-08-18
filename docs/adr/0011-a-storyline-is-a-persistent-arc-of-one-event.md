@@ -90,6 +90,46 @@ linking runs per group (~1,200/day), and cheap-and-measurable beats
 better-and-opaque at that volume while auto-merge exists to heal its
 misses.
 
+**Token evidence has now been measured insufficient (2026-08-18).** The
+condition this paragraph set has been met, and the record is
+docs/STORYLINE-LINKING.md, "What the anchor rule cannot see". The labelling
+campaign left a set hand-judged in both directions — 382 storylines a model was
+shown and could not name, against 1,189 it named — and against it *no*
+rearrangement of the token evidence separates the two: thirty-one settings
+across five independent families (overlap size, rarity, lexical class,
+provenance, temporal concentration), each destroying more model-named arcs than
+it prevents unnameable piles, confirmed by a nine-setting replay over the whole
+archive at under one pile per arc in every direction. The anchor's premise is
+"there is a name here" and its implementation is "this token is rare"; the
+archive says those are different propositions, because `ogbah` and `biweekly`
+are equally rare in a fortnight.
+
+Three things follow:
+
+- The failure is **not** the one auto-merge heals. The label-agreement merge
+  cures over-narrow formation; this is over-broad formation, and ADR-0011 builds
+  no split, so it has no cure at all today.
+- The verdict is **already being computed and discarded**. A promotion makes one
+  model call, and the Labels prompt below opens by asserting the coverage is one
+  story — so a model shown two unrelated articles invents a name, `validateLabel`
+  refuses it, and the storyline stands under a bigram label. The 382 declines are
+  that verdict arriving as a formatting failure.
+- **Not yet shipped, and the reason is a measurement, not a doubt.** Acting on
+  the verdict *dissolves* storylines rather than declining to build them, so what
+  decides it is the false-positive rate on the named set, and that number needs a
+  run this repo's free-tier key cannot finish in a day (500 requests per model per
+  day; the campaign exhausts it). `storyline-coherence.ts` is the pure,
+  tested half — a prompt that stops asserting the conclusion, and a **three-way**
+  reply that never lets "the model did not answer" act like "the model said no".
+  `pnpm measure:storyline-coherence` is the resumable run.
+
+When it is wired, the gate must **defer** a formation rather than revert one. On
+the fresh path the arriving group's birth storyline is absorbed by
+merge-with-alias, so undoing a promotion is exactly the split refused above; the
+merge must wait for the verdict instead, and a refusal must be recorded durably
+or the nightly late-candidate sweep will re-offer the pair and pay for a refusal
+every night.
+
 ## Labels
 
 A storyline carries a persistent, **non-unique** display label of two or three
