@@ -13,7 +13,7 @@ import { validateLabel, type LabelMember } from "./storyline-label.js";
  * cannot see", records seventeen candidate rules across five independent
  * families, each of which destroys more model-named arcs than it prevents
  * declined piles. The distinction is between an EVENT and an entity, a beat, a
- * publisher's template or a coincidence of vocabulary, and every one of those
+ * source's template or a coincidence of vocabulary, and every one of those
  * looks identical in document frequency.
  *
  * ADR-0011 named this seam in advance: an LLM verdict "does not ship now …

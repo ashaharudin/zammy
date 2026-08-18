@@ -363,7 +363,7 @@ Content-free bodies are **four times more common in the storylines the model
 could name**. A floor here removes one pile and puts 143 real storylines at
 risk. Refused.
 
-**Publisher chrome in `story_tokens`.** This one is real and worth recording.
+**Source chrome in `story_tokens`.** This one is real and worth recording.
 Site furniture reaches the linker's vocabulary — `pennlive`, `com` from a title
 suffix; `buffalonew`, `click`, `view` from a stub; `welcome hill defense natsec
 beacon` is the *entire* shared evidence of `d5444871`, two unrelated Hill
@@ -401,7 +401,7 @@ the last is "coincidence" in the sense the report assumed:
   storyline; 'Donald Trump' is not."*
 - **a beat or a market.** Two skincare listicles (`4bd2f6d0`), two watch
   launches (`8afb34f8`), two `fool.ca` dividend columns (`4611d35f`).
-- **a publisher's recurring template.** The Hill newsletters, `r/Stocks` daily
+- **a source's recurring template.** The Hill newsletters, `r/Stocks` daily
   threads, two `bizjournals` winery listicles sharing 19 template tokens.
 - **a turn of phrase.** "cordoned" joining two unrelated police cordons
   (`712d234f`); "off-duty"/"fatally"; "charging"/"ev"/"charger".

@@ -200,7 +200,16 @@ export async function runLateCandidateChore(
         );
         tally.attachedTo += outcome.attachedTo.length;
         tally.merges += outcome.merged.length;
-        if (outcome.attachedTo.length > 0 || outcome.merged.length > 0) {
+        // A withheld formation travels too: its attachedTo and merged are both
+        // empty — the merge is the thing being withheld — and dropping it here
+        // would leave labelLinkedStorylines' resolvePendingFormations as the
+        // retry this sweep is supposed to be. The pair would be re-withheld and
+        // re-dropped every night, forever.
+        if (
+          outcome.attachedTo.length > 0 ||
+          outcome.merged.length > 0 ||
+          outcome.pendingFormation !== undefined
+        ) {
           changed.push(outcome);
         }
       } catch (error) {

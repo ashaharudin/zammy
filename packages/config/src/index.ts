@@ -327,13 +327,6 @@ const EnvSchema = z
      */
     STORYLINE_MERGE_BRIDGES: z.coerce.number().int().min(1).default(2),
     /**
-     * Days without coverage after which a storyline leaves the normal candidate
-     * set. UNMEASURED, and honestly so: the dev archive is 31 days, so 30, 90
-     * and 365 replay identically — nothing in it is ever dormant. ADR-0011's
-     * starting knob, kept, and the first thing S5's full-history backfill can
-     * actually measure.
-     */
-    /**
      * Withhold a FORMATION — two singleton groups becoming a real storyline —
      * until a model has been asked whether they cover one story (ADR-0011's
      * amendment). Off restores the pre-gate behaviour exactly: the linker merges
@@ -366,6 +359,13 @@ const EnvSchema = z
       .enum(["true", "false"])
       .default("true")
       .transform((value) => value === "true"),
+    /**
+     * Days without coverage after which a storyline leaves the normal candidate
+     * set. UNMEASURED, and honestly so: the dev archive is 31 days, so 30, 90
+     * and 365 replay identically — nothing in it is ever dormant. ADR-0011's
+     * starting knob, kept, and the first thing S5's full-history backfill can
+     * actually measure.
+     */
     STORYLINE_DORMANCY_DAYS: z.coerce.number().int().min(1).default(90),
     /**
      * How much harder a dormant storyline is to join: anchor ceiling divided by
