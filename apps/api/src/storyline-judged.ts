@@ -24,8 +24,11 @@
  * stop and the coverage fragments with them. Both numbers together are what make
  * "fewer bad storylines" distinguishable from "fewer storylines".
  *
- * Nothing here reads a database or a model: it takes the storylines a replay
+ * The scoring reads no database and no model: it takes the storylines a replay
  * built and the group sets the archive judged, and reports how they overlap.
+ * `readJudgedStorylines` is the module's one read — materialising those sets is
+ * part of the same job, and sharing it is what keeps the two CLIs that consume
+ * them measuring against the same query.
  *
  * ## Reading the numbers
  *
@@ -46,6 +49,9 @@
  * of the named sets exactly. Compare a candidate against the pinned baseline in
  * this same harness; do not read the absolute figure as a grade.
  */
+
+import type { Kysely } from "kysely";
+import type { Database } from "@zammy/storage";
 
 /** One storyline the archive has a human-checked verdict on. */
 export interface JudgedStoryline {
@@ -152,6 +158,47 @@ export function scoreJudged(
 
   verdicts.sort((a, b) => b.size - a.size || (a.id < b.id ? -1 : 1));
   return { n: verdicts.length, formed, intact, groupsTogether, groupsTotal, verdicts };
+}
+
+/**
+ * Materialise the two judged sets from the live archive.
+ *
+ * One query, shared by the sweep and coherence CLIs, so "the judged sets" can
+ * never quietly mean two different reads: live storylines only (`merged_into is
+ * null`), real ones only (provisionals were never offered to the campaign), and
+ * only those carrying a verdict at all (`label_source is not null` —
+ * `judgedSetOf` says which side it lands on).
+ */
+export async function readJudgedStorylines(
+  db: Kysely<Database>,
+): Promise<Record<"declined" | "named", JudgedStoryline[]>> {
+  const rows = await db
+    .selectFrom("storylines")
+    .innerJoin("storyline_groups", "storyline_groups.storyline_id", "storylines.id")
+    .select([
+      "storylines.id as id",
+      "storylines.label as label",
+      "storylines.label_source as labelSource",
+      "storyline_groups.group_id as groupId",
+    ])
+    .where("storylines.merged_into", "is", null)
+    .where("storylines.status", "<>", "provisional")
+    .where("storylines.label_source", "is not", null)
+    .execute();
+
+  type Gathering = { id: string; label: string | null; groupIds: string[] };
+  const gathered: Record<"declined" | "named", Map<string, Gathering>> = {
+    declined: new Map(),
+    named: new Map(),
+  };
+  for (const row of rows) {
+    const set = judgedSetOf(row.labelSource);
+    if (set === null) continue;
+    const held = gathered[set].get(row.id);
+    if (held) held.groupIds.push(row.groupId);
+    else gathered[set].set(row.id, { id: row.id, label: row.label, groupIds: [row.groupId] });
+  }
+  return { declined: [...gathered.declined.values()], named: [...gathered.named.values()] };
 }
 
 /**

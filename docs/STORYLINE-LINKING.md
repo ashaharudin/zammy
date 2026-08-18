@@ -486,7 +486,7 @@ bidirectional trade.
 
 The 13 declined it *named* cut the same way: ~3 are storylines the **campaign**
 got wrong (`56ce166f`, the Maple Ridge bear attack covered twice; `66cb6c4d`,
-the US-Iran deal expiring; `30111d24`, two near-duplicate winery listicles), and
+the US-Iran deal expiring; `30111d24`, two nearly identical winery listicles), and
 ~7 are genuine misses (two Diddy stories, two Star Trek pieces, two market
 week-ahead columns).
 

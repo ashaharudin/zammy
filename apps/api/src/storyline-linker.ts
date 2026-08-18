@@ -14,6 +14,7 @@ import {
   resolveStoryline,
   type Database,
 } from "@zammy/storage";
+import { mayRefuseFormation } from "./storyline-coherence.js";
 import { readTrailingCorpus, type StoryDfConfig } from "./story-df.js";
 import {
   bridgePairs,
@@ -376,7 +377,10 @@ export async function linkGroup(
   //
   // Bridges below are recorded either way. "This group qualified for both of
   // these" is a fact about those storylines whatever happens to this formation.
-  if (deps.config.coherenceGate && best.candidate.groupCount === 1) {
+  if (
+    deps.config.coherenceGate &&
+    mayRefuseFormation({ trigger: "promotion", groupCountBefore: best.candidate.groupCount })
+  ) {
     const partnerGroupId = await readSoleGroup(deps.db, best.candidate.id);
     // Null means the candidate gained a group since retrieval — a concurrent
     // arrival got there first. It is no longer a formation, so it is no longer

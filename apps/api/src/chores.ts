@@ -229,15 +229,15 @@ export async function runLateCandidateChore(
 
   // Label what the sweep changed — awaited, because 3am has no reader waiting
   // and never-throws is already labelLinkedStorylines' own contract. Only the
-  // outcomes that changed something travel: most offers are no-ops and carry
-  // no trigger anyway.
+  // outcomes that changed something — or withheld a formation — travel: most
+  // offers are no-ops and carry no trigger anyway.
   if (deps.labeler && changed.length > 0) {
     await labelLinkedStorylines(
       {
         db: deps.db,
         labeler: deps.labeler,
         log: deps.log,
-        timeZone: deps.config.timeZone,
+        formations: { timeZone: deps.config.timeZone },
       },
       changed,
     );

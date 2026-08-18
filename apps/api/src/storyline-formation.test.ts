@@ -409,7 +409,7 @@ describe("the tail actually resolves them (the wiring, not the rule)", () => {
     expect(pending).toBeTruthy();
 
     await labelLinkedStorylines(
-      { db, labeler: labeler(saying("NOT ONE STORY")), timeZone: ZONE },
+      { db, labeler: labeler(saying("NOT ONE STORY")), formations: { timeZone: ZONE } },
       outcomes,
     );
 
@@ -424,7 +424,7 @@ describe("the tail actually resolves them (the wiring, not the rule)", () => {
     const pending = outcomes[1]!.pendingFormation!;
 
     await labelLinkedStorylines(
-      { db, labeler: labeler(saying("Hurricane Fausto Hawaii")), timeZone: ZONE },
+      { db, labeler: labeler(saying("Hurricane Fausto Hawaii")), formations: { timeZone: ZONE } },
       outcomes,
     );
 
@@ -434,7 +434,7 @@ describe("the tail actually resolves them (the wiring, not the rule)", () => {
     expect(await readGroupStorylines(db, pending.groupId)).toEqual([pending.winnerId]);
   });
 
-  it("leaves the formation pending when the caller passes no timeZone", async () => {
+  it("leaves the formation pending when the caller declares no formations", async () => {
     // A merge recomputes day slots, so a caller that cannot say which calendar
     // must not perform one. The late-candidate sweep re-offers the pair.
     const outcomes = await deferThroughLinker();

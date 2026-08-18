@@ -71,12 +71,14 @@ export async function labelLinkedStorylines(
     labeler: Omit<LabelerDeps, "db">;
     log?: { warn: (obj: object, msg: string) => void };
     /**
-     * The calendar storyline days are bucketed by — needed only because a
-     * resolved formation performs the merge the linker withheld, and a merge
-     * recomputes day slots. Omitted, deferred formations are left for the
-     * late-candidate sweep rather than performed against a guessed timezone.
+     * Present when the outcomes may carry withheld formations to resolve
+     * (`LinkOutcome.pendingFormation`) — the ingest tail and the late-candidate
+     * sweep. The timezone is what a resolution needs: performing the merge the
+     * linker withheld recomputes day slots, which are bucketed by calendar.
+     * Callers whose outcomes are synthetic merge shapes (the bridge sweeps) have
+     * no formations to resolve and rightly omit this.
      */
-    timeZone?: string;
+    formations?: { timeZone: string };
   },
   outcomes: readonly LinkOutcome[],
 ): Promise<void> {
@@ -86,13 +88,13 @@ export async function labelLinkedStorylines(
   // same model call that names it. Resolving afterwards would either label a
   // storyline that turned out not to exist or spend a second call on one that
   // does.
-  if (deps.timeZone !== undefined) {
+  if (deps.formations !== undefined) {
     const formationDeps: FormationDeps = {
       db: deps.db,
       generator: deps.labeler.generator,
       modelId: deps.labeler.modelId,
       sampleSize: deps.labeler.sampleSize,
-      timeZone: deps.timeZone,
+      timeZone: deps.formations.timeZone,
       now: deps.labeler.now,
       logger: deps.labeler.logger,
     };

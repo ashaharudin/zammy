@@ -9,11 +9,7 @@ import {
   type Database,
 } from "@zammy/storage";
 import type { TextGenerator } from "./gemini.js";
-import {
-  buildCoherencePrompt,
-  mayRefuseFormation,
-  readCoherenceReply,
-} from "./storyline-coherence.js";
+import { buildCoherencePrompt, readCoherenceReply } from "./storyline-coherence.js";
 import { fallbackLabel, selectLabelMembers } from "./storyline-label.js";
 import type { LinkOutcome } from "./storyline-linker.js";
 
@@ -109,9 +105,6 @@ export async function resolveFormation(
     // us. The pair the verdict would be about is not the pair the linker judged,
     // so refuse to record anything against it.
     return { kind: "moot", reason: "partner group changed" };
-  }
-  if (!mayRefuseFormation({ trigger: "promotion", groupCountBefore: 1 })) {
-    return performFormation(deps, pending, null);
   }
 
   const { members } = await readStorylineLabelInput(deps.db, {

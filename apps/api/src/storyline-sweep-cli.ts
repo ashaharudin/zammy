@@ -4,7 +4,7 @@ import { zonedDayKey } from "./app-day.js";
 import { storyTokens } from "./storyline.js";
 import { replayLinker, type ReplayGroup } from "./storyline-replay.js";
 import type { Corpus, LinkRules } from "./storyline-link.js";
-import { judgedSetOf, scoreJudged, type JudgedStoryline } from "./storyline-judged.js";
+import { readJudgedStorylines, scoreJudged, type JudgedStoryline } from "./storyline-judged.js";
 
 /**
  * `pnpm measure:storylines-v2 [--days=N]` — the ADR-0011 threshold sweep.
@@ -146,34 +146,9 @@ try {
   // by two unrelated articles sharing a word, and the thing a candidate change
   // is trying to stop. `named` are the ones it named, including every large
   // correct arc in the archive, and a candidate change must leave them standing.
-  const judgedRows = await db
-    .selectFrom("storylines")
-    .innerJoin("storyline_groups", "storyline_groups.storyline_id", "storylines.id")
-    .select([
-      "storylines.id as id",
-      "storylines.label as label",
-      "storylines.label_source as labelSource",
-      "storyline_groups.group_id as groupId",
-    ])
-    .where("storylines.merged_into", "is", null)
-    .where("storylines.status", "<>", "provisional")
-    .where("storylines.label_source", "is not", null)
-    .execute();
-
-  type Gathering = { id: string; label: string | null; groupIds: string[] };
-  const judged: Record<"declined" | "named", Map<string, Gathering>> = {
-    declined: new Map(),
-    named: new Map(),
-  };
-  for (const row of judgedRows) {
-    const set = judgedSetOf(row.labelSource);
-    if (set === null) continue;
-    const held = judged[set].get(row.id);
-    if (held) held.groupIds.push(row.groupId);
-    else judged[set].set(row.id, { id: row.id, label: row.label, groupIds: [row.groupId] });
-  }
-  const declined: JudgedStoryline[] = [...judged.declined.values()];
-  const named: JudgedStoryline[] = [...judged.named.values()];
+  const judged = await readJudgedStorylines(db);
+  const declined: JudgedStoryline[] = judged.declined;
+  const named: JudgedStoryline[] = judged.named;
   // Only groups the replay was actually offered count — a judged arc reaching
   // back past `--days` must not be charged to the rule under test.
   const known = (groupId: string): boolean => byGroup.has(groupId);

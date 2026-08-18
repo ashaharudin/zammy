@@ -10,9 +10,9 @@ import { validateLabel, type LabelMember } from "./storyline-label.js";
  * MASS. Measured against the archive's hand-judged storylines, that evidence
  * cannot tell "these cover one event" from "these share a word", and no
  * rearrangement of it can — docs/STORYLINE-LINKING.md, "What the anchor rule
- * cannot see", records seventeen candidate rules across five independent
- * families, each of which destroys more model-named arcs than it prevents
- * declined piles. The distinction is between an EVENT and an entity, a beat, a
+ * cannot see", records thirty-one settings across five independent families,
+ * every one of which destroys more model-named arcs than it prevents declined
+ * piles. The distinction is between an EVENT and an entity, a beat, a
  * source's template or a coincidence of vocabulary, and every one of those
  * looks identical in document frequency.
  *
@@ -89,6 +89,13 @@ export type CoherenceReply =
  * reactions and analysis ARE the same story, and an arc is supposed to
  * accumulate them. Without that clause the gate would refuse exactly the
  * long-running coverage the storyline model exists to hold together.
+ *
+ * The wording below is a MEASURED artifact — the 85.2% / 31.4% matrix and the
+ * 43%-of-mature-arcs figure in docs/STORYLINE-LINKING.md were produced by this
+ * exact text. That is why "a topic" stands despite CONTEXT.md reserving the
+ * word for searches: it is model-facing prose, not repo vocabulary, and editing
+ * it — even a synonym — makes every recorded number describe a different
+ * prompt. Change it only alongside a rerun of `measure:storyline-coherence`.
  */
 export function buildCoherencePrompt(members: readonly LabelMember[]): string {
   const coverage = members
@@ -181,7 +188,9 @@ export function readCoherenceReply(
  * This is a function rather than a comment because the labeler already fires on
  * all three triggers (`labelLinkedStorylines`), so the unscoped wiring — pass the
  * coherence prompt wherever a label is made — is both the obvious implementation
- * and the one that dissolves 43% of the archive's mature arcs.
+ * and the one that dissolves 43% of the archive's mature arcs. The linker is its
+ * one caller, at the moment it decides whether to withhold; the rule lives here,
+ * with the measurement that scoped it, rather than inlined there.
  */
 export function mayRefuseFormation(input: {
   trigger: "promotion" | "merge" | "drift";

@@ -4,7 +4,7 @@ import { createDb } from "@zammy/storage";
 import { createGeminiClient } from "./gemini.js";
 import { selectLabelMembers } from "./storyline-label.js";
 import { buildCoherencePrompt, readCoherenceReply } from "./storyline-coherence.js";
-import { judgedSetOf } from "./storyline-judged.js";
+import { readJudgedStorylines } from "./storyline-judged.js";
 
 /**
  * `pnpm measure:storyline-coherence` — does a model verdict separate the archive's
@@ -17,9 +17,9 @@ import { judgedSetOf } from "./storyline-judged.js";
  *
  * docs/STORYLINE-LINKING.md, "What the anchor rule cannot see", records that no
  * token statistic separates the storylines a model could name from the ones it
- * declined: seventeen candidate rules across five families, plus a nine-setting
- * replay grid, and every one destroys more named arcs than it prevents declined
- * piles. The remaining candidate is the seam ADR-0011 reserved — asking a model
+ * declined: thirty-one settings across five families, plus a thirty-setting
+ * whole-archive replay grid, and every one destroys more named arcs than it
+ * prevents declined piles. The remaining candidate is the seam ADR-0011 reserved — asking a model
  * outright whether the coverage is one story.
  *
  * That candidate is a threshold like any other, and this repo does not ship
@@ -105,33 +105,19 @@ if (existsSync(transcript)) {
 }
 
 try {
-  const rows = await db
-    .selectFrom("storylines")
-    .innerJoin("storyline_groups", "storyline_groups.storyline_id", "storylines.id")
-    .select([
-      "storylines.id as id",
-      "storylines.label as label",
-      "storylines.label_source as labelSource",
-      "storyline_groups.group_id as groupId",
-    ])
-    .where("storylines.merged_into", "is", null)
-    .where("storylines.status", "<>", "provisional")
-    .where("storylines.label_source", "is not", null)
-    .execute();
-
-  const byStoryline = new Map<string, Judged>();
-  for (const row of rows) {
-    const set = judgedSetOf(row.labelSource);
-    if (set === null) continue;
-    const held = byStoryline.get(row.id);
-    if (held) held.groups += 1;
-    else byStoryline.set(row.id, { id: row.id, label: row.label, set, groups: 1 });
-  }
+  const judged = await readJudgedStorylines(db);
 
   const candidates: Record<"declined" | "named", Judged[]> = { declined: [], named: [] };
-  for (const storyline of byStoryline.values()) {
-    if (size > 0 && storyline.groups !== size) continue;
-    candidates[storyline.set].push(storyline);
+  for (const set of ["declined", "named"] as const) {
+    for (const storyline of judged[set]) {
+      if (size > 0 && storyline.groupIds.length !== size) continue;
+      candidates[set].push({
+        id: storyline.id,
+        label: storyline.label,
+        set,
+        groups: storyline.groupIds.length,
+      });
+    }
   }
   // By id, so the sample is the same one on every run and a resumed transcript
   // lines up with the run that started it.
