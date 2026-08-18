@@ -237,14 +237,54 @@ move to OCI Cache a `REDIS_URL` change if the fairness or persistence argument e
 
 ### Secrets — OCI Vault
 
-`CURRENTS_API_KEY`, `GEMINI_API_KEY`, and the DB password live in Vault. Terraform reads them and
-injects them as Container Instance environment variables. Two consequences to accept explicitly:
+`CURRENTS_API_KEY`, `GEMINI_API_KEY`, `GNEWS_API_KEY` and the DB password live in Vault. Terraform
+reads them and injects them as Container Instance environment variables. Two consequences to accept
+explicitly:
 
 - Secrets transit Terraform state → the state backend must be an encrypted, private OCI Object
   Storage bucket, and state access is secret access.
 - Rotation means re-applying Terraform, which redeploys the api. Acceptable at this scale; the
   upgrade (app fetches from Vault at boot via instance principals) is a code change deferred until
   rotation frequency makes it worth having.
+
+#### The vault exists — created by hand 2026-08-18, and Terraform must **import** it
+
+Phase 1 owns the vault in IaC, but it was created ahead of that by hand, so writing a
+`oci_kms_vault` resource without importing first would try to create a second one:
+
+| Resource | Name | OCID |
+|---|---|---|
+| Vault (`DEFAULT`) | `zammy` | `ocid1.vault.oc1.ca-toronto-1.evvij2j7aaemg.ab2g6ljrocken2bfqla5mn4xxenlvsilkkccl6iovt4k2wk3a4anlziovtnq` |
+| Master key (AES-256, `SOFTWARE`) | `zammy-secrets` | `ocid1.key.oc1.ca-toronto-1.evvij2j7aaemg.ab2g6ljrsqognh3zn7khhzolsytn4bn7orkpohou77s4uty3u7hbcfbws4ra` |
+
+Both live in the **tenancy root** compartment (§9.5 — no other compartment exists yet) and carry
+`managed-by: manual-pending-terraform` as a freeform tag, so the ones needing an import are
+identifiable without consulting this table. The management endpoint is
+`https://evvij2j7aaemg-management.kms.ca-toronto-1.oraclecloud.com` — vault-specific, and the `kms
+management` CLI commands need it passed as `--endpoint`.
+
+**Type `DEFAULT`, deliberately.** `virtual-private-vault-count` is **0** in this tenancy, so the
+expensive private-partition type cannot be created here even by accident — a useful accident not to be
+able to have, given §9.6. `DEFAULT` bills per key version per month, which is the cents-scale end of
+the pricing, though not free.
+
+⚠️ **A vault cannot be deleted promptly.** OCI only *schedules* deletion, minimum 7 days out. So this
+is not a resource to create speculatively, and tearing down a Phase 1 mistake will not be same-day.
+
+**Secret naming: environment-prefixed, one vault.** Production needs its own values for the same four
+names, and a second vault would mean a second billed key version for no benefit:
+
+| Secret | Holds |
+|---|---|
+| `staging-currents-api-key` | `CURRENTS_API_KEY` — give staging its own key, not production's (§7: the 1000/day budget is per key) |
+| `staging-gemini-api-key` | `GEMINI_API_KEY` — optional; absent means labels fall back to the bigram extractor (§9.4) |
+| `staging-gnews-api-key` | `GNEWS_API_KEY` — only consumed when `GNEWS_ENABLED=true` |
+| `staging-postgres-password` | `POSTGRES_PASSWORD` for the staging compose stack |
+
+The secret *values* are set outside this repo and outside any agent's hands — Console, or
+`oci vault secret create-base64` with the value read from a prompt rather than an argument. Whether
+all four exist yet is deliberately not recorded here: `oci vault secret list` answers it, and a doc
+claiming a secret exists is worse than one that says nothing.
 
 Everything non-secret stays a plain env var in Terraform, mirroring `.env.example` — including
 `CURRENTS_USER_AGENT`, which must be non-empty and should identify the deployment (Cloudflare 403s
@@ -284,7 +324,7 @@ state managed for you); decide when the CI pipeline is being written, it changes
 | Phase | Delivers | New work outside IaC |
 |---|---|---|
 | **0. Pre-flight** | buildable arm64 image in OCIR, CI publish | ✅ **complete** — Dockerfile fix, CI workflow, OCIR credentials, first digest pushed (§2) |
-| **1. Ground** | VCN, subnets, NSGs, gateways, Vault, state bucket | delete the `oci-dev-tools` stack first (§9.5) ⬜; budget + spend alert (§9.6) ⬜; staging VM cloud-init ✅ drafted |
+| **1. Ground** | VCN, subnets, NSGs, gateways, Vault, state bucket | delete the `oci-dev-tools` stack first (§9.5) ⬜; budget + spend alert (§9.6) ⬜ — **now overdue, the vault bills**; import the existing vault rather than creating one (§4) ⬜; staging VM cloud-init ✅ drafted |
 | **2. Data** | PostgreSQL private endpoint + one shared Redis Container Instance | assert `/readyz` says `ready`, not just 200 (`rediss://` ✅ verified but unused — §4) |
 | **3. api** | Container Instances, LB `/api/*` routing, migration job, first end-to-end deploy | seed the database from the dev archive once, after the first migrate (§7) ⬜ |
 | **4. web** | static container, path routing, domain + TLS on the LB | `apps/web/Dockerfile`, plus an `image` job publishing to `zammy/web` |
