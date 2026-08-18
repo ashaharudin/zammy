@@ -3,6 +3,7 @@ import { sql } from "kysely";
 import {
   attachGroup,
   countBridges,
+  recordFormationRefusal,
   createProvisionalStoryline,
   promoteStoryline,
   readGroupStorylines,
@@ -45,7 +46,8 @@ afterAll(async () => {
 beforeEach(async () => {
   await sql`
     truncate storylines, storyline_groups, storyline_days, storyline_bridges,
-             story_token_days, story_corpus_days, articles cascade
+             storyline_formation_refusals, story_token_days, story_corpus_days,
+             articles cascade
   `.execute(db);
 });
 
@@ -60,6 +62,9 @@ const CONFIG: LinkerConfig = {
     dormantStrictness: 1.5,
   },
   mergeBridges: 2,
+  // Off, so everything below describes the pre-gate path: the merge happens
+  // inside `linkGroup`. The gate has its own describe block at the bottom.
+  coherenceGate: false,
   storyDf: { windowDays: 14, timeZone: "UTC" },
   timeZone: "UTC",
 };
@@ -714,5 +719,124 @@ describe("the trailing corpus is what rarity is measured against", () => {
     // alone no longer anchor. The link is refused, and that is the rule
     // working: at this df the vocabulary has become a beat.
     expect(outcome.attached).toBe(false);
+  });
+});
+
+describe("the coherence gate (ADR-0011's amendment)", () => {
+  const GATED: LinkerConfig = { ...CONFIG, coherenceGate: true };
+  const gated = () => ({ db, config: GATED });
+
+  it("withholds the FORMATION instead of performing it", async () => {
+    await seedCorpus({ rare: STORY });
+    const first = await group({ tokens: STORY });
+    const second = await group({ tokens: STORY });
+
+    await linkGroup(gated(), first);
+    const outcome = await linkGroup(gated(), second);
+
+    // The token evidence was earned and reported…
+    expect(outcome.pendingFormation).toMatchObject({
+      groupId: second.groupId,
+      partnerGroupId: first.groupId,
+    });
+    // …and nothing was merged, promoted or re-homed.
+    expect(outcome.attached).toBe(false);
+    expect(outcome.promoted).toEqual([]);
+    const firstStoryline = await readStoryline(db, outcome.pendingFormation!.winnerId);
+    expect(firstStoryline?.status).toBe("provisional");
+    const homes = await readGroupStorylines(db, second.groupId);
+    expect(homes).toHaveLength(1);
+    expect(homes[0]).not.toBe(outcome.pendingFormation!.winnerId);
+  });
+
+  it("does not defer a join to a storyline that is already REAL", async () => {
+    // The gate is measurably wrong about established arcs (43% false refusals at
+    // 20 groups or more), so it must never see one. Two groups formed ungated
+    // make the third arrival an ordinary attach.
+    await seedCorpus({ rare: STORY });
+    const first = await group({ tokens: STORY });
+    const second = await group({ tokens: STORY });
+    await linkGroup(deps(), first);
+    const home = await linkGroup(deps(), second);
+    expect(home.promoted).toHaveLength(1);
+
+    const third = await group({ tokens: STORY });
+    const outcome = await linkGroup(gated(), third);
+
+    expect(outcome.pendingFormation).toBeUndefined();
+    expect(outcome.attached).toBe(true);
+  });
+
+  it("performs the formation synchronously when the gate is off", async () => {
+    await seedCorpus({ rare: STORY });
+    const first = await group({ tokens: STORY });
+    const second = await group({ tokens: STORY });
+
+    await linkGroup(deps(), first);
+    const outcome = await linkGroup(deps(), second);
+
+    expect(outcome.pendingFormation).toBeUndefined();
+    expect(outcome.attached).toBe(true);
+    expect(outcome.promoted).toEqual([outcome.storylineId]);
+  });
+
+  it("never offers a formation a verdict already refused", async () => {
+    await seedCorpus({ rare: STORY });
+    const first = await group({ tokens: STORY });
+    const second = await group({ tokens: STORY });
+    await linkGroup(gated(), first);
+    const deferred = await linkGroup(gated(), second);
+    expect(deferred.pendingFormation).toBeTruthy();
+
+    await recordFormationRefusal(db, { groupA: first.groupId, groupB: second.groupId });
+
+    // Re-offered by the nightly late-candidate sweep. Without the refusal this
+    // would defer again and spend another model call, every night, for ever.
+    const again = await linkGroup(gated(), second);
+
+    expect(again.pendingFormation).toBeUndefined();
+    expect(again.attached).toBe(false);
+  });
+
+  it("a refusal bars only THAT pair, not the group from linking at all", async () => {
+    await seedCorpus({ rare: STORY });
+    const first = await group({ tokens: STORY });
+    const second = await group({ tokens: STORY });
+    await linkGroup(gated(), first);
+    await linkGroup(gated(), second);
+    await recordFormationRefusal(db, { groupA: first.groupId, groupB: second.groupId });
+
+    // A THIRD group covering the same story is a formation the gate has said
+    // nothing about, so it is still offered.
+    const third = await group({ tokens: STORY });
+    const outcome = await linkGroup(gated(), third);
+
+    expect(outcome.pendingFormation).toBeTruthy();
+    expect([first.groupId, second.groupId]).toContain(
+      outcome.pendingFormation!.partnerGroupId,
+    );
+  });
+
+  it("records bridge evidence even though the formation was withheld", async () => {
+    // "This group qualified for both of these" is a fact about those storylines
+    // whatever happens to the formation — suppressing it would leave the K-bridge
+    // merge blind.
+    await seedCorpus({ rare: [...STORY, "kona", "hilo"] });
+    const a = await group({ tokens: [...STORY, "kona"] });
+    const b = await group({ tokens: [...STORY, "hilo"] });
+    const linkedA = await linkGroup(gated(), a);
+    const linkedB = await linkGroup(gated(), b);
+    expect(linkedB.pendingFormation).toBeTruthy();
+
+    const straddler = await group({ tokens: [...STORY, "kona", "hilo"] });
+    const outcome = await linkGroup(gated(), straddler);
+
+    expect(outcome.bridged.length + (outcome.pendingFormation ? 1 : 0)).toBeGreaterThan(1);
+    expect(
+      await countBridges(db, {
+        storylineA: linkedA.storylineId,
+        storylineB: linkedB.storylineId,
+      }),
+    ).toBeGreaterThan(0);
   });
 });

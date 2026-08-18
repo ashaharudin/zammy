@@ -127,12 +127,24 @@ Three things follow:
   agreement) and never `drift`. `storyline-coherence.ts` is the pure, tested half;
   `pnpm measure:storyline-coherence` reproduces the matrix.
 
-When it is wired, the gate must **defer** a formation rather than revert one. On
+**Wired 2026-08-18**, and the shape is the one the measurement forced. The gate
+**defers** a formation rather than reverting one. On
 the fresh path the arriving group's birth storyline is absorbed by
 merge-with-alias, so undoing a promotion is exactly the split refused above; the
-merge must wait for the verdict instead, and a refusal must be recorded durably
-or the nightly late-candidate sweep will re-offer the pair and pay for a refusal
-every night.
+merge waits for the verdict instead (`LinkOutcome.pendingFormation` →
+`resolveFormation`), and refusals are recorded durably in
+`storyline_formation_refusals` — keyed on GROUPS, since a provisional
+storyline-of-one is an identity a group is merely wearing — or the nightly
+late-candidate sweep would re-offer the pair and pay for a refusal every night.
+
+It costs no extra model call: the promotion label was already one, and a model
+that can name the story has thereby said it is one. Only an explicit refusal
+acts; an unavailable, slow, out-of-quota or contract-breaking model performs the
+withheld merge and falls back to bigrams, which is the pre-gate outcome exactly.
+`STORYLINE_COHERENCE_GATE` can stop it without a deploy, and it is inert with no
+`GEMINI_API_KEY`. The backfill does not gate — thousands of formations against a
+500-a-day ceiling — so it rebuilds what the token evidence says and leaves
+verdicts to the live path.
 
 ## Labels
 

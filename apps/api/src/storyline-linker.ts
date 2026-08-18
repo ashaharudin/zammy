@@ -7,7 +7,9 @@ import {
   promoteStoryline,
   readBridgedPairs,
   readCandidateStorylines,
+  readFormationRefusals,
   readGroupStorylines,
+  readSoleGroup,
   recordBridge,
   resolveStoryline,
   type Database,
@@ -66,6 +68,17 @@ export interface LinkerConfig {
   storyDf: StoryDfConfig;
   /** The calendar storyline days are bucketed by (§10.1). */
   timeZone: string;
+  /**
+   * Withhold a FORMATION until a coherence verdict has seen it (ADR-0011's
+   * amendment). False restores the pre-gate behaviour exactly: the merge happens
+   * here, synchronously, and the label is asked for afterwards.
+   *
+   * The caller decides, because whether a gate exists is not the linker's
+   * business: the server sets this only when a model is actually configured, and
+   * the backfill sets it false because replaying the archive through the gate is
+   * thousands of calls against a 500-a-day ceiling.
+   */
+  coherenceGate: boolean;
 }
 
 export interface LinkerDeps {
@@ -128,6 +141,24 @@ export interface LinkOutcome {
   bridged: string[];
   /** Pairs this arrival's bridge pushed over K. */
   merged: { winnerId: string; loserId: string }[];
+  /**
+   * A formation this arrival EARNED on the token evidence and did not perform,
+   * because `coherenceGate` is on and both sides are still singletons (ADR-0011's
+   * amendment; docs/STORYLINE-LINKING.md, "The verdict, measured").
+   *
+   * The group is still alone in `storylineId` and nothing has been promoted. The
+   * async tail (`resolvePendingFormations`) asks a model whether the two are one
+   * story and then performs this merge, or records a refusal and leaves them
+   * apart. Deferring rather than reverting is the whole point: the fresh path
+   * absorbs a birth storyline by merge-WITH-ALIAS, so a promotion undone is the
+   * split ADR-0011 refuses to build, and the way not to need a split is never to
+   * create the state.
+   *
+   * A verdict that never arrives — a dead process, an exhausted quota — loses the
+   * formation, not the coverage. Both groups keep their own storylines and the
+   * nightly late-candidate sweep offers them again.
+   */
+  pendingFormation?: { winnerId: string; groupId: string; partnerGroupId: string };
 }
 
 /**
@@ -209,9 +240,34 @@ export async function linkGroup(
   // with a corpus behind it, gets the real decision.
   if (corpus.size === 0) return outcome;
 
-  const candidates = (
+  let candidates = (
     await readCandidateStorylines(deps.db, { tokens: profile, limit: CANDIDATE_LIMIT })
   ).filter((candidate) => candidate.id !== own);
+
+  // A formation a coherence verdict already refused is not offered again. Read
+  // once, before the choice, so the group takes its best NON-refused candidate
+  // rather than being handed its best and then blocked — a group refused at its
+  // best candidate should land where the evidence puts it next, not nowhere.
+  //
+  // Only storylines-of-one are filtered, because that is all a refusal is about:
+  // it says these two singletons are not a story between them, not that one may
+  // never join the other's arc once that arc is real and wide. The gate is
+  // measurably wrong about mature coverage, so its verdicts do not reach there.
+  if (deps.config.coherenceGate && candidates.some((candidate) => candidate.groupCount === 1)) {
+    const refused = await readFormationRefusals(deps.db, group.groupId);
+    if (refused.size > 0) {
+      const keep: typeof candidates = [];
+      for (const candidate of candidates) {
+        if (candidate.groupCount !== 1) {
+          keep.push(candidate);
+          continue;
+        }
+        const sole = await readSoleGroup(deps.db, candidate.id);
+        if (sole === null || !refused.has(sole)) keep.push(candidate);
+      }
+      candidates = keep;
+    }
+  }
 
   const qualified = qualifyingStorylines(
     profile,
@@ -310,6 +366,33 @@ export async function linkGroup(
   // dangle. `attachGroup` stays the primitive for the other case — an old
   // group pulled into an ADDITIONAL arc, which is where the duplication
   // ADR-0011 accepts actually comes from.
+  // THE GATE. When both sides are still singletons this attach would not merely
+  // grow a storyline, it would CREATE one — the moment the coincidence piles come
+  // from, and the only moment a coherence verdict is accurate enough to consult
+  // (docs/STORYLINE-LINKING.md: 85.2% of declined piles caught at two groups, and
+  // 43% of mature arcs wrongly refused). So the merge is withheld, not undone:
+  // `mergeStorylines` leaves the loser as an ALIAS, and un-aliasing it is the
+  // split ADR-0011 refuses to build.
+  //
+  // Bridges below are recorded either way. "This group qualified for both of
+  // these" is a fact about those storylines whatever happens to this formation.
+  if (deps.config.coherenceGate && best.candidate.groupCount === 1) {
+    const partnerGroupId = await readSoleGroup(deps.db, best.candidate.id);
+    // Null means the candidate gained a group since retrieval — a concurrent
+    // arrival got there first. It is no longer a formation, so it is no longer
+    // the gate's business and the merge below proceeds.
+    if (partnerGroupId !== null) {
+      outcome.pendingFormation = {
+        winnerId: best.candidate.id,
+        groupId: group.groupId,
+        partnerGroupId,
+      };
+      outcome.bridged = qualified.slice(1).map((q) => q.candidate.id);
+      await recordBridgesAmong(deps, qualified, group.groupId, outcome);
+      return outcome;
+    }
+  }
+
   const absorbed = await mergeStorylines(deps.db, {
     winnerId: best.candidate.id,
     loserId: own,

@@ -526,18 +526,60 @@ fires on every doubling of membership. Wiring the verdict into that call
 unscoped would put it on mature arcs and dissolve 43% of them. **The verdict may
 be consulted only where the storyline is not yet real.**
 
-### One thing the write path must not do
+### The write path, as built
 
-When it is wired, the verdict cannot revert a promotion. On the fresh path the
-arriving group's birth storyline is **absorbed by merge-with-alias**
-(`storyline-linker.ts`), so undoing a promotion is the split ADR-0011
-deliberately does not build. The gate must *defer* the formation instead — hold
-the merge until the verdict arrives, then perform it or drop it — so the state
-that would need unwinding is never created. A refusal must also be recorded
-durably, or the nightly late-candidate sweep re-offers the same pair and spends
-a model call refusing it every night.
+Wired 2026-08-18. `STORYLINE_COHERENCE_GATE=true` by default, and inert without a
+`GEMINI_API_KEY` — with no model there is no verdict to wait for, and deferring
+would only lose formations.
 
-And it must be scoped to the two-group moment, per the 43% above: a `promotion`
-where the winner was a provisional-of-one, and nothing else. `merge` already
-carries K independent bridges plus label agreement, `drift` runs on arcs the
-verdict is measurably bad at, and neither has a formation to defer.
+**It DEFERS, it does not revert.** On the fresh path the arriving group's birth
+storyline is absorbed by **merge-with-alias** (`storyline-linker.ts`), so undoing
+a promotion is the split ADR-0011 deliberately does not build. Where the winner
+is still a provisional-of-one the linker therefore withholds the merge, reports
+`pendingFormation`, and returns; the state that would need unwinding is never
+created. Everything else about that decision is unchanged, including the bridges
+— "this group qualified for both of these" is a fact about those storylines
+whatever happens to the formation, and suppressing it would leave the K-bridge
+merge blind.
+
+`resolveFormation` (`storyline-formation.ts`) runs in the tail that already
+labels — off the latency path, started and not awaited — and spends **no extra
+model call**: the promotion label was already one call, and a model that can name
+the story has thereby said it is one.
+
+| verdict | what happens |
+| --- | --- |
+| explicit `NOT ONE STORY` | a refusal is recorded; both groups keep their own provisional storylines and keep rendering as ordinary slots |
+| a usable name | the withheld merge is performed, the storyline promoted, and that name written (`label_source` = the model id) |
+| **anything else** | the withheld merge is performed, promoted, bigram fallback — **exactly the pre-gate outcome** |
+
+The third row is the one production depends on. A 429, a timeout, a spent daily
+quota or a contract-breaking answer must all form the storyline: the archive's own
+key has a 500-request DAILY ceiling that the labelling campaign exhausts, and a
+gate reading silence as a refusal would dissolve storylines on a quiet Tuesday
+rather than on evidence.
+
+Three more properties, each measured or argued above:
+
+- **Scoped to the two-group moment.** `mayRefuseFormation` admits a `promotion`
+  whose winner held one group and nothing else, per the 43% false-refusal rate on
+  mature arcs. `resolveFormation` re-checks it at resolution time too, because
+  another arrival may have attached while the tail was queued — a formation that
+  is no longer a formation is simply performed, unjudged.
+- **Refusals are durable, and keyed on GROUPS** (migration 0015,
+  `storyline_formation_refusals`). Without that the nightly late-candidate sweep
+  re-offers the pair and buys the same refusal every night. Groups rather than
+  UUIDs because a provisional storyline-of-one is an identity a group is wearing:
+  it can be merged away, and a refusal keyed on it would then name nothing.
+  A refusal bars only that FORMATION — not the group from ever joining that arc
+  once it is real and wide, which is a different question the gate is bad at.
+- **The backfill does not gate.** A budget decision, not a doubt: replaying the
+  archive produces thousands of formations at one call each. It rebuilds what the
+  token evidence says and leaves verdicts to the live path. Refusals survive it,
+  being keyed on groups.
+
+The sweep is deliberately unchanged and still measures the **token** decision. It
+has no model and cannot have one — a grid of 30 settings over 23,000 groups is
+hundreds of thousands of decisions — so `PILES-FORMED` and `NAMED-INTACT` answer
+"what would the anchor rule build", which is still the question when a threshold
+moves.

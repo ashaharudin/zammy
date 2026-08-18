@@ -224,7 +224,12 @@ export async function runLateCandidateChore(
   // no trigger anyway.
   if (deps.labeler && changed.length > 0) {
     await labelLinkedStorylines(
-      { db: deps.db, labeler: deps.labeler, log: deps.log },
+      {
+        db: deps.db,
+        labeler: deps.labeler,
+        log: deps.log,
+        timeZone: deps.config.timeZone,
+      },
       changed,
     );
   }

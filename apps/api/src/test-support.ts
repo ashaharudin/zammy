@@ -127,6 +127,9 @@ export async function createTestHarness(
             dormantStrictness: 1.5,
           },
           mergeBridges: 2,
+          // Off by default: the gate needs a model, and a test that wants it
+          // says so (see storyline-linker.test.ts).
+          coherenceGate: false,
           storyDf: { windowDays: 14, timeZone: "UTC" },
           timeZone: "UTC",
         },
