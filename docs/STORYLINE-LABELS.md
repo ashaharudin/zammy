@@ -326,9 +326,31 @@ half. Yield is small here only because most of the archive is unlabelled (13,390
 of 13,648 live storylines have no model label); under the nightly label chore every
 promoted storyline carries one.
 
-`STORYLINE_LABEL_MERGE_GRACE_DAYS` is **unmeasured**: every arc of the one
-qualifying component overlaps every other, so 0 and 30 plan the identical merge. It
-needs an archive holding a story that stopped and restarted.
+### The grace window, measured
+
+`STORYLINE_LABEL_MERGE_GRACE_DAYS` was unmeasured while every arc of the one
+qualifying component overlapped every other. The label backfill (2026-08-17, 855
+model-labelled live storylines) produced the archive the knob needed: two shared
+labels whose arcs are separated by a real gap, wanting **opposite** answers.
+
+| label | gap | what it is | should merge |
+| --- | --- | --- | --- |
+| Kyle Shanahan car crash | 12d (Jul 30 → Aug 11) | the crash, then the admission of fault | yes |
+| Canada US tariff talks | 19d (Jul 24 → Aug 12) | two rounds of a recurring negotiation | no |
+
+The gap is doing exactly the work ADR-0010 gives it. A story that stops and
+restarts is one storyline; a negotiation that comes back around is not, and the
+only thing separating those two cases here is how long the silence ran.
+
+**14 is the only setting that gets both right.** 7 refuses the Shanahan merge; 20
+accepts the tariff merge. The value now rests on data rather than on the argument
+— but on a sample of two, so a third separated component is worth re-reading it
+against.
+
+The reason this went unmeasured for so long is worth naming: it needed a *large*
+labelled archive, not a clever test. At 258 model labels there were two shared
+labels and no gap between any pair of arcs. At 855 there were four, two of them
+separated. The knob was untestable until the backfill ran.
 
 ## Operating it
 

@@ -251,15 +251,23 @@ const EnvSchema = z
      * Days of silence a shared label may bridge before the label-agreement merge
      * stops treating two arcs as one story (`storyline-label-merge.ts`).
      *
-     * UNMEASURED, and honestly so: the one qualifying component in the dev archive
-     * ("Strait of Hormuz Crisis", six arcs) has one member spanning the whole
-     * range, so every value from 0 upwards plans the identical merge. 7 is chosen
-     * on the argument rather than the data — an evolving situation goes quiet for
-     * a week and comes back, and ADR-0010 already makes the date span the
-     * disambiguator between two storylines that share a name. It needs an archive
-     * holding a story that stopped and restarted.
+     * MEASURED once the label backfill gave the dev archive 855 model-labelled
+     * storylines (2026-08-17). Two shared labels are separated by a real gap, and
+     * they want opposite answers:
+     *
+     *   - "Kyle Shanahan car crash" — 12 days between the crash and the admission
+     *     of fault. One story that went quiet. Should merge.
+     *   - "Canada US tariff talks" — 19 days between two rounds of the same
+     *     recurring negotiation. Two arcs ADR-0010's date span is right to keep
+     *     apart. Should not.
+     *
+     * 14 is the only setting in the archive that gets both right: 7 refuses the
+     * Shanahan merge that should happen, 20 accepts the tariff merge that should
+     * not. The value therefore sits on data now rather than on the argument, but
+     * on a sample of two — a third separated component is worth re-reading this
+     * knob against.
      */
-    STORYLINE_LABEL_MERGE_GRACE_DAYS: z.coerce.number().int().min(0).default(7),
+    STORYLINE_LABEL_MERGE_GRACE_DAYS: z.coerce.number().int().min(0).default(14),
     /**
      * Safety valve on one label's component, in storylines — not a tuning knob.
      * A model label that turned out both generic AND grounded would otherwise
