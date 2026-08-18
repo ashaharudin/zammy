@@ -24,10 +24,15 @@ export function TimelinePage({
   topic,
   onSearch,
   onClear,
+  onOpenStoryline,
+  onLeaveStoryline,
 }: {
   topic: TopicQuery;
   onSearch: (topic: TopicQuery, options?: { replace?: boolean }) => void;
   onClear: () => void;
+  onOpenStoryline: (storylineId: string) => void;
+  /** The keywords typed to leave the view, or null for a dismissed chip. */
+  onLeaveStoryline: (typed: string | null) => void;
 }) {
   const timeline = useTimeline(topic);
   const reference = useReference();
@@ -54,7 +59,8 @@ export function TimelinePage({
         reference={reference.data}
         onSearch={onSearch}
         onClear={onClear}
-        onOpenStorylineView={(storylineId) => onSearch({ q: "", storyline: storylineId })}
+        onOpenStorylineView={onOpenStoryline}
+        onLeaveStorylineView={onLeaveStoryline}
         qualifiers={qualifiers}
       />
       <main style={{ maxWidth: "var(--page-max)", margin: "0 auto", padding: "1.5rem 1rem 3rem" }}>
@@ -68,10 +74,10 @@ export function TimelinePage({
           <Rail
             // ADR-0011: the label's words are never executed as a search —
             // labels are non-unique, so only the UUID identifies the story.
-            // The reader's filters do NOT travel: the view is not a search,
-            // and narrowing it by language would hide coverage that is part
-            // of the same story.
-            onOpenStorylineView={(storylineId) => onSearch({ q: "", storyline: storylineId })}
+            // The reader's filters do NOT narrow the view, which is one
+            // storyline's own coverage; they ride in the route because the
+            // search waiting behind it is still theirs (openStorylineView).
+            onOpenStorylineView={onOpenStoryline}
             qualifiers={qualifiers}
             items={visible}
             newCount={newCount}

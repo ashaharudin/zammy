@@ -26,6 +26,12 @@ export interface Route {
    * keywords at all, since its search box is empty by definition.
    */
   storyline?: string;
+  /**
+   * The search the STORYLINE VIEW was opened from, so dismissing the chip or
+   * typing returns the reader there rather than to the hero. Held only where
+   * there is a view to leave; a plain search has nothing behind it to restore.
+   */
+  from?: string;
 }
 
 const PARAM_KEYS = { language: "lang", country: "country", category: "category" } as const;
@@ -34,6 +40,7 @@ export function parseRoute(search: string): Route {
   const params = new URLSearchParams(search);
   const q = params.get("q")?.trim() || null;
   const storyline = params.get("storyline") ?? undefined;
+  const from = params.get("from")?.trim() || undefined;
   return {
     q,
     filters: {
@@ -45,6 +52,8 @@ export function parseRoute(search: string): Route {
     // URL to the filters it is actually showing. A storyline VIEW is the
     // opposite: keyword-less is its normal state, so it survives on its own.
     ...(storyline && (q || STORYLINE_UUID.test(storyline)) ? { storyline } : {}),
+    // An origin only means something where there is a VIEW to leave.
+    ...(from && storyline && STORYLINE_UUID.test(storyline) ? { from } : {}),
   };
 }
 
@@ -55,9 +64,47 @@ export function routeSearch(route: Route): string {
     const value = route.filters[filter as keyof TopicFilters];
     if (value) params.set(key, value);
   }
-  if (route.storyline && (route.q || STORYLINE_UUID.test(route.storyline))) {
-    params.set("storyline", route.storyline);
-  }
+  const view = route.storyline && STORYLINE_UUID.test(route.storyline);
+  if (route.storyline && (route.q || view)) params.set("storyline", route.storyline);
+  if (route.from && view) params.set("from", route.from);
   const search = params.toString();
   return search ? `?${search}` : "";
+}
+
+/**
+ * The STORYLINE VIEW, opened from wherever the reader is now.
+ *
+ * The keywords they leave are kept as the view's origin rather than dropped:
+ * the view is a step into one storyline, and the search that surfaced it is
+ * where "out" leads. The filters carry as they always do; the view itself
+ * ignores them (it is one storyline's own coverage, §api), but the search they
+ * came from — and will return to — is still theirs.
+ */
+export function openStorylineView(current: Route, storylineId: string): Route {
+  return {
+    q: null,
+    filters: current.filters,
+    storyline: storylineId,
+    ...(current.q ? { from: current.q } : {}),
+  };
+}
+
+/**
+ * Where the reader goes when they leave the STORYLINE VIEW — by dismissing the
+ * chip (`typed` null) or by typing a search.
+ *
+ * The view is somewhere the reader stepped INTO, not somewhere they searched
+ * for, so leaving it is a step back out: dismissing restores the search that
+ * opened it. Neither the storyline nor its origin travels onward — both are
+ * provenance for what the reader was looking at, and belong to that view alone.
+ * The filters do travel: they outlive the topic (see Route).
+ */
+export function leaveStorylineView(
+  route: Route,
+  typed: string | null,
+): { route: Route; replace: boolean } {
+  return {
+    route: { q: typed ?? route.from ?? null, filters: route.filters },
+    replace: typed !== null,
+  };
 }
