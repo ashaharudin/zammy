@@ -100,9 +100,15 @@ resource "oci_core_instance" "staging" {
 
   metadata = {
     ssh_authorized_keys = var.ssh_public_key
+    # base64gzip, not base64encode: instance metadata is capped at 32000 bytes and
+    # the plain base64 of this cloud-init is 35740
+    # (the API reported 35886 for the whole metadata map, of which this is the bulk). cloud-init detects the gzip
+    # magic bytes and decompresses, so nothing on the box changes. A plan cannot
+    # catch this — the limit is enforced server-side at create time.
+    #
     # user_data is readable from the metadata service and via the API, which is
     # why cloud-init writes a .env TEMPLATE and no values (see its header).
-    user_data = base64encode(file("${path.module}/../staging/cloud-init.yaml"))
+    user_data = base64gzip(file("${path.module}/../staging/cloud-init.yaml"))
   }
 
   # A2 capacity in a single-AD region is a routine transient failure (§9.1), and
