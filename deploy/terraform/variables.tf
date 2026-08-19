@@ -94,13 +94,41 @@ variable "ssh_public_key" {
 }
 
 variable "staging_ocpus" {
-  description = "2 OCPU decided in §7, which is 99.2% of the monthly Ampere allowance at 24×7 — see that section before raising it."
+  description = <<-EOT
+    Reduced from §7's 2 to 1 on 2026-08-19, after ten create attempts over ~50
+    minutes all returned `Out of host capacity`. Free-tier Ampere scarcity is
+    usually OCPU-bound, so asking for fewer cores is the lever §9.1 names.
+
+    It does NOT relieve the allowance pressure §7 worried about: memory is the
+    binding constraint, so 12 GB × 744h is still 8,928 of 9,000 GB-hours (99.2%).
+    What it does buy is OCPU-hours — 744 of 1,500 rather than 1,488 — and it keeps
+    the 12 GB that §7 chose for Postgres page cache, which was the actual reason
+    for the size. So this trades a core for a chance of being scheduled, and gives
+    up nothing §7 was protecting.
+
+    Valid ratio: A1.Flex permits up to 64 GB per OCPU (checked against the shape).
+  EOT
   type        = number
-  default     = 2
+  default     = 1
 }
 
 variable "staging_memory_gb" {
-  description = "12 GB. Not slack: it is Postgres page cache for the seeded corpus (§7)."
+  description = <<-EOT
+    12 GB, as §7 chose. Briefly reduced to 6 on 2026-08-19 to try to get scheduled
+    past `Out of host capacity`, then restored: OCI's capacity report showed EVERY
+    free shape in this AD out of capacity, including `VM.Standard.E2.1.Micro`, so
+    sizing was never the lever and the reduction cost the reason for the size
+    without buying anything.
+
+    The reason is Postgres page cache against the seeded ~163 MB corpus, so
+    staging's read paths behave like production's rather than like a cold disk.
+
+    Paired with 1 OCPU rather than §7's 2, this sits at 99.2% of the monthly
+    GB-hour allowance (unchanged — memory is the binding constraint, which §7
+    accepted) and 49.6% of OCPU-hours. That makes it strictly better than 2 OCPU /
+    12 GB: identical cache, half the core-hours, and the second core buys nothing
+    while capacity is the blocker.
+  EOT
   type        = number
   default     = 12
 }
