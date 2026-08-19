@@ -605,7 +605,7 @@ healthy behind the LB — and that is worth having on day one.
    | `CAA` | *none* | any CA may issue. Worth adding once the certificate path is settled — it is the cheapest way to stop a mis-issuance being possible |
 
    ✅ **TLS half resolved 2026-08-18: a Namecheap *Standard SSL* certificate, currently unactivated.**
-   That is a certificate, not a proxy — a Sectigo-issued domain-validated cert — so **TLS terminates on
+   That is a certificate, not a proxy — an **SSL.com**-issued domain-validated cert — so **TLS terminates on
    the OCI load balancer exactly as §4 assumes**, `CORS_ORIGIN` becomes same-origin in production, and no
    third party sits in the request path. The alternative reading feared here (Namecheap URL forwarding is
    a 301/302 redirect, not a reverse proxy, and could not serve an application at all) does not apply.
@@ -620,12 +620,12 @@ healthy behind the LB — and that is worth having on day one.
      can then bring the LB up with TLS on first boot instead of standing up an HTTP-only listener and
      revisiting it.
    - **Upload the full chain, not just the certificate.** An OCI LB listener needs the leaf, the private
-     key *and* Sectigo's intermediates. Omitting intermediates produces the classic split failure —
+     key *and* SSL.com's intermediates. Omitting intermediates produces the classic split failure —
      fine in a desktop browser that happens to have cached the issuer, broken for `curl`, Android and
      anything doing strict verification — which reads as an app bug and is not one.
-   - **verify the coverage and the validity period before relying on either.** Sectigo DV certificates
-     usually cover the bare domain plus `www` as a SAN, and the plan serves both, so confirm rather than
-     assume. Likewise confirm the *issued* lifetime: certificate maximum lifetimes have been contracting
+   - **verify the coverage and the validity period before relying on either.** DV certificates commonly
+     cover the bare domain plus `www` as a SAN, and the plan serves both — but that is the issuer's
+     policy rather than a rule, so read it off the issued certificate rather than assuming it. Likewise confirm the *issued* lifetime: certificate maximum lifetimes have been contracting
      industry-wide, so "a year" may not be a year, and everything below is sized by that number.
    - ⚠️ **Renewal is manual, and that is now a scheduled operational obligation.** Nothing here is ACME,
      so no automation renews this. That makes two follow-ons real rather than theoretical: a certificate
@@ -634,8 +634,28 @@ healthy behind the LB — and that is worth having on day one.
      for *first issuance*. A manual step with a hard deadline and no alarm is how a site goes dark on a
      Sunday.
 
-   With the CA now known, the missing `CAA` record above becomes actionable: pinning issuance to Sectigo
-   (**verify** their published CAA identifier) closes the gap where any CA could issue for this name.
+   ⚠️ **The issuer is SSL.com, not Sectigo — an earlier version of this section said Sectigo, and acting
+   on it would have broken issuance.** Namecheap issues this product through SSL.com. Established twice
+   over: the activation surfaced an `ssl.com` API error, and the DCV record SSL.com asked for is a CNAME
+   to **`dcv.ssl.com`**, which is conclusive. The correction matters most for `CAA`: the record this
+   section previously proposed, pinning `sectigo.com`, would have told every CA that SSL.com may **not**
+   issue for this name — turning a hardening step into a hard validation failure whose error message says
+   nothing about CAA. Any CAA record here must authorise **`ssl.com`** (**verify** their published
+   identifier), and none should be added until the certificate has issued, so a mistake cannot block the
+   thing it is meant to protect.
+
+   **The validation in flight**, recorded because renewal will repeat it: DCV is by CNAME —
+   `_<order-token>.zammy.info` → `dcv.ssl.com` — added in Namecheap's Advanced DNS with the **host label
+   alone**, since the panel appends the domain and a full name silently becomes
+   `_token.zammy.info.zammy.info` that validates forever. Note also that `dcv.ssl.com` resolves to
+   nothing at all, by design: the CA compares the CNAME's *target string* read out of the zone, so a
+   failed ping on it is not a fault worth chasing. The token is per-order, so expect a fresh record at
+   renewal rather than a standing one.
+
+   🔑 **The private key is the part with no backup.** It was generated outside the repo on an operator's
+   machine, paired to the CSR that was submitted; the certificate is worthless without it, and losing it
+   means reissuing rather than recovering. It needs to reach the vault (§4) before Phase 1 configures a
+   listener, so that the key for production TLS is not a single file on one laptop.
 
    ℹ️ **One thing this resolution does *not* retire.** Working out what a front proxy would have implied
    surfaced a bug that exists without one: `server.ts` set `trustProxy` to a boolean, trusting the whole
