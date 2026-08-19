@@ -324,7 +324,7 @@ state managed for you); decide when the CI pipeline is being written, it changes
 | Phase | Delivers | New work outside IaC |
 |---|---|---|
 | **0. Pre-flight** | buildable arm64 image in OCIR, CI publish | ✅ **complete** — Dockerfile fix, CI workflow, OCIR credentials, first digest pushed (§2) |
-| **1. Ground** | VCN, subnets, NSGs, gateways, Vault, state bucket | delete the `oci-dev-tools` stack first (§9.5) ⬜; budget + spend alert (§9.6) ⬜ — **now overdue, the vault bills**; import the existing vault rather than creating one (§4) ⬜; staging VM cloud-init ✅ drafted |
+| **1. Ground** | VCN, subnets, NSGs, gateways, Vault, state bucket | delete the `oci-dev-tools` stack first (§9.5) ⬜; budget + spend alert (§9.6) ✅; import the existing vault **and budget** rather than creating them (§4, §9.6) ⬜; staging VM cloud-init ✅ drafted |
 | **2. Data** | PostgreSQL private endpoint + one shared Redis Container Instance | assert `/readyz` says `ready`, not just 200 (`rediss://` ✅ verified but unused — §4) |
 | **3. api** | Container Instances, LB `/api/*` routing, migration job, first end-to-end deploy | seed the database from the dev archive once, after the first migrate (§7) ⬜ |
 | **4. web** | static container, path routing, domain + TLS on the LB | `apps/web/Dockerfile`, plus an `image` job publishing to `zammy/web` |
@@ -578,8 +578,8 @@ healthy behind the LB — and that is worth having on day one.
    repositories and everything above live directly in it. Worth deciding deliberately rather than by
    default, but it is not blocking: a compartment can hold new resources without moving the OCIR
    repositories, and both can move later.
-6. **No budget or spending alert exists.** ➡️ **Decided 2026-08-18: add one before Phase 1**, on the
-   tenancy root so nothing can be created outside its scope. This is the cheapest guardrail in the
+6. ~~**No budget or spending alert exists.**~~ ✅ **Created 2026-08-18** (details at the end of this
+   item), on the tenancy root so nothing can be created outside its scope. This is the cheapest guardrail in the
    whole plan and the only one that catches the failure the Always Free tier invites — not a runaway
    bill, but a *single* resource that quietly is not free. Everything §7 provisions is meant to cost
    nothing, so the useful threshold is low: a small monthly amount with an alert rule on **actual**
@@ -597,3 +597,34 @@ healthy behind the LB — and that is worth having on day one.
 
    A budget alert is a smoke detector: it fires after the spend has started, not before, so it does
    not replace checking a shape's price before creating it.
+
+   **What exists**, created by hand ahead of the Terraform that should own it — so, like the vault
+   (§4), Phase 1 must **import** rather than create:
+
+   | Resource | Name | Setting |
+   |---|---|---|
+   | Budget | `tenancy-any-spend` | $1 / `MONTHLY`, target = tenancy root compartment |
+   | Alert rule | `any-spend-at-all` | `ACTUAL`, `ABSOLUTE`, threshold **$0.01** → `ashaharudin@me.com` |
+
+   ```
+   ocid1.budget.oc1.ca-toronto-1.amaaaaaahy65lfiaiyqw7hcj5bg737dxyyo56ouzwwx237zukw3iqlqpesda
+   ```
+
+   **The $1 amount is not a spending plan.** OCI has no "alert at zero", so the amount is a
+   denominator chosen to make the first cent the trigger: a $0.01 absolute threshold against it means
+   "anything at all is billing". Reading it as a budget in the ordinary sense — a limit somebody
+   intends to spend up to — inverts what it is for. And it enforces nothing: a budget alert cannot
+   stop a create, only report one (§9.5's raised limits are why that distinction matters).
+
+   Two things to expect from it, so neither reads as a fault:
+
+   - **It is not instant.** Budgets are evaluated periodically and cost data itself lags, so the mail
+     arrives within hours of the first cent being recorded, not on the second.
+   - **It may fire legitimately, soon.** The §4 vault bills per key version. If mail arrives, read the
+     amount before reacting — a few cents is the alert proving itself, which is the one test of a
+     smoke detector worth having.
+
+   One CLI trap, for whoever automates this: `oci budgets budget alert-rule create --wait-for-state`
+   throws `missing 1 required positional argument: 'alert_rule_id'`. That is a bug in the CLI's
+   poller, not a failed create — the rule lands ACTIVE regardless. Omit the flag and verify with
+   `alert-rule list`.
