@@ -455,7 +455,7 @@ implied:
 - **So the hazard is not cost, it is reclamation.** If the trial is still active, the raised limits are
   temporary: at trial end anything outside the Always Free allowance is stopped and reclaimed rather
   than invoiced. A staging box sized comfortably today could simply stop.
-- **The 2 OCPU / 12 GB decision below is safe either way** — it sits inside the Always Free allowance,
+- **The staging shape decided below is safe either way** — 1 OCPU / 12 GB sits inside the Always Free allowance,
   so it survives trial end untouched. That is now a reason to be *more* confident in it, not less.
 - ~~⚠️ **The vault (§4) is the resource actually at risk.**~~ ✅ **Wrong — OCI Vault *is* Always Free**,
   at 20 HSM key versions and 150 secrets, against 1 and 4 in use (§4). It therefore survives a trial
@@ -478,7 +478,7 @@ Against the allowance above and `deploy/staging/cloud-init.yaml` as written:
 |---|---|---|
 | 12 GB memory | 4.62 GiB of container limits + OS | ✅ ~7 GB spare |
 | 2 OCPU | no CPU limits set; three containers | ✅ |
-| **1,500 OCPU-hrs / 9,000 GB-hrs per month** | 2 OCPU / 12 GB running 24×7 | ✅ fits, at **99.2%** — decided, see below |
+| **1,500 OCPU-hrs / 9,000 GB-hrs per month** | 1 OCPU / 12 GB running 24×7 | ✅ fits — 49.6% of OCPU-hrs, **99.2%** of GB-hrs; see below |
 | 200 GB block, 47 GB min boot | one boot volume; `postgres-data` on it, Docker logs capped at 10m×3, corpus pruned nightly (TRAILING-CORPUS: ~135k rows) | ✅ ample |
 | 1 Flexible LB @ 10 Mbps | staging uses one — the api publishes `3000` for the LB to reach by private IP | ✅ decided, see below |
 | Managed PostgreSQL / Cache not included | `postgres:17-alpine` + `redis:7-alpine` as containers | ✅ as designed |
@@ -488,14 +488,17 @@ Two of those need a decision rather than a note.
 
 ⚠️ **A 2 OCPU / 12 GB VM running all month is 99.2% of the allowance, not comfortably inside it.** A
 31-day month is 744 hours: 2 × 744 = **1,488 of 1,500** OCPU-hrs and 12 × 744 = **8,928 of 9,000**
-GB-hrs. The slack is 12 OCPU-hrs — *six hours of a second 2-OCPU VM per month*. So rebuilding the
+GB-hrs. The slack is 12 OCPU-hrs — *six hours of a second 2-OCPU VM per month*. (At the 1 OCPU the
+next paragraph settles on, the same six hours survives on the other axis: 72 spare GB-hrs is six hours
+of a second 12 GB VM. The number did not move, only which resource enforces it.) So rebuilding the
 staging box, if the replacement boots before the original is terminated, spends a meaningful fraction
 of the month's remaining allowance, and there is no room at all for a second instance to test
 anything. What the overflow does *not* do is bill: with no payment method on file (above), exceeding
 the allowance spends trial credits or is refused outright. The cost of being careless here is a
 staging box that stops, not an invoice.
 
-➡️ **Decided 2026-08-18: keep 2 OCPU / 12 GB.** The alternative considered was 1 OCPU / 8 GB —
+➡️ **Decided 2026-08-18: keep 12 GB. Revised 2026-08-19 to 1 OCPU rather than 2.** The alternative
+considered was 1 OCPU / 8 GB —
 744/1,500 OCPU-hrs (49.6%) and 5,952/9,000 GB-hrs (66.1%), headroom on both — since memory is the
 binding constraint and trimming OCPU alone changes nothing (1 OCPU / 12 GB is still 99.2%). The full
 size wins anyway, for a reason the fit table understates: 12 GB is not slack, it is Postgres page
@@ -504,7 +507,18 @@ cache. The seeded corpus is ~163 MB across 28k articles and `story_token_days` i
 working set is actually resident. Sizing down to protect an allowance the deploy path does not spend
 would trade the thing being tested for a margin nothing draws on.
 
-What the decision obliges, since 12 OCPU-hrs of slack is not a margin you can be careless with:
+**2026-08-19: OCPU drops to 1, and it is strictly better.** Identical memory, so identical page cache
+and the same 99.2% of GB-hours; but 744 rather than 1,488 OCPU-hrs, which is 49.6% instead of 99.2% on
+that axis. The second core was bought to no purpose — see the capacity finding below, where it turned
+out not to be what was holding the instance back. Memory stays the binding constraint, so everything
+this section says about overlap still applies:
+
+| | 2 OCPU / 12 GB | **1 OCPU / 12 GB** |
+|---|---|---|
+| OCPU-hrs | 1,488 / 1,500 (99.2%) | **744 / 1,500 (49.6%)** |
+| GB-hrs | 8,928 / 9,000 (99.2%) | 8,928 / 9,000 (99.2%) |
+
+What the decision obliges, since the GB-hour margin is not one you can be careless with:
 
 - **Never let two staging instances exist at once.** Terraform must **replace destructively** here —
   `create_before_destroy` on the staging VM would boot the replacement alongside the original and eat
@@ -546,6 +560,44 @@ behaviour and the same-origin `CORS_ORIGIN` (§4). Three consequences:
 question — which zone, and an OCI Certificates cert versus a Let's Encrypt one managed in CI — needs an
 answer for *staging* before Phase 4 needs one for production. It can be deferred by running staging on
 plain HTTP behind the LB, at the cost of not exercising the TLS path that production will depend on.
+
+#### The instance could not be created at all: capacity, not configuration
+
+🚩 **Phase 1 applied on 2026-08-19 with one thing missing — the staging VM.** Every create returned
+`500-InternalError, Out of host capacity`. Everything else landed: VCN, three subnets, three route
+tables, all three gateways, four NSGs, the state bucket, and the load balancer with both listeners and
+the real certificate installed. `terraform plan` sat at **2 to add** — the instance and its backend.
+
+**Sizing is not the lever, and OCI will tell you so in one call.** Twenty create attempts across
+2 OCPU / 12 GB, 1 OCPU / 12 GB and 1 OCPU / 6 GB all refused, which cost about ninety minutes to learn
+what the **capacity report** answers immediately, read-only, creating nothing:
+
+```
+oci compute compute-capacity-report create --compartment-id <c>   --availability-domain PFaU:CA-TORONTO-1-AD-1   --shape-availabilities '[{"instanceShape":"VM.Standard.A1.Flex",
+                            "instanceShapeConfig":{"ocpus":1,"memoryInGBs":12}}]'
+```
+
+| Shape | Status |
+|---|---|
+| `VM.Standard.A1.Flex` 1 OCPU / 6 GB | `OUT_OF_HOST_CAPACITY` |
+| `VM.Standard.A1.Flex` 2 OCPU / 12 GB | `OUT_OF_HOST_CAPACITY` |
+| `VM.Standard.E2.1.Micro` | `OUT_OF_HOST_CAPACITY` |
+
+**Reach for that report before changing a shape.** Shrinking to 6 GB gave up the page cache this
+section chose 12 GB for and bought nothing, which is the mistake the report exists to prevent.
+
+⚠️ **There is no escape hatch here, and it is worth knowing why before someone looks for one.** The AD
+is the only one in the region (§9.1); Always Free resources exist only in the home region, so another
+region is not an option either; `VM.Standard.E2.1.Micro` is out of capacity too *and* could not run the
+api image regardless, since CI builds `linux/arm64` only (§2.2); and a paid shape is unavailable rather
+than merely unwanted, because the account carries no payment method (above). It is Ampere in this AD or
+nothing.
+
+**So the remaining lever is time, and it is automated.** `deploy/terraform/retry-capacity.sh` polls the
+capacity report on a schedule and runs `terraform apply` only when it reports `AVAILABLE`. It exits as
+soon as the instance exists, so it retires itself rather than needing to be remembered; an atomic lock
+stops two runs fighting over state; and it runs locally because it must, since Terraform state and
+`~/.oci` both live on one machine. Installed as a crontab entry every 30 minutes from 2026-08-20.
 
 The VM bootstrap is `deploy/staging/cloud-init.yaml` — pass it as the instance's `user_data`. It
 installs Docker, writes the staging compose file, a `.env` template and the `zammy-deploy` /
