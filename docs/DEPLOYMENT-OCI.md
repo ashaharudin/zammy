@@ -395,9 +395,9 @@ Against the allowance above and `deploy/staging/cloud-init.yaml` as written:
 |---|---|---|
 | 12 GB memory | 4.62 GiB of container limits + OS | ✅ ~7 GB spare |
 | 2 OCPU | no CPU limits set; three containers | ✅ |
-| **1,500 OCPU-hrs / 9,000 GB-hrs per month** | 2 OCPU / 12 GB running 24×7 | ⚠️ **99.2%** — see below |
+| **1,500 OCPU-hrs / 9,000 GB-hrs per month** | 2 OCPU / 12 GB running 24×7 | ✅ fits, at **99.2%** — decided, see below |
 | 200 GB block, 47 GB min boot | one boot volume; `postgres-data` on it, Docker logs capped at 10m×3, corpus pruned nightly (TRAILING-CORPUS: ~135k rows) | ✅ ample |
-| 1 Flexible LB @ 10 Mbps | staging uses one — the api publishes `3000` for the LB to reach by private IP | ⚠️ consumes the only free one |
+| 1 Flexible LB @ 10 Mbps | staging uses one — the api publishes `3000` for the LB to reach by private IP | ✅ decided, see below |
 | Managed PostgreSQL / Cache not included | `postgres:17-alpine` + `redis:7-alpine` as containers | ✅ as designed |
 | arm64 | both images publish `linux/arm64` manifests; the api image is built arm64 (§2.2) | ✅ verified |
 
@@ -411,18 +411,55 @@ of the month's remaining allowance, and there is no room at all for a second ins
 anything. Worse in combination with the PAYG finding above: the overflow does not fail the create, it
 bills.
 
-The fix is to size *memory* down, not OCPU — GB-hrs is the binding constraint, so 1 OCPU / 12 GB still
-sits at 99.2%. **1 OCPU / 8 GB** is the recommendation: 744/1,500 OCPU-hrs (49.6%) and 5,952/9,000
-GB-hrs (66.1%), real headroom on both, and still ~3 GB clear of the 4.62 GiB of container limits.
-**verify** at create time that the shape accepts that combination — the CLI reports A1.Flex's default
-as 1 OCPU / 6 GB, and the per-OCPU memory bound is Oracle's to enforce.
+➡️ **Decided 2026-08-18: keep 2 OCPU / 12 GB.** The alternative considered was 1 OCPU / 8 GB —
+744/1,500 OCPU-hrs (49.6%) and 5,952/9,000 GB-hrs (66.1%), headroom on both — since memory is the
+binding constraint and trimming OCPU alone changes nothing (1 OCPU / 12 GB is still 99.2%). The full
+size wins anyway, for a reason the fit table understates: 12 GB is not slack, it is Postgres page
+cache. The seeded corpus is ~163 MB across 28k articles and `story_token_days` is the largest table
+(TRAILING-CORPUS), so the read paths staging exists to exercise behave like production only if the
+working set is actually resident. Sizing down to protect an allowance the deploy path does not spend
+would trade the thing being tested for a margin nothing draws on.
 
-⚠️ **Staging's load balancer is the only free one.** The allowance is one Flexible LB, and the compose
-comment ("the load balancer reaches this instance by its private IP") means staging claims it. Nothing
-is wrong with that — but production's LB in §4 is then a paid resource from the moment it exists, and
-that cost belongs in the Phase 4 decision rather than arriving as a surprise. Reusing one LB across
-both environments by path or hostname is possible and worse: it couples staging traffic to
-production's data plane, which is exactly what having a staging environment is meant to avoid.
+What the decision obliges, since 12 OCPU-hrs of slack is not a margin you can be careless with:
+
+- **Never let two staging instances exist at once.** Terraform must **replace destructively** here —
+  `create_before_destroy` on the staging VM would boot the replacement alongside the original and eat
+  hours out of a 6-hour monthly budget. Note this is the *opposite* of §6's production rolling deploy,
+  which depends on `create_before_destroy`; the two environments want different lifecycle rules and the
+  module cannot share one.
+- **The routine deploy path is not the risk.** `zammy-deploy` rolls *containers* on one host, so a
+  normal deploy creates no second instance and spends nothing extra. Only a Terraform-level VM
+  replacement does — which is rare, and now has a named rule attached to it.
+- **The tightest case is a 31-day month.** Shorter months have real slack (February: 1,344/1,500,
+  89.6%), so a plan that holds in a 31-day month holds always.
+- **The guardrail is now the budget, not the limit.** §9.5 raised A1 limits mean an overflow bills
+  rather than failing, and §9.6's $0.01 alert is what turns that from silent into mail. Keeping the
+  full size is defensible *because* that alert exists; it would have been reckless before it did.
+
+➡️ **Decided 2026-08-18: staging takes the one free Flexible LB.** The allowance is a single LB at a
+fixed 10 Mbps, and the compose comment ("the load balancer reaches this instance by its private IP")
+already assumes staging has it. Confirmed as the deliberate choice, because the LB is not an
+optimisation here — it is half of what staging is *for*. §7 says staging proves the shape, "image →
+migrate → roll → healthy behind the LB", and a staging environment reached directly on port 3000 would
+prove the first three steps and skip the one that carries the path-routing topology, the health-check
+behaviour and the same-origin `CORS_ORIGIN` (§4). Three consequences:
+
+- **Production's LB is a paid resource the moment it exists.** Not a surprise to discover in Phase 4 —
+  it is the cost of having decided this, and it belongs in that phase's budget line rather than in a
+  bill. Nothing else in §4's production topology becomes cheaper by staging having gone first.
+- **Do not share one LB across both environments.** Path- or hostname-routing a single LB to both is
+  possible and worse: it couples staging traffic to production's data plane, which is the specific
+  thing having a staging environment exists to avoid. A saved LB is not worth a shared failure domain.
+- **10 Mbps is fixed, not burstable — and that is fine for what staging is.** One or two people
+  exercising the API is nowhere near it. The one place to keep it in mind is Phase 4, when the LB also
+  serves the web bundle (~355 KB of JS, ~108 KB gzipped): a cold page load is comfortable, a dozen
+  concurrent cold loads on a 1.25 MB/s ceiling is not, so a slow staging page under parallel testing
+  is the shape rather than a regression.
+
+⚠️ **This also means staging meets §9.2 first.** TLS terminates on the LB, so the open domain-and-DNS
+question — which zone, and an OCI Certificates cert versus a Let's Encrypt one managed in CI — needs an
+answer for *staging* before Phase 4 needs one for production. It can be deferred by running staging on
+plain HTTP behind the LB, at the cost of not exercising the TLS path that production will depend on.
 
 The VM bootstrap is `deploy/staging/cloud-init.yaml` — pass it as the instance's `user_data`. It
 installs Docker, writes the staging compose file, a `.env` template and the `zammy-deploy` /
