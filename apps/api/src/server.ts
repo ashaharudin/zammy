@@ -65,6 +65,18 @@ export interface App {
   close: () => Promise<void>;
 }
 
+/**
+ * Fastify's `trustProxy` as a hop count, or `false` when nothing is in front.
+ *
+ * Named and exported so the security-relevant case is testable: with a boolean
+ * `true`, `request.ip` resolves to the LEFTMOST `X-Forwarded-For` entry, which is
+ * whatever the caller wrote. With a count, only the hops we operate are trusted
+ * and the caller's contribution is never reached.
+ */
+export function trustedProxyOption(hops: number): number | false {
+  return hops > 0 ? hops : false;
+}
+
 export async function buildApp(config: Config): Promise<App> {
   const app = Fastify({
     logger: {
@@ -72,9 +84,13 @@ export async function buildApp(config: Config): Promise<App> {
       // Never let a key reach the logs (ARCHITECTURE 5.5).
       redact: ["req.headers.authorization", "req.headers.cookie"],
     },
-    // Trust the ALB's X-Forwarded-* headers in AWS so per-IP rate limiting
-    // (ARCHITECTURE 12) sees the real client rather than the load balancer.
-    trustProxy: config.NODE_ENV === "production",
+    // A hop COUNT, never `true`. Trusting the whole X-Forwarded-For chain makes
+    // the leftmost entry win, and the leftmost entry is client-supplied — so
+    // `true` lets a forged header defeat the per-IP ceiling that rate limiting
+    // depends on (ARCHITECTURE 12; see TRUSTED_PROXY_HOPS in @zammy/config).
+    // Counting hops trusts only the proxies we run, so `req.ip` is what our own
+    // load balancer observed.
+    trustProxy: trustedProxyOption(config.TRUSTED_PROXY_HOPS),
   });
 
   const pool = new Pool({ connectionString: config.DATABASE_URL, max: 10 });

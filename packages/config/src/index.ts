@@ -149,6 +149,36 @@ const EnvSchema = z
     INGEST_POLL_MAX: z.coerce.number().int().min(1).max(60).default(8),
     /** §9.4: per-IP ceiling on /api/v1/*, so novel-fingerprint spam can't mint topics. */
     RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).default(60),
+    /**
+     * How many reverse proxies sit in front of this process. 0 means none.
+     *
+     * This is the *count* and not a boolean because `trustProxy: true` trusts the
+     * entire `X-Forwarded-For` chain, and trusting the whole chain means the
+     * **leftmost** entry wins — which is whatever the client sent. A client can
+     * then forge a header, rotate the value, and walk straight through the per-IP
+     * ceiling RATE_LIMIT_PER_MINUTE exists to impose (ARCHITECTURE 12). A hop
+     * count trusts only the hops we actually operate, so `req.ip` is the address
+     * our own proxy observed rather than one the caller chose.
+     *
+     * Set it to the number of proxies between the internet and this process:
+     * **1** behind the OCI load balancer alone (DEPLOYMENT-OCI §4), **2** if a
+     * TLS-terminating proxy is ever put in front of that (§9.2). Local dev talks
+     * to the port directly, so the default is 0.
+     *
+     * **Over-counting is as bad as `true`, so do not round up "to be safe".**
+     * Measured against Fastify with `X-Forwarded-For: 9.9.9.9, 5.5.5.5`: a count
+     * of 1 yields `5.5.5.5` (what the one real hop reported), while a count of 2
+     * yields `9.9.9.9` — both entries become trusted and the caller's forgery wins
+     * again, exactly as `true` does. The number must match the topology, not
+     * exceed it.
+     *
+     * Forgetting it in production degrades toward *availability*, not exposure:
+     * every request keys on the load balancer's address, so one shared bucket
+     * rate-limits everybody instead of one forged header exempting anybody. That
+     * is the safer direction to fail in, and it is the reason this defaults to 0
+     * rather than to something convenient.
+     */
+    TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
 
     RETENTION_DAYS: z.coerce.number().int().min(1).default(90),
 

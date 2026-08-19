@@ -125,6 +125,12 @@ write_files:
             CURRENTS_USER_AGENT: ${CURRENTS_USER_AGENT:?set CURRENTS_USER_AGENT in /opt/zammy/.env}
             GEMINI_API_KEY: ${GEMINI_API_KEY:-}
             CORS_ORIGIN: ${CORS_ORIGIN:?set CORS_ORIGIN in /opt/zammy/.env}
+            # 0 until the load balancer actually fronts this box, then 1. The count
+            # must match what is really in front: over-counting trusts a
+            # client-supplied X-Forwarded-For hop and voids the per-IP rate limit,
+            # while under-counting only keys every request on the LB's address —
+            # one shared bucket, which is the safer way to be wrong.
+            TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-0}
             FIXTURES_DIR: ./fixtures
           ports:
             # Bound on all interfaces because the load balancer reaches this
@@ -157,6 +163,10 @@ write_files:
 
       # Written by zammy-deploy — leave empty, it is not edited by hand.
       ZAMMY_API_IMAGE=
+
+      # Set to 1 once the load balancer fronts this instance; leave 0 while the
+      # api is reached directly. Must match the topology exactly — see compose.yaml.
+      TRUSTED_PROXY_HOPS=0
 
       # Any long random string; it never leaves this VM. e.g. openssl rand -hex 24
       POSTGRES_PASSWORD=
