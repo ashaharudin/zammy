@@ -118,7 +118,9 @@ resource "oci_load_balancer_listener" "https" {
 # fails to connect rather than upgrading.
 resource "oci_load_balancer_rule_set" "redirect_to_https" {
   load_balancer_id = oci_load_balancer_load_balancer.main.id
-  name             = "redirect-to-https"
+  # Underscores, not hyphens: OCI rejects a rule set name that does not match
+  # ^[a-zA-Z_][a-zA-Z_0-9]*$, which a plan cannot catch because it is server-side.
+  name = "redirect_to_https"
 
   items {
     action = "REDIRECT"
