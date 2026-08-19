@@ -15,7 +15,8 @@
     "merge:storyline-labels": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-label-merge-cli.js",
     "backfill:storylines": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-backfill-cli.js",
     "measure:storylines-v2": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-sweep-cli.js",
-    "measure:storyline-coherence": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-coherence-cli.js"
+    "measure:storyline-coherence": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-coherence-cli.js",
+    "dissolve:storyline-piles": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-dissolve-cli.js"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

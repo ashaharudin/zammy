@@ -1303,3 +1303,141 @@ export async function readSoleGroup(
     .execute();
   return rows.length === 1 ? rows[0]!.group_id : null;
 }
+
+export interface DissolveResult {
+  dissolved: boolean;
+  /** The storyline the departing group now leads — a revived alias, or a new row. */
+  freedStorylineId: string | null;
+  /** True when the departing group's ORIGINAL UUID was revived rather than replaced. */
+  revivedAlias: boolean;
+  /** Why nothing happened. Null on success. */
+  refusedBecause: string | null;
+}
+
+/**
+ * Undo ONE formation: a two-group storyline becomes the two singletons it was
+ * made of (docs/STORYLINE-LINKING.md, "The verdict, measured").
+ *
+ * This is not the split ADR-0011 refuses to build, and the difference is the
+ * whole reason it can exist. A split asks which of N groups belong together,
+ * which nothing in this system can answer. This asks nothing: a storyline of
+ * exactly two groups was one `mergeStorylines` call, the losing UUID is still
+ * sitting there as an alias, and reversing a single known merge is arithmetic.
+ * The guard below is what keeps it honest — anything other than exactly two
+ * groups is refused rather than guessed at.
+ *
+ * ## What it restores
+ *
+ * The departing group's ORIGINAL storyline UUID, by reviving the alias. A reader
+ * holding that link followed it to the pile while the pile existed and now
+ * follows it to the one story it really names; ADR-0011's requirement is that a
+ * held UUID never dangle, and reviving satisfies it more completely than minting
+ * a fresh row would. Only where no alias exists — a formation built by
+ * `attachGroup` on the retroactive path rather than by a merge — is a new
+ * provisional storyline created instead.
+ *
+ * ## What it deliberately leaves alone
+ *
+ * **Bridges.** A bridge is `(pair, group)` and K counts DISTINCT groups, so a
+ * shrunken storyline still cannot reach K without two independent groups
+ * qualifying for it. Deleting them would throw away evidence a later, better
+ * merge is entitled to; keeping them cannot manufacture a merge on its own.
+ * Recorded here because it is a judgement, not an oversight.
+ *
+ * The caller records the formation refusal. Storage does not know that a verdict
+ * happened — it may be a person running a cleanup — and a dissolve with no
+ * refusal written is exactly how the next backfill rebuilds the pile.
+ */
+export async function dissolveFormation(
+  db: Kysely<Database>,
+  input: { storylineId: string; groupId: string } & Zoned,
+): Promise<DissolveResult> {
+  return db.transaction().execute(async (trx) => {
+    // The same lock merge takes, for the same reason and more sharply: a
+    // dissolve racing the merge that would grow this storyline past two groups
+    // must not both decide it is a formation.
+    await sql`select pg_advisory_xact_lock(hashtext('zammy.storyline-merge'))`.execute(trx);
+
+    const target = await resolveIn(trx, input.storylineId);
+    const refuse = (why: string): DissolveResult => ({
+      dissolved: false,
+      freedStorylineId: null,
+      revivedAlias: false,
+      refusedBecause: why,
+    });
+    if (target === null) return refuse("no such storyline");
+
+    const members = await trx
+      .selectFrom("storyline_groups")
+      .select("group_id")
+      .where("storyline_id", "=", target)
+      .execute();
+    // EXACTLY two. Three or more is the split this refuses to be, and one means
+    // the formation is already undone.
+    if (members.length !== 2) return refuse(`holds ${members.length} groups, not 2`);
+    if (!members.some((row) => row.group_id === input.groupId)) {
+      return refuse("group is not a member");
+    }
+
+    // The departing group's own identity, if it still exists as an alias. A
+    // two-group storyline is one merge, so there is at most one candidate — but
+    // it is matched on having held THIS group, never assumed to be the only
+    // alias present, because a caller may hand us a storyline that also absorbed
+    // something else long ago.
+    const revivable = await sql<{ id: string }>`
+      select a.id from storylines a
+      where a.merged_into = ${target}::uuid
+      order by a.created_at desc, a.id
+    `.execute(trx);
+
+    let freed: string | null = null;
+    let revivedAlias = false;
+    if (revivable.rows.length === 1) {
+      freed = revivable.rows[0]!.id;
+      revivedAlias = true;
+      await trx
+        .updateTable("storylines")
+        .set({ merged_into: null, status: "provisional", label: null, label_at: null,
+               label_group_count: null, label_source: null })
+        .where("id", "=", freed)
+        .execute();
+    } else {
+      // No alias (an `attachGroup` formation), or several (history this cannot
+      // read). Mint a fresh identity rather than guess which alias was whose.
+      const row = await trx
+        .insertInto("storylines")
+        .values({ label: null, merged_into: null })
+        .returning("id")
+        .executeTakeFirstOrThrow();
+      freed = row.id;
+    }
+
+    await trx
+      .deleteFrom("storyline_groups")
+      .where("storyline_id", "=", target)
+      .where("group_id", "=", input.groupId)
+      .execute();
+    await trx
+      .insertInto("storyline_groups")
+      .values({ storyline_id: freed, group_id: input.groupId })
+      .onConflict((conflict) => conflict.doNothing())
+      .execute();
+
+    // Both sides are storylines-of-one now: provisional, unlabelled, invisible
+    // as storylines. The remaining one keeps its UUID and loses its name,
+    // because the name described coverage half of which has just left.
+    await trx
+      .updateTable("storylines")
+      .set({ status: "provisional", label: null, label_at: null,
+             label_group_count: null, label_source: null })
+      .where("id", "=", target)
+      .execute();
+
+    for (const id of [target, freed]) {
+      await refreshProfileTokens(trx, id);
+      await refreshDaySlots(trx, id, input.timeZone);
+    }
+
+    return { dissolved: true, freedStorylineId: freed, revivedAlias, refusedBecause: null };
+  });
+}

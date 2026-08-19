@@ -6,6 +6,7 @@ import {
   attachGroup,
   countBridges,
   createProvisionalStoryline,
+  dissolveFormation,
   mergeStorylines,
   recordBridge,
   promoteStoryline,
@@ -590,5 +591,215 @@ describe("storylines in storage", () => {
         (select count(*) from storyline_days   where storyline_id = ${storyline.id}::uuid) as slots
     `.execute(harness.db);
     expect(rows[0]).toEqual({ joins: "0", slots: "0" });
+  });
+
+  describe("dissolve — the inverse of ONE formation", () => {
+    /** Two singleton groups merged into a storyline, as a formation leaves them. */
+    const formed = async () => {
+      const keptGroup = await group("2026-08-09T15:00:00.000Z", ["fatally", "shot", "lounge"]);
+      const kept = await createProvisionalStoryline(harness.db, {
+        groupId: keptGroup,
+        timeZone: ZONE,
+      });
+      const leavingGroup = await group("2026-08-12T09:00:00.000Z", ["fatally", "shot", "ice"]);
+      const leaving = await createProvisionalStoryline(harness.db, {
+        groupId: leavingGroup,
+        timeZone: ZONE,
+      });
+      await mergeStorylines(harness.db, {
+        winnerId: kept.id,
+        loserId: leaving.id,
+        timeZone: ZONE,
+      });
+      await promoteStoryline(harness.db, { storylineId: kept.id });
+      await setStorylineLabel(harness.db, {
+        storylineId: kept.id,
+        label: "Fatally Shot",
+        labelAt: new Date("2026-08-13T00:00:00.000Z"),
+        labelGroupCount: 2,
+        labelSource: "bigram",
+      });
+      return { kept: kept.id, keptGroup, leaving: leaving.id, leavingGroup };
+    };
+
+    it("REVIVES the departing group's original UUID rather than minting one", async () => {
+      // ADR-0011's requirement is that a held UUID never dangle. Reviving the
+      // alias satisfies it more completely than a fresh row: the link a reader
+      // has now names the one story it really covers.
+      const { kept, leaving, leavingGroup } = await formed();
+      expect(await resolveStoryline(harness.db, leaving)).toBe(kept);
+
+      const result = await dissolveFormation(harness.db, {
+        storylineId: kept,
+        groupId: leavingGroup,
+        timeZone: ZONE,
+      });
+
+      expect(result).toMatchObject({
+        dissolved: true,
+        freedStorylineId: leaving,
+        revivedAlias: true,
+      });
+      expect(await resolveStoryline(harness.db, leaving)).toBe(leaving);
+      expect(await readGroupStorylines(harness.db, leavingGroup)).toEqual([leaving]);
+    });
+
+    it("leaves both sides provisional and unlabelled", async () => {
+      // The label described coverage half of which has just left, and a
+      // storyline-of-one is invisible as a storyline by ADR-0011's lifecycle.
+      const { kept, leaving, leavingGroup } = await formed();
+
+      await dissolveFormation(harness.db, {
+        storylineId: kept,
+        groupId: leavingGroup,
+        timeZone: ZONE,
+      });
+
+      for (const id of [kept, leaving]) {
+        const storyline = await readStoryline(harness.db, id);
+        expect(storyline?.status).toBe("provisional");
+        expect(storyline?.label).toBeNull();
+        expect(storyline?.labelSource).toBeNull();
+      }
+    });
+
+    it("rewrites the day slots on both sides", async () => {
+      // The kept storyline covered the leaver's day only through the leaver.
+      const { kept, leaving, keptGroup, leavingGroup } = await formed();
+      expect((await days(kept)).length).toBe(2);
+
+      await dissolveFormation(harness.db, {
+        storylineId: kept,
+        groupId: leavingGroup,
+        timeZone: ZONE,
+      });
+
+      expect((await days(kept)).map((day) => day.lead)).toEqual([keptGroup]);
+      expect((await days(leaving)).map((day) => day.lead)).toEqual([leavingGroup]);
+    });
+
+    it("re-derives the profile from what is left", async () => {
+      const { kept, leavingGroup } = await formed();
+
+      await dissolveFormation(harness.db, {
+        storylineId: kept,
+        groupId: leavingGroup,
+        timeZone: ZONE,
+      });
+
+      // A storyline of one speaks with its own group's tokens: `ice` came from
+      // the leaver and must be gone.
+      const storyline = await readStoryline(harness.db, kept);
+      expect(storyline?.profileTokens).toContain("lounge");
+      expect(storyline?.profileTokens).not.toContain("ice");
+    });
+
+    it("REFUSES a storyline of three or more — that is the split, not a dissolve", async () => {
+      // The guard is the whole reason this operation is allowed to exist. Three
+      // groups asks which of them belong together, and nothing here can answer.
+      const { kept, leavingGroup } = await formed();
+      const third = await group("2026-08-13T09:00:00.000Z", ["fatally", "shot", "third"]);
+      await attachGroup(harness.db, { storylineId: kept, groupId: third, timeZone: ZONE });
+
+      const result = await dissolveFormation(harness.db, {
+        storylineId: kept,
+        groupId: leavingGroup,
+        timeZone: ZONE,
+      });
+
+      expect(result).toMatchObject({ dissolved: false, refusedBecause: "holds 3 groups, not 2" });
+      expect(await readGroupStorylines(harness.db, leavingGroup)).toEqual([kept]);
+    });
+
+    it("refuses a group that is not a member, and an unknown storyline", async () => {
+      const { kept } = await formed();
+      const stranger = await group("2026-08-14T09:00:00.000Z", ["unrelated"]);
+
+      expect(
+        await dissolveFormation(harness.db, {
+          storylineId: kept,
+          groupId: stranger,
+          timeZone: ZONE,
+        }),
+      ).toMatchObject({ dissolved: false, refusedBecause: "group is not a member" });
+      expect(
+        await dissolveFormation(harness.db, {
+          storylineId: "00000000-0000-0000-0000-000000000000",
+          groupId: stranger,
+          timeZone: ZONE,
+        }),
+      ).toMatchObject({ dissolved: false, refusedBecause: "no such storyline" });
+    });
+
+    it("is reached through an alias, like every other storyline operation", async () => {
+      const { kept, keptGroup, leaving, leavingGroup } = await formed();
+
+      // The caller holds the loser's UUID. It resolves to the survivor.
+      const result = await dissolveFormation(harness.db, {
+        storylineId: leaving,
+        groupId: leavingGroup,
+        timeZone: ZONE,
+      });
+
+      expect(result.dissolved).toBe(true);
+      expect(await readGroupStorylines(harness.db, leavingGroup)).toEqual([leaving]);
+      // …and the survivor kept its own group and nothing else.
+      expect(await readGroupStorylines(harness.db, keptGroup)).toEqual([kept]);
+    });
+
+    it("mints a fresh identity when the formation left no alias", async () => {
+      // An `attachGroup` formation — the retroactive path — never made the
+      // arriving group's storyline a loser, so there is nothing to revive.
+      const keptGroup = await group("2026-08-09T15:00:00.000Z", ["reef", "survey"]);
+      const kept = await createProvisionalStoryline(harness.db, {
+        groupId: keptGroup,
+        timeZone: ZONE,
+      });
+      const joinerGroup = await group("2026-08-10T09:00:00.000Z", ["reef", "results"]);
+      await attachGroup(harness.db, {
+        storylineId: kept.id,
+        groupId: joinerGroup,
+        timeZone: ZONE,
+      });
+
+      const result = await dissolveFormation(harness.db, {
+        storylineId: kept.id,
+        groupId: joinerGroup,
+        timeZone: ZONE,
+      });
+
+      expect(result).toMatchObject({ dissolved: true, revivedAlias: false });
+      expect(result.freedStorylineId).not.toBe(kept.id);
+      expect(await readGroupStorylines(harness.db, joinerGroup)).toEqual([
+        result.freedStorylineId,
+      ]);
+    });
+
+    it("leaves bridge evidence standing — K still needs two distinct groups", async () => {
+      // Recorded as a judgement, not an oversight: deleting would discard
+      // evidence a later, better merge is entitled to, and keeping cannot
+      // manufacture a merge because K counts DISTINCT groups.
+      const { kept, leavingGroup } = await formed();
+      const other = await group("2026-08-11T09:00:00.000Z", ["kelp", "forest"]);
+      const otherStoryline = await createProvisionalStoryline(harness.db, {
+        groupId: other,
+        timeZone: ZONE,
+      });
+      await recordBridge(harness.db, {
+        storylineA: kept,
+        storylineB: otherStoryline.id,
+        groupId: leavingGroup,
+      });
+
+      await dissolveFormation(harness.db, {
+        storylineId: kept,
+        groupId: leavingGroup,
+        timeZone: ZONE,
+      });
+
+      expect(
+        await countBridges(harness.db, { storylineA: kept, storylineB: otherStoryline.id }),
+      ).toBe(1);
+    });
   });
 });

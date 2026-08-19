@@ -20,6 +20,7 @@ coverage/
 # run that spans days on a free-tier key. The RESULT belongs in
 # docs/STORYLINE-LINKING.md, not in the tree.
 storyline-coherence*.jsonl
+storyline-dissolve*.jsonl
 
 # Terraform / OpenTofu
 deploy/terraform/.terraform/
