@@ -357,6 +357,16 @@ export async function readLinkableGroups(
      * nightly full-table GROUP BY.
      */
     publishedFrom?: Date;
+    /**
+     * Aggregate ONLY these groups, ignoring the keyset entirely.
+     *
+     * For the one case the cursor cannot serve: a group in the middle of the
+     * archive with no storyline at all, which a resume run starting after the
+     * last linked group walks straight past. Pushed into the aggregate's WHERE
+     * so it stays an index scan rather than a full GROUP BY that a filter then
+     * discards.
+     */
+    onlyGroupIds?: readonly string[];
     limit: number;
   },
 ): Promise<LinkableGroupRow[]> {
@@ -382,9 +392,11 @@ export async function readLinkableGroups(
              json_agg(a.story_tokens) as member_tokens
       from articles a
       where ${
-        query.publishedFrom
-          ? sql`a.group_published >= ${query.publishedFrom}`
-          : sql`true`
+        query.onlyGroupIds && query.onlyGroupIds.length > 0
+          ? sql`a.group_id = any(${query.onlyGroupIds}::bigint[])`
+          : query.publishedFrom
+            ? sql`a.group_published >= ${query.publishedFrom}`
+            : sql`true`
       }
       group by a.group_id
     ) g

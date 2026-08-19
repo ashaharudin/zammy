@@ -183,6 +183,7 @@ pnpm backfill:storylines --labels-only      # label what is already linked
 pnpm backfill:storylines --max-groups=500   # rehearse on a slice
 pnpm backfill:storylines --labels-only --relabel   # re-name everything
 pnpm backfill:storylines --label-rate=8     # model calls per minute; slower only
+pnpm backfill:storylines --groups=1,2,3     # link exactly these; cursor ignored
 ```
 
 `--label-rate` defaults to `GEMINI_MAX_RPM` (15) and is useful only to go
@@ -192,6 +193,35 @@ knows nothing about the server's, so `--label-rate=7` is how an operator keeps
 the two of them under one 15/min ceiling on a shared key.
 
 `--restart` is the only flag that discards state.
+
+`--groups` is for the one failure the resume cursor cannot see. Progress is a
+keyset over `(group_published, group_id)`, so a run starts AFTER the last group
+it linked and never looks behind itself — which is right for a rollout and blind
+to a group stranded in the middle of the archive with no storyline at all. Such a
+group takes no timeline slot, and `--restart` would reach it only by rewriting
+every storyline in the database.
+
+Found 2026-08-19: **7 groups (9 articles) published 2026-07-24..31 held no
+storyline**, with the cursor three weeks past them. They were already unlinked
+before that day's cleanup, so the cause is older — an ingest that died mid-batch,
+or linking that threw for them once.
+
+A targeted run **skips the bridge sweep**: a seven-group repair has no business
+triggering archive-wide merges, and the nightly chore enforces that invariant
+anyway. It is safe to name a group that IS linked — `linkGroup` is idempotent, so
+it re-records bridges and leaves the group where it lives — and a group the
+archive no longer holds is ignored rather than reported as a failure.
+
+    pnpm backfill:storylines --groups=40855,40856,40857 --no-labels
+
+Detecting the condition:
+
+```sql
+select count(*) from (select distinct group_id from articles) g
+where not exists (
+  select 1 from storyline_groups sg join storylines s on s.id = sg.storyline_id
+  where sg.group_id = g.group_id and s.merged_into is null);
+```
 
 `--relabel` is how an operator says "the model config changed": it relabels
 every storyline the **configured model** did not name, judged by
