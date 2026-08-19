@@ -9,22 +9,22 @@ groups covering one specific event or evolving situation. Identity is a UUID,
 never a label. Membership is group-level and many-to-many: a group may belong
 to several storylines, and an article's storylines are its group's. The
 timeline's paginated unit becomes the **storyline-day** — each day a storyline
-has coverage it takes one fresh slot on that day — which is what makes
-"unbounded" free at read time: no slot ever spans days, and keyset pagination
-survives unchanged in shape.
+has coverage it takes one fresh slot — which is what makes "unbounded" free at
+read time: no slot spans days, and keyset pagination survives unchanged in
+shape.
 
 This supersedes ADR-0009 entirely (the day-bounded storyline, its hub-and-spoke
-day clustering, and the `storyline_id`/`storyline_published` columns) and the
-mechanics of ADR-0010 (read-time phrase choice, topic seeding, and the superset
+day clustering, the `storyline_id`/`storyline_published` columns) and the
+mechanics of ADR-0010 (read-time phrase choice, topic seeding, the superset
 guarantee). ADR-0010's layout survives: the gutter left of the spine remains
 the label's home. The group layer — syndication, bridge merging, the figures
 veto, the day bound on group drift — is untouched.
 
 ## What a storyline is, and is not
 
-A storyline is anchored to a *happening*, not to an entity. "Trump Iran War"
-is a storyline; "Donald Trump" is not, however much coverage he draws. The
-system errs **narrow**: two storylines that should be one can merge later; one
+A storyline is anchored to a *happening*, not an entity. "Trump Iran War" is a
+storyline; "Donald Trump" is not, however much coverage he draws. The system
+errs **narrow**: two storylines that should be one can merge later; one
 storyline that swallowed a day cannot be unwound, and ADR-0009's measurement
 history says exactly that happens — the transitive first cut absorbed 1,179 of
 a day's 1,190 groups. That failure remains the specification's north star.
@@ -35,25 +35,25 @@ holds multiple groups; singleton coverage is the normal case, not an error.
 ## Lifecycle
 
 - **Born provisional.** Every new group seeds a provisional storyline of one —
-  the same seed-own-identity discipline the old trigger enforced, generalized.
+  the seed-own-identity discipline the old trigger enforced, generalized.
   Provisional storylines are invisible as storylines: no label, no display
-  treatment; their slot is the plain article slot. This gives the timeline one
-  uniform unit — a provisional storyline-of-one *is* the ordinary slot.
+  treatment; their slot is the plain article slot, so the timeline has one
+  uniform unit.
 - **Promoted** when a second group attaches: the storyline becomes real and is
   labeled. Retroactive attachment is allowed and asynchronous — a Wednesday
   storyline may pull in Monday's group, and past days re-rendering with richer
   grouping is the feature working.
 - **Merged, never split.** Merges are automatic and bridge-counted: a group
-  that qualifies (anchor + mass) for two storylines attaches to the better and
+  qualifying (anchor + mass) for two storylines attaches to the better and
   records a bridge; K independent bridges merge them (K starts at 2, pinned by
   measurement). Single-bridge merging is refused — one ambiguous roundup
-  chaining three storylines together is percolation by another door. The
-  losing UUID becomes an alias resolving to the winner, so nothing held
-  elsewhere dangles. Split is not built: err-narrow formation makes it rare,
-  and it is the one operation with no cheap correct implementation.
+  chaining three storylines is percolation by another door. The losing UUID
+  becomes an alias resolving to the winner, so nothing held elsewhere dangles.
+  Split is not built: err-narrow formation makes it rare, and it is the one
+  operation with no cheap correct implementation.
 - **Dormant, not dead.** Nothing ends a storyline. After ~90 days without
-  coverage it leaves the normal candidate set; it stays matchable at a
-  high-confidence threshold only, so the trial fourteen months after the crash
+  coverage it leaves the normal candidate set but stays matchable at a
+  high-confidence threshold only — the trial fourteen months after the crash
   can still reattach without ten thousand dead storylines serving as
   false-positive surface at everyday thresholds.
 
@@ -63,23 +63,20 @@ The decision stays anchor + mass (ADR-0009's structure), with the corpus
 redefined:
 
 - A storyline speaks through **profile tokens** — tokens carried by at least
-  half its member groups, stored on the storyline row. This is the
-  majority-support rule that silenced AP live-blog vocabulary, promoted one
-  level; it is also the percolation damper, since a growing storyline's
-  consensus vocabulary tightens rather than loosens.
+  half its member groups, stored on the storyline row. ADR-0009's
+  majority-support rule promoted one level; also the percolation damper, since
+  a growing storyline's consensus vocabulary tightens rather than loosens.
 - **Candidate retrieval** is a GIN overlap between the arriving group's
-  `story_tokens` and `storylines.profile_tokens` — one index scan over a
-  small table. No day corpus, no unbounded read; the whole-day-in-memory read
-  dies with the day bound.
+  `story_tokens` and `storylines.profile_tokens` — one index scan over a small
+  table. The whole-day-in-memory read dies with the day bound.
 - **Rarity is measured against a trailing corpus** — document frequency over a
-  rolling ~14-day window of article tokens, the same shape as the
-  `term_baseline` infrastructure — replacing day-relative df. ADR-0009's
-  finding that an absolute cap fails (a story's own name hit df 64 the day it
-  dominated) carries forward: the ceiling stays a share of the corpus, the
-  corpus is now a window wide enough that one loud day cannot blind the
-  anchor to itself. Fourteen days is the starting knob, not a commitment.
-- **No threshold ships unmeasured.** `measure:storylines` is extended to
-  replay group→storyline decisions over the live corpus and grows a
+  rolling ~14-day window of article tokens — replacing day-relative df.
+  ADR-0009's finding that an absolute cap fails (a story's own name hit df 64
+  the day it dominated) carries forward: the ceiling stays a share of the
+  corpus, now over a window wide enough that one loud day cannot blind the
+  anchor to itself. Fourteen days is a starting knob, not a commitment.
+- **No threshold ships unmeasured.** `measure:storylines` is extended to replay
+  group→storyline decisions over the live corpus and grows a
   largest-storyline-share metric, so a swallow event is visible in the sweep
   before it is visible in production.
 
@@ -87,12 +84,10 @@ Embeddings remain refused (ADR-0005 stands); the decision functions stay pure
 and swappable, and the linking seam is explicitly where an LLM verdict could
 slot in later if token evidence proves insufficient. It does not ship now:
 linking runs per group (~1,200/day), and cheap-and-measurable beats
-better-and-opaque at that volume while auto-merge exists to heal its
-misses.
+better-and-opaque at that volume while auto-merge exists to heal its misses.
 
-**Token evidence has now been measured insufficient (2026-08-18).** The
-condition this paragraph set has been met, and the record is
-docs/STORYLINE-LINKING.md, "What the anchor rule cannot see". The labelling
+**Token evidence has now been measured insufficient (2026-08-18).** The record
+is docs/STORYLINE-LINKING.md, "What the anchor rule cannot see". The labelling
 campaign left a set hand-judged in both directions — 382 storylines a model was
 shown and could not name, against 1,189 it named — and against it *no*
 rearrangement of the token evidence separates the two: thirty-one settings
@@ -107,44 +102,45 @@ are equally rare in a fortnight.
 Three things follow:
 
 - The failure is **not** the one auto-merge heals. The label-agreement merge
-  cures over-narrow formation; this is over-broad formation, and ADR-0011 builds
-  no split, so it has no cure at all today.
-- The verdict is **already being computed and discarded**. A promotion makes one
-  model call, and the Labels prompt below opens by asserting the coverage is one
-  story — so a model shown two unrelated articles invents a name, `validateLabel`
-  refuses it, and the storyline stands under a bigram label. The 382 declines are
-  that verdict arriving as a formatting failure.
+  cures over-narrow formation; this is over-broad formation, and with no split
+  built it has no cure at all today.
+- The verdict is **already being computed and discarded**. A promotion makes
+  one model call, and the Labels prompt opens by asserting the coverage is one
+  story — so a model shown two unrelated articles invents a name,
+  `validateLabel` refuses it, and the storyline stands under a bigram label.
+  The 382 declines are that verdict arriving as a formatting failure.
 - **Measured 2026-08-18 on the configured model, and it holds — at two groups
-  only.** Over the hand-judged sets it refuses 75 of 88 declined (85.2%) and 27 of
-  86 named; reading all 27 shows ~22 are coincidence piles the *namer* papered
-  over, so the true cost is 1–5 of 86. That makes it the first candidate here that
-  is not a bidirectional trade. It also means the `named` set is contaminated and
-  the reported failure is **larger than 382**. But over the 21 named arcs at ≥20
-  groups the same verdict refuses **9, seven of them genuine events** — a mature
-  arc's breadth reads as incoherence. So the verdict may be consulted **only where
-  the storyline is not yet real**: a promotion whose winner was a
-  provisional-of-one, never `merge` (which already carries K bridges plus label
-  agreement) and never `drift`. `storyline-coherence.ts` is the pure, tested half;
-  `pnpm measure:storyline-coherence` reproduces the matrix.
+  only.** Over the hand-judged sets the verdict refuses 75 of 88 declined
+  (85.2%) and 27 of 86 named; reading all 27 shows ~22 are coincidence piles
+  the *namer* papered over, so the true cost is 1–5 of 86 — the first candidate
+  here that is not a bidirectional trade. It also means the `named` set is
+  contaminated and the reported failure is **larger than 382**. But over the 21
+  named arcs at ≥20 groups the same verdict refuses **9, seven of them genuine
+  events** — a mature arc's breadth reads as incoherence. So the verdict may be
+  consulted **only where the storyline is not yet real**: a promotion whose
+  winner was a provisional-of-one, never `merge` (which already carries K
+  bridges plus label agreement) and never `drift`. `storyline-coherence.ts` is
+  the pure, tested half; `pnpm measure:storyline-coherence` reproduces the
+  matrix.
 
-**Wired 2026-08-18**, and the shape is the one the measurement forced. The gate
-**defers** a formation rather than reverting one. On
-the fresh path the arriving group's birth storyline is absorbed by
-merge-with-alias, so undoing a promotion is exactly the split refused above; the
-merge waits for the verdict instead (`LinkOutcome.pendingFormation` →
-`resolveFormation`), and refusals are recorded durably in
-`storyline_formation_refusals` — keyed on GROUPS, since a provisional
-storyline-of-one is an identity a group is merely wearing — or the nightly
-late-candidate sweep would re-offer the pair and pay for a refusal every night.
+**Wired 2026-08-18**, in the shape the measurement forced: the gate **defers**
+a formation rather than reverting one. On the fresh path the arriving group's
+birth storyline is absorbed by merge-with-alias, so undoing a promotion is
+exactly the split refused above; the merge waits for the verdict instead
+(`LinkOutcome.pendingFormation` → `resolveFormation`), and refusals are
+recorded durably in `storyline_formation_refusals` — keyed on GROUPS, since a
+provisional storyline-of-one is an identity a group is merely wearing —
+otherwise the nightly late-candidate sweep would re-offer the pair and pay for
+a refusal every night.
 
 It costs no extra model call: the promotion label was already one, and a model
 that can name the story has thereby said it is one. Only an explicit refusal
-acts; an unavailable, slow, out-of-quota or contract-breaking model performs the
-withheld merge and falls back to bigrams, which is the pre-gate outcome exactly.
-`STORYLINE_COHERENCE_GATE` can stop it without a deploy, and it is inert with no
-`GEMINI_API_KEY`. The backfill does not gate — thousands of formations against a
-500-a-day ceiling — so it rebuilds what the token evidence says and leaves
-verdicts to the live path.
+acts; an unavailable, slow, out-of-quota or contract-breaking model performs
+the withheld merge and falls back to bigrams — the pre-gate outcome exactly.
+`STORYLINE_COHERENCE_GATE` can stop it without a deploy, and it is inert with
+no `GEMINI_API_KEY`. The backfill does not gate — thousands of formations
+against a 500-a-day ceiling — so it rebuilds what the token evidence says and
+leaves verdicts to the live path.
 
 ## Labels
 
@@ -152,83 +148,76 @@ A storyline carries a persistent, **non-unique** display label of two or three
 words — a proper noun plus what happened: "Fort Hood Crash", "Trump Iran War".
 Generated by Gemini (flash tier; `GEMINI_API_KEY` via `packages/config`) at
 promotion, on merge, and on drift (membership doubled since the label was
-made). Input: up to ~10 representative headlines and descriptions, recent-
-weighted. Contract: 2–3 words, must contain a proper noun, names the event or
-situation not just the entity, no punctuation. On failure or unavailability:
-the bigram extractor, else the storyline renders label-less.
+made). Input: up to ~10 representative headlines and descriptions,
+recent-weighted. Contract: 2–3 words, must contain a proper noun, names the
+event or situation not just the entity, no punctuation. On failure or
+unavailability: the bigram extractor, else the storyline renders label-less.
 
 The label is presentation, not identity. It regenerates as the storyline
 drifts — "Fort Hood Crash" may become "Fort Hood Investigation" — and two
-storylines may share a label; when a collision is actually on screen, a quiet
-date-span disambiguator ("Fort Hood Crash · Mar 2026") separates them.
+storylines may share a label; an on-screen collision gets a quiet date-span
+disambiguator ("Fort Hood Crash · Mar 2026").
 
-**Amended 2026-08-17 (label-agreement merge).** A label is still not identity — nothing
-keys off one, and clicking still rides the UUID — but agreement between two
+**Amended 2026-08-17 (label-agreement merge).** A label is still not identity —
+nothing keys off one, clicking rides the UUID — but agreement between two
 labels is now **evidence**, and the merge acts on it. The reason is measured:
-the token-bridge merge below cannot reach a big running story, because the
-story's own name outgrows the anchor ceiling as its coverage climbs. The dev
-archive held the Strait of Hormuz coverage as 25 arcs whose entire shared
-vocabulary was `{hormuz, strait, iran}` — mass 10.7 against a floor of 20,
-every token at 2.1–4.1% of a 17,028-article fortnight against a ceiling of
-0.2% — so no group
+the token-bridge merge cannot reach a big running story, because the story's
+own name outgrows the anchor ceiling as coverage climbs. The dev archive held
+the Strait of Hormuz coverage as 25 arcs whose entire shared vocabulary was
+`{hormuz, strait, iran}` — mass 10.7 against a floor of 20, every token at
+2.1–4.1% of a 17,028-article fortnight against a ceiling of 0.2% — so no group
 could bridge them and the cure never fired. Reshaping the ceiling does not fix
 it either (docs/STORYLINE-LINKING.md): every setting loose enough to collapse
 that component also builds a 315-group `com, investing` storyline and 58
 storylines with no profile at all.
 
-The labeler had already solved it. Six of those arcs were independently handed
-the identical name "Strait of Hormuz Crisis" by a model reading their
-headlines — the semantic judgement no df statistic can make. Two storylines
-merge when their **model** labels agree, the label contains a **grounded proper
-noun**, and their **spans overlap or nearly touch**. The date span stays the
-disambiguator it always was, which is what keeps two "Fort Hood Crash"es apart;
-the grounding guard is what keeps a *category* from passing as a name — the
-same archive labelled three unrelated earnings arcs "Q2 2026 Financial
+The labeler had already solved it: six of those arcs were independently handed
+the identical name "Strait of Hormuz Crisis" — the semantic judgement no df
+statistic can make. Two storylines merge when their **model** labels agree, the
+label contains a **grounded proper noun**, and their **spans overlap or nearly
+touch**. The date span stays the disambiguator, keeping two "Fort Hood
+Crash"es apart; the grounding guard keeps a *category* from passing as a name —
+the same archive labelled three unrelated earnings arcs "Q2 2026 Financial
 Results", with overlapping spans, and no word of it survives
 `properNounEvidence`. The bigram fallback is excluded outright: it named
 sixteen unrelated arcs "Strait Hormuz", which is agreement about vocabulary,
-not about events.
-
-Merging is transitive within one label and nowhere else, which is what bounds
-it where ADR-0009's transitive token linking was unbounded. See
+not events. Merging is transitive within one label and nowhere else — bounded
+where ADR-0009's transitive token linking was unbounded. See
 `storyline-label-merge.ts`.
 
 **ADR-0010's superset guarantee is deliberately dead.** It was load-bearing
-only while the phrase *was* the query. Clicking a label now opens the
-storyline itself by UUID — the label's words never execute as a search, so
-nothing requires them to appear in any member article, and the ~20% yield
-ceiling that guarantee imposed goes with it: every promoted storyline has a
-label.
+only while the phrase *was* the query. Clicking a label opens the storyline by
+UUID — the label's words never execute as a search — so nothing requires them
+to appear in any member article, and the ~20% yield ceiling goes with it: every
+promoted storyline has a label.
 
-*Amended by [ADR-0013](0013-the-cloud-names-recently-updated-storylines.md): the
-landing-page cloud does run a label as a search, and accepts exactly the cost
-this paragraph describes — the keyword match reaches headlines, not the arc, so
-the result is not a superset of the storyline it was clicked from. The timeline
-gutter and the surfaced pills still open the storyline by UUID, which is what
-makes the cloud an exception rather than a reversal.*
+*Amended by [ADR-0013](0013-the-cloud-names-recently-updated-storylines.md):
+the landing-page cloud does run a label as a search, accepting exactly the cost
+this paragraph describes. The timeline gutter and the surfaced pills still open
+the storyline by UUID, which makes the cloud an exception rather than a
+reversal.*
 
 This is the repo's first external model dependency. It is confined to the one
 place heuristics demonstrably cannot meet the bar — the adjacent-bigram
 extractor cannot reliably produce "names the event at a glance" — it runs at
-storyline volume (births and drifts), not article volume, and every call has
-a deterministic fallback.
+storyline volume (births and drifts), not article volume, and every call has a
+deterministic fallback.
 
 ## The timeline
 
 - The paginated unit is the **storyline-day**: keyset over
   `(day_slot_published, storyline_id)`, one row per storyline per day with
-  coverage, positioned by that day's earliest article. A ten-day storyline
-  appears ten times as the reader scrolls back; a long-running story
+  coverage, positioned by that day's earliest article. A long-running story
   resurfaces every day it earns coverage instead of sinking to its first
-  article's date — the exact failure MIN-published positioning would have
-  under unbounded storylines.
+  article's date — the exact failure MIN-published positioning would have under
+  unbounded storylines.
 - Within a slot: hero is that day's earliest article; the day's remaining
-  articles sit in the related pane, chronological. Same-story/more-coverage
-  sectioning inside the pane derives from group membership as before.
-- A group in two storylines appears in both storylines' slots that day,
-  hero of both if it comes to that. Duplication is accepted: it is honest,
-  err-narrow formation makes it rare, and "primary storyline" is a concept
-  with no principled definition.
+  articles sit in the related pane, chronological, with same-story/
+  more-coverage sectioning derived from group membership as before.
+- A group in two storylines appears in both storylines' slots that day, hero of
+  both if it comes to that. Duplication is accepted: it is honest, err-narrow
+  formation makes it rare, and "primary storyline" has no principled
+  definition.
 
 ## Search and navigation
 
@@ -236,14 +225,13 @@ Search and storylines are separate axes. A search is never limited to a
 storyline; it **surfaces** matching ones (search keywords ⊆ profile tokens).
 Clicking a storyline opens the **storyline view**: the timeline filtered to
 that UUID, the label as a dismissible chip, the search box empty; typing exits
-the view, consistent with "typing strips the seed". The label-as-query click
-of ADR-0010 is refused in its new context — non-unique labels mean the words
-no longer identify the story, so navigation must ride the UUID.
+the view, consistent with "typing strips the seed". ADR-0010's label-as-query
+click is refused in this context — non-unique labels mean the words no longer
+identify the story, so navigation must ride the UUID.
 
-How surfaced storylines present — top strip above results, storyline-as-rail-
-slot at its latest activity, command-bar typeahead — is deliberately left to a
-throwaway prototype round, with universal gutter labels as the baseline layer
-in every variant.
+How surfaced storylines present — top strip, storyline-as-rail-slot,
+command-bar typeahead — is deliberately left to a throwaway prototype round,
+with universal gutter labels as the baseline layer in every variant.
 
 ## Schema
 
@@ -252,8 +240,8 @@ Three new tables:
 - `storylines` — UUID pk, label, profile tokens, status
   (provisional/active/dormant), merged-into alias pointer.
 - `storyline_groups` — the join; group-level many-to-many.
-- `storyline_days` — one row per storyline-day: the keyset index, maintained
-  at write time exactly as `storyline_published` was.
+- `storyline_days` — one row per storyline-day: the keyset index, maintained at
+  write time exactly as `storyline_published` was.
 
 Dropped after cutover: `articles.storyline_id`, `articles.storyline_published`,
 their trigger and indexes. Kept: `story_tokens` (still the linker's input) and
@@ -261,9 +249,8 @@ the entire group layer.
 
 This puts the first real join in the hot read path, superseding the letter of
 "the timeline read is one index scan with no join". The spirit of ADR-0002 is
-what mattered and it is preserved: position is precomputed at write time in
-`storyline_days`, step one of the read stays a pure index scan, and reads
-never re-sort.
+preserved: position is precomputed at write time in `storyline_days`, step one
+of the read stays a pure index scan, and reads never re-sort.
 
 ## Rollout
 
@@ -273,51 +260,50 @@ order-dependent; replay order is the canonical order, as regroup's is today),
 builds storylines/joins/day-slots from scratch, then labels each promoted
 storyline. Existing `storyline_id` data is ignored — it dies with the old
 model. The new read path ships behind a flag until the backfill is verified;
-`PAGE_SHAPE_VERSION` bumps with the wire change, and any tokenizer change
-rides the usual `TOKENIZER_VERSION` + regroup discipline.
+`PAGE_SHAPE_VERSION` bumps with the wire change, and any tokenizer change rides
+the usual `TOKENIZER_VERSION` + regroup discipline.
 
 ## Considered and refused
 
 **Keeping the day-cluster as an internal layer**, with storylines as chains of
 day-bundles. Lower-risk and it preserved the one clustering layer with real
 measurement history — but it keeps two coverage concepts alive forever, and
-every reader of the code pays for the distinction the product no longer draws.
+every reader of the code pays for a distinction the product no longer draws.
 Replaced wholesale; the measured lessons (majority profiles, share-relative
-rarity, hub discipline) carry into the new linker rather than the old code.
+rarity, hub discipline) carry into the new linker.
 
 **Heuristic-only labels.** The bar is "proper noun, names the event at a
 glance" — measured experience with the adjacent-bigram extractor (9 phrases
-from 46 eligible slots, and those bound by an adjacency rule that existed for
-a guarantee now dead) says token heuristics do not reach it.
+from 46 eligible slots, bound by an adjacency rule that served a guarantee now
+dead) says token heuristics do not reach it.
 
-**LLM-judged linking.** Better at "is 'Survivor found' a continuation of
-'Fort Hood Crash'?" than token overlap will ever be — and per-group volume,
+**LLM-judged linking.** Better at "is 'Survivor found' a continuation of 'Fort
+Hood Crash'?" than token overlap will ever be — and per-group volume,
 un-replayable verdicts, and an unmeasurable threshold. The seam stays open.
 
-**Forever-flat candidate matching.** "Unbounded" cannot mean every dead
-storyline competes at normal thresholds forever; accumulation degrades
-precision monotonically. Dormancy with high-confidence revival keeps the
-promise without the decay.
+**Forever-flat candidate matching.** Every dead storyline competing at normal
+thresholds forever degrades precision monotonically. Dormancy with
+high-confidence revival keeps the "unbounded" promise without the decay.
 
 **Single-bridge merging.** The 1,179-group swallow was transitive linking;
 merging two storylines because one group qualified for both is the same
 percolation delivered more slowly.
 
 **Split support.** Requires re-deciding every member's true home — the one
-operation with no cheap correct answer. Err-narrow formation is the
-prevention; prevention over cure.
+operation with no cheap correct answer. Err-narrow formation is the prevention;
+prevention over cure.
 
 ## Left open
 
-- **All thresholds are unmeasured as of this writing** — anchor share and
-  floor against the trailing corpus, mass, K, the dormancy window, the
-  drift-relabel trigger. The extended `measure:storylines` sweep pins them
-  before anything ships; the numbers in this document are starting knobs.
+- **All thresholds are unmeasured as of this writing** — anchor share and floor
+  against the trailing corpus, mass, K, the dormancy window, the drift-relabel
+  trigger. The extended `measure:storylines` sweep pins them before anything
+  ships; the numbers here are starting knobs.
 - **The surfacing UX** awaits the prototype round.
 - **The label prompt will iterate** on live output; the contract (2–3 words,
   proper noun, event not just entity, no punctuation) is the fixed part.
 - **Non-English storylines** inherit the group layer's English-stopword
-  degradation, now compounded by an English-tuned label prompt. Recorded, not
+  degradation, compounded by an English-tuned label prompt. Recorded, not
   fixed.
 - **Trailing-corpus df infrastructure** stands alone — settled by ADR-0013,
   which dropped `term_baseline` outright, so there is nothing left to converge
@@ -334,9 +320,9 @@ Two or three words was the tighter reading of "readable at a glance", and it
 buys tightness at the cost of the clause the contract actually cares about:
 "Fort Hood Crash" fits, but "Fort Hood Helicopter Crash Investigation" is the
 same story once it has moved on, and at three words the model's only way to
-keep the proper noun is to drop what happened — which is precisely the failure
-the event-not-entity clause exists to prevent. The ceiling was doing the
-opposite of its job on the arcs long enough to matter.
+keep the proper noun is to drop what happened — precisely the failure the
+event-not-entity clause exists to prevent. The ceiling was doing the opposite
+of its job on the arcs long enough to matter.
 
 Five is where a label stops reading as a running-story tag and starts reading
 as a headline, so the ceiling moves rather than opens. The floor of two is
