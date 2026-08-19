@@ -397,7 +397,7 @@ Against the allowance above and `deploy/staging/cloud-init.yaml` as written:
 | 2 OCPU | no CPU limits set; three containers | ✅ |
 | **1,500 OCPU-hrs / 9,000 GB-hrs per month** | 2 OCPU / 12 GB running 24×7 | ✅ fits, at **99.2%** — decided, see below |
 | 200 GB block, 47 GB min boot | one boot volume; `postgres-data` on it, Docker logs capped at 10m×3, corpus pruned nightly (TRAILING-CORPUS: ~135k rows) | ✅ ample |
-| 1 Flexible LB @ 10 Mbps | staging uses one — the api publishes `3000` for the LB to reach by private IP | ⚠️ consumes the only free one |
+| 1 Flexible LB @ 10 Mbps | staging uses one — the api publishes `3000` for the LB to reach by private IP | ✅ decided, see below |
 | Managed PostgreSQL / Cache not included | `postgres:17-alpine` + `redis:7-alpine` as containers | ✅ as designed |
 | arm64 | both images publish `linux/arm64` manifests; the api image is built arm64 (§2.2) | ✅ verified |
 
@@ -436,12 +436,30 @@ What the decision obliges, since 12 OCPU-hrs of slack is not a margin you can be
   rather than failing, and §9.6's $0.01 alert is what turns that from silent into mail. Keeping the
   full size is defensible *because* that alert exists; it would have been reckless before it did.
 
-⚠️ **Staging's load balancer is the only free one.** The allowance is one Flexible LB, and the compose
-comment ("the load balancer reaches this instance by its private IP") means staging claims it. Nothing
-is wrong with that — but production's LB in §4 is then a paid resource from the moment it exists, and
-that cost belongs in the Phase 4 decision rather than arriving as a surprise. Reusing one LB across
-both environments by path or hostname is possible and worse: it couples staging traffic to
-production's data plane, which is exactly what having a staging environment is meant to avoid.
+➡️ **Decided 2026-08-18: staging takes the one free Flexible LB.** The allowance is a single LB at a
+fixed 10 Mbps, and the compose comment ("the load balancer reaches this instance by its private IP")
+already assumes staging has it. Confirmed as the deliberate choice, because the LB is not an
+optimisation here — it is half of what staging is *for*. §7 says staging proves the shape, "image →
+migrate → roll → healthy behind the LB", and a staging environment reached directly on port 3000 would
+prove the first three steps and skip the one that carries the path-routing topology, the health-check
+behaviour and the same-origin `CORS_ORIGIN` (§4). Three consequences:
+
+- **Production's LB is a paid resource the moment it exists.** Not a surprise to discover in Phase 4 —
+  it is the cost of having decided this, and it belongs in that phase's budget line rather than in a
+  bill. Nothing else in §4's production topology becomes cheaper by staging having gone first.
+- **Do not share one LB across both environments.** Path- or hostname-routing a single LB to both is
+  possible and worse: it couples staging traffic to production's data plane, which is the specific
+  thing having a staging environment exists to avoid. A saved LB is not worth a shared failure domain.
+- **10 Mbps is fixed, not burstable — and that is fine for what staging is.** One or two people
+  exercising the API is nowhere near it. The one place to keep it in mind is Phase 4, when the LB also
+  serves the web bundle (~355 KB of JS, ~108 KB gzipped): a cold page load is comfortable, a dozen
+  concurrent cold loads on a 1.25 MB/s ceiling is not, so a slow staging page under parallel testing
+  is the shape rather than a regression.
+
+⚠️ **This also means staging meets §9.2 first.** TLS terminates on the LB, so the open domain-and-DNS
+question — which zone, and an OCI Certificates cert versus a Let's Encrypt one managed in CI — needs an
+answer for *staging* before Phase 4 needs one for production. It can be deferred by running staging on
+plain HTTP behind the LB, at the cost of not exercising the TLS path that production will depend on.
 
 The VM bootstrap is `deploy/staging/cloud-init.yaml` — pass it as the instance's `user_data`. It
 installs Docker, writes the staging compose file, a `.env` template and the `zammy-deploy` /
