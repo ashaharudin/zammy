@@ -583,3 +583,52 @@ has no model and cannot have one — a grid of 30 settings over 23,000 groups is
 hundreds of thousands of decisions — so `PILES-FORMED` and `NAMED-INTACT` answer
 "what would the anchor rule build", which is still the question when a threshold
 moves.
+
+### The retroactive cleanup, applied (2026-08-19)
+
+`pnpm dissolve:storyline-piles` — dry run, reviewed, then `--apply`. Scope was the
+hand-verified set only: `label_source = 'bigram'` at exactly two groups.
+
+The population had already fallen from 88 to **66** on its own, because the live
+gate has been refusing formations since it shipped — 101 of them by the time this
+ran, and reading a sample confirms they are what they claim (Paul Parker on a
+player against Rooney's nose surgery; sharks-and-hurricanes against synthetic
+tumour data).
+
+| verdict | n | action |
+| --- | --- | --- |
+| NOT ONE STORY | **49** | dissolved |
+| named | 7 | kept |
+| no verdict (429) | 10 | untouched — quota, and quota never acts |
+
+Both sides of all 49 verified afterwards: one group each, provisional,
+unlabelled, live, day slot intact. **48 revived the departing group's original
+UUID**; one minted a new identity, being an `attachGroup` formation with no alias
+to revive. Live storylines 3,348 → 3,299, aliases 8,601 → 8,553, refusals 101 →
+150. No group was left without a storyline, and no refused pair shares a
+two-group storyline.
+
+**The 7 keeps are the more useful half of the result, because the gate erred
+toward keeping** — which is the safe direction when the action is destructive.
+Two of them say the *campaign* was wrong to decline: `07c02679` is really the
+Strait of Hormuz coverage, and `30111d24` is two near-duplicate winery
+listicles. Three more — "South Korea AI Ambition", "Diddy Legal Battles",
+"Middle East Peace Prospects" — are arguably beats rather than events, kept
+piles this pass did not catch. Erring that way costs a pile that was already
+there; erring the other way costs a real arc that cannot be rebuilt.
+
+Two things this did NOT touch, both deliberate:
+
+- **The 1,084 known-suspect storylines at 3+ groups** (250 declined, 834 never
+  judged). 199 of the 250 have absorbed merges, up to 30 aliases deep, so undoing
+  one asks which of N groups belong together — the split ADR-0011 refuses to
+  build. Only a full gated relink reaches them, and that re-points all 8,553
+  aliases, so it is a decision rather than a chore.
+- **The ~26% of model-named two-group storylines the validation found are piles.**
+  A real target, and a bad first one: no hand-checked ground truth stands behind
+  them.
+
+A pre-existing gap surfaced while verifying, unrelated to any of this: **7 groups
+(9 articles, last seen 2026-07-31) hold no storyline at all**, so they take no
+timeline slot. They were already unlinked in the pre-cleanup snapshot.
+`pnpm backfill:storylines` is what re-offers them.
