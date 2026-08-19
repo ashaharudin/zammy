@@ -251,6 +251,55 @@ write_files:
       exec docker compose run --rm --no-deps api \
         node node_modules/@zammy/storage/dist/migrate-cli.js
 
+  # The nightly chores (ARCHITECTURE 9.1). They used to be a BullMQ job scheduler
+  # inside the api process; the clock now lives out here, and the api only has to
+  # be running for the passes to reach a database, not to make them happen.
+  #
+  # Same image, same environment block, command overridden — the discipline
+  # zammy-migrate follows, for the same reason: a chore that read a different
+  # DATABASE_URL or a different APP_TIMEZONE than the api would bucket days
+  # differently, and nothing in the rows would say which ran.
+  - path: /opt/zammy/bin/zammy-chores
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # Argument check before anything touches the filesystem, so a typo reports
+      # the usage rather than whatever failed first.
+      pass="${1:-}"
+      case "$pass" in
+        retention|storylines) ;;
+        *) echo "usage: zammy-chores <retention|storylines>" >&2; exit 64 ;;
+      esac
+
+      cd /opt/zammy
+
+      # An unconfigured or half-deployed box is not a failed chore. A timer that
+      # goes red on a fresh instance trains an operator to ignore the timer, and
+      # the state these three checks describe is one a deploy fixes — not one a
+      # nightly pass should report. Same posture, and same three checks, as
+      # zammy-up.
+      if [[ ! -f .env ]]; then
+        echo "zammy-chores: no /opt/zammy/.env — nothing to run against yet."
+        exit 0
+      fi
+      if ! grep -qE '^ZAMMY_API_IMAGE=.+' .env; then
+        echo "zammy-chores: no image pinned yet — run zammy-deploy first."
+        exit 0
+      fi
+      if [[ -f deploy.state ]] && [[ "$(awk '{print $1; exit}' deploy.state)" != "ok" ]]; then
+        echo "zammy-chores: last deploy did not complete ($(cat deploy.state));" >&2
+        echo "zammy-chores: refusing to run chores against an unverified image." >&2
+        exit 0
+      fi
+
+      # --wait so a cold box cannot ECONNREFUSED on 5432, and --no-deps so the
+      # runner does not drag Redis up: these passes touch Postgres and Gemini
+      # only, never the cache or the queue.
+      docker compose up -d --wait postgres
+      exec docker compose run --rm --no-deps api node dist/chores-cli.js "$pass"
+
   - path: /opt/zammy/bin/zammy-deploy
     permissions: "0755"
     content: |
@@ -476,6 +525,87 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 
+  # ── The nightly chore schedule ──────────────────────────────────────────────
+  # Two things about these timers are load-bearing.
+  #
+  # 1. `UTC` is written explicitly. OnCalendar defaults to the HOST's local time,
+  #    while the schedule being reproduced (BullMQ's `0 3 * * *` / `0 4 * * *`)
+  #    ran in the api container's UTC, and the passes bucket by calendar day
+  #    using APP_TIMEZONE, which also defaults to UTC. A box in a non-UTC zone
+  #    would silently shift the prune cutoff and the day buckets relative to each
+  #    other. Pinning UTC here keeps all three agreeing.
+  #
+  # 2. `Persistent=true`. A box that was off at 03:00 runs the missed pass on next
+  #    boot rather than skipping the night. This is deliberately the behaviour the
+  #    BullMQ scheduler had — a due job sat in Redis's delayed set and was
+  #    promoted whenever a worker came back — so moving the clock out here does
+  #    not quietly lose the catch-up. It runs late; it does not vanish.
+  #
+  # systemd will not re-enter a unit that is still running, so a pass that
+  # overruns into the next night is skipped rather than doubled. The runner's
+  # advisory lock is the backstop for the case systemd cannot see: a second
+  # scheduler, somewhere else, pointed at the same database.
+  - path: /etc/systemd/system/zammy-chore-retention.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=zammy retention report and trailing-corpus prune
+      Requires=docker.service
+      After=docker.service
+
+      [Service]
+      Type=oneshot
+      WorkingDirectory=/opt/zammy
+      ExecStart=/opt/zammy/bin/zammy-chores retention
+      # The pass walks the archive; it is not a 90-second job on a busy night.
+      TimeoutStartSec=30min
+
+  - path: /etc/systemd/system/zammy-chore-retention.timer
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=zammy retention chore, 03:00 UTC
+
+      [Timer]
+      OnCalendar=*-*-* 03:00:00 UTC
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+
+  - path: /etc/systemd/system/zammy-chore-storylines.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=zammy storyline lifecycle pass (dormancy, sweeps, labels, merges)
+      Requires=docker.service
+      After=docker.service
+
+      [Service]
+      Type=oneshot
+      WorkingDirectory=/opt/zammy
+      ExecStart=/opt/zammy/bin/zammy-chores storylines
+      # Generous on purpose: the label pass is PACED, not slow — it spaces model
+      # calls at GEMINI_MAX_RPM (15/min by default) and a night with hundreds of
+      # drifted storylines legitimately takes hours. A tight timeout here would
+      # SIGTERM the pass mid-run every busy night, which reads as a broken chore
+      # rather than as the ceiling doing its job. Lower `--max-labels` to bound
+      # the work; do not bound it with this.
+      TimeoutStartSec=6h
+
+  - path: /etc/systemd/system/zammy-chore-storylines.timer
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=zammy storyline lifecycle pass, 04:00 UTC
+
+      [Timer]
+      OnCalendar=*-*-* 04:00:00 UTC
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+
   # The free tier has no managed backups, so staging gets the cheap version. Not
   # PITR and not a substitute for §4's production requirement — but it means a
   # staging database is worth having data in. bash with pipefail, because under
@@ -537,6 +667,18 @@ write_files:
                                        # anything else and zammy-up refuses to
                                        # auto-start until a deploy completes
 
+      Nightly chores (retention 03:00 UTC, storylines 04:00 UTC). These are the
+      app's clock: the api does NOT schedule them, so if these timers are not
+      running, the passes never happen and nothing will say so.
+        systemctl list-timers 'zammy-chore-*'      # next/last fire — check this first
+        journalctl -u zammy-chore-storylines -n 50 # what the last pass reported
+        sudo zammy-chores retention                # run one now, by hand
+        sudo zammy-chores storylines               # ditto (paced; can take hours)
+
+      A pass logs "another run holds this pass's lock — skipping" when one is
+      already in flight. Seen once, that is the overlap guard working; seen every
+      night, a run is stuck — check journalctl for the one that never finished.
+
       What staging does NOT prove: managed Postgres/Cache, private endpoints,
       PITR, rediss:// against a real TLS endpoint, or multi-instance rolling
       deploys. See docs/DEPLOYMENT-OCI.md §7.
@@ -558,6 +700,7 @@ runcmd:
   - usermod -aG docker ubuntu
   - ln -sf /opt/zammy/bin/zammy-deploy /usr/local/bin/zammy-deploy
   - ln -sf /opt/zammy/bin/zammy-migrate /usr/local/bin/zammy-migrate
+  - ln -sf /opt/zammy/bin/zammy-chores /usr/local/bin/zammy-chores
 
   # ── Host firewall ─────────────────────────────────────────────────────────
   # Applied by a systemd unit rather than inline, so it survives reboots without
@@ -569,6 +712,13 @@ runcmd:
   # first real start is the operator's deploy.
   - systemctl daemon-reload
   - systemctl enable zammy.service
+
+  # The chore timers ARE started: they are the app's clock, and the scripts they
+  # run no-op cleanly on an unconfigured box. Starting them now means the first
+  # night after a deploy is covered without anyone remembering this step — which
+  # matters more than usual, because nothing in the api will report their absence.
+  - systemctl enable --now zammy-chore-retention.timer
+  - systemctl enable --now zammy-chore-storylines.timer
 
 final_message: |
   zammy staging bootstrapped in $UPTIME seconds.

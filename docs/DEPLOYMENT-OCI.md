@@ -16,6 +16,7 @@ Verified against Oracle's docs as of 2026-08-14; facts that may drift are marked
 | Unit | Local dev (Compose) | AWS plan (4.1) | OCI target |
 |---|---|---|---|
 | `api` + in-process consumer | container | ECS Fargate + ALB | **Container Instances** behind an **OCI Flexible Load Balancer** |
+| nightly chores (`chores-cli.ts`) | `pnpm chores <pass>` | EventBridge Scheduler → ECS task | **OCI Resource Scheduler** → Container Instance ⬜ (staging uses systemd timers) |
 | `web` | Vite dev server | S3 + CloudFront | static-serving container behind the **same LB**, path-routed (§4) |
 | Postgres 17 | `postgres:17` container | RDS | **OCI Database with PostgreSQL** — PG 17 supported since 2026-04 |
 | Redis 7 | `redis:7` container | ElastiCache | a **`redis:7` Container Instance**, one shared (§4) — *not* OCI Cache |
@@ -34,6 +35,21 @@ not serve custom domains with TLS. Path-routing one LB (`/api/*` → api backend
 else → static web) gives one origin and deletes the CORS surface: `CORS_ORIGIN` becomes same-origin
 in production. A CDN later means fronting the whole thing with Cloudflare — additive, not
 structural.
+
+**Why the nightly chores are a separate invocation.** As a BullMQ scheduler inside the api, they
+required the api to be awake at 03:00 for the retention report to exist. As `chores-cli.ts` they are
+one-shot runs of the *same image* with the command overridden — the shape the migration job already
+has (§5) — priced as a few minutes of compute a night rather than a process holding a timer.
+Exactly-once came from Redis-shared state and now comes from a Postgres advisory lock, one key per
+pass.
+
+The cost: the schedule is no longer the app's problem and therefore no longer guaranteed to exist.
+**Nothing in the api reports a chore that never ran** — `/readyz` is green either way — so this needs
+a monitoring alarm in Phase 5, not just a Terraform resource in Phase 3. Container Instances have no
+native cron, so production means **OCI Resource Scheduler** firing one instance per pass; ⚠️
+**verify** its granularity and command-override support before committing, since the alternatives (a
+scheduled Function, or a systemd timer on a small always-on VM) change the Terraform and nothing in
+the image.
 
 ## 2. Pre-flight — work that must land before any OCI work
 
@@ -347,7 +363,7 @@ bucket backend and its **Customer Secret Key are required, not preferred** —
 | **0. Pre-flight** | buildable arm64 image in OCIR, CI publish | ✅ **complete** — Dockerfile fix, CI workflow, OCIR credentials, first digest pushed (§2) |
 | **1. Ground** | VCN, subnets, NSGs, gateways, Vault, state bucket | ~~delete the `oci-dev-tools` stack first (§9.5)~~ ✅; budget + spend alert (§9.6) ✅; import the existing vault **and budget** rather than creating them (§4, §9.6) ⬜; staging VM cloud-init ✅ drafted |
 | **2. Data** | PostgreSQL private endpoint + one shared Redis Container Instance | assert `/readyz` says `ready`, not just 200 (`rediss://` ✅ verified but unused — §4) |
-| **3. api** | Container Instances, LB `/api/*` routing, migration job, first end-to-end deploy | seed the database from the dev archive once, after the first migrate (§7) ⬜ |
+| **3. api** | Container Instances, LB `/api/*` routing, migration job, chore schedule, first end-to-end deploy | seed the database from the dev archive once, after the first migrate (§7) ⬜; Resource Scheduler for the two chore passes ⬜ (§1 — staging proves the runner, never the scheduler) |
 | **4. web** | static container, path routing, domain + TLS on the LB | `apps/web/Dockerfile`, plus an `image` job publishing to `zammy/web`; point `www` at the LB rather than Namecheap parking, which also brings `www` under this zone's CAA (§9.2) ⬜ |
 | **5. Ops** | OCI Logging for container stdout, Monitoring alarms (LB unhealthy-backend count, 5xx rate, api restart count), backup verification | **certificate-expiry alarm — first renewal 2027-03-05, manual, ~2×/year (§9.2)** ⬜ |
 

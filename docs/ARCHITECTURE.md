@@ -902,8 +902,22 @@ All triggers originate from a user request:
 | **Deferred backfill** — gap segments and subdivisions §6.3 didn't have budget for | queued, background | metered |
 | **Refresh-on-read** — stale coverage noticed while serving (§6.4) | queued, background | ~1 call |
 
-The worker also handles coverage-span merging, retention (§7.5), and a daily `/available/*` refresh
-(3 calls).
+The worker also handles coverage-span merging and a daily `/available/*` refresh (3 calls).
+
+**The nightly chores are not in this process.** Retention (§7.5) and the storyline lifecycle pass
+(ADR-0011) are one-shot runs of `apps/api/src/chores-cli.ts` — `pnpm chores retention`, `pnpm chores
+storylines` — on the platform's scheduler: systemd timers at 03:00/04:00 UTC on the staging VM
+(`deploy/staging/cloud-init.yaml`), OCI Resource Scheduler in production (DEPLOYMENT-OCI §1). They
+were a BullMQ job scheduler registered at boot, which bought exactly-once across N instances from
+Redis-shared state; the runner buys it from a Postgres advisory lock, one key per pass.
+
+Two consequences, neither of them visible in the api's logs. A schedule the app registers cannot be
+forgotten, while an external one is absent until someone configures it — so if nothing schedules the
+runner, every pass silently never runs and `/readyz` stays green throughout (`systemctl list-timers
+'zammy-chore-*'` is the check). And the labelling pacer no longer spans both: it is a window inside
+one Gemini client, so two processes labelling at once is up to 2x `GEMINI_MAX_RPM` on the shared key
+(STORYLINE-LABELS, "The pacer's scope"). What it buys is an api that need not be awake at 3am for
+any of this to happen.
 
 **User A pays, User B doesn't.** A's search populates `articles`, `sightings`, `topic_articles` and
 `topic_coverage`; B's identical search canonicalizes to the same fingerprint, finds the window
