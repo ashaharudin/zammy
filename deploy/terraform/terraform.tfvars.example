@@ -1,0 +1,8 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+
+# The tenancy root today — no other compartment exists (§9.5), and the vault,
+# budget and OCIR repositories already live there.
+compartment_ocid = "ocid1.tenancy.oc1..aaaa..."
+
+# region      = "ca-toronto-1"   # home region; Always Free lives only here
+# name_prefix = "zammy"
