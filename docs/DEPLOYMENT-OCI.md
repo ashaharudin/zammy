@@ -588,38 +588,46 @@ healthy behind the LB — and that is worth having on day one.
    | `TXT` | `v=spf1 include:spf.efwd.registrar-servers.com ~all` | Namecheap email forwarding is configured; unrelated to the app but do not clobber it when adding records |
    | `CAA` | *none* | any CA may issue. Worth adding once the certificate path is settled — it is the cheapest way to stop a mis-issuance being possible |
 
-   🚧 **The TLS half is not settled yet, and the stated plan needs one specific confirmation.** The
-   intent is Namecheap's *free SSL*, which resolves to one of two very different things:
+   ✅ **TLS half resolved 2026-08-18: a Namecheap *Standard SSL* certificate, currently unactivated.**
+   That is a certificate, not a proxy — a Sectigo-issued domain-validated cert — so **TLS terminates on
+   the OCI load balancer exactly as §4 assumes**, `CORS_ORIGIN` becomes same-origin in production, and no
+   third party sits in the request path. The alternative reading feared here (Namecheap URL forwarding is
+   a 301/302 redirect, not a reverse proxy, and could not serve an application at all) does not apply.
 
-   - **A certificate** (their bundled Sectigo/PositiveSSL). This fits the plan as written: it installs
-     on the OCI LB, TLS terminates there exactly as §4 assumes, `CORS_ORIGIN` becomes same-origin, and
-     the only new obligation is a **manual yearly renewal** — a hard expiry cliff with no automation,
-     which is the argument for ACME-in-CI that §9.2 originally posed.
-   - **A redirect or proxy service in front of the LB.** This is the reading to check hardest, because
-     Namecheap's URL forwarding is a **redirect** (301/302 to a target), not a reverse proxy — it cannot
-     serve an application, and masked/iframe forwarding is worse than useless for an API and a SPA. If
-     that is what "free SSL" refers to, it does **not** solve TLS for the app: the browser ends up
-     talking to the OCI LB directly, and the LB still needs its own certificate. A genuine
-     TLS-terminating reverse proxy in front (Cloudflare's free tier being the usual one) is a
-     legitimate design — §4 already contemplates fronting the stack with Cloudflare later — but it is a
-     different decision with the consequences below, not a free upgrade to this one.
+   *Unactivated* means bought but not yet issued: no CSR submitted, no domain control validation done.
+   Four things about getting from there to a working listener, in the order they bite:
 
-   **If a reverse proxy does end up in front, three things follow** and none of them are cosmetic:
+   - **Validate over DNS, not over HTTP.** HTTP file validation needs something already serving
+     `http://zammy.info/.well-known/...`, which needs the LB and the api — so the certificate would
+     depend on the infrastructure that is waiting on the certificate. The zone is on Namecheap BasicDNS
+     (above), so a DNS CNAME challenge can be satisfied **today, against a parked domain**, and Phase 1
+     can then bring the LB up with TLS on first boot instead of standing up an HTTP-only listener and
+     revisiting it.
+   - **Upload the full chain, not just the certificate.** An OCI LB listener needs the leaf, the private
+     key *and* Sectigo's intermediates. Omitting intermediates produces the classic split failure —
+     fine in a desktop browser that happens to have cached the issuer, broken for `curl`, Android and
+     anything doing strict verification — which reads as an app bug and is not one.
+   - **verify the coverage and the validity period before relying on either.** Sectigo DV certificates
+     usually cover the bare domain plus `www` as a SAN, and the plan serves both, so confirm rather than
+     assume. Likewise confirm the *issued* lifetime: certificate maximum lifetimes have been contracting
+     industry-wide, so "a year" may not be a year, and everything below is sized by that number.
+   - ⚠️ **Renewal is manual, and that is now a scheduled operational obligation.** Nothing here is ACME,
+     so no automation renews this. That makes two follow-ons real rather than theoretical: a certificate
+     expiry alarm belongs in Phase 5's monitoring alongside the others, and the ACME-in-CI option this
+     question originally posed stays on the table as the answer to *renewal*, having been settled only
+     for *first issuance*. A manual step with a hard deadline and no alarm is how a site goes dark on a
+     Sunday.
 
-   - ⚠️ **`trustProxy` becomes a correctness bug, not a config detail.** `server.ts` sets
-     `trustProxy: config.NODE_ENV === "production"`, i.e. *trust every hop*, and `@fastify/rate-limit`
-     keys on `req.ip`. Trusting the whole `X-Forwarded-For` chain means the **leftmost** entry wins, and
-     the leftmost entry is whatever the client sent — so a client can rotate a forged header and walk
-     straight through the per-IP limit ARCHITECTURE 12 relies on. This is already true behind the OCI LB
-     alone; a second proxy hop only lengthens the chain. The fix is a **hop count** rather than a
-     boolean: `trustProxy: 1` for the LB alone, `2` with a proxy in front, so only hops we actually
-     operate are trusted. **Worth fixing regardless of how the TLS question lands.**
-   - **Origin traffic needs its own protection.** A proxy terminating TLS speaks to the origin over the
-     public internet; if that leg is plain HTTP, the encryption stops at the proxy. Either give the LB a
-     certificate too (so it is TLS end to end) or accept the exposure knowingly.
-   - **The origin stops being private by default.** The LB must be publicly reachable for the proxy to
-     reach it, so "only the proxy may talk to it" becomes an NSG rule keyed to the proxy's published IP
-     ranges — a list that changes and therefore needs a source, not a snapshot.
+   With the CA now known, the missing `CAA` record above becomes actionable: pinning issuance to Sectigo
+   (**verify** their published CAA identifier) closes the gap where any CA could issue for this name.
+
+   ℹ️ **One thing this resolution does *not* retire.** Working out what a front proxy would have implied
+   surfaced a bug that exists without one: `server.ts` set `trustProxy` to a boolean, trusting the whole
+   `X-Forwarded-For` chain, so the client-supplied leftmost entry became `request.ip` and a forged header
+   defeated the per-IP rate limit (ARCHITECTURE 12). That is true behind a single load balancer, which is
+   the topology just chosen. Fixed separately by counting hops (`TRUSTED_PROXY_HOPS`) — **`1` is the
+   correct value for this topology**, and over-counting to `2` would reintroduce the hole exactly as the
+   boolean did.
 3. ~~**OCI Cache vs. container Redis**~~ ✅ **Resolved 2026-08-17: container Redis** (§4). The
    ~$30/month for a managed cache is not worth it when queue loss is survivable by design. Revisit
    if per-topic fairness resets or flush-driven latency ever start showing up in practice.
