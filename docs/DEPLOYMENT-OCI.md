@@ -593,8 +593,57 @@ healthy behind the LB — and that is worth having on day one.
      `VM.Standard.A1.Flex` (Ampere, arm64) is listed for compute. Listed is not the same as
      *capacity available at create time* — the free-tier Ampere retry problem in the bullet above is
      unaffected by this.
-2. **Domain and DNS** — where is the zone hosted, and does TLS terminate on the OCI LB with an OCI
-   Certificates cert or a Let's Encrypt cert managed in CI?
+2. **Domain and DNS** — ✅ **half resolved 2026-08-18: the domain is `zammy.info`, registered through
+   Namecheap, with the zone on Namecheap's own nameservers.** Verified from DNS the same day:
+
+   | Record | Value | Reading |
+   |---|---|---|
+   | `NS` | `dns1/dns2.registrar-servers.com` | Namecheap BasicDNS — the zone is theirs, so records are edited in their panel (or via their API) rather than in OCI DNS |
+   | `A zammy.info` | `162.255.119.225` | Namecheap parking IP — nothing of ours is served yet |
+   | `CNAME www` | `parkingpage.namecheap.com` | parked |
+   | `TXT` | `v=spf1 include:spf.efwd.registrar-servers.com ~all` | Namecheap email forwarding is configured; unrelated to the app but do not clobber it when adding records |
+   | `CAA` | *none* | any CA may issue. Worth adding once the certificate path is settled — it is the cheapest way to stop a mis-issuance being possible |
+
+   ✅ **TLS half resolved 2026-08-18: a Namecheap *Standard SSL* certificate, currently unactivated.**
+   That is a certificate, not a proxy — a Sectigo-issued domain-validated cert — so **TLS terminates on
+   the OCI load balancer exactly as §4 assumes**, `CORS_ORIGIN` becomes same-origin in production, and no
+   third party sits in the request path. The alternative reading feared here (Namecheap URL forwarding is
+   a 301/302 redirect, not a reverse proxy, and could not serve an application at all) does not apply.
+
+   *Unactivated* means bought but not yet issued: no CSR submitted, no domain control validation done.
+   Four things about getting from there to a working listener, in the order they bite:
+
+   - **Validate over DNS, not over HTTP.** HTTP file validation needs something already serving
+     `http://zammy.info/.well-known/...`, which needs the LB and the api — so the certificate would
+     depend on the infrastructure that is waiting on the certificate. The zone is on Namecheap BasicDNS
+     (above), so a DNS CNAME challenge can be satisfied **today, against a parked domain**, and Phase 1
+     can then bring the LB up with TLS on first boot instead of standing up an HTTP-only listener and
+     revisiting it.
+   - **Upload the full chain, not just the certificate.** An OCI LB listener needs the leaf, the private
+     key *and* Sectigo's intermediates. Omitting intermediates produces the classic split failure —
+     fine in a desktop browser that happens to have cached the issuer, broken for `curl`, Android and
+     anything doing strict verification — which reads as an app bug and is not one.
+   - **verify the coverage and the validity period before relying on either.** Sectigo DV certificates
+     usually cover the bare domain plus `www` as a SAN, and the plan serves both, so confirm rather than
+     assume. Likewise confirm the *issued* lifetime: certificate maximum lifetimes have been contracting
+     industry-wide, so "a year" may not be a year, and everything below is sized by that number.
+   - ⚠️ **Renewal is manual, and that is now a scheduled operational obligation.** Nothing here is ACME,
+     so no automation renews this. That makes two follow-ons real rather than theoretical: a certificate
+     expiry alarm belongs in Phase 5's monitoring alongside the others, and the ACME-in-CI option this
+     question originally posed stays on the table as the answer to *renewal*, having been settled only
+     for *first issuance*. A manual step with a hard deadline and no alarm is how a site goes dark on a
+     Sunday.
+
+   With the CA now known, the missing `CAA` record above becomes actionable: pinning issuance to Sectigo
+   (**verify** their published CAA identifier) closes the gap where any CA could issue for this name.
+
+   ℹ️ **One thing this resolution does *not* retire.** Working out what a front proxy would have implied
+   surfaced a bug that exists without one: `server.ts` set `trustProxy` to a boolean, trusting the whole
+   `X-Forwarded-For` chain, so the client-supplied leftmost entry became `request.ip` and a forged header
+   defeated the per-IP rate limit (ARCHITECTURE 12). That is true behind a single load balancer, which is
+   the topology just chosen. Fixed separately by counting hops (`TRUSTED_PROXY_HOPS`) — **`1` is the
+   correct value for this topology**, and over-counting to `2` would reintroduce the hole exactly as the
+   boolean did.
 3. ~~**OCI Cache vs. container Redis**~~ ✅ **Resolved 2026-08-17: container Redis** (§4). The
    ~$30/month for a managed cache is not worth it when queue loss is survivable by design. Revisit
    if per-topic fairness resets or flush-driven latency ever start showing up in practice.
