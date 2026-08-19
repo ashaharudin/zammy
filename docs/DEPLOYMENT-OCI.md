@@ -395,7 +395,7 @@ Against the allowance above and `deploy/staging/cloud-init.yaml` as written:
 |---|---|---|
 | 12 GB memory | 4.62 GiB of container limits + OS | ✅ ~7 GB spare |
 | 2 OCPU | no CPU limits set; three containers | ✅ |
-| **1,500 OCPU-hrs / 9,000 GB-hrs per month** | 2 OCPU / 12 GB running 24×7 | ⚠️ **99.2%** — see below |
+| **1,500 OCPU-hrs / 9,000 GB-hrs per month** | 2 OCPU / 12 GB running 24×7 | ✅ fits, at **99.2%** — decided, see below |
 | 200 GB block, 47 GB min boot | one boot volume; `postgres-data` on it, Docker logs capped at 10m×3, corpus pruned nightly (TRAILING-CORPUS: ~135k rows) | ✅ ample |
 | 1 Flexible LB @ 10 Mbps | staging uses one — the api publishes `3000` for the LB to reach by private IP | ⚠️ consumes the only free one |
 | Managed PostgreSQL / Cache not included | `postgres:17-alpine` + `redis:7-alpine` as containers | ✅ as designed |
@@ -411,11 +411,30 @@ of the month's remaining allowance, and there is no room at all for a second ins
 anything. Worse in combination with the PAYG finding above: the overflow does not fail the create, it
 bills.
 
-The fix is to size *memory* down, not OCPU — GB-hrs is the binding constraint, so 1 OCPU / 12 GB still
-sits at 99.2%. **1 OCPU / 8 GB** is the recommendation: 744/1,500 OCPU-hrs (49.6%) and 5,952/9,000
-GB-hrs (66.1%), real headroom on both, and still ~3 GB clear of the 4.62 GiB of container limits.
-**verify** at create time that the shape accepts that combination — the CLI reports A1.Flex's default
-as 1 OCPU / 6 GB, and the per-OCPU memory bound is Oracle's to enforce.
+➡️ **Decided 2026-08-18: keep 2 OCPU / 12 GB.** The alternative considered was 1 OCPU / 8 GB —
+744/1,500 OCPU-hrs (49.6%) and 5,952/9,000 GB-hrs (66.1%), headroom on both — since memory is the
+binding constraint and trimming OCPU alone changes nothing (1 OCPU / 12 GB is still 99.2%). The full
+size wins anyway, for a reason the fit table understates: 12 GB is not slack, it is Postgres page
+cache. The seeded corpus is ~163 MB across 28k articles and `story_token_days` is the largest table
+(TRAILING-CORPUS), so the read paths staging exists to exercise behave like production only if the
+working set is actually resident. Sizing down to protect an allowance the deploy path does not spend
+would trade the thing being tested for a margin nothing draws on.
+
+What the decision obliges, since 12 OCPU-hrs of slack is not a margin you can be careless with:
+
+- **Never let two staging instances exist at once.** Terraform must **replace destructively** here —
+  `create_before_destroy` on the staging VM would boot the replacement alongside the original and eat
+  hours out of a 6-hour monthly budget. Note this is the *opposite* of §6's production rolling deploy,
+  which depends on `create_before_destroy`; the two environments want different lifecycle rules and the
+  module cannot share one.
+- **The routine deploy path is not the risk.** `zammy-deploy` rolls *containers* on one host, so a
+  normal deploy creates no second instance and spends nothing extra. Only a Terraform-level VM
+  replacement does — which is rare, and now has a named rule attached to it.
+- **The tightest case is a 31-day month.** Shorter months have real slack (February: 1,344/1,500,
+  89.6%), so a plan that holds in a 31-day month holds always.
+- **The guardrail is now the budget, not the limit.** §9.5 raised A1 limits mean an overflow bills
+  rather than failing, and §9.6's $0.01 alert is what turns that from silent into mail. Keeping the
+  full size is defensible *because* that alert exists; it would have been reckless before it did.
 
 ⚠️ **Staging's load balancer is the only free one.** The allowance is one Flexible LB, and the compose
 comment ("the load balancer reaches this instance by its private IP") means staging claims it. Nothing
