@@ -293,20 +293,38 @@ against an unknown.
 ⚠️ **A vault cannot be deleted promptly.** OCI only *schedules* deletion, minimum 7 days out. So this
 is not a resource to create speculatively, and tearing down a Phase 1 mistake will not be same-day.
 
-**Secret naming: environment-prefixed, one vault.** Production needs its own values for the same four
-names, and a second vault would mean a second billed key version for no benefit:
+**What the vault holds**, verified by name 2026-08-19 — seven active secrets, against an allowance of
+150. Terraform reads these **by name**, which is the whole reason the names are worth agreeing rather
+than improvising:
 
 | Secret | Holds |
 |---|---|
-| `staging-currents-api-key` | `CURRENTS_API_KEY` — give staging its own key, not production's (§7: the 1000/day budget is per key) |
+| `staging-currents-api-key` | `CURRENTS_API_KEY` |
 | `staging-gemini-api-key` | `GEMINI_API_KEY` — optional; absent means labels fall back to the bigram extractor (§9.4) |
 | `staging-gnews-api-key` | `GNEWS_API_KEY` — only consumed when `GNEWS_ENABLED=true` |
 | `staging-postgres-password` | `POSTGRES_PASSWORD` for the staging compose stack |
+| `zammy-info-tls-key` | the certificate's private key (§9.2) |
+| `zammy-info-tls-cert` | the leaf certificate |
+| `zammy-info-tls-chain` | SSL.com's intermediates — the LB listener needs these separately, not folded into the leaf |
+
+**Two naming conventions, deliberately.** The credentials are **environment-prefixed** because
+production needs its own values for the same four names and a second vault would only add a key
+version. The TLS material is **domain-keyed** because it is a property of `zammy.info` rather than of
+an environment — one certificate, whichever environment currently answers for that name (§7). Nobody
+should "tidy" the TLS three into a `staging-` prefix: names are **immutable** (`oci vault secret
+update` takes no `--secret-name`), so a wrong prefix cannot be renamed, only duplicated.
+
+**No dates or serials in any of these names, on purpose.** Renewal — first due 2027-03-05 — adds a new
+*version* to the same secret. That keeps "what is deployed now" answerable from the secret's version
+history, which a `…-2026` name would destroy by forcing a fresh secret every 197 days.
 
 The secret *values* are set outside this repo and outside any agent's hands — Console, or
-`oci vault secret create-base64` with the value read from a prompt rather than an argument. Whether
-all four exist yet is deliberately not recorded here: `oci vault secret list` answers it, and a doc
-claiming a secret exists is worse than one that says nothing.
+`oci vault secret create-base64` with the value read from a prompt rather than an argument. The table
+above records names and existence only; what is *inside* each one has not been read back, so two
+paste-time mistakes remain possible and neither surfaces until a listener refuses to start: a key that
+is not the one paired to the certificate, and a "chain" that is really the leaf again. **Phase 1 should
+compare the stored key against the `pubkey_sha256` in §9.2 before configuring the listener** — that is
+a one-command check with the value in hand, and much cheaper than debugging an LB.
 
 Everything non-secret stays a plain env var in Terraform, mirroring `.env.example` — including
 `CURRENTS_USER_AGENT`, which must be non-empty and should identify the deployment (Cloudflare 403s
