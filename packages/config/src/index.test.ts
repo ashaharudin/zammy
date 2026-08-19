@@ -49,6 +49,23 @@ describe("loadConfig", () => {
     }
   });
 
+  // The per-IP rate limit keys on request.ip, so this number decides whether the
+  // ceiling is real. It is a count rather than a boolean because trusting the whole
+  // X-Forwarded-For chain lets the caller pick the leftmost entry.
+  it("trusts no proxy hops by default", () => {
+    expect(loadConfig({ ...base } as NodeJS.ProcessEnv).TRUSTED_PROXY_HOPS).toBe(0);
+  });
+
+  it("coerces the hop count from a string and rejects a negative one", () => {
+    expect(
+      loadConfig({ ...base, TRUSTED_PROXY_HOPS: "2" } as NodeJS.ProcessEnv)
+        .TRUSTED_PROXY_HOPS,
+    ).toBe(2);
+    expect(() =>
+      loadConfig({ ...base, TRUSTED_PROXY_HOPS: "-1" } as NodeJS.ProcessEnv),
+    ).toThrow(ConfigError);
+  });
+
   it("requires an API key in live mode", () => {
     expect(() =>
       loadConfig({ ...base, CURRENTS_MODE: "live" } as NodeJS.ProcessEnv),
