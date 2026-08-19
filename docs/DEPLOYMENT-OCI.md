@@ -324,7 +324,7 @@ state managed for you); decide when the CI pipeline is being written, it changes
 | Phase | Delivers | New work outside IaC |
 |---|---|---|
 | **0. Pre-flight** | buildable arm64 image in OCIR, CI publish | ✅ **complete** — Dockerfile fix, CI workflow, OCIR credentials, first digest pushed (§2) |
-| **1. Ground** | VCN, subnets, NSGs, gateways, Vault, state bucket | delete the `oci-dev-tools` stack first (§9.5) ⬜; budget + spend alert (§9.6) ✅; import the existing vault **and budget** rather than creating them (§4, §9.6) ⬜; staging VM cloud-init ✅ drafted |
+| **1. Ground** | VCN, subnets, NSGs, gateways, Vault, state bucket | ~~delete the `oci-dev-tools` stack first (§9.5)~~ ✅; budget + spend alert (§9.6) ✅; import the existing vault **and budget** rather than creating them (§4, §9.6) ⬜; staging VM cloud-init ✅ drafted |
 | **2. Data** | PostgreSQL private endpoint + one shared Redis Container Instance | assert `/readyz` says `ready`, not just 200 (`rediss://` ✅ verified but unused — §4) |
 | **3. api** | Container Instances, LB `/api/*` routing, migration job, first end-to-end deploy | seed the database from the dev archive once, after the first migrate (§7) ⬜ |
 | **4. web** | static container, path routing, domain + TLS on the LB | `apps/web/Dockerfile`, plus an `image` job publishing to `zammy/web` |
@@ -585,12 +585,13 @@ healthy behind the LB — and that is worth having on day one.
 4. **Gemini egress** — labels are optional by design, but confirm the NAT egress path and the
    pinned model are reachable/valid from the chosen region on day one, or labels silently fall back
    to the bigram extractor and nobody notices.
-5. **An unrelated `oci-dev-tools` stack is already in the tenancy, and it squats §3's address space.**
-   Found 2026-08-18: a VCN `oci-dev-tools-vcn` at **`10.0.0.0/16`** with one subnet `10.0.1.0/24`, an
+5. ~~**An unrelated `oci-dev-tools` stack is already in the tenancy, and it squats §3's address
+   space.**~~ ✅ **Deleted 2026-08-18 — the tenancy now contains no VCN at all, so `10.0.0.0/16` is
+   free for Phase 1 to take as its natural range.** Found earlier the same day: a VCN `oci-dev-tools-vcn` at **`10.0.0.0/16`** with one subnet `10.0.1.0/24`, an
    NSG, and a **running** `VM.Standard.E2.1.Micro` instance (x86, so unrelated to anything here) with
    a public IP, created 2026-08-17 by an OCI quickstart — freeform tag `Reference: oci-dev-tools`.
-   ➡️ **Decided 2026-08-18: delete the stack** — before Phase 1 writes any Terraform, and by hand
-   rather than by importing it into state. It settles both of the problems it created:
+   Deleted by hand rather than imported into state, since nothing here was worth keeping. It settled
+   both of the problems it created:
 
    - **The CIDR.** `10.0.0.0/16` is the obvious default a fresh VCN would claim, and deleting frees it
      so Phase 1 can take the natural range instead of documenting a detour. Coexisting was the
@@ -602,14 +603,32 @@ healthy behind the LB — and that is worth having on day one.
      host in the same tenancy as the production data stores to come, and deletion removes it rather
      than leaving a rule to remember.
 
-   **Before deleting, confirm the box is genuinely unused** — it was created from a personal login
-   (`ashaharudin@me.com`), so this plan is not the authority on whether something else depends on it.
-   Then delete in dependency order, since OCI refuses a VCN that still has children: terminate the
-   instance → delete the subnet → detach and delete the internet gateway and any route table and NSG
-   → delete the VCN. Two things that outlive the obvious steps and should be checked explicitly: the
-   instance's **boot volume**, which survives termination unless it is deleted along with it and keeps
-   billing quietly, and the **reserved public IP**, if the quickstart made it reserved rather than
-   ephemeral.
+   **What was removed**, in the order it had to happen — OCI refuses a VCN that still has children:
+
+   instance `instance20260817174112` (terminated) → subnet `oci-dev-tools-subnet` → route table
+   `oci-dev-tools-route-table` → internet gateway → NSG → security list → VCN → the instance's
+   **47 GB boot volume**.
+
+   Three notes for anyone tearing down a quickstart stack again, since two of them cost a retry here:
+
+   - **Route table before internet gateway, not after.** Deleting the gateway while a route table still
+     references it fails with an explicit "you must remove the reference" error. An earlier draft of
+     this item said "internet gateway and any route table" without an order, which is how the wrong one
+     got attempted first.
+   - **The boot volume outlives the instance.** Terminating with `--preserve-boot-volume true` leaves a
+     47 GB volume `AVAILABLE` and still costing whatever block storage costs on this tenancy; it was
+     deleted separately and deliberately, after confirming the box held nothing wanted. It had no
+     backups — worth checking, because deleting a volume does **not** delete its backups.
+   - **The public IP was ephemeral**, so it died with the instance. Had the quickstart reserved one it
+     would have survived as an orphan, which is why it is worth looking rather than assuming.
+
+   A `TERMINATED` boot-volume record still appears in `bv boot-volume list`. That is a tombstone, not a
+   resource: it bills nothing and ages out on its own.
+
+   Verified after the fact: no VCNs, no live instances, no block volumes, no boot-volume backups, no
+   reserved public IPs, and `standard-a1-core-regional-count` usage back to 0. What remains in the
+   tenancy is exactly what the plan wants — the two OCIR repositories (§2), the vault (§4) and the
+   budget (§9.6).
 
    Also noted while looking: **no compartment** exists other than the tenancy root — the OCIR
    repositories and everything above live directly in it. Worth deciding deliberately rather than by
