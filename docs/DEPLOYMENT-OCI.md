@@ -327,7 +327,7 @@ state managed for you); decide when the CI pipeline is being written, it changes
 | **1. Ground** | VCN, subnets, NSGs, gateways, Vault, state bucket | ~~delete the `oci-dev-tools` stack first (§9.5)~~ ✅; budget + spend alert (§9.6) ✅; import the existing vault **and budget** rather than creating them (§4, §9.6) ⬜; staging VM cloud-init ✅ drafted |
 | **2. Data** | PostgreSQL private endpoint + one shared Redis Container Instance | assert `/readyz` says `ready`, not just 200 (`rediss://` ✅ verified but unused — §4) |
 | **3. api** | Container Instances, LB `/api/*` routing, migration job, first end-to-end deploy | seed the database from the dev archive once, after the first migrate (§7) ⬜ |
-| **4. web** | static container, path routing, domain + TLS on the LB | `apps/web/Dockerfile`, plus an `image` job publishing to `zammy/web` |
+| **4. web** | static container, path routing, domain + TLS on the LB | `apps/web/Dockerfile`, plus an `image` job publishing to `zammy/web`; point `www` at the LB rather than Namecheap parking, which is also what brings `www` under this zone's CAA (§9.2) ⬜ |
 | **5. Ops** | OCI Logging for container stdout, Monitoring alarms (LB unhealthy-backend count, 5xx rate, api restart count), backup verification | **certificate-expiry alarm — first renewal 2027-03-05, manual, ~2×/year (§9.2)** ⬜ |
 
 Phase 3 is the milestone that proves the shape: image → migrate → roll → healthy behind the LB.
@@ -602,7 +602,7 @@ healthy behind the LB — and that is worth having on day one.
    | `A zammy.info` | `162.255.119.225` | Namecheap parking IP — nothing of ours is served yet |
    | `CNAME www` | `parkingpage.namecheap.com` | parked |
    | `TXT` | `v=spf1 include:spf.efwd.registrar-servers.com ~all` | Namecheap email forwarding is configured; unrelated to the app but do not clobber it when adding records |
-   | `CAA` | *none* | any CA may issue. Worth adding once the certificate path is settled — it is the cheapest way to stop a mis-issuance being possible |
+   | `CAA` | `0 issue "ssl.com"`, `0 issue "letsencrypt.org"`, `0 issuewild ";"` | added 2026-08-19, after issuance — see below for why two CAs and not one |
 
    ✅ **TLS half resolved: a Namecheap *Standard SSL* certificate, issued 2026-08-19.**
    That is a certificate, not a proxy — an **SSL.com**-issued domain-validated cert — so **TLS terminates on
@@ -666,8 +666,36 @@ healthy behind the LB — and that is worth having on day one.
    section previously proposed, pinning `sectigo.com`, would have told every CA that SSL.com may **not**
    issue for this name — turning a hardening step into a hard validation failure whose error message says
    nothing about CAA. Any CAA record here must authorise **`ssl.com`** (**verify** their published
-   identifier). That gate has now lifted — the certificate has issued, so a wrong CAA value can no longer
-   block the thing it was meant to protect, and adding one is safe.
+   identifier). That gate lifted once the certificate issued, and the records were added 2026-08-19 —
+   verified at the authoritative nameserver rather than through a resolver, since a recursive lookup was
+   still serving a cached "no such record" from before they existed:
+
+   ```
+   zammy.info.  IN  CAA  0 issue "ssl.com"
+   zammy.info.  IN  CAA  0 issue "letsencrypt.org"
+   zammy.info.  IN  CAA  0 issuewild ";"
+   ```
+
+   **`letsencrypt.org` is authorised deliberately, and pinning `ssl.com` alone would have been the same
+   mistake twice.** This section's own conclusion is that ACME-in-CI is the proportionate answer to
+   renewal at a 197-day lifetime; a CAA naming only the incumbent CA turns that migration into an
+   issuance failure whose error points at ACME rather than at DNS. Pre-authorising costs nothing in
+   safety — a CA listed in CAA still has to complete domain validation before it can issue — and it
+   removes a trap that would otherwise be discovered mid-migration. `issuewild ";"` denies wildcards
+   outright, which restricts nothing in use: the certificate names `zammy.info` and `www.zammy.info`
+   explicitly, so a wildcard has no role here and the row is what to change if that ever stops being true.
+
+   ⚠️ **These records do not govern `www` yet, and the reason is easy to misread.** Under RFC 8659, CAA
+   processing *follows* a CNAME rather than climbing the tree of the name being validated — and `www`
+   is still a CNAME to Namecheap's parking page. So a CA validating `www.zammy.info` today consults CAA
+   at `parkingpage.namecheap.com` and upward, not here. That is currently harmless: verified 2026-08-19,
+   neither `parkingpage.namecheap.com`, `parking.d.parity.domains` nor `namecheap.com` publishes any CAA
+   record, which is also why the issued certificate covered `www` without difficulty. But it leaves a
+   third party holding a lever over `www` renewals that is invisible from this zone — if Namecheap ever
+   publishes CAA on that chain, `www` renewal can fail for reasons no inspection of `zammy.info` will
+   reveal. **Phase 4 closes this** by pointing `www` at the load balancer instead of at parking: once it
+   is no longer a CNAME to a third party, the CAA climb reaches this apex and both names are governed
+   here. Worth doing for that reason as well as the obvious one.
 
    **The validation that was used**, recorded because renewal will repeat it: DCV is by CNAME —
    `_<order-token>.zammy.info` → `dcv.ssl.com` — added in Namecheap's Advanced DNS with the **host label
