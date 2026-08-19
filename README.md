@@ -8,10 +8,13 @@ wordcloud of the storylines the last 24 hours updated. Backed by
 - **[docs/PROBE-FINDINGS.md](docs/PROBE-FINDINGS.md)** — what 45 live API calls revealed. Read this
   before assuming anything about the upstream; several of its findings contradict the OpenAPI spec.
 
-**Status: Phase 1 complete** — scaffold, shared contract, config validation, container build, and the
-upstream client: normalization, mandatory User-Agent, typed error taxonomy, header-driven quota
-governance, retries with a circuit breaker, and paging. No timeline yet; that needs the schema
-(Phase 2) and the query service (Phase 3).
+**Status: Phases 0–5f and 7a complete** — the full keyword→timeline product is built: schema with
+write-time dedup, the query service with caching and progressive fill, the timeline front end,
+article grouping, persistent storylines with Gemini-generated labels, the landing-page wordcloud
+(now naming recently updated storylines), and GNews as a second provider behind the client
+interface. In progress: the OCI deploy ([docs/DEPLOYMENT-OCI.md](docs/DEPLOYMENT-OCI.md)). Not
+started: topic summaries (Phase 7b). The full phase table is in
+[ARCHITECTURE §13](docs/ARCHITECTURE.md#13-delivery-phases).
 
 ## Quick start
 
