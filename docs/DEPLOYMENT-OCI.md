@@ -795,9 +795,45 @@ healthy behind the LB — and that is worth having on day one.
 3. ~~**OCI Cache vs. container Redis**~~ ✅ **Resolved 2026-08-17: container Redis** (§4). The
    ~$30/month for a managed cache is not worth it when queue loss is survivable by design. Revisit
    if per-topic fairness resets or flush-driven latency ever start showing up in practice.
-4. **Gemini egress** — labels are optional by design, but confirm the NAT egress path and the
-   pinned model are reachable/valid from the chosen region on day one, or labels silently fall back
-   to the bigram extractor and nobody notices.
+4. **Gemini egress** — narrowed 2026-08-19 to the NAT path alone. The other two halves of this
+   question turned out to be answerable from what already exists.
+
+   ✅ **The pinned model is valid, on evidence rather than on a day-one test.** `GEMINI_MODEL` defaults
+   to `gemini-3.1-flash-lite` against `generativelanguage.googleapis.com/v1beta`, and that exact model
+   id is the recorded provenance on 1,259 storylines in the dev corpus — so the name resolves and the
+   endpoint answers. No live call was needed to establish it, which also means no quota spent and no
+   key handled.
+
+   ✅ **The fallback is not silent, so "nobody notices" was the wrong worry.** Two independent detectors
+   already exist:
+
+   - `storyline-label-service.ts` logs the fallback at **`warn`**, with the failure reason attached — so
+     Phase 5's OCI Logging surfaces it without new instrumentation.
+   - `storylines.label_source` **persists** the provenance and is indexed
+     (`storylines_label_source_idx … WHERE merged_into IS NULL`). This is the stronger signal:
+     cumulative and queryable, and unlike a log line it does not age out of retention.
+
+   **Which turns the day-one check into a comparison rather than a judgement.** The dev corpus gives a
+   baseline — of 2,028 labelled storylines, **393 (~19%) fell back to bigram**:
+
+   | `label_source` | count |
+   |---|---|
+   | `(null)` | 21,631 |
+   | `gemini-3.1-flash-lite` | 1,259 |
+   | `bigram` | 393 |
+   | `model` | 376 |
+
+   So the acceptance check is not "did Gemini work" but "is staging's bigram share near 19% or near
+   100%", which nobody has to interpret. ⚠️ Query the **failure** value — `label_source = 'bigram'` —
+   rather than enumerating success values: those 376 rows reading plain `model` predate the model id
+   being recorded (`deps.modelId ?? "model"`), so a query keyed on success values silently miscounts.
+
+   🚧 **What remains open is only the NAT path, and it cannot be tested before it exists.** There is no
+   VCN, no NAT gateway and no instance to test from, so this is a Phase 1 item: one `curl` to the Gemini
+   endpoint from an instance in the private app subnet, before anything depends on it. That is also the
+   one failure this section's original worry describes correctly — an NSG or route table that forgets
+   egress produces exactly the 100%-bigram outcome above, and the fix is infrastructure rather than
+   application code.
 5. ~~**An unrelated `oci-dev-tools` stack is already in the tenancy, and it squats §3's address
    space.**~~ ✅ **Deleted 2026-08-18 — the tenancy now contains no VCN at all, so `10.0.0.0/16` is
    free for Phase 1 to take as its natural range.** Found earlier the same day: a VCN `oci-dev-tools-vcn` at **`10.0.0.0/16`** with one subnet `10.0.1.0/24`, an
