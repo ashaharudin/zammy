@@ -207,6 +207,35 @@ is what makes this a cost decision rather than a correctness one: a lost queue j
 coverage gap the next reader repairs. The swap back is a `REDIS_URL` change if that ever stops
 being true.
 
+**Its image comes from OCIR, not Docker Hub — and that is a requirement, not a preference.** The
+private data subnet has no route to the internet (§3, and `deploy/terraform/network.tf` enforces it by
+having no default route at all), so a Container Instance there reaches OCIR over the service gateway
+and cannot reach `docker.io`. Mirroring is therefore the only way that container gets an image. The
+alternative would be adding a NAT route to the data subnet — giving the data stores outbound internet
+access purely to fetch a public image, which trades the property §3 exists to guarantee for a
+convenience.
+
+Set up 2026-08-19:
+
+- `<namespace>/zammy/redis` created **private**, explicitly rather than by push auto-create (§2).
+- `.github/workflows/mirror-image.yml` does the copy on `workflow_dispatch`. It runs in CI rather than
+  on a laptop because pushing needs `OCI_USERNAME` and `OCI_AUTH_TOKEN`, which already live there as
+  secrets — so nobody handles a registry credential by hand, and a version bump is one click rather
+  than a remembered procedure.
+- The upstream is **digest-pinned** and the job refuses a bare tag: a tag-only mirror copies something
+  different each run, which defeats the reason for mirroring. `redis:7-alpine` is currently
+  `sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2` (index), with
+  `linux/arm64/v8` at `sha256:102aa93d02c163a634662ec18a1a1db51bf5b8b6a2f28547ce24626218a40d54`.
+- The whole manifest index is copied, not just this runner's platform, and the job **asserts the
+  mirrored digest equals upstream's** — content-addressing means it should, and a mismatch would mean
+  the mirror is not the image that was reviewed.
+
+⚠️ **This does not apply to staging.** Staging runs Postgres and Redis as containers on one VM in the
+app subnet, which has NAT egress on 443, so it pulls `redis:7-alpine` and `postgres:17-alpine` from
+Docker Hub as the cloud-init already does. The mirror is for the production topology, where Redis
+becomes a Container Instance in the data subnet. Nothing about staging needs to change, and pointing
+staging at the mirror too would be reasonable later — it just is not what unblocks anything today.
+
 **One shared instance, never a sidecar per api instance.** This is the part that can quietly go
 wrong. Three things in Redis are cross-instance by design — the ingest queue (§9.1), single-flight
 (§7) and the per-topic daily cap (§9.4) — so giving each api instance its own Redis would fragment
