@@ -328,7 +328,7 @@ state managed for you); decide when the CI pipeline is being written, it changes
 | **2. Data** | PostgreSQL private endpoint + one shared Redis Container Instance | assert `/readyz` says `ready`, not just 200 (`rediss://` ✅ verified but unused — §4) |
 | **3. api** | Container Instances, LB `/api/*` routing, migration job, first end-to-end deploy | seed the database from the dev archive once, after the first migrate (§7) ⬜ |
 | **4. web** | static container, path routing, domain + TLS on the LB | `apps/web/Dockerfile`, plus an `image` job publishing to `zammy/web` |
-| **5. Ops** | OCI Logging for container stdout, Monitoring alarms (LB unhealthy-backend count, 5xx rate, api restart count), backup verification | — |
+| **5. Ops** | OCI Logging for container stdout, Monitoring alarms (LB unhealthy-backend count, 5xx rate, api restart count), backup verification | **certificate-expiry alarm — first renewal 2027-03-05, manual, ~2×/year (§9.2)** ⬜ |
 
 Phase 3 is the milestone that proves the shape: image → migrate → roll → healthy behind the LB.
 Everything after is accretion.
@@ -604,29 +604,54 @@ healthy behind the LB — and that is worth having on day one.
    | `TXT` | `v=spf1 include:spf.efwd.registrar-servers.com ~all` | Namecheap email forwarding is configured; unrelated to the app but do not clobber it when adding records |
    | `CAA` | *none* | any CA may issue. Worth adding once the certificate path is settled — it is the cheapest way to stop a mis-issuance being possible |
 
-   ✅ **TLS half resolved 2026-08-18: a Namecheap *Standard SSL* certificate, currently unactivated.**
+   ✅ **TLS half resolved: a Namecheap *Standard SSL* certificate, issued 2026-08-19.**
    That is a certificate, not a proxy — an **SSL.com**-issued domain-validated cert — so **TLS terminates on
    the OCI load balancer exactly as §4 assumes**, `CORS_ORIGIN` becomes same-origin in production, and no
    third party sits in the request path. The alternative reading feared here (Namecheap URL forwarding is
    a 301/302 redirect, not a reverse proxy, and could not serve an application at all) does not apply.
 
-   *Unactivated* means bought but not yet issued: no CSR submitted, no domain control validation done.
-   Four things about getting from there to a working listener, in the order they bite:
+   **The issued certificate**, read from Certificate Transparency rather than from the panel:
 
-   - **Validate over DNS, not over HTTP.** HTTP file validation needs something already serving
-     `http://zammy.info/.well-known/...`, which needs the LB and the api — so the certificate would
-     depend on the infrastructure that is waiting on the certificate. The zone is on Namecheap BasicDNS
-     (above), so a DNS CNAME challenge can be satisfied **today, against a parked domain**, and Phase 1
-     can then bring the LB up with TLS on first boot instead of standing up an HTTP-only listener and
-     revisiting it.
+   | | |
+   |---|---|
+   | Names | `zammy.info` **and** `www.zammy.info` |
+   | Issuer | `C=US, O=SSL Corporation, CN=SSL.com TLS Issuing RSA CA R1` — the intermediate the chain needs |
+   | Valid | 2026-08-19T13:59:15Z → **2027-03-05T13:58:09Z** |
+   | Lifetime | **197 days**, not a year |
+   | `cert_sha256` | `8be9cf14ffee75ed5270a098be297e89a64ae6de0d9475735fbc117cc00c7e07` |
+   | `pubkey_sha256` | `2a220e6e3965af6efa0275a0b62a5f1bc11eac8e1303a7d182863c7b14320e16` |
+
+   🔑 **The key pairing is verified, and that fingerprint is how to re-verify it.** The certificate's
+   public key hashes to the same value as the private half of the CSR that was submitted, so the key held
+   outside the repo is the only key this certificate works with. Checking that again — before configuring
+   a listener, and at every renewal — is one command against the file:
+
+   ```
+   openssl pkey -in zammy.info.key -pubout -outform DER | openssl dgst -sha256
+   ```
+
+   A mismatch there is the difference between a listener that serves and one that refuses, and it is far
+   cheaper to catch on a laptop than on an LB.
+
+   **197 days is the number everything else is sized by, and it is worse than the "a year" assumed
+   above.** Renewal falls due **2027-03-05** and roughly twice a year after that — each time manual, each
+   time needing a fresh DCV record. Two consequences promote themselves from tidy to necessary: the
+   certificate-expiry alarm in Phase 5 is now the only thing between an unattended date and an outage,
+   and ACME-in-CI stops being the elegant option for *renewal* and starts being the proportionate one, at
+   roughly twice the manual toil per year that a 365-day certificate would have cost.
+
+   What remains between here and a working listener:
+
+   - ~~**Validate over DNS, not over HTTP.**~~ ✅ Done exactly that way, and it worked as intended: the
+     CNAME was satisfied against a still-parked domain, so no listener had to exist first and Phase 1 can
+     bring the LB up with TLS already in hand. Worth keeping as the method for renewals.
    - **Upload the full chain, not just the certificate.** An OCI LB listener needs the leaf, the private
      key *and* SSL.com's intermediates. Omitting intermediates produces the classic split failure —
      fine in a desktop browser that happens to have cached the issuer, broken for `curl`, Android and
      anything doing strict verification — which reads as an app bug and is not one.
-   - **verify the coverage and the validity period before relying on either.** DV certificates commonly
-     cover the bare domain plus `www` as a SAN, and the plan serves both — but that is the issuer's
-     policy rather than a rule, so read it off the issued certificate rather than assuming it. Likewise confirm the *issued* lifetime: certificate maximum lifetimes have been contracting
-     industry-wide, so "a year" may not be a year, and everything below is sized by that number.
+   - ~~**verify the coverage and the validity period.**~~ ✅ Both answered by the table above: `www` is
+     covered as a SAN, so one certificate serves both names the plan needs, and the lifetime came back at
+     197 days rather than the year that was assumed.
    - ⚠️ **Renewal is manual, and that is now a scheduled operational obligation.** Nothing here is ACME,
      so no automation renews this. That makes two follow-ons real rather than theoretical: a certificate
      expiry alarm belongs in Phase 5's monitoring alongside the others, and the ACME-in-CI option this
@@ -641,10 +666,10 @@ healthy behind the LB — and that is worth having on day one.
    section previously proposed, pinning `sectigo.com`, would have told every CA that SSL.com may **not**
    issue for this name — turning a hardening step into a hard validation failure whose error message says
    nothing about CAA. Any CAA record here must authorise **`ssl.com`** (**verify** their published
-   identifier), and none should be added until the certificate has issued, so a mistake cannot block the
-   thing it is meant to protect.
+   identifier). That gate has now lifted — the certificate has issued, so a wrong CAA value can no longer
+   block the thing it was meant to protect, and adding one is safe.
 
-   **The validation in flight**, recorded because renewal will repeat it: DCV is by CNAME —
+   **The validation that was used**, recorded because renewal will repeat it: DCV is by CNAME —
    `_<order-token>.zammy.info` → `dcv.ssl.com` — added in Namecheap's Advanced DNS with the **host label
    alone**, since the panel appends the domain and a full name silently becomes
    `_token.zammy.info.zammy.info` that validates forever. Note also that `dcv.ssl.com` resolves to
