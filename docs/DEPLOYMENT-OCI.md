@@ -577,8 +577,49 @@ healthy behind the LB — and that is worth having on day one.
      `VM.Standard.A1.Flex` (Ampere, arm64) is listed for compute. Listed is not the same as
      *capacity available at create time* — the free-tier Ampere retry problem in the bullet above is
      unaffected by this.
-2. **Domain and DNS** — where is the zone hosted, and does TLS terminate on the OCI LB with an OCI
-   Certificates cert or a Let's Encrypt cert managed in CI?
+2. **Domain and DNS** — ✅ **half resolved 2026-08-18: the domain is `zammy.info`, registered through
+   Namecheap, with the zone on Namecheap's own nameservers.** Verified from DNS the same day:
+
+   | Record | Value | Reading |
+   |---|---|---|
+   | `NS` | `dns1/dns2.registrar-servers.com` | Namecheap BasicDNS — the zone is theirs, so records are edited in their panel (or via their API) rather than in OCI DNS |
+   | `A zammy.info` | `162.255.119.225` | Namecheap parking IP — nothing of ours is served yet |
+   | `CNAME www` | `parkingpage.namecheap.com` | parked |
+   | `TXT` | `v=spf1 include:spf.efwd.registrar-servers.com ~all` | Namecheap email forwarding is configured; unrelated to the app but do not clobber it when adding records |
+   | `CAA` | *none* | any CA may issue. Worth adding once the certificate path is settled — it is the cheapest way to stop a mis-issuance being possible |
+
+   🚧 **The TLS half is not settled yet, and the stated plan needs one specific confirmation.** The
+   intent is Namecheap's *free SSL*, which resolves to one of two very different things:
+
+   - **A certificate** (their bundled Sectigo/PositiveSSL). This fits the plan as written: it installs
+     on the OCI LB, TLS terminates there exactly as §4 assumes, `CORS_ORIGIN` becomes same-origin, and
+     the only new obligation is a **manual yearly renewal** — a hard expiry cliff with no automation,
+     which is the argument for ACME-in-CI that §9.2 originally posed.
+   - **A redirect or proxy service in front of the LB.** This is the reading to check hardest, because
+     Namecheap's URL forwarding is a **redirect** (301/302 to a target), not a reverse proxy — it cannot
+     serve an application, and masked/iframe forwarding is worse than useless for an API and a SPA. If
+     that is what "free SSL" refers to, it does **not** solve TLS for the app: the browser ends up
+     talking to the OCI LB directly, and the LB still needs its own certificate. A genuine
+     TLS-terminating reverse proxy in front (Cloudflare's free tier being the usual one) is a
+     legitimate design — §4 already contemplates fronting the stack with Cloudflare later — but it is a
+     different decision with the consequences below, not a free upgrade to this one.
+
+   **If a reverse proxy does end up in front, three things follow** and none of them are cosmetic:
+
+   - ⚠️ **`trustProxy` becomes a correctness bug, not a config detail.** `server.ts` sets
+     `trustProxy: config.NODE_ENV === "production"`, i.e. *trust every hop*, and `@fastify/rate-limit`
+     keys on `req.ip`. Trusting the whole `X-Forwarded-For` chain means the **leftmost** entry wins, and
+     the leftmost entry is whatever the client sent — so a client can rotate a forged header and walk
+     straight through the per-IP limit ARCHITECTURE 12 relies on. This is already true behind the OCI LB
+     alone; a second proxy hop only lengthens the chain. The fix is a **hop count** rather than a
+     boolean: `trustProxy: 1` for the LB alone, `2` with a proxy in front, so only hops we actually
+     operate are trusted. **Worth fixing regardless of how the TLS question lands.**
+   - **Origin traffic needs its own protection.** A proxy terminating TLS speaks to the origin over the
+     public internet; if that leg is plain HTTP, the encryption stops at the proxy. Either give the LB a
+     certificate too (so it is TLS end to end) or accept the exposure knowingly.
+   - **The origin stops being private by default.** The LB must be publicly reachable for the proxy to
+     reach it, so "only the proxy may talk to it" becomes an NSG rule keyed to the proxy's published IP
+     ranges — a list that changes and therefore needs a source, not a snapshot.
 3. ~~**OCI Cache vs. container Redis**~~ ✅ **Resolved 2026-08-17: container Redis** (§4). The
    ~$30/month for a managed cache is not worth it when queue loss is survivable by design. Revisit
    if per-topic fairness resets or flush-driven latency ever start showing up in practice.
