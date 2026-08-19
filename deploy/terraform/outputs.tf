@@ -32,3 +32,13 @@ output "vault_management_endpoint" {
   description = "Vault-specific; the kms management CLI and provider calls need it."
   value       = oci_kms_vault.main.management_endpoint
 }
+
+output "staging_public_ip" {
+  description = "SSH here once to fill /opt/zammy/.env — and set TRUSTED_PROXY_HOPS=1 while there, since the LB is in front (§9.2)."
+  value       = oci_core_instance.staging.public_ip
+}
+
+output "load_balancer_ip" {
+  description = "Point zammy.info's A record here at Namecheap. www too, which also brings www under this zone's CAA (§9.2)."
+  value       = oci_load_balancer_load_balancer.main.ip_address_details
+}
