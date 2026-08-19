@@ -370,22 +370,35 @@ the tenancy is inside the new limit before building on it.
 reports 0 of its limit used, likewise memory, and the only running instance is the x86 micro of §9.5.
 The deadline above passes today with no exposure.
 
-🚩 **But the check turned up something that undercuts the premise of this section: the tenancy's A1
-limits are `16` cores / `96 GB` regional — four to eight times the free allowance, not equal to it.**
-Always Free tenancies are capped at the allowance; these are Pay-As-You-Go defaults, which is strong
-evidence the tenancy has been **upgraded to PAYG** rather than sitting on Always Free. *(Inferred from
-the limits — the CLI exposes no direct "is this account free tier" field, so confirm it in the console
-under Billing & Cost Management → Upgrade and Payment; an account still on Always Free shows an
-upgrade offer.)* If it is upgraded, two things in this section change and one gets worse:
+ℹ️ **The tenancy's A1 limits are `16` cores / `96 GB` regional — four to eight times the free
+allowance.** An earlier draft of this section read that as strong evidence the account had been
+upgraded to Pay-As-You-Go. **That was wrong, and it is worth saying so plainly rather than quietly
+editing:** checked in the console 2026-08-18, the plan type is **Free Tier with no payment method on
+file**. The inference confused a *service limit* with the *account's spending capability*; the two are
+separate mechanisms, and a Free Tier account can show generous service limits while the free allowance
+is enforced by account type at create time.
 
-- **The free allowance still applies** — Always Free resources stay free on an upgraded account — so
-  "zero-cost staging" remains achievable exactly as described, provided the shapes stay inside it.
-- **Nothing enforces it any more.** On Always Free the limit *is* the guardrail: an over-sized create
-  simply fails. At 16/96 the same request succeeds and bills. The 2 OCPU / 12 GB figure becomes a
-  number someone has to honour by hand, in every Terraform shape block, forever.
-- **This is the strongest argument for §9.6.** A budget with a spend alert is no longer a nice-to-have
-  guardrail duplicating the limits — with the limits raised, it is the *only* thing standing between a
-  mistyped `ocpus = 16` and a bill.
+What follows from Free Tier + no payment method is nearly the opposite of what the PAYG reading
+implied:
+
+- **An over-allowance create cannot produce a bill**, because there is nothing to bill it to. It either
+  draws on trial credits, if the 30-day trial is still running, or is refused.
+- **So the hazard is not cost, it is reclamation.** If the trial is still active, the raised limits are
+  temporary: at trial end anything outside the Always Free allowance is stopped and reclaimed rather
+  than invoiced. A staging box sized comfortably today could simply stop.
+- **The 2 OCPU / 12 GB decision below is safe either way** — it sits inside the Always Free allowance,
+  so it survives trial end untouched. That is now a reason to be *more* confident in it, not less.
+- ⚠️ **The vault (§4) is the resource actually at risk.** OCI Vault is not an Always Free service. While
+  a trial is running, credits cover it; when the trial ends with no payment method, it is exactly the
+  kind of resource that gets reclaimed — and it holds the staging secrets. That makes it worth knowing
+  whether the vault survives the transition *before* Phase 1 depends on it.
+
+**verify** — the one fact still missing is **whether the 30-day trial is still running, and if so its
+end date**, visible as a credit balance and expiry under Billing & Cost Management → Overview. That
+date, if it exists, is a real deadline for the vault rather than a curiosity. Ambiguity remains because
+the raised limits are consistent with a live trial *and* with a post-trial Always Free account whose
+allowance is enforced separately from its limits; the credit balance is what separates them, and only
+the console shows it.
 
 #### Does staging actually fit? Checked line by line, 2026-08-18
 
@@ -408,8 +421,9 @@ Two of those need a decision rather than a note.
 GB-hrs. The slack is 12 OCPU-hrs — *six hours of a second 2-OCPU VM per month*. So rebuilding the
 staging box, if the replacement boots before the original is terminated, spends a meaningful fraction
 of the month's remaining allowance, and there is no room at all for a second instance to test
-anything. Worse in combination with the PAYG finding above: the overflow does not fail the create, it
-bills.
+anything. What the overflow does *not* do is bill: with no payment method on file (above), exceeding
+the allowance spends trial credits or is refused outright. The cost of being careless here is a
+staging box that stops, not an invoice.
 
 ➡️ **Decided 2026-08-18: keep 2 OCPU / 12 GB.** The alternative considered was 1 OCPU / 8 GB —
 744/1,500 OCPU-hrs (49.6%) and 5,952/9,000 GB-hrs (66.1%), headroom on both — since memory is the
@@ -432,9 +446,11 @@ What the decision obliges, since 12 OCPU-hrs of slack is not a margin you can be
   replacement does — which is rare, and now has a named rule attached to it.
 - **The tightest case is a 31-day month.** Shorter months have real slack (February: 1,344/1,500,
   89.6%), so a plan that holds in a 31-day month holds always.
-- **The guardrail is now the budget, not the limit.** §9.5 raised A1 limits mean an overflow bills
-  rather than failing, and §9.6's $0.01 alert is what turns that from silent into mail. Keeping the
-  full size is defensible *because* that alert exists; it would have been reckless before it did.
+- **§9.6's alert is a canary, not a brake.** With Free Tier and no payment method (above), an overflow
+  cannot become a bill, so the alert is not standing between a typo and an invoice — what it detects is
+  *credit consumption*, which is the earliest visible sign that something outside the Always Free
+  allowance is running and will therefore not survive trial end. Useful, for a different reason than
+  the one it was created for.
 
 ➡️ **Decided 2026-08-18: staging takes the one free Flexible LB.** The allowance is a single LB at a
 fixed 10 Mbps, and the compose comment ("the load balancer reaches this instance by its private IP")
@@ -637,7 +653,8 @@ healthy behind the LB — and that is worth having on day one.
 6. ~~**No budget or spending alert exists.**~~ ✅ **Created 2026-08-18** (details at the end of this
    item), on the tenancy root so nothing can be created outside its scope. This is the cheapest guardrail in the
    whole plan and the only one that catches the failure the Always Free tier invites — not a runaway
-   bill, but a *single* resource that quietly is not free. Everything §7 provisions is meant to cost
+   bill (§7: the account carries no payment method, so there is no bill to run away), but a *single*
+   resource that quietly is not free and will therefore not outlive the tier it runs on. Everything §7 provisions is meant to cost
    nothing, so the useful threshold is low: a small monthly amount with an alert rule on **actual**
    spend at a low percentage means the first dollar sends mail. Specifically:
 
@@ -669,8 +686,10 @@ healthy behind the LB — and that is worth having on day one.
    **The $1 amount is not a spending plan.** OCI has no "alert at zero", so the amount is a
    denominator chosen to make the first cent the trigger: a $0.01 absolute threshold against it means
    "anything at all is billing". Reading it as a budget in the ordinary sense — a limit somebody
-   intends to spend up to — inverts what it is for. And it enforces nothing: a budget alert cannot
-   stop a create, only report one (§9.5's raised limits are why that distinction matters).
+   intends to spend up to — inverts what it is for. And it enforces nothing: a budget alert cannot stop
+   a create, only report one. On this tenancy what it reports is credit consumption rather than an
+   invoice, since there is no payment method (§7) — which makes it an early warning that something
+   outside the free allowance is running, not a financial control.
 
    Two things to expect from it, so neither reads as a fault:
 
