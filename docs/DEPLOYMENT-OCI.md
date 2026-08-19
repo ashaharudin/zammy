@@ -507,6 +507,40 @@ secrets**: `user_data` is readable from the instance metadata service and via th
 is filled in once over SSH. Swapping that for an instance principal reading OCI Vault is the same
 upgrade §4 defers for production, and it changes nothing else.
 
+#### Staging serves `zammy.info` itself, for now
+
+Decided 2026-08-19. The issued certificate covers `zammy.info` and `www.zammy.info` and nothing else
+(§9.2), so this is the option that needs no second certificate — and it fits §7's order, where staging
+is built first and production follows. `CORS_ORIGIN` for staging is therefore **`https://zammy.info`**,
+which is the same-origin value §4 wants rather than a staging-specific exception.
+
+The thing to be clear-eyed about: **this makes "staging" the public site.** It is not a private
+environment behind an unadvertised name, and three things follow that would otherwise be someone's
+unpleasant discovery:
+
+- **Everything broken is broken in public**, on the real domain, for as long as production does not
+  exist. That is an acceptable trade for a system with no users yet, and it stops being one the moment
+  there are any.
+- **The per-IP rate limit is now exposed to the internet rather than to a test harness**, which
+  promotes `TRUSTED_PROXY_HOPS=1` from a tidy setting to the thing standing between the ceiling and a
+  forged header (§9.2, and the reason it is a count rather than a boolean). It must be set at the same
+  time the LB is put in front, not afterwards.
+- **A public hostname invites indexing.** A staging-quality timeline being crawled and cached is worth
+  a deliberate decision rather than an accident — the cheap answer is `noindex` until the system is
+  meant to be found.
+
+⚠️ **The deferred half returns when production arrives, and it returns with two problems at once.**
+Production will want `zammy.info`, which means staging must move to a hostname like
+`staging.zammy.info` — and *this certificate does not cover that name*, so the move needs a
+certificate that does not exist yet. At the same moment the single free Flexible LB (§7 above) has to
+serve two environments, and the paragraph there rules out sharing one. So "staging keeps the apex" is
+cheap today and buys a two-part bill later: a second certificate and a second load balancer. Worth
+pricing when Phase 4 is planned rather than discovering at cutover.
+
+One thing this simplifies: the quota advice below is moot until production exists. There is no
+production key for staging to starve, because staging *is* the deployment — so a single Currents key
+and the caps below are the whole story for now.
+
 Staging runs **`CURRENTS_MODE=live`**, so it exercises the real upstream — the Cloudflare
 User-Agent rule, the `x-ratelimit-*` headers and the 7-day `date_range` ceiling are things fixtures
 replay rather than enforce. The cost is quota: the free tier's 1000 calls/day are **per key**, so
