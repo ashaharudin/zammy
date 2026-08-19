@@ -58,3 +58,49 @@ variable "redis_port" {
   type    = number
   default = 6379
 }
+
+# --- staging VM -------------------------------------------------------------
+
+variable "operator_ssh_cidr" {
+  description = <<-EOT
+    The single address allowed to SSH to the staging VM, as a /32.
+
+    Required with no default on purpose. A default of 0.0.0.0/0 is exactly the
+    posture the oci-dev-tools stack had (§9.5) and that we deleted it for, so an
+    apply that forgets this must FAIL rather than quietly open port 22 to the
+    internet. Find it with `curl -s https://checkip.amazonaws.com`.
+  EOT
+  type        = string
+
+  validation {
+    condition     = var.operator_ssh_cidr != "0.0.0.0/0"
+    error_message = "Refusing 0.0.0.0/0: SSH on a public host must be restricted to a known address."
+  }
+
+  validation {
+    condition     = can(cidrhost(var.operator_ssh_cidr, 0))
+    error_message = "Must be a CIDR block, e.g. 203.0.113.4/32."
+  }
+}
+
+variable "ssh_public_key" {
+  description = <<-EOT
+    Public half of the key that may SSH to the staging VM. No default and never
+    generated here: the key that reaches a public host should be one you created
+    and hold the private half of. `ssh-keygen -t ed25519 -C zammy-staging` if you
+    do not have one — there is currently no *.pub in ~/.ssh.
+  EOT
+  type        = string
+}
+
+variable "staging_ocpus" {
+  description = "2 OCPU decided in §7, which is 99.2% of the monthly Ampere allowance at 24×7 — see that section before raising it."
+  type        = number
+  default     = 2
+}
+
+variable "staging_memory_gb" {
+  description = "12 GB. Not slack: it is Postgres page cache for the seeded corpus (§7)."
+  type        = number
+  default     = 12
+}
