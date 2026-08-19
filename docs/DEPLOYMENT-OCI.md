@@ -265,8 +265,30 @@ management` CLI commands need it passed as `--endpoint`.
 
 **Type `DEFAULT`, deliberately.** `virtual-private-vault-count` is **0** in this tenancy, so the
 expensive private-partition type cannot be created here even by accident — a useful accident not to be
-able to have, given §9.6. `DEFAULT` bills per key version per month, which is the cents-scale end of
-the pricing, though not free.
+able to have, given §9.6.
+
+✅ **And the vault is Always Free, which an earlier draft of this section got wrong.** Oracle's free-tier
+listing covers **20 key versions of HSM-protected master encryption keys and 150 secrets** — against
+which this vault uses **1 key version and 4 secrets**, two orders of magnitude inside the allowance. So
+the vault is not the cents-scale expense recorded here before, and §7's worry that it was the resource
+most exposed to a trial ending was misplaced.
+
+⚠️ **One detail the allowance wording does not settle: this key is `SOFTWARE`, and the free entitlement
+names `HSM`.** The limits API meters the two separately (`virtual-vault-keyversion-count` versus
+`virtual-vault-softwarekeyversion-count`), so a software key version is a different metered resource
+rather than a cheaper flavour of the same one — and whether it is equally free is **verify**, not
+established. Two things make this a small question rather than an urgent one:
+
+- HSM is *explicitly* free to 20 versions and is the stronger mode, so there is no argument for
+  `SOFTWARE` on cost or on security. Were the key being created today, HSM would be the choice.
+- Switching now is not free of effort: a secret's encryption key is **fixed at creation** —
+  `oci vault secret update` takes no `--key-id` — so moving to an HSM key means recreating all four
+  secrets and re-entering their values by hand.
+
+**So leave it, and let §9.6's alert answer the question.** If nothing bills through a full cycle, a
+software key version is free and there is nothing to do; if a few cents appear, the alert has both
+proved itself and priced the decision. That is a better use of the guardrail than churning four secrets
+against an unknown.
 
 ⚠️ **A vault cannot be deleted promptly.** OCI only *schedules* deletion, minimum 7 days out. So this
 is not a resource to create speculatively, and tearing down a Phase 1 mistake will not be same-day.
@@ -388,10 +410,11 @@ implied:
   than invoiced. A staging box sized comfortably today could simply stop.
 - **The 2 OCPU / 12 GB decision below is safe either way** — it sits inside the Always Free allowance,
   so it survives trial end untouched. That is now a reason to be *more* confident in it, not less.
-- ⚠️ **The vault (§4) is the resource actually at risk.** OCI Vault is not an Always Free service. While
-  a trial is running, credits cover it; when the trial ends with no payment method, it is exactly the
-  kind of resource that gets reclaimed — and it holds the staging secrets. That makes it worth knowing
-  whether the vault survives the transition *before* Phase 1 depends on it.
+- ~~⚠️ **The vault (§4) is the resource actually at risk.**~~ ✅ **Wrong — OCI Vault *is* Always Free**,
+  at 20 HSM key versions and 150 secrets, against 1 and 4 in use (§4). It therefore survives a trial
+  ending like everything else here, and this section no longer has a named resource waiting to be
+  reclaimed. Which also drains most of the urgency from the question below: with nothing in the tenancy
+  outside the allowance, the trial's end date stops being a deadline and becomes a detail.
 
 **verify** — the one fact still missing is **whether the 30-day trial is still running, and if so its
 end date**, visible as a credit balance and expiry under Billing & Cost Management → Overview. That
@@ -776,9 +799,10 @@ healthy behind the LB — and that is worth having on day one.
    item), on the tenancy root so nothing can be created outside its scope. This is the cheapest guardrail in the
    whole plan and the only one that catches the failure the Always Free tier invites — not a runaway
    bill (§7: the account carries no payment method, so there is no bill to run away), but a *single*
-   resource that quietly is not free and will therefore not outlive the tier it runs on. Everything §7 provisions is meant to cost
-   nothing, so the useful threshold is low: a small monthly amount with an alert rule on **actual**
-   spend at a low percentage means the first dollar sends mail. Specifically:
+   resource that quietly sits outside the allowance. Everything §7 provisions is meant to cost nothing —
+   and as of 2026-08-19 everything in the tenancy actually is inside the free tier, the vault included
+   (§4) — so the useful threshold is low: a small monthly amount with an alert rule on **actual** spend
+   at a low percentage means the first cent sends mail. Specifically:
 
    - **Alert on actual, not forecast.** Forecast rules need a spend history to extrapolate from; on a
      tenancy sitting at or near zero they either stay silent or swing wildly. Actual spend crossing a
@@ -817,9 +841,11 @@ healthy behind the LB — and that is worth having on day one.
 
    - **It is not instant.** Budgets are evaluated periodically and cost data itself lags, so the mail
      arrives within hours of the first cent being recorded, not on the second.
-   - **It may fire legitimately, soon.** The §4 vault bills per key version. If mail arrives, read the
-     amount before reacting — a few cents is the alert proving itself, which is the one test of a
-     smoke detector worth having.
+   - **Silence is now the expected outcome, which makes it a real canary.** Nothing currently in the
+     tenancy is known to sit outside the free tier — the vault included (§4) — so mail arriving is
+     information rather than noise. The one open case it would settle is whether a `SOFTWARE` key
+     version is free where the allowance names `HSM` (§4); a few cents against this budget answers that
+     question more cheaply than any amount of reading.
 
    One CLI trap, for whoever automates this: `oci budgets budget alert-rule create --wait-for-state`
    throws `missing 1 required positional argument: 'alert_rule_id'`. That is a bug in the CLI's
