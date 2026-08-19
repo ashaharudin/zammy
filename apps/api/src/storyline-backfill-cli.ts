@@ -46,6 +46,19 @@ const num = (name: string, fallback?: number): number | undefined => {
 };
 
 const restart = args.includes("--restart");
+/**
+ * `--groups=1,2,3` — link exactly these and nothing else, cursor ignored.
+ *
+ * For a group stranded BEHIND the resume cursor with no storyline at all, which
+ * a plain resume never revisits and `--restart` would fix only by rewriting the
+ * whole database. Skips the bridge sweep: a seven-group repair has no business
+ * triggering archive-wide merges, and the nightly chore runs that invariant
+ * anyway.
+ */
+const onlyGroups = (flag("groups") ?? "")
+  .split(",")
+  .map((id) => id.trim())
+  .filter((id) => /^\d+$/.test(id));
 const labelsOnly = args.includes("--labels-only");
 const skipLabels = args.includes("--no-labels");
 const relabel = args.includes("--relabel");
@@ -149,6 +162,7 @@ try {
       // Defaults to the configured ceiling, so the pass paces itself instead of
       // piling into the client's pacer and waiting there. `--label-rate` can
       // only go SLOWER usefully: the client enforces the ceiling regardless.
+      ...(onlyGroups.length > 0 ? { onlyGroups } : {}),
       labelRatePerMinute: num("label-rate", config.GEMINI_MAX_RPM)!,
       onProgress: (progress) => {
         // One line per 2s at most: a backfill is long enough that progress
@@ -182,7 +196,7 @@ try {
   // sweep plus relabels is not "the next group boundary". The nightly chore
   // catches up on whatever a stopped run left.
   let bridgeReport: Awaited<ReturnType<typeof runBridgeSweep>> | null = null;
-  if (!labelsOnly && !stopping) {
+  if (!labelsOnly && !stopping && onlyGroups.length === 0) {
     bridgeReport = await runBridgeSweep({ db, config: linkerConfig, log });
     // `!skipLabels`: --no-labels promises no model calls, and the post-sweep
     // relabel is a model call per survivor — the sweep's merges still happen,

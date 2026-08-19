@@ -69,6 +69,25 @@ export interface BackfillOptions {
   /** Ceiling on how many storylines the label pass will touch. */
   maxLabels?: number;
   /**
+   * Link exactly these groups and nothing else, ignoring the resume cursor.
+   *
+   * The cursor is a keyset over `(group_published, group_id)`, so a resume run
+   * starts AFTER the last group it linked and never looks behind itself. That is
+   * right for a rollout and wrong for the one failure it cannot see: a group
+   * somewhere in the middle of the archive that has no storyline at all — the
+   * ingest died mid-batch, or linking threw for it once. A plain resume walks
+   * straight past it and `--restart` is a sledgehammer, since it rewrites every
+   * storyline in the database.
+   *
+   * Measured need: 7 groups (9 articles) from 2026-07-24..31 sat unlinked in the
+   * dev archive, taking no timeline slot at all, with the cursor three weeks
+   * ahead of them.
+   *
+   * `linkGroup` is idempotent, so naming a group that IS linked is safe — it
+   * re-records bridges and leaves the group where it lives.
+   */
+  onlyGroups?: readonly string[];
+  /**
    * Relabel storylines the CONFIGURED MODEL did not name, ignoring the drift
    * check.
    *
@@ -193,6 +212,12 @@ async function link(
   // is a command the operator has to run.
   await assertCorpusExists(deps);
 
+  // A targeted run reaches behind the cursor for named groups only, and reports
+  // against that list rather than against the archive.
+  if (options.onlyGroups && options.onlyGroups.length > 0) {
+    return linkNamed(deps, options, options.onlyGroups);
+  }
+
   const total = await countGroups(deps.db);
   const resumeFrom = options.restart ? null : await readLastLinkedGroup(deps.db);
   let after: { published: Date; groupId: string } | null = resumeFrom;
@@ -262,6 +287,52 @@ async function link(
     // moved. It cannot fail to move here (the loop above advances it on every
     // group, failures included), and the check is what makes that explicit.
     if (batch.length < batchSize) break;
+  }
+
+  return tally;
+}
+
+/**
+ * Link a named list of groups, cursor ignored.
+ *
+ * Deliberately not a loop over `readLinkableGroups`: that reads a keyset PAGE,
+ * and what this needs is specific rows. It reuses the same aggregate through a
+ * one-group window per id, so the tokens and publication date a group is judged
+ * on are derived exactly as the sweeping pass derives them.
+ */
+async function linkNamed(
+  deps: LinkerDeps,
+  options: BackfillOptions,
+  groupIds: readonly string[],
+): Promise<Pick<BackfillReport, "linked" | "attached" | "merges" | "failures" | "incomplete">> {
+  await assertCorpusExists(deps);
+  const tally = { linked: 0, attached: 0, merges: 0, failures: 0, incomplete: false };
+
+  for (const groupId of groupIds) {
+    if (options.signal?.aborted) {
+      tally.incomplete = true;
+      break;
+    }
+    const [group] = await readLinkableGroups(deps.db, { onlyGroupIds: [groupId], limit: 1 });
+    if (!group) {
+      // No articles under that id. Not a failure to report as one: the caller
+      // named a group retention has already taken.
+      continue;
+    }
+    try {
+      const outcome = await linkGroup(deps, {
+        groupId: group.groupId,
+        memberTokens: group.memberTokens,
+        language: group.language,
+        published: group.published,
+      });
+      tally.linked += 1;
+      if (outcome.attached) tally.attached += 1;
+      tally.merges += outcome.merged.length;
+    } catch {
+      tally.failures += 1;
+    }
+    options.onProgress?.({ phase: "link", done: tally.linked, total: groupIds.length });
   }
 
   return tally;

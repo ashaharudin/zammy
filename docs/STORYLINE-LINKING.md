@@ -583,3 +583,203 @@ has no model and cannot have one — a grid of 30 settings over 23,000 groups is
 hundreds of thousands of decisions — so `PILES-FORMED` and `NAMED-INTACT` answer
 "what would the anchor rule build", which is still the question when a threshold
 moves.
+
+### The retroactive cleanup, applied (2026-08-19)
+
+`pnpm dissolve:storyline-piles` — dry run, reviewed, then `--apply`. Scope was the
+hand-verified set only: `label_source = 'bigram'` at exactly two groups.
+
+The population had already fallen from 88 to **66** on its own, because the live
+gate has been refusing formations since it shipped — 101 of them by the time this
+ran, and reading a sample confirms they are what they claim (Paul Parker on a
+player against Rooney's nose surgery; sharks-and-hurricanes against synthetic
+tumour data).
+
+| verdict | n | action |
+| --- | --- | --- |
+| NOT ONE STORY | **49** | dissolved |
+| named | 7 | kept |
+| no verdict (429) | 10 | untouched — quota, and quota never acts |
+
+Both sides of all 49 verified afterwards: one group each, provisional,
+unlabelled, live, day slot intact. **48 revived the departing group's original
+UUID**; one minted a new identity, being an `attachGroup` formation with no alias
+to revive. Live storylines 3,348 → 3,299, aliases 8,601 → 8,553, refusals 101 →
+150. No group was left without a storyline, and no refused pair shares a
+two-group storyline.
+
+**The 7 keeps are the more useful half of the result, because the gate erred
+toward keeping** — which is the safe direction when the action is destructive.
+Two of them say the *campaign* was wrong to decline: `07c02679` is really the
+Strait of Hormuz coverage, and `30111d24` is two near-duplicate winery
+listicles. Three more — "South Korea AI Ambition", "Diddy Legal Battles",
+"Middle East Peace Prospects" — are arguably beats rather than events, kept
+piles this pass did not catch. Erring that way costs a pile that was already
+there; erring the other way costs a real arc that cannot be rebuilt.
+
+Two things this did NOT touch, both deliberate:
+
+- **The 1,084 known-suspect storylines at 3+ groups** (250 declined, 834 never
+  judged). 199 of the 250 have absorbed merges, up to 30 aliases deep, so undoing
+  one asks which of N groups belong together — the split ADR-0011 refuses to
+  build. Only a full gated relink reaches them, and that re-points all 8,553
+  aliases, so it is a decision rather than a chore.
+- **The ~26% of model-named two-group storylines the validation found are piles.**
+  A real target, and a bad first one: no hand-checked ground truth stands behind
+  them.
+
+A pre-existing gap surfaced while verifying, unrelated to any of this: **7 groups
+(9 articles, last seen 2026-07-31) hold no storyline at all**, so they take no
+timeline slot. They were already unlinked in the pre-cleanup snapshot, so the
+cause is older. `pnpm backfill:storylines --groups=...` is what reaches them —
+NOT a plain resume, whose cursor had passed them three weeks earlier
+(docs/STORYLINE-BACKFILL.md).
+
+## Where the big arcs come from (2026-08-19)
+
+Chased after the backfill report showed a largest storyline of 135 groups where
+the day before it had been 97.
+
+**First, a measurement trap worth naming.** Nothing grew by 38. `Tropical Storm
+Lala` is still exactly 97; a *different* arc overtook it — `Hormuz Strait Crisis`
+went **47 → 135 groups in roughly one nightly pass**. The percolation alarm is a
+number about the archive, not about a storyline, and comparing it across days
+compares whichever arc happened to be biggest. 135 of 23,645 groups is **0.57%**,
+so ADR-0009's alarm is still nowhere near ringing; what moved is coherence, not
+percolation.
+
+### The anchor rule is not how either big arc grew
+
+Both of the two largest problem arcs are **frozen against the anchor rule**, and
+for the same reason:
+
+| arc | groups | profile | df of profile tokens |
+| --- | --- | --- | --- |
+| `e2c8dd39` Hormuz Strait Crisis | 135 | `{hormuz, iran, strait}` | 2.3–2.7% of the corpus |
+| `b23db435` Canadian Stock Market Investing | 47 | `{dividend, stock}` | 0.37% and 3.7% |
+
+Every one of those tokens is above the 0.2% ceiling, so no arriving group can
+anchor on them. That is the percolation damper ADR-0011 claimed for majority
+profiles, working: a growing storyline's consensus vocabulary tightens until the
+anchor can no longer reach it. Growth after that point is **merges and
+attaches made earlier**, not new anchoring.
+
+`b23db435` shows how the window opens and shuts. **All 47 of its groups are
+`fool.ca`** dividend columns, and `dividend` was **df 17** when the arc formed —
+comfortably under the ceiling — against **df 61 (0.372%)** now, above it. This is
+ADR-0009's original finding ("the story's own name hit df 64 the day it
+dominated") happening to a BEAT rather than a story: the anchor recognised the
+column series while its vocabulary was still rare and stopped once the series was
+established, by which time the arc held 47 groups. It grew 32 by direct attach
+and ~7 by bridge merge.
+
+### The label-agreement merge is NOT the vector — do not add a coherence check there
+
+This was the obvious next place to put a verdict, and the archive says it would
+be wasted:
+
+- **Hormuz**: the absorbed labels are legitimate *exact* agreements — "Hormuz
+  Strait Crisis" ×8, "Strait of Hormuz Crisis" ×10. The merge did exactly its job.
+- **`b23db435`**: of 40 aliases, **one** carried the matching label. The other six
+  model labels were all different names ("Canadian Dividend Passive Income", "TSX
+  Market Strategy", …), so the merge could not have built it.
+
+And the seam already carries STRONGER evidence than a coherence verdict would
+add: two *independent* model labels agreeing exactly, plus the grounded-proper-noun
+guard, plus span overlap. Asking a model "are these one story?" there re-asks a
+question two labels have already answered separately.
+
+Contamination enters **earlier, at formation**. An oil-market piece pairs with a
+Hormuz piece, the labeller reasonably names the pair "Strait of Hormuz Tensions",
+and label agreement then merges it in — dragging the market piece along. Each
+step is defensible; the aggregate drifts an event into a topic. 35 of the arc's
+135 lead titles (26%) never mention hormuz, strait, Iran or Tehran, and most of
+those are oil-and-markets commentary, which ADR-0011 arguably permits
+("follow-ups, reactions, analysis"). About ten are not defensible at all — a
+Canada.ca diplomatic-appointments notice, a Reddit CMV post, "Daily Stock Market
+Report (Mon 3rd August)". **Note that the coherence gate would not refuse these
+either**: shown an oil piece and a Hormuz piece, a model plausibly says yes.
+
+### Absorption is a ONE-WAY DOOR, and it is the reason cleanup is time-sensitive
+
+**49 declined piles have already been absorbed into 30 larger arcs**, which puts
+them permanently beyond `dissolveFormation` — it requires exactly two groups, and
+these are now members of arcs of 31 to 135. Every large arc has swallowed
+several:
+
+| arc | groups | piles absorbed |
+| --- | --- | --- |
+| Europe Solar Eclipse | 98 | 5 |
+| Hormuz Strait Crisis | 135 | 4 |
+| FedEx St Jude Championship | 86 | 4 |
+| Tropical Storm Lala | 97 | 3 |
+| Trump Turkey Flight Scare | 94 | 3 |
+| USS Lincoln Conditions Inquiry | 43 | 3 |
+| Y Intercept Hong Kong Filings | 31 | 3 |
+
+So the original 382 split three ways: 66 were still dissolvable at cleanup time,
+**49 had already escaped into real arcs**, and the rest sit at 3+ groups alone.
+The nightly chore keeps opening that door. A pile left alone does not stay
+dissolvable — it migrates into a correct arc and contaminates it, which is a
+stronger argument for acting promptly than "the timeline looks untidy".
+
+A related gotcha for whoever measures this next: **`attached_at` survives a
+merge** ("the loser's groups keep their original `attached_at`"), so that column
+dates a group's FIRST attachment to anything, not when it joined the arc it is in
+now. It cannot be used to date an arc's growth.
+
+### Single-domain concentration finds the boilerplate residue for free
+
+A genuine event draws several outlets; a publisher's column series draws one.
+That is one aggregate and no model calls:
+
+```sql
+-- arcs of 6+ groups whose every member group leads with the same source domain
+select s.id, s.label, count(*) groups, min(a.source_domain) domain
+from storylines s
+join storyline_groups sg on sg.storyline_id = s.id
+join lateral (
+  select source_domain from articles where group_id = sg.group_id
+  order by published limit 1
+) a on true
+where s.merged_into is null and s.status <> 'provisional'
+group by s.id, s.label
+having count(*) >= 6 and count(distinct a.source_domain) = 1
+order by count(*) desc;
+```
+
+| arc size | arcs | single-domain |
+| --- | --- | --- |
+| 2 | 936 | 23.2% |
+| 3–5 | 1,884 | 11.1% |
+| 6–19 | 448 | 7.1% |
+| **20+** | 31 | **9.7% (3)** |
+
+**35 arcs hold 381 groups at 6+ groups, and all 14 at 9+ are boilerplate or a
+beat** — `fool.ca` dividends (47), marketbeat ×5 ("Price Target", "Consensus
+Recommendation", "MarketBeat Daily Stock Picks", "Royal Bank"), `akipress` "South
+Korea" (30), `hkexnews` ×3, `investing.com` and `benzinga` "Earnings Call",
+`prnewswire` InventHelp ×2. **That includes both families this document logged as
+"known residue … recorded, not fixed"**, found for nothing.
+
+It is a **detector, not a gate**, on two measured grounds:
+
+- At 6–8 groups roughly a third are legitimate. `winnipegfreepress.com` carrying
+  AP sports is one outlet on one real story: "Nationals No Hitter Bids",
+  "Minnesota Lynx Playoff Berth", "Twins Orioles Series".
+- With one provider configured (ADR-0012 leaves GNews off by default),
+  single-domain partly measures PROVIDER coverage rather than publisher behaviour.
+  Switching a second provider on will move these numbers for reasons that have
+  nothing to do with storyline quality, so do not build a threshold on them.
+
+### An expectation this document got wrong
+
+The known-residue note above predicted: *"S4's labeler will make them
+conspicuous, since neither can be named in a few words."* **It did not.** The
+labeller named them fluently — "MarketBeat Daily Stock Picks", "InventHelp
+Product Innovations", "Frontiers Research Publication Series", "Canadian Stock
+Market Investing". A beat is *easy* to name; naming difficulty was the wrong
+proxy for incoherence, and it is why this residue grew into top-ten arcs
+unnoticed. What does surface them is the domain aggregate above, and — at
+formation only — the coherence verdict, which refused two `fool.ca` dividend
+pairs in the cleanup's dry run.

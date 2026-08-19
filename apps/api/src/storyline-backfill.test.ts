@@ -573,4 +573,79 @@ describe("the backfill", () => {
       expect(gen.calls).toBe(2);
     });
   });
+
+  describe("a targeted run (--groups)", () => {
+    it("links a group stranded BEHIND the resume cursor", async () => {
+      // The failure this exists for: a group in the middle of the archive with
+      // no storyline at all. The cursor is a keyset over (published, group_id),
+      // so a resume run starts after the last linked group and never looks back.
+      await seedArchive();
+      await backfillStorylines(deps(), { skipLabels: true });
+
+      // Strand the FIRST group by hand — everything after it stays linked, so
+      // the cursor sits far past it exactly as it does in the live archive.
+      const stranded = (
+        await db
+          .selectFrom("storyline_groups")
+          .select("group_id")
+          .orderBy("group_id", "asc")
+          .executeTakeFirstOrThrow()
+      ).group_id;
+      await sql`
+        delete from storyline_days where storyline_id in (
+          select storyline_id from storyline_groups where group_id = ${stranded})
+      `.execute(db);
+      await sql`delete from storyline_groups where group_id = ${stranded}`.execute(db);
+
+      // A plain resume walks straight past it…
+      const resume = await backfillStorylines(deps(), { skipLabels: true });
+      expect(resume.linked).toBeLessThanOrEqual(1);
+      expect(await readGroupStorylines(db, stranded)).toEqual([]);
+
+      // …and a targeted run reaches it.
+      const targeted = await backfillStorylines(deps(), {
+        skipLabels: true,
+        onlyGroups: [stranded],
+      });
+
+      expect(targeted.linked).toBe(1);
+      expect(await readGroupStorylines(db, stranded)).toHaveLength(1);
+    });
+
+    it("touches nothing but the groups it was given", async () => {
+      await seedArchive();
+      await backfillStorylines(deps(), { skipLabels: true });
+      const before = await shape();
+
+      const one = (
+        await db
+          .selectFrom("storyline_groups")
+          .select("group_id")
+          .orderBy("group_id", "asc")
+          .executeTakeFirstOrThrow()
+      ).group_id;
+      const report = await backfillStorylines(deps(), {
+        skipLabels: true,
+        onlyGroups: [one],
+      });
+
+      // Idempotent: naming an already-linked group re-records its bridges and
+      // leaves it where it lives.
+      expect(report.linked).toBe(1);
+      expect(await shape()).toEqual(before);
+    });
+
+    it("ignores a group id the archive does not hold", async () => {
+      await seedArchive();
+      await backfillStorylines(deps(), { skipLabels: true });
+
+      const report = await backfillStorylines(deps(), {
+        skipLabels: true,
+        onlyGroups: ["999999999"],
+      });
+
+      // Not a failure to report as one — retention may have taken it.
+      expect(report).toMatchObject({ linked: 0, failures: 0 });
+    });
+  });
 });
