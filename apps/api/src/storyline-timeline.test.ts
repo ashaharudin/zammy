@@ -18,6 +18,8 @@ import type { CanonicalQuery } from "./canonical.js";
 import { groupCreatedArticles } from "./grouping-service.js";
 import { readStorylineView, readTimeline } from "./timeline-service.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
+import { labelWords } from "./storyline-label-merge.js";
+import { backfillLabelWords } from "./label-words-backfill.js";
 
 /**
  * The storylines-v2 read path (ADR-0011): the timeline pages over
@@ -166,6 +168,7 @@ async function storylineOf(groupIdList: string[], label?: string): Promise<strin
     await setStorylineLabel(db, {
       storylineId: first.id,
       label: label ?? "Fausto Hawaii",
+      labelWords: labelWords(label ?? "Fausto Hawaii"),
       labelAt: NOW,
       labelGroupCount: groupIdList.length,
       labelSource: "test",
@@ -567,11 +570,12 @@ describe("surfacing storylines beside a search", () => {
     expect(result.storylines.map((s) => s.id)).toEqual([storyline]);
   });
 
-  it("folds plurals across the label too, which is stored as the model wrote it", async () => {
-    // Keywords arrive folded because `profile_tokens` are; a label is not, so
-    // the folded keyword is offered back to it in the spellings the fold would
-    // have produced it from. Both directions: a plural label found by a
-    // singular keyword, and a plural keyword found by the singular profile.
+  it("folds plurals across the label too, by folding the label the same way", async () => {
+    // `label_words` is folded by `normalizeLabel` and `profile_tokens` by the
+    // corpus tokenizer, which is the same two steps in the same order — so one
+    // folded keyword answers both and neither side needs an inverse. Both
+    // directions: a plural label found by a singular keyword, and a plural
+    // keyword found by the singular profile.
     const query = await seed([
       sighting({ domain: "a.example", title: "Hurricane Fausto nears Hawaii", published: MONDAY }),
       sighting({
@@ -627,9 +631,9 @@ describe("surfacing storylines beside a search", () => {
   });
 
   it("finds a label's possessive by the name inside it", async () => {
-    // "Dillard's Tariff Refund" answers to `dillard`: the label is split on
-    // runs of non-alphanumerics, so the possessive comes apart the way the
-    // tokenizer's own fold would have taken it off (`trimWordPunctuation`).
+    // "Dillard's Tariff Refund" answers to `dillard`, because the words stored
+    // for it went through `trimWordPunctuation` — the tokenizer's own fold, the
+    // one that took the possessive off the corpus side too.
     const query = await seed([
       sighting({ domain: "a.example", title: "Hurricane Fausto nears Hawaii", published: MONDAY }),
       sighting({
@@ -649,11 +653,11 @@ describe("surfacing storylines beside a search", () => {
 
     // And by the possessive itself, which is what a reader typing the label
     // back sends. `canonicalize` does not trim punctuation, so the keyword
-    // arrives as `dillard's`; folded with `trimWordPunctuation` before
-    // `singular` it reaches `dillard` and meets the label's split word. Without
-    // that first half of the fold it reaches `dillard'` and meets nothing —
-    // neither the label, split on the apostrophe, nor a profile holding the
-    // trimmed spelling.
+    // arrives as `dillard's`; `labelWords` trims it before stemming, exactly as
+    // it did when the label was written, so both sides say `dillard`. With
+    // `singular` alone the keyword reaches `dillard'` and meets nothing — the
+    // stranded apostrophe `trimWordPunctuation` exists to prevent, arriving
+    // this time from the search side.
     await dropCachedPages(query.fingerprint);
     const possessive = await readTimeline(
       harness.deps,
@@ -661,6 +665,47 @@ describe("surfacing storylines beside a search", () => {
       { limit: 25 },
     );
     expect(possessive.storylines.map((s) => s.id)).toEqual([storyline]);
+  });
+
+  it("matches nothing on the label side until the backfill runs, then does", async () => {
+    // Migration 0016 adds `label_words` empty and only `setStorylineLabel`
+    // fills it, so every row labelled before the migration has none. That is
+    // deliberate and is what lets the migration run AHEAD of the API: an
+    // un-backfilled row simply falls back to the profile-only surfacing it had
+    // before, rather than erroring or matching wrongly.
+    //
+    // `label_words` is emptied here by hand because that is the only way to
+    // stand where a pre-migration row stands — the write path cannot produce it.
+    const query = await seed([
+      sighting({ domain: "a.example", title: "Hurricane Fausto nears Hawaii", published: MONDAY }),
+      sighting({
+        domain: "b.example",
+        title: "Hurricane Fausto weakens west of Hawaii",
+        published: TUESDAY,
+      }),
+    ]);
+    const storyline = await storylineOf(await groupIds(), "Pacific Storm Fausto");
+    await sql`update storylines set label_words = '{}' where id = ${storyline}::uuid`.execute(db);
+
+    // `pacific` is in the label and in no headline, so the profile cannot
+    // answer it: this is the label side and nothing else.
+    const before = await readTimeline(
+      harness.deps,
+      { ...query, keywords: ["pacific"] },
+      { limit: 25 },
+    );
+    expect(before.storylines).toEqual([]);
+
+    const result = await backfillLabelWords({ db }, { batch: 100 });
+    expect(result.written).toBeGreaterThanOrEqual(1);
+
+    await dropCachedPages(query.fingerprint);
+    const after = await readTimeline(
+      harness.deps,
+      { ...query, keywords: ["pacific"] },
+      { limit: 25 },
+    );
+    expect(after.storylines.map((s) => s.id)).toEqual([storyline]);
   });
 });
 

@@ -17,6 +17,7 @@ import {
 } from "@zammy/storage";
 import { fingerprintOf } from "./canonical.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
+import { labelWords } from "./storyline-label-merge.js";
 
 /**
  * The landing-page cloud (ARCHITECTURE 10.1, post-6c): the first visitor after
@@ -155,6 +156,7 @@ async function seedStoryline(
   await setStorylineLabel(h.deps.db, {
     storylineId: created.id,
     label,
+    labelWords: labelWords(label),
     labelAt: NOW,
     labelGroupCount: groups.length,
     labelSource: "test",

@@ -227,6 +227,14 @@ export async function setStorylineLabel(
   input: {
     storylineId: string;
     label: string | null;
+    /**
+     * The label's words, folded by `normalizeLabel` — the label side of
+     * surfacing (ADR-0011, as amended). Passed in rather than derived here
+     * because the fold is the corpus tokenizer's own (`trimWordPunctuation`,
+     * then `singular`) and lives with it in `apps/api`; storage carries it and
+     * indexes it. Empty when `label` is null, which the caller owes us.
+     */
+    labelWords: readonly string[];
     labelAt: Date;
     /**
      * Member groups this label describes — the drift baseline. Stamped even
@@ -246,12 +254,59 @@ export async function setStorylineLabel(
     .updateTable("storylines")
     .set({
       label: input.label,
+      label_words: [...input.labelWords],
       label_at: input.labelAt,
       label_group_count: input.labelGroupCount,
       label_source: input.labelSource,
     })
     .where("id", "=", input.storylineId)
     .where("merged_into", "is", null)
+    .execute();
+}
+
+/**
+ * Labelled storylines in id order, for the `label_words` backfill — one page at
+ * a time, resumable from the last id seen.
+ *
+ * Keyset over `id` rather than a `where label_words = '{}'` filter, which would
+ * look like the tighter query and does not terminate: a label whose words fold
+ * to nothing at all (punctuation, a stray identifier) stays empty after a
+ * correct write, and the filter would hand it back forever. Walking every
+ * labelled row is also the more useful pass — it repairs a row whose words were
+ * written under an older fold, not just one that has none.
+ */
+export async function readLabelledStorylinePage(
+  db: Kysely<Database>,
+  input: { after: string | null; limit: number },
+): Promise<{ id: string; label: string }[]> {
+  let query = db
+    .selectFrom("storylines")
+    .select(["id", "label"])
+    .where("label", "is not", null)
+    .where("merged_into", "is", null)
+    .orderBy("id")
+    .limit(input.limit);
+  if (input.after !== null) query = query.where("id", ">", input.after);
+  const rows = await query.execute();
+  return rows.map((row) => ({ id: row.id, label: row.label! }));
+}
+
+/**
+ * Write a storyline's label words and nothing else.
+ *
+ * Separate from `setStorylineLabel` because the backfill is not labelling: it
+ * must not touch `label_at`, `label_group_count` or `label_source`, all of
+ * which are the drift clock and would tell the labeler this row had just been
+ * regenerated (ADR-0011, Labels).
+ */
+export async function setStorylineLabelWords(
+  db: Kysely<Database>,
+  input: { storylineId: string; labelWords: readonly string[] },
+): Promise<void> {
+  await db
+    .updateTable("storylines")
+    .set({ label_words: [...input.labelWords] })
+    .where("id", "=", input.storylineId)
     .execute();
 }
 
@@ -1397,8 +1452,8 @@ export async function dissolveFormation(
       revivedAlias = true;
       await trx
         .updateTable("storylines")
-        .set({ merged_into: null, status: "provisional", label: null, label_at: null,
-               label_group_count: null, label_source: null })
+        .set({ merged_into: null, status: "provisional", label: null, label_words: [],
+               label_at: null, label_group_count: null, label_source: null })
         .where("id", "=", freed)
         .execute();
     } else {
@@ -1428,7 +1483,7 @@ export async function dissolveFormation(
     // because the name described coverage half of which has just left.
     await trx
       .updateTable("storylines")
-      .set({ status: "provisional", label: null, label_at: null,
+      .set({ status: "provisional", label: null, label_words: [], label_at: null,
              label_group_count: null, label_source: null })
       .where("id", "=", target)
       .execute();

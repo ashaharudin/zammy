@@ -196,34 +196,27 @@ export async function readStorylineTimelinePage(
 }
 
 /**
- * One keyword, as surfacing matches it: the two vocabularies a storyline speaks
- * in, and one spelling of the keyword for each.
- */
-export interface SurfacingKeyword {
-  /** Folded the way `story_tokens` and so `profile_tokens` were. */
-  token: string;
-  /**
-   * The surface spellings that fold to `token`, for the LABEL side — a label is
-   * stored as the model wrote it, and folding it here would mean a second
-   * stemmer written in SQL. The caller owns the fold and therefore owns its
-   * inverse (`surfaceForms`); this module only compares.
-   */
-  labelForms: readonly string[];
-}
-
-/**
  * Storylines a SEARCH surfaces: those whose own vocabulary contains every
  * keyword (ADR-0011 — "search keywords ⊆ profile tokens", widened to the label).
  *
  * Two places a storyline says what it is about, and a keyword may be found in
  * either: its **profile tokens**, the words half its member groups carry, and
- * its **label**, the words the model chose to name it by. The label is not a
- * restatement of the profile — the majority rule means a word only a minority
+ * its **label words**, the words the model chose to name it by. The label is not
+ * a restatement of the profile — the majority rule means a word only a minority
  * of groups use is absent from the profile even when it is the very word that
  * names the event, and "Fort Hood Crash" surfaced for neither `hood` nor
  * `crash` while both sat in the label on screen. Reading only the profile also
  * made the cloud a one-way door: a label the reader was just shown, typed back
  * in, found nothing.
+ *
+ * One spelling of the keyword answers both columns, and that is the whole
+ * reason `label_words` is a column. `normalizeLabel` folds a label with
+ * `trimWordPunctuation` then `singular` — the same two steps in the same order
+ * the corpus ran into `story_tokens` — so both vocabularies hold the same
+ * spelling of the same word and both conjuncts are a GIN `@>`. Splitting the
+ * label in SQL on read would have been free of a write and a backfill, and
+ * would have cost a second definition of "the label's words" that drifts
+ * silently from this one (migration 0016).
  *
  * Containment, not overlap, and containment per KEYWORD across both
  * vocabularies rather than within one — "fausto hawaii" surfaces the storm
@@ -240,11 +233,11 @@ export interface SurfacingKeyword {
  * valid thing to RENDER — its slots simply carry no gutter label (ADR-0011) —
  * but it is not a thing to OFFER, because a surfacing pill is a name plus a
  * size and without the name there is nothing for the reader to choose between.
- * It is also, now, the only storyline with nothing to match on the label side.
+ * It is also, now, the only storyline whose `label_words` are empty by right.
  */
 export async function findSurfacedStorylines(
   db: Kysely<Database>,
-  input: { keywords: readonly SurfacingKeyword[]; limit: number },
+  input: { keywords: readonly string[]; limit: number },
 ): Promise<
   {
     id: string;
@@ -257,38 +250,30 @@ export async function findSurfacedStorylines(
 > {
   if (input.keywords.length === 0) return [];
 
-  // The label, split into words the same way `profile_tokens` were split off a
-  // headline: lowercased, on runs of non-alphanumerics. Splitting rather than
-  // tokenizing is what makes "Dillard's Tariff Refund" answer to `dillard`
-  // without this file learning the possessive rule the tokenizer already knows
-  // (`trimWordPunctuation`) — the stray `s` it also yields matches nothing a
-  // reader would type.
+  // One conjunct per keyword: found in the profile, or found in the label. Both
+  // sides are `@>` over a `text[]` column, so both are answered by a GIN index
+  // (`storylines_profile_tokens_idx`, `storylines_label_words_idx`) and the
+  // planner reaches for a BitmapOr — which it has to, since either vocabulary
+  // may satisfy a keyword and neither index alone can answer the predicate.
   //
-  // Spelled to match `storylines_label_words_idx` (migration 0016) EXACTLY: a
-  // GIN expression index only answers the expression it was built on, and the
-  // difference here is a 15ms sequential scan over every storyline.
-  const labelWords = sql`regexp_split_to_array(lower(s.label), '[^[:alnum:]]+')`;
-
-  // One conjunct per keyword: found in the profile, or found in the label.
-  // Spelled as `@>` on the profile side so the GIN index still answers it, and
-  // as `&&` on the label side because the keyword arrives as several candidate
-  // spellings of which any one is a match.
+  // An empty keyword matches nothing on either side, which is the conservative
+  // reading: it means the caller's fold consumed the whole word, and a keyword
+  // that survives as no word must not silently widen the search.
   const matches = sql.join(
     input.keywords.map(
       (keyword) => sql`(
-        s.profile_tokens @> array[${keyword.token}]::text[]
-        or ${labelWords} && ${[...keyword.labelForms]}::text[]
+        s.profile_tokens @> array[${keyword}]::text[]
+        or s.label_words @> array[${keyword}]::text[]
       )`,
     ),
     sql` and `,
   );
 
-  // The match is settled over `storylines` alone before any day row is touched:
-  // the label split is a per-row regex, and joining first would run it once per
-  // covered DAY of every candidate. The size subquery counts member ARTICLES,
-  // and counts them per storyline rather than per matched search — a
-  // storyline's size is a fact about the story, not about the words that found
-  // it.
+  // The match is settled over `storylines` alone before any day row is touched,
+  // so the predicate runs once per candidate storyline rather than once per
+  // covered DAY of one. The size subquery counts member ARTICLES, and counts
+  // them per storyline rather than per matched search — a storyline's size is a
+  // fact about the story, not about the words that found it.
   const { rows } = await sql<{
     id: string;
     label: string | null;

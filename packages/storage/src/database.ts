@@ -197,6 +197,20 @@ export interface StorylinesTable {
    */
   label_source: string | null;
   /**
+   * The label's own words, folded by `normalizeLabel` — the OTHER vocabulary a
+   * search surfaces a storyline by (ADR-0011, as amended). Written beside the
+   * label by its one writer rather than derived on read, because the fold is
+   * `trimWordPunctuation` then `singular` and neither exists in SQL; deriving
+   * it there would be a second definition of "the label's words" in another
+   * language, drifting silently from this one.
+   *
+   * Folded the same way and in the same order as `story_tokens` and therefore
+   * `profile_tokens`, which is what lets surfacing compare ONE spelling of a
+   * keyword against both columns. `'{}'` for an unlabelled storyline, and for a
+   * labelled one that migration 0016 has not yet had backfilled.
+   */
+  label_words: Generated<string[]>;
+  /**
    * Tokens carried by at least half the member groups: the storyline's own
    * vocabulary, and the GIN surface candidate retrieval overlaps against. The
    * majority rule is the percolation damper — a growing storyline's consensus

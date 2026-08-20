@@ -6,7 +6,6 @@ import {
   headlineFigures,
   headlineTokens,
   singular,
-  surfaceForms,
   titleSimilarity,
   type GroupCandidate,
 } from "./grouping.js";
@@ -101,34 +100,6 @@ describe("headlineTokens", () => {
   it("is a set: a word repeated in one headline counts once", () => {
     const tokens = headlineTokens("Flood warnings after flood warnings ignored");
     expect(tokens.filter((token) => token === "flood")).toHaveLength(1);
-  });
-});
-
-describe("surfaceForms", () => {
-  it("offers the spellings a label might use for a folded keyword", () => {
-    // What storyline surfacing compares: a folded keyword against a label
-    // nobody folded. `storm` must reach a label reading "Storms", and `city`
-    // one reading "Cities".
-    expect(surfaceForms("storm")).toEqual(["storm", "storms"]);
-    expect(surfaceForms("city")).toEqual(["city", "citys", "cities"]);
-  });
-
-  it("only offers spellings that fold BACK to the keyword", () => {
-    // The property that matters, asserted over the words the stemmer's own
-    // tests pin: every form offered must be one the fold would have produced
-    // this keyword from, or surfacing would match a storyline the search never
-    // asked for.
-    for (const token of ["storm", "city", "press", "gas", "boxe", "release", "hama", "moviy"]) {
-      for (const form of surfaceForms(token)) expect(singular(form)).toBe(token);
-    }
-  });
-
-  it("adds no plural where the fold would not have made one", () => {
-    // `gas` is under the length floor and `press` is -ss guarded, so neither
-    // `gass` nor `presss` folds back — offering them would be offering a word
-    // the profile side can never hold.
-    expect(surfaceForms("gas")).toEqual(["gas"]);
-    expect(surfaceForms("press")).toEqual(["press"]);
   });
 });
 

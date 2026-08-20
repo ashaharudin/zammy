@@ -262,6 +262,13 @@ describe("storylines in storage", () => {
     await setStorylineLabel(harness.db, {
       storylineId: storyline.id,
       label: "Delta Flood",
+      // What `labelWords` (apps/api) would fold this label to. Spelled out
+      // rather than imported: storage cannot reach the fold, and inventing a
+      // second one here is the exact duplication `label_words` exists to
+      // prevent. Safe for these fixtures because their labels are plain ASCII
+      // words with no plural, possessive or punctuation, where the fold is just
+      // the lowercase split; the fold itself is pinned in apps/api.
+      labelWords: ["delta", "flood"],
       labelAt,
       // The drift baseline and the provenance. One member group here, and
       // "test" for the source, as every other suite spells it. Both were
@@ -621,6 +628,7 @@ describe("storylines in storage", () => {
       await setStorylineLabel(harness.db, {
         storylineId: kept.id,
         label: "Fatally Shot",
+        labelWords: ["fatally", "shot"],
         labelAt: new Date("2026-08-13T00:00:00.000Z"),
         labelGroupCount: 2,
         labelSource: "bigram",

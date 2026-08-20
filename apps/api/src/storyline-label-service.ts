@@ -15,6 +15,7 @@ import {
   validateLabel,
   type LabelTrigger,
 } from "./storyline-label.js";
+import { labelWords } from "./storyline-label-merge.js";
 import type { LinkOutcome } from "./storyline-linker.js";
 import { resolvePendingFormations, type FormationDeps } from "./storyline-formation.js";
 
@@ -240,6 +241,10 @@ export async function labelStoryline(
   await setStorylineLabel(deps.db, {
     storylineId: storyline.id,
     label,
+    // The label's own words, folded once here so `label_words` and
+    // `profile_tokens` hold one spelling of a word between them (ADR-0011, as
+    // amended). Null label, no words — there is nothing to surface it by.
+    labelWords: label === null ? [] : labelWords(label),
     labelAt: now(),
     labelGroupCount: groupCount,
     // Provenance, not a category: `bigram` and a model id are both answers to

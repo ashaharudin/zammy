@@ -357,20 +357,34 @@ reasons that only showed up once labels were real:
 The label is still **presentation, never identity** (labels are non-unique, and
 navigation still rides the UUID). What changes is that it is now also a MATCH
 surface: a name is what a reader has to go on, so it must be a name search can
-reach. Matching is on surface spellings offered by the folded side
-(`surfaceForms`, the checked inverse of `singular`) rather than by folding the
-label in SQL, because a second stemmer in another language is the failure this
-codebase already refuses for tokenizers; the cost is one GIN expression index
-(migration 0016).
+reach.
 
-Which means the folded side has to run the WHOLE corpus fold, not half of it.
-`canonicalize` lowercases and splits on whitespace and stops there, so a keyword
-still carries its punctuation, and `singular` alone strands the apostrophe —
-`dillard's` becomes `dillard'`, which is in no profile (the corpus trimmed it)
-and in no label's words (they split on the apostrophe). Surfacing folds with
-`trimWordPunctuation` first, which is the same order `splitTokens` runs it in.
-The `dillard'` lesson is now paid for on three sides: label agreement, the
-cloud's own query, and this.
+**The label's words are stored, folded by `normalizeLabel`, in `label_words`.**
+One definition of "the label's words", used by everything that needs them: the
+label-agreement merge that has always used it, ADR-0014's `cloudQuery`, and now
+surfacing. `normalizeLabel` is `trimWordPunctuation` and then `singular` — the
+same two steps in the same order the corpus ran into `story_tokens` — so
+`label_words` and `profile_tokens` hold the SAME SPELLING of the same word, and
+a keyword folded once answers both with a GIN `@>`. There is no inverse fold and
+nothing to keep in sync.
+
+The alternative was an expression index over
+`regexp_split_to_array(lower(label), '[^[:alnum:]]+')`, which is free of a write
+and a backfill and was how this first shipped for review. It is the wrong trade.
+It puts a SECOND definition of the label's words in another language, and the two
+drift silently: it splits on the apostrophe instead of folding the possessive, so
+`dillard's` — which is what a reader typing a label back actually sends, since
+`canonicalize` never trims punctuation — reaches `dillard'` under `singular`
+alone and is in no profile and no label. That is the `dillard'` lesson
+`trimWordPunctuation` was written for, arriving from the search side. The SQL
+class `[:alnum:]` is also collation-dependent where the fold is not.
+
+The cost is what an expression index avoided, and it is small: `label_words` is
+written beside the label by its one writer (`setStorylineLabel`), and existing
+rows are filled in by `backfill:label-words` — pure local computation, no
+upstream call and no model. Until that runs, a row's words are `'{}'` and
+surfacing degrades to the profile-only behaviour it had before, which is what
+makes migration 0016 safe to run ahead of the API.
 
 Note that the second reason above — the cloud as a one-way door — is answered
 twice over once ADR-0014 lands, and by a different mechanism: ADR-0014 stops the

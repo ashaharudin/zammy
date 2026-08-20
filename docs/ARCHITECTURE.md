@@ -848,10 +848,12 @@ keywords in, timeline out.
   amended): its `profile_tokens`, and its LABEL — the majority rule drops a word only a minority of
   member groups use, even when that word is the one the model chose to name the event by, and the
   label is a name the reader was just shown in the cloud or the gutter. Containment is per keyword
-  across the two together, so "fausto pacific" may take one word from each. The label side matches
-  on surface spellings (`surfaceForms`), because a label is stored as the model wrote it and folding
-  it in SQL would mean a second stemmer; `storylines_label_words_idx` (migration 0016) keeps it an
-  index scan.
+  across the two together, so "fausto pacific" may take one word from each. The label side reads
+  `label_words`, written beside the label by `setStorylineLabel` and folded by `normalizeLabel` —
+  the corpus fold's own two steps, so both columns hold one spelling of a word and one folded
+  keyword answers both with `@>`; `storylines_label_words_idx` (migration 0016) keeps it an index
+  scan. Deriving the words in SQL instead would be a second definition of them in another language
+  (ADR-0011, amended).
 - **Freshness banner** — renders `meta.asOf` / `meta.stale` / `meta.degraded` honestly.
 - **States** — skeleton cards on first load, distinct empty states ("no articles yet for X" vs "no
   more history"), and an error state with retry.

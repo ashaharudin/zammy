@@ -15,7 +15,7 @@ import * as dropDayStorylines from "./migrations/0012-drop-day-storylines.js";
 import * as sightingProvider from "./migrations/0013-sighting-provider.js";
 import * as dropTermCloud from "./migrations/0014-drop-term-cloud.js";
 import * as formationRefusals from "./migrations/0015-storyline-formation-refusals.js";
-import * as labelWords from "./migrations/0016-storyline-label-words.js";
+import * as labelWordsColumn from "./migrations/0016-storyline-label-words.js";
 
 /**
  * Migrations as a static record rather than a directory scan: the file provider
@@ -39,7 +39,7 @@ const migrations: Record<string, Migration> = {
   "0013-sighting-provider": sightingProvider,
   "0014-drop-term-cloud": dropTermCloud,
   "0015-storyline-formation-refusals": formationRefusals,
-  "0016-storyline-label-words": labelWords,
+  "0016-storyline-label-words": labelWordsColumn,
 };
 
 /**

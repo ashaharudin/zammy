@@ -16,6 +16,7 @@ import {
   type ChoreDeps,
 } from "./chores.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
+import { labelWords } from "./storyline-label-merge.js";
 
 /**
  * The nightly chores that keep `storylines.status` honest (ADR-0011, WP2).
@@ -164,6 +165,7 @@ describe("the nightly label pass", () => {
     await setStorylineLabel(db, {
       storylineId: id,
       label: "Fausto Hawaii",
+      labelWords: labelWords("Fausto Hawaii"),
       labelAt: new Date("2026-08-01T00:00:00.000Z"),
       labelGroupCount: 2,
       // An earlier model wrote it — provenance, which `readLabelCandidates`
@@ -187,6 +189,7 @@ describe("the nightly label pass", () => {
     await setStorylineLabel(db, {
       storylineId: id,
       label: "Fausto Hawaii",
+      labelWords: labelWords("Fausto Hawaii"),
       labelAt: new Date("2026-08-01T00:00:00.000Z"),
       labelGroupCount: 2,
       // An earlier model wrote it — provenance, which `readLabelCandidates`
