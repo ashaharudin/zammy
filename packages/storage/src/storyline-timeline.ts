@@ -196,14 +196,36 @@ export async function readStorylineTimelinePage(
 }
 
 /**
- * Storylines a SEARCH surfaces: those whose profile tokens contain every
- * keyword (ADR-0011 — "search keywords ⊆ profile tokens").
+ * Storylines a SEARCH surfaces: those whose own vocabulary contains every
+ * keyword (ADR-0011 — "search keywords ⊆ profile tokens", widened to the label).
  *
- * Containment, not overlap. A search for "fausto hawaii" should surface the
- * storm, not every storyline that has ever said "hawaii"; the GIN index answers
- * `@>` as readily as `&&`, so the stricter reading costs nothing. Aliases are
- * excluded — a pointer has no profile — and provisional storylines with them:
- * a storyline-of-one is not a story to surface, it is the slot itself.
+ * Two places a storyline says what it is about, and a keyword may be found in
+ * either: its **profile tokens**, the words half its member groups carry, and
+ * its **label words**, the words the model chose to name it by. The label is not
+ * a restatement of the profile — the majority rule means a word only a minority
+ * of groups use is absent from the profile even when it is the very word that
+ * names the event, and "Fort Hood Crash" surfaced for neither `hood` nor
+ * `crash` while both sat in the label on screen. Reading only the profile also
+ * made the cloud a one-way door: a label the reader was just shown, typed back
+ * in, found nothing.
+ *
+ * One spelling of the keyword answers both columns, and that is the whole
+ * reason `label_words` is a column. `normalizeLabel` folds a label with
+ * `trimWordPunctuation` then `singular` — the same two steps in the same order
+ * the corpus ran into `story_tokens` — so both vocabularies hold the same
+ * spelling of the same word and both conjuncts are a GIN `@>`. Splitting the
+ * label in SQL on read would have been free of a write and a backfill, and
+ * would have cost a second definition of "the label's words" that drifts
+ * silently from this one (migration 0016).
+ *
+ * Containment, not overlap, and containment per KEYWORD across both
+ * vocabularies rather than within one — "fausto hawaii" surfaces the storm
+ * whose label says Fausto and whose profile says hawaii. A search for "fausto
+ * hawaii" should not surface every storyline that has ever said "hawaii"; the
+ * GIN index answers `@>` as readily as `&&`, so the stricter reading costs
+ * nothing on the profile side. Aliases are excluded — a pointer has no profile
+ * — and provisional storylines with them: a storyline-of-one is not a story to
+ * surface, it is the slot itself.
  *
  * UNLABELLED storylines are excluded too, and that one was learned by looking:
  * eight pills reading "unlabelled storyline" is what the browser showed while
@@ -211,10 +233,11 @@ export async function readStorylineTimelinePage(
  * valid thing to RENDER — its slots simply carry no gutter label (ADR-0011) —
  * but it is not a thing to OFFER, because a surfacing pill is a name plus a
  * size and without the name there is nothing for the reader to choose between.
+ * It is also, now, the only storyline whose `label_words` are empty by right.
  */
 export async function findSurfacedStorylines(
   db: Kysely<Database>,
-  input: { tokens: readonly string[]; limit: number },
+  input: { keywords: readonly string[]; limit: number },
 ): Promise<
   {
     id: string;
@@ -225,11 +248,32 @@ export async function findSurfacedStorylines(
     status: StorylineStatus;
   }[]
 > {
-  if (input.tokens.length === 0) return [];
+  if (input.keywords.length === 0) return [];
 
-  // The size subquery counts member ARTICLES, and counts them per storyline
-  // rather than per matched search — a storyline's size is a fact about the
-  // story, not about the words that found it.
+  // One conjunct per keyword: found in the profile, or found in the label. Both
+  // sides are `@>` over a `text[]` column, so both are answered by a GIN index
+  // (`storylines_profile_tokens_idx`, `storylines_label_words_idx`) and the
+  // planner reaches for a BitmapOr — which it has to, since either vocabulary
+  // may satisfy a keyword and neither index alone can answer the predicate.
+  //
+  // An empty keyword matches nothing on either side, which is the conservative
+  // reading: it means the caller's fold consumed the whole word, and a keyword
+  // that survives as no word must not silently widen the search.
+  const matches = sql.join(
+    input.keywords.map(
+      (keyword) => sql`(
+        s.profile_tokens @> array[${keyword}]::text[]
+        or s.label_words @> array[${keyword}]::text[]
+      )`,
+    ),
+    sql` and `,
+  );
+
+  // The match is settled over `storylines` alone before any day row is touched,
+  // so the predicate runs once per candidate storyline rather than once per
+  // covered DAY of one. The size subquery counts member ARTICLES, and counts
+  // them per storyline rather than per matched search — a storyline's size is a
+  // fact about the story, not about the words that found it.
   const { rows } = await sql<{
     id: string;
     label: string | null;
@@ -238,20 +282,24 @@ export async function findSurfacedStorylines(
     span_to: Date;
     size: string;
   }>`
-    select s.id, s.label, s.status,
+    with matched as (
+      select s.id, s.label, s.status
+      from storylines s
+      where s.merged_into is null
+        and s.status <> 'provisional'
+        and s.label is not null
+        and ${matches}
+    )
+    select m.id, m.label, m.status,
            min(d.day_slot_published) as span_from,
            max(d.day_slot_published) as span_to,
            (select count(*) from storyline_groups sg
               join articles a on a.group_id = sg.group_id
-             where sg.storyline_id = s.id) as size
-    from storylines s
-    join storyline_days d on d.storyline_id = s.id
-    where s.merged_into is null
-      and s.status <> 'provisional'
-      and s.label is not null
-      and s.profile_tokens @> ${[...input.tokens]}::text[]
-    group by s.id, s.label, s.status
-    order by max(d.day_slot_published) desc, s.id
+             where sg.storyline_id = m.id) as size
+    from matched m
+    join storyline_days d on d.storyline_id = m.id
+    group by m.id, m.label, m.status
+    order by max(d.day_slot_published) desc, m.id
     limit ${input.limit}
   `.execute(db);
 

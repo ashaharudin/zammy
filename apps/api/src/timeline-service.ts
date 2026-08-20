@@ -46,7 +46,7 @@ import {
   type GroupingDeps,
 } from "./grouping-service.js";
 import { chooseRepresentative } from "./source-authority.js";
-import { singular } from "./grouping.js";
+import { labelWords } from "./storyline-label-merge.js";
 
 /**
  * The query planner (ARCHITECTURE 6.3) — how a page gets filled, or ideally
@@ -308,11 +308,25 @@ async function planAndRead(
   });
 
   // Storylines this SEARCH surfaces, beside the results rather than narrowing
-  // them (ADR-0011). Keywords are folded the way `story_tokens` and therefore
-  // `profile_tokens` were, or a search for "storms" would miss a profile that
-  // says "storm".
+  // them (ADR-0011). One folded spelling per keyword, answering BOTH the
+  // vocabularies a storyline speaks in — `profile_tokens` and `label_words` —
+  // because `normalizeLabel` folds a label the same way the corpus folded its
+  // headlines, so the two columns hold the same spelling of the same word.
+  //
+  // `labelWords` is that fold and is deliberately the same function the label
+  // side is written with: one definition, used on both sides of the comparison.
+  // It matters that it is BOTH halves — `trimWordPunctuation` and then
+  // `singular`. `canonicalize` lowercases and splits on whitespace and stops
+  // there, so a keyword still carries its punctuation, and `singular` alone
+  // strands the apostrophe: "dillard's" becomes `dillard'`, which no corpus and
+  // no label holds. A search for "storms" reaching a profile that says "storm"
+  // is the other half, and the reason the fold was ever here.
+  //
+  // A keyword that folds to no word at all (pure punctuation) is kept as the
+  // empty string rather than dropped: dropping it would let a keyword nothing
+  // can match quietly widen the search instead of refusing it.
   const surfaced = await findSurfacedStorylines(deps.db, {
-    tokens: query.keywords.map(singular),
+    keywords: query.keywords.map((keyword) => labelWords(keyword).join(" ")),
     limit: SURFACED_STORYLINE_LIMIT,
   });
 

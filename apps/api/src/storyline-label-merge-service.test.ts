@@ -12,6 +12,7 @@ import {
   mergeAgreeingLabels,
   planLabelMerges,
 } from "./storyline-label-merge-service.js";
+import { labelWords } from "./storyline-label-merge.js";
 
 /**
  * The label-agreement merge against real Postgres.
@@ -374,6 +375,7 @@ describe("mergeAgreeingLabels", () => {
     await setStorylineLabel(db, {
       storylineId: big,
       label: "Strait of Hormuz Crisis",
+      labelWords: labelWords("Strait of Hormuz Crisis"),
       // `groupCount` / `source` here until the tests were type-checked (§12):
       // neither is a field, so both were dropped and the pre-merge baseline was
       // never set. The assertion below is about the value the RELABEL writes, so

@@ -10,6 +10,7 @@ import {
 } from "@zammy/storage";
 import type { TextGenerator } from "./gemini.js";
 import { buildCoherencePrompt, readCoherenceReply } from "./storyline-coherence.js";
+import { labelWords } from "./storyline-label-merge.js";
 import { fallbackLabel, selectLabelMembers } from "./storyline-label.js";
 import type { LinkOutcome } from "./storyline-linker.js";
 
@@ -188,6 +189,9 @@ async function performFormation(
   await setStorylineLabel(deps.db, {
     storylineId,
     label,
+    // See the same field in `storyline-label-service.ts`: one fold, written
+    // beside the label it folds.
+    labelWords: label === null ? [] : labelWords(label),
     labelAt: named?.at ?? (deps.now ?? (() => new Date()))(),
     labelGroupCount: groupCount,
     labelSource: named ? (deps.modelId ?? "model") : label === null ? null : "bigram",

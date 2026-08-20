@@ -109,6 +109,13 @@ describe("readTrendingStorylines", () => {
     await setStorylineLabel(harness.db, {
       storylineId: created.id,
       label,
+      // What `labelWords` (apps/api) would fold this label to. Spelled out
+      // rather than imported: storage cannot reach the fold, and inventing a
+      // second one here is the exact duplication `label_words` exists to
+      // prevent. Safe for these fixtures because their labels are plain ASCII
+      // words with no plural, possessive or punctuation, where the fold is just
+      // the lowercase split; the fold itself is pinned in apps/api.
+      labelWords: label.toLowerCase().split(" "),
       labelAt: NOW,
       labelGroupCount: groups.length,
       labelSource: "test",
@@ -252,6 +259,7 @@ describe("readTrendingStorylines", () => {
     await setStorylineLabel(harness.db, {
       storylineId: provisional.id,
       label: "Provisional Arc",
+      labelWords: ["provisional", "arc"],
       labelAt: NOW,
       labelGroupCount: 1,
       labelSource: "test",
@@ -265,6 +273,7 @@ describe("readTrendingStorylines", () => {
     await setStorylineLabel(harness.db, {
       storylineId: unlabelled,
       label: null,
+      labelWords: [],
       labelAt: NOW,
       labelGroupCount: 2,
       labelSource: null,
@@ -313,6 +322,7 @@ describe("readTrendingStorylines", () => {
     await setStorylineLabel(harness.db, {
       storylineId: created.id,
       label: "Bilingual Arc",
+      labelWords: ["bilingual", "arc"],
       labelAt: NOW,
       labelGroupCount: 4,
       labelSource: "test",

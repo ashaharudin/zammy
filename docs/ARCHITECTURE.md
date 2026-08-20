@@ -839,11 +839,21 @@ keywords in, timeline out.
   that works: month, escalating to day. A provisional storyline-of-one carries no label and renders
   as the plain article slot. Left of the spine on purpose: the right-hand column is the reader's
   present, and the label is a way out of it.
-- **Surfaced storylines** — a search never narrows to a storyline; it surfaces the ones whose
-  profile tokens contain every keyword, as pills inside the sticky command bar under the `asOf`
+- **Surfaced storylines** — a search never narrows to a storyline; it surfaces the ones whose own
+  vocabulary contains every keyword, as pills inside the sticky command bar under the `asOf`
   stamp, each a size-bucket glyph plus the label. In the chrome rather than the results, because
   search and storylines are separate axes and a strip among the results reads as part of the result
   set. The bar's bottom edge hides the row; the collapsed state persists.
+  **A storyline speaks in two vocabularies and a keyword may be found in either** (ADR-0011,
+  amended): its `profile_tokens`, and its LABEL — the majority rule drops a word only a minority of
+  member groups use, even when that word is the one the model chose to name the event by, and the
+  label is a name the reader was just shown in the cloud or the gutter. Containment is per keyword
+  across the two together, so "fausto pacific" may take one word from each. The label side reads
+  `label_words`, written beside the label by `setStorylineLabel` and folded by `normalizeLabel` —
+  the corpus fold's own two steps, so both columns hold one spelling of a word and one folded
+  keyword answers both with `@>`; `storylines_label_words_idx` (migration 0016) keeps it an index
+  scan. Deriving the words in SQL instead would be a second definition of them in another language
+  (ADR-0011, amended).
 - **Freshness banner** — renders `meta.asOf` / `meta.stale` / `meta.degraded` honestly.
 - **States** — skeleton cards on first load, distinct empty states ("no articles yet for X" vs "no
   more history"), and an error state with retry.

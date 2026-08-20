@@ -64,17 +64,22 @@ would change upsert semantics with no code diff.
 
 ### 2.2 `text[]` arrays + `&&`/`@>` + GIN — **schema change rippling through 5 modules**
 
-MySQL has no array types. Six array columns (`articles.title_tokens`, `articles.story_tokens`,
+MySQL has no array types. Seven array columns (`articles.title_tokens`, `articles.story_tokens`,
 `articles.categories`, `articles.source_category`, `topics.keywords`,
-`storylines.profile_tokens`) become `JSON`, and every operation translates:
+`storylines.profile_tokens`, `storylines.label_words`) become `JSON`, and every operation
+translates:
 
 - **Overlap `&&`** (candidate narrowing [grouping.ts:74](../packages/storage/src/grouping.ts),
   candidate retrieval [storylines.ts:882](../packages/storage/src/storylines.ts)) →
   `JSON_OVERLAPS(col, CAST(? AS JSON))`.
-- **Containment `@>`** (search surfacing
-  [storyline-timeline.ts:252](../packages/storage/src/storyline-timeline.ts)) → `JSON_CONTAINS`.
+- **Containment `@>`** (search surfacing, over BOTH of a storyline's vocabularies —
+  `profile_tokens` and `label_words`
+  [storyline-timeline.ts](../packages/storage/src/storyline-timeline.ts)) → `JSON_CONTAINS`. Two
+  `JSON_CONTAINS` disjuncts per keyword, needing the optimizer to reach for both multi-valued
+  indexes at once; worth measuring, since Postgres answers it as a BitmapOr.
 - **The GIN indexes** ([0003:83](../packages/storage/src/migrations/0003-article-groups.ts),
-  [0007:58–62](../packages/storage/src/migrations/0007-storyline-tables.ts)) → MySQL **multi-valued
+  [0007:58–62](../packages/storage/src/migrations/0007-storyline-tables.ts),
+  [0016](../packages/storage/src/migrations/0016-storyline-label-words.ts)) → MySQL **multi-valued
   indexes** (`CREATE INDEX ... ((CAST(col AS CHAR(64) ARRAY)))`). They serve `MEMBER OF`,
   `JSON_OVERLAPS` and `JSON_CONTAINS` — a real analog, but the optimizer's willingness to use one
   for `JSON_OVERLAPS` under an additional date-range predicate (the grouping query combines both)

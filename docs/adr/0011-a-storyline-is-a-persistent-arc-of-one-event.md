@@ -330,3 +330,65 @@ untouched: one word is an entity, never an event.
 
 `validateLabel` and the prompt in `storyline-label.ts` carry the new range; the
 prompt half remains free to iterate, and the contract half is now 2–5.
+
+## Amended 2026-08-20: surfacing reads the label as well as the profile
+
+**"Search keywords ⊆ profile tokens" is superseded. The rule is now: search
+keywords ⊆ profile tokens ∪ label words**, per keyword rather than per side —
+"fausto pacific" surfaces the storyline whose profile says `fausto` and whose
+label says "Pacific". Everything else about surfacing stands: containment and
+not overlap, beside the results and never narrowing them, aliases and
+provisional and unlabelled storylines excluded.
+
+The profile alone was the wrong reading of "what a storyline is about", for two
+reasons that only showed up once labels were real:
+
+- **The majority rule is a filter on vocabulary, not on aboutness.** Profile
+  tokens are the words at least half the member groups carry, which is exactly
+  right for the linker — it is the percolation damper — and wrong for search: a
+  word only a minority of the coverage uses is dropped even when it is the word
+  the model chose to name the event by. "Fort Hood Crash" answered to neither
+  `hood` nor `crash` while both sat in the label on screen.
+- **The cloud was a one-way door.** ADR-0013 made the label the cloud's word, so
+  a reader is shown labels before they type anything. A label typed back into
+  the box, verbatim, found nothing — the one search a reader has been actively
+  invited to make.
+
+The label is still **presentation, never identity** (labels are non-unique, and
+navigation still rides the UUID). What changes is that it is now also a MATCH
+surface: a name is what a reader has to go on, so it must be a name search can
+reach.
+
+**The label's words are stored, folded by `normalizeLabel`, in `label_words`.**
+One definition of "the label's words", used by everything that needs them: the
+label-agreement merge that has always used it, ADR-0014's `cloudQuery`, and now
+surfacing. `normalizeLabel` is `trimWordPunctuation` and then `singular` — the
+same two steps in the same order the corpus ran into `story_tokens` — so
+`label_words` and `profile_tokens` hold the SAME SPELLING of the same word, and
+a keyword folded once answers both with a GIN `@>`. There is no inverse fold and
+nothing to keep in sync.
+
+The alternative was an expression index over
+`regexp_split_to_array(lower(label), '[^[:alnum:]]+')`, which is free of a write
+and a backfill and was how this first shipped for review. It is the wrong trade.
+It puts a SECOND definition of the label's words in another language, and the two
+drift silently: it splits on the apostrophe instead of folding the possessive, so
+`dillard's` — which is what a reader typing a label back actually sends, since
+`canonicalize` never trims punctuation — reaches `dillard'` under `singular`
+alone and is in no profile and no label. That is the `dillard'` lesson
+`trimWordPunctuation` was written for, arriving from the search side. The SQL
+class `[:alnum:]` is also collation-dependent where the fold is not.
+
+The cost is what an expression index avoided, and it is small: `label_words` is
+written beside the label by its one writer (`setStorylineLabel`), and existing
+rows are filled in by `backfill:label-words` — pure local computation, no
+upstream call and no model. Until that runs, a row's words are `'{}'` and
+surfacing degrades to the profile-only behaviour it had before, which is what
+makes migration 0016 safe to run ahead of the API.
+
+Note that the second reason above — the cloud as a one-way door — is answered
+twice over once ADR-0014 lands, and by a different mechanism: ADR-0014 stops the
+cloud sending a verbatim label at all. It stays recorded here because it is why
+this was found, and because the first reason is the one that outlives it: a
+reader typing a name they read in the gutter is not the cloud's click, and no
+amount of grounding the cloud reaches them.
