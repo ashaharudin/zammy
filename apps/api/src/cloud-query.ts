@@ -69,8 +69,20 @@ export const CLOUD_QUERY_TERMS = 2;
  * Two fallbacks, in order, and both are for storylines that should not exist:
  *
  *  - **No label word survives** — the label shares nothing with the coverage it
- *    names. Search the profile's own leading tokens instead: headline words with
- *    no claim to name the event still beat prose that cannot be matched at all.
+ *    names. Search the profile's own tokens instead: headline words with no
+ *    claim to name the event still beat prose that cannot be matched at all.
+ *
+ *    Which two of them is ARBITRARY, and that is worth saying plainly rather
+ *    than dressing up as an ordering. `refreshProfileTokens` stores the profile
+ *    alphabetically (`order by support.tok`), so this takes the two words
+ *    nearest the front of the alphabet — the same reading the test two cases
+ *    above rejects for the grounded path, where "climate" would have beaten
+ *    "florida" and named the wrong subject. It is tolerable only here, and only
+ *    because of what the fallback is for: the label has already failed to say
+ *    anything the coverage says, so there is no subject to name, and any two
+ *    profile tokens keep the containment that makes the arc's pill appear. If a
+ *    salient pair is ever wanted, `story_token_df` rarity is the ranking this
+ *    ADR declined, at the cost of the trailing corpus on the request path.
  *  - **An empty profile** — `refreshProfileTokens` keeps a labelled, promoted
  *    storyline's profile non-empty, and a merged-away one is excluded upstream
  *    of here, so this is unreachable rather than merely unlikely. It returns the

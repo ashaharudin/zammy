@@ -103,7 +103,7 @@ export async function readTrendingStorylines(
     language: string;
     from: Date;
     to: Date;
-    /** The decay's half-life in hours. Must be > 0; config's floor is 1. */
+    /** The decay's half-life in hours. Must be > 0; config's floor is 0.5. */
     halfLifeHours: number;
     limit: number;
   },

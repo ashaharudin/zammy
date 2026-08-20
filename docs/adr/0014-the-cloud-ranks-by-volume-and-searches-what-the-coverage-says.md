@@ -197,7 +197,14 @@ ADR-0013's two channels were built to escape.
   out of scope here, where the pill's existence was the thing that was missing.
 - **`searchPlaceholder` offers `query` too.** It was suggesting readers type
   labels — that is, suggesting they type searches that return nothing.
-- **A bad label now costs less than it did.** ADR-0013 raised the stakes on the
-  labeler by putting labels on the landing page; grounding the click in the
-  coverage lowers them again, because a label whose words the corpus never says
-  falls back to the profile's own tokens rather than searching prose.
+- **A bad label now costs less than it did, but not nothing.** ADR-0013 raised
+  the stakes on the labeler by putting labels on the landing page; grounding the
+  click in the coverage lowers them again, because a label whose words the
+  corpus never says falls back to the profile's own tokens rather than searching
+  prose. That fallback keeps the pill and gives up on the subject: the profile is
+  stored alphabetically, so the two tokens it takes are arbitrary, and the cloud
+  will draw a good label over a search that does not name it. Accepted here
+  because there is nothing left to name it WITH — the label has already failed to
+  say a word its own coverage says — and rejected on the grounded path, where
+  `cloud-query.test.ts` pins label order precisely so "climate" cannot beat
+  "florida".
