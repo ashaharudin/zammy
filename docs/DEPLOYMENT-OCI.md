@@ -331,8 +331,14 @@ Terraform owns the release, keyed on image digest:
 A poor man's rolling deploy — enough at 2–3 instances. What it lacks (autoscaling, sub-minute
 rollback) is the OKE trigger in §1.
 
-Run Terraform from CI. OCI Resource Manager (server-side Terraform, managed state) is optional
-sugar; decide when the CI pipeline is written.
+Run Terraform from CI. ⛔ **OCI Resource Manager is ruled out — decided 2026-08-20, not deferred.**
+It was carried here as optional sugar (server-side Terraform, managed state, no S3 credential). It
+cannot host this configuration: probing every version RM accepts showed it rejects
+`terraformVersion` 1.6.x–1.15.x and accepts only **1.5.x**, while this configuration requires
+`>= 1.9.0` and its state was written by **1.15.8**. State has no downgrade path, so this is
+permanent rather than a version-pin to bump. The consequence for CI is that the S3-compatible
+bucket backend and its **Customer Secret Key are required, not preferred** —
+`deploy/terraform/versions.tf` carries the detail.
 
 ## 7. Phases
 
@@ -506,7 +512,34 @@ has no payment method. Ampere in this AD or nothing.
 **The remaining lever is time, automated.** `deploy/terraform/retry-capacity.sh` polls the capacity
 report and runs `terraform apply` only on `AVAILABLE`. It exits once the instance exists (retiring
 itself); an atomic lock stops two runs fighting over state; it runs locally because Terraform state
-and `~/.oci` both live on one machine. Crontab entry every 30 minutes from 2026-08-20.
+and `~/.oci` both live on one machine.
+
+🚩 **A day of that produced nothing, and the crontab entry was removed 2026-08-20.** The script is
+kept; only the schedule is gone. What the day showed:
+
+```
+2026-08-20T02:30:04Z capacity OUT_OF_HOST_CAPACITY — not attempting
+2026-08-20T04:00:24Z capacity OUT_OF_HOST_CAPACITY — not attempting
+2026-08-20T04:32:01Z capacity OUT_OF_HOST_CAPACITY — not attempting
+2026-08-20T12:38:15Z capacity OUT_OF_HOST_CAPACITY — not attempting
+2026-08-20T14:05:17Z capacity OUT_OF_HOST_CAPACITY — not attempting
+```
+
+**Five checks where a `*/30` entry owed ~28** — the gaps are the laptop asleep, and they are the
+reason to stop rather than to shorten the interval. Free Ampere is typically claimed within minutes
+of appearing, so a poll that skips eight hours at a stretch is unlikely to win one even when a
+window opens; meanwhile §9.1's widened probe found Ampere out at *every* size, fault domain, AD and
+region, so there is no configuration change left to race toward. Polling from a sleeping machine
+buys the appearance of progress and not the thing itself.
+
+**To re-arm it properly, in CI rather than here** — the poll is read-only and needs no state, so
+only the `terraform apply` step requires the bucket migration. That ordering is the point: migrate
+state first, then a 5-minute poll on a runner that never sleeps replaces a 30-minute one that does.
+Until then, re-running the script by hand costs one free API call:
+
+```bash
+./deploy/terraform/retry-capacity.sh && tail -1 deploy/terraform/retry-capacity.log
+```
 
 The VM bootstrap is `deploy/staging/cloud-init.yaml`, passed as the instance's `user_data`. It
 installs Docker, writes the staging compose file, a `.env` template and the `zammy-deploy` /
@@ -626,8 +659,45 @@ proves the *shape*, and that is worth having on day one.
    config.) Two consequences:
 
    - **One availability domain** — no second AD to retry into when free Ampere capacity is
-     unavailable, a routine transient rather than a misconfiguration. Smaller asks are likelier
-     granted, and the stack's own limits total under 3 GB.
+     unavailable, which is a capacity fact rather than a misconfiguration. An earlier version of
+     this bullet added "smaller asks are likelier granted"; **that is disproven** — see below and
+     §7, where shrinking the shape three times bought nothing.
+
+     🚩 **Ampere exhausted across every axis — verified read-only 2026-08-20.** A day of polling
+     (log below) never once reported `AVAILABLE`. A widened probe found nothing left to try:
+
+     | Probe | Result |
+     |---|---|
+     | `A1.Flex` at 1/12, 2/12, 1/6, **4/24** | all `OUT_OF_HOST_CAPACITY` |
+     | `A1.Flex` 1/12 per fault domain, FD-1 / -2 / -3 | all `OUT_OF_HOST_CAPACITY` |
+     | `VM.Standard.E2.1.Micro` (free x86) | `OUT_OF_HOST_CAPACITY` |
+     | Availability domains in `ca-toronto-1` | **one** |
+     | Subscribed regions | **one**, and it is home |
+
+     Size, fault domain, AD and region are therefore all exhausted — the aggregate report was not
+     masking capacity sitting in a single FD, which is worth checking because it sometimes does.
+
+     **The AD is not wholesale full**, which is the one genuinely new fact: `VM.Standard.E5.Flex`
+     and `VM.Standard3.Flex` both report `AVAILABLE` in that same AD, while `VM.Standard.E4.Flex`
+     does not. ⚠️ **Do not read that as free-tier accounts being fenced out of Ampere.** `A1.Flex`
+     is the same shape whether it falls inside the free allowance or is billed, so its capacity
+     number carries no free-vs-paid signal at all; the supportable reading is only that *Ampere*
+     hardware in YYZ is full while current-generation x86 has room. The community claim that
+     upgrading to pay-as-you-go improves Ampere success is plausible and often repeated, but
+     nothing here demonstrates it — do not spend a payment method on it expecting a fix.
+
+     **Polling from a laptop is a thin net, and that is the actionable part.** A `*/30` crontab
+     entry logged five checks on 2026-08-20 (02:30, 04:00, 04:32, 12:38, 14:05) where ~28 were
+     due; the gaps are the machine asleep. Free Ampere capacity is typically claimed within
+     minutes of appearing, so a sleep-interrupted 30-minute poll would likely miss a window even
+     if one opened. **The fix is not a shorter interval on the same machine** — it is that the
+     *poll* is read-only and needs no Terraform state, while only the *apply* does. Moving state
+     to the bucket (`deploy/terraform/versions.tf`, and "Bootstrap order" in that directory's
+     README) lets both run in CI, where credentials already exist and nothing sleeps. That
+     reframes the state migration as the repair for this, not housekeeping.
+
+     **The crontab entry was therefore stopped and removed 2026-08-20** rather than left to log
+     into an empty room — see §7, which carries the log and the removal.
    - ✅ **Service availability checked 2026-08-18 — all three offered in `ca-toronto-1`.** OCI
      Database with PostgreSQL offers versions 13–18 (PG 17 holds, 18 available later); its shapes
      are `VM.Standard3.Flex` (Intel) and `VM.Standard.E5.Flex` (AMD), no Ampere — irrelevant, since

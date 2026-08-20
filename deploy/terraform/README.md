@@ -29,8 +29,16 @@ on a resource in the configuration it stores. So:
 
 OCI has no native Terraform backend; Object Storage is reached through the S3 compatibility API,
 which needs a **Customer Secret Key** (User settings → Customer secret keys) — a credential, so
-generating it is a human step. §6 leaves OCI Resource Manager open as the alternative: server-side
-state, no secret key at all.
+generating it is a human step.
+
+**That key is unavoidable — Resource Manager is not an escape from it.** An earlier version of this
+section offered RM as "server-side state, no secret key at all". RM does keep state server-side,
+but it cannot host *this* state: probing every version it accepts (2026-08-20) showed it rejects
+`terraformVersion` 1.6.x through 1.15.x and accepts only **1.5.x**. This configuration declares
+`required_version >= 1.9.0`, which 1.5 would refuse to run, and the local state was written by
+**1.15.8** (format 4), which 1.5 cannot read. The version constraint could be relaxed; the state
+cannot — Terraform has no downgrade path — so no RM stack can ever adopt it. The bucket backend is
+version-agnostic storage and has no such limit.
 
 ## Two things to know before applying
 
