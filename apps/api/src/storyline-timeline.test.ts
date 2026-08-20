@@ -646,6 +646,21 @@ describe("surfacing storylines beside a search", () => {
       { limit: 25 },
     );
     expect(result.storylines.map((s) => s.id)).toEqual([storyline]);
+
+    // And by the possessive itself, which is what a reader typing the label
+    // back sends. `canonicalize` does not trim punctuation, so the keyword
+    // arrives as `dillard's`; folded with `trimWordPunctuation` before
+    // `singular` it reaches `dillard` and meets the label's split word. Without
+    // that first half of the fold it reaches `dillard'` and meets nothing —
+    // neither the label, split on the apostrophe, nor a profile holding the
+    // trimmed spelling.
+    await dropCachedPages(query.fingerprint);
+    const possessive = await readTimeline(
+      harness.deps,
+      { ...query, keywords: ["dillard's"] },
+      { limit: 25 },
+    );
+    expect(possessive.storylines.map((s) => s.id)).toEqual([storyline]);
   });
 });
 

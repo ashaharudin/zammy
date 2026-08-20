@@ -132,9 +132,13 @@ export function singular(token: string): string {
  * Candidates are GENERATED and then CHECKED against `singular`, rather than
  * derived by inverting its rules by hand: that way this function cannot drift
  * from the fold it inverts, only fail to enumerate. `movie` is the known gap —
- * `movies` folds to `moviy`, so no candidate of `movie` reaches it — and it
+ * `movies` folds to `movy`, so no candidate of `movie` reaches it — and it
  * costs nothing on either side, because a reader typing "movies" folds to
- * `moviy` too and meets the label there.
+ * `movy` too and meets the label there.
+ *
+ * Callers must hand this the fold's own output. `singular` is only half the
+ * corpus fold — `trimWordPunctuation` runs first — so a raw keyword like
+ * "dillard's" is not a token this can invert usefully.
  */
 export function surfaceForms(token: string): readonly string[] {
   const candidates = [token, `${token}s`];

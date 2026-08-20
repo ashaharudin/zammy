@@ -362,3 +362,19 @@ reach. Matching is on surface spellings offered by the folded side
 label in SQL, because a second stemmer in another language is the failure this
 codebase already refuses for tokenizers; the cost is one GIN expression index
 (migration 0016).
+
+Which means the folded side has to run the WHOLE corpus fold, not half of it.
+`canonicalize` lowercases and splits on whitespace and stops there, so a keyword
+still carries its punctuation, and `singular` alone strands the apostrophe —
+`dillard's` becomes `dillard'`, which is in no profile (the corpus trimmed it)
+and in no label's words (they split on the apostrophe). Surfacing folds with
+`trimWordPunctuation` first, which is the same order `splitTokens` runs it in.
+The `dillard'` lesson is now paid for on three sides: label agreement, the
+cloud's own query, and this.
+
+Note that the second reason above — the cloud as a one-way door — is answered
+twice over once ADR-0014 lands, and by a different mechanism: ADR-0014 stops the
+cloud sending a verbatim label at all. It stays recorded here because it is why
+this was found, and because the first reason is the one that outlives it: a
+reader typing a name they read in the gutter is not the cloud's click, and no
+amount of grounding the cloud reaches them.
