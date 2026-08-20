@@ -142,6 +142,24 @@ export async function readTrendingStorylines(
      where s.merged_into is null
        and s.status <> 'provisional'
        and s.label is not null
+       -- Not a bigram label. The fallback extractor names vocabulary rather
+       -- than events ("Investing Com" over four unrelated earnings templates,
+       -- "Second Quarter" over three unrelated companies), and the cloud is the
+       -- one place a label's words are EXECUTED as a search (ADR-0013/0014) --
+       -- so a vocabulary label here mints a topic for a story that does not
+       -- exist. readLabelMergeCandidates has excluded these from merge evidence
+       -- since ADR-0011 for the same reason; the cloud never got the same guard.
+       --
+       -- coalesce, NOT a bare "s.label_source <> 'bigram'": that comparison is
+       -- NULL for a row whose provenance predates migration 0011, and a NULL
+       -- predicate filters the row out. Spelled bare it would silently drop
+       -- every pre-migration label too -- 1,601 of 3,458 eligible rows in the
+       -- dev archive, over half the cloud, for a change meant to remove 323.
+       -- The merge query DOES require a known source, and the asymmetry is
+       -- deliberate: a merge is destructive and earns "prove it is a model
+       -- label", while the cloud is presentation and only needs "not one we
+       -- know to be vocabulary".
+       and coalesce(s.label_source, '') <> 'bigram'
        and a.language = ${input.language}
        and a.published >= ${input.from}
        and a.published < ${input.to}
