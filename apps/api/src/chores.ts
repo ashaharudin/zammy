@@ -1,5 +1,3 @@
-import { Queue, Worker } from "bullmq";
-import { Redis } from "ioredis";
 import type { Kysely } from "kysely";
 import {
   markDormantStorylines,
@@ -32,10 +30,24 @@ import {
  * (`term_snapshots` used to be pruned here too; the table went with the term
  * cloud, ADR-0013.)
  *
- * The schedule lives in BullMQ's job scheduler, which is Redis-shared state:
- * N Fargate tasks register the same scheduler id and exactly one instance
- * runs each night's job — the distributed-lock problem §4.1 warned about,
- * solved by the queue we already run.
+ * ── Where the schedule lives ─────────────────────────────────────────────────
+ * Outside this process. These passes run as one-shot invocations of
+ * `chores-cli.ts` under whatever the platform's scheduler is — a systemd timer
+ * on the staging VM, Railway's cron, OCI Resource Scheduler in production
+ * (DEPLOYMENT-OCI §1). They used to be a BullMQ job scheduler inside the api,
+ * which bought exactly-once across N instances from Redis-shared state; the
+ * runner now buys the same property from a Postgres advisory lock, and the
+ * platform owns the clock.
+ *
+ * The trade is deliberate and it is not free: a scheduler the app registers at
+ * boot cannot be forgotten, whereas an external one is absent until someone
+ * configures it, and nothing in the app will say so. What the trade buys is a
+ * process that exists only while the work does — the api no longer has to be
+ * awake at 3am for the retention report to happen, which is the whole point.
+ *
+ * Note what these chores do NOT touch: Redis. Every pass here reads and writes
+ * Postgres and (for labels) calls Gemini, so the runner needs no cache, no
+ * queue, and no `REDIS_URL` that resolves to anything.
  */
 
 /** §7.5: a topic hit within this window still protects its articles. */
@@ -380,54 +392,64 @@ export async function runStorylineLabelChore(
   return labelled;
 }
 
-export class ChoreQueue {
-  private readonly queue: Queue;
-  private worker: Worker | null = null;
+export interface StorylinePassDeps extends ChoreDeps {
+  /** The bar the live write path judges at — see `wiring.createLinkerConfig`. */
+  linker: LinkerConfig;
+  /**
+   * Required here, unlike on the individual chores: with no `GEMINI_API_KEY` the
+   * labeler still exists and only its `generator` is null (the bigram extractor
+   * becomes the whole path, ADR-0011). "No labeler at all" is not a state this
+   * pass can be in, and the label pass has no meaningful behaviour without one.
+   */
+  labeler: Omit<LabelerDeps, "db">;
+  rules: LabelMergeRules;
+  /** Model calls per minute for the label pass. `--label-rate` on the runner. */
+  labelRatePerMinute?: number;
+  /** Ceiling on storylines one night will relabel. */
+  maxLabels?: number;
+}
 
-  constructor(
-    private readonly redisUrl: string,
-    private readonly queueName = "chores",
-  ) {
-    this.queue = new Queue(this.queueName, {
-      connection: new Redis(redisUrl, { maxRetriesPerRequest: null }),
-    });
-  }
+export interface StorylinePassReport {
+  dormant: number;
+  bridges: BridgeSweepReport;
+  lateCandidates: Awaited<ReturnType<typeof runLateCandidateChore>>;
+  labels: Awaited<ReturnType<typeof runStorylineLabelChore>>;
+  labelMerge: LabelMergeReport;
+}
 
-  /** Idempotent: re-registering the same scheduler id updates, never duplicates. */
-  async scheduleNightlyRetention(cron = "0 3 * * *"): Promise<void> {
-    await this.queue.upsertJobScheduler(
-      "retention-nightly",
-      { pattern: cron },
-      { name: "retention" },
-    );
-  }
+/**
+ * The storyline lifecycle pass: everything the night does to `storylines`, in
+ * the one order that makes it converge.
+ *
+ * The order is the order of what each pass READS, and every step of it is
+ * load-bearing:
+ *
+ *   1. **Dormancy** first, so the late sweep judges candidates at the bar their
+ *      quiet earns rather than at yesterday's.
+ *   2. **The bridge sweep** before the late-candidate sweep: a pair that should
+ *      be one storyline should be one BEFORE old groups are offered to it, or
+ *      the offer is made against a profile that is about to change.
+ *   3. **The late-candidate sweep**, so the storylines it grows are the ones the
+ *      label pass then looks at — a membership change and its label in one
+ *      night, rather than a label describing yesterday's membership.
+ *   4. **The label pass** (the drift trigger).
+ *   5. **The label-agreement merge** LAST, because it is the only pass whose
+ *      input is a label: a storyline named tonight should be a merge candidate
+ *      tonight rather than tomorrow (ADR-0011's repair). This is also what makes
+ *      the whole thing converge — each night's new labels are the next night's
+ *      candidates.
+ *
+ * Sequential on purpose, and awaited: 3am has no reader waiting, and every step
+ * here is one whose input the previous step just changed.
+ */
+export async function runStorylinePass(
+  deps: StorylinePassDeps,
+): Promise<StorylinePassReport> {
+  const { dormant } = await runDormancyChore(deps);
+  const bridges = await runBridgeSweepChore(deps);
+  const lateCandidates = await runLateCandidateChore(deps);
+  const labels = await runStorylineLabelChore(deps);
+  const labelMerge = await runLabelMergeChore(deps);
 
-  /** The storyline lifecycle pass: dormancy, and the labels that drifted. */
-  async scheduleNightlyStorylines(cron = "0 4 * * *"): Promise<void> {
-    await this.queue.upsertJobScheduler(
-      "storylines-nightly",
-      { pattern: cron },
-      { name: "storylines" },
-    );
-  }
-
-  startConsumer(handlers: {
-    retention: () => Promise<unknown>;
-    storylines?: () => Promise<unknown>;
-  }): void {
-    if (this.worker) throw new Error("chore consumer already started");
-    this.worker = new Worker(
-      this.queueName,
-      async (job) => {
-        if (job.name === "retention") await handlers.retention();
-        if (job.name === "storylines") await handlers.storylines?.();
-      },
-      { connection: new Redis(this.redisUrl, { maxRetriesPerRequest: null }) },
-    );
-  }
-
-  async close(): Promise<void> {
-    await this.worker?.close();
-    await this.queue.close();
-  }
+  return { dormant, bridges, lateCandidates, labels, labelMerge };
 }

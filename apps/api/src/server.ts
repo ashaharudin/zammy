@@ -12,17 +12,7 @@ import { createDb } from "@zammy/storage";
 import { registerHealthRoutes } from "./health.js";
 import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
 import { IngestQueue } from "./ingest-queue.js";
-import {
-  ChoreQueue,
-  runBridgeSweepChore,
-  runDormancyChore,
-  runLabelMergeChore,
-  runLateCandidateChore,
-  runRetentionChore,
-  runStorylineLabelChore,
-  type ChoreDeps,
-} from "./chores.js";
-import { createGeminiClient } from "./gemini.js";
+import { createLabeler, createLinkerConfig } from "./wiring.js";
 import { Metrics, registerMetricsRoute } from "./metrics.js";
 import { processSegmentJob, type TimelineDeps } from "./timeline-service.js";
 import { processSampleJob, type TrendingDeps } from "./trending-service.js";
@@ -152,30 +142,14 @@ export async function buildApp(config: Config): Promise<App> {
   const db = createDb(pool);
   const queue = new IngestQueue(config.REDIS_URL);
 
-  // The labeler, built once (ADR-0011's Labels). No key is a supported
-  // configuration and not a degraded one: the generator is null, the bigram
-  // extractor becomes the only path, and it renders. What is NOT supported is a
-  // storyline that gets no label until an operator remembers to run the CLI,
-  // which is what this wiring ends.
-  const labeler = {
-    generator: config.GEMINI_API_KEY
-      ? createGeminiClient({
-          apiKey: config.GEMINI_API_KEY,
-          model: config.GEMINI_MODEL,
-          baseUrl: config.GEMINI_BASE_URL,
-          thinkingLevel: config.GEMINI_THINKING_LEVEL,
-          timeoutMs: config.GEMINI_TIMEOUT_MS,
-          // Built once and shared by the live tail, the sweep and the nightly
-          // chore — which is the point. One client is one pacer, and the
-          // ceiling is on the key they share.
-          maxRequestsPerMinute: config.GEMINI_MAX_RPM,
-          maxRateWaitMs: config.GEMINI_MAX_RATE_WAIT_MS,
-        })
-      : null,
-    sampleSize: config.STORYLINE_LABEL_SAMPLE,
-    driftFactor: config.STORYLINE_LABEL_DRIFT_FACTOR,
-    logger: app.log,
-  };
+  // The labeler, built once for this process (ADR-0011's Labels). What is NOT
+  // supported is a storyline that gets no label until an operator remembers to
+  // run the CLI, which is what this wiring ends.
+  //
+  // Once shared with the nightly chores; they now run in their own process and
+  // build their own client from the same factory, so one pacer no longer covers
+  // both. See `wiring.ts` for what that costs on a shared key.
+  const labeler = createLabeler(config, app.log);
 
   const deps: TimelineDeps = {
     db,
@@ -194,27 +168,10 @@ export async function buildApp(config: Config): Promise<App> {
         enabled: config.GROUPING_ENABLED,
         threshold: config.GROUPING_SIMILARITY_THRESHOLD,
         timeZone: config.APP_TIMEZONE,
-        linker: {
-          // Structural, not optional: no storylines means no timeline rows.
-          enabled: true,
-          rules: {
-            anchorMaxShare: config.STORYLINE_ANCHOR_MAX_SHARE,
-            anchorDfFloor: config.STORYLINE_ANCHOR_DF_FLOOR,
-            massThreshold: config.STORYLINE_MASS_THRESHOLD_V2,
-            dormancyDays: config.STORYLINE_DORMANCY_DAYS,
-            dormantStrictness: config.STORYLINE_DORMANT_STRICTNESS,
-          },
-          mergeBridges: config.STORYLINE_MERGE_BRIDGES,
-          // No model, no verdict to wait for — deferring would only lose
-          // formations to a tail that can never resolve them.
-          coherenceGate:
-            config.STORYLINE_COHERENCE_GATE && Boolean(config.GEMINI_API_KEY),
-          storyDf: {
-            windowDays: config.STORYLINE_DF_WINDOW_DAYS,
-            timeZone: config.APP_TIMEZONE,
-          },
-          timeZone: config.APP_TIMEZONE,
-        },
+        // Shared with the nightly sweeps by construction, not by copying: they
+        // exist to re-offer the linker what it declined, and an offer judged at
+        // a different bar is a different decision (`wiring.ts`).
+        linker: createLinkerConfig(config),
       },
     },
     now: () => new Date(),
@@ -237,62 +194,12 @@ export async function buildApp(config: Config): Promise<App> {
   await registerQueryRoutes(app, { deps, defaultLanguage: config.DEFAULT_LANGUAGE });
   registerTrendingRoute(app, { deps: trendingDeps });
 
-  // Nightly chores (§9.1): the retention report (§7.5), and the storyline
-  // lifecycle pass that keeps `status` honest (ADR-0011).
-  const choreDeps: ChoreDeps = {
-    db,
-    config: {
-      retentionDays: config.RETENTION_DAYS,
-      storyDfWindowDays: config.STORYLINE_DF_WINDOW_DAYS,
-      storylineDormancyDays: config.STORYLINE_DORMANCY_DAYS,
-      timeZone: config.APP_TIMEZONE,
-    },
-    now: () => new Date(),
-    log: app.log,
-  };
-  const chores = new ChoreQueue(config.REDIS_URL);
-  chores.startConsumer({
-    retention: () => runRetentionChore(choreDeps),
-    // Order matters, and it is the order of what each pass reads. Dormancy
-    // first, so the late sweep judges candidates at the bar their quiet earns.
-    // The sweep next, so the storylines it grows are the ones the label pass
-    // then looks at — a membership change and its label in one night, rather
-    // than a label that describes yesterday's membership.
-    //
-    // The label-agreement merge runs LAST, after the label pass, because it is
-    // the only pass whose input is a label: a storyline named tonight should be
-    // a merge candidate tonight rather than tomorrow (ADR-0011's repair).
-    storylines: async () => {
-      await runDormancyChore(choreDeps);
-      // The bridge sweep before the late-candidate sweep: a pair that should be
-      // one storyline should be one before old groups are offered to it.
-      await runBridgeSweepChore({
-        ...choreDeps,
-        linker: deps.config.grouping.linker,
-        labeler,
-      });
-      await runLateCandidateChore({
-        ...choreDeps,
-        linker: deps.config.grouping.linker,
-        labeler,
-      });
-      await runStorylineLabelChore({
-        ...choreDeps,
-        labeler,
-        labelRatePerMinute: config.GEMINI_MAX_RPM,
-      });
-      await runLabelMergeChore({
-        ...choreDeps,
-        rules: {
-          graceDays: config.STORYLINE_LABEL_MERGE_GRACE_DAYS,
-          maxComponent: config.STORYLINE_LABEL_MERGE_MAX_COMPONENT,
-        },
-        labeler,
-      });
-    },
-  });
-  await chores.scheduleNightlyRetention();
-  await chores.scheduleNightlyStorylines();
+  // The nightly chores (§9.1) do NOT run here. They are one-shot invocations of
+  // `chores-cli.ts` on the platform's scheduler — retention at 03:00 UTC, the
+  // storyline pass at 04:00 UTC. This process therefore does not have to be
+  // awake for them, and equally cannot make them happen: if nothing schedules
+  // the runner, the retention report and the storyline lifecycle passes simply
+  // never run, and no log line here will say so. See `chores.ts`.
 
   app.log.info({ config: redactConfig(config) }, "configuration loaded");
 
@@ -301,7 +208,6 @@ export async function buildApp(config: Config): Promise<App> {
     // The queue first (it holds Redis connections and may be mid-job), then
     // the stores. db.destroy() ends the shared pool — nothing ends it twice.
     await queue.close().catch(() => {});
-    await chores.close().catch(() => {});
     await Promise.allSettled([db.destroy(), redis.quit(), currents.close()]);
   };
 

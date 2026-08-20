@@ -98,6 +98,14 @@ pnpm infra:down     # stop them
 pnpm infra:reset    # stop and delete the postgres volume
 pnpm db:migrate     # apply migrations (a deploy step, never on boot)
 
+# The nightly chores (ARCHITECTURE 9.1). One-shot processes, not a background
+# thread in the api: the platform's scheduler runs them — 03:00 and 04:00 UTC —
+# so the api does not have to be awake for them. Nothing in the api reports a
+# chore that never ran, so the schedule needs its own monitoring.
+pnpm chores retention     # the retention report, and the trailing-corpus prune
+pnpm chores storylines    # dormancy → bridge sweep → late candidates → labels → merge
+pnpm chores storylines --max-labels=1   # bound the model spend (500 calls/day, free tier)
+
 # Grouping maintenance (ARCHITECTURE 14.3, ADR-0005). Run after a change to
 # the headline tokenizer, which leaves already-stored tokens behind:
 pnpm regroup --tokens-only    # re-derive stored tokens; changes no groupings

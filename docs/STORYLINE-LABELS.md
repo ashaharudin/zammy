@@ -96,8 +96,8 @@ things label storylines:
 | caller | where it runs | when |
 | --- | --- | --- |
 | the ingest tail (`labelLinkedStorylines`) | the server | promotion and merge, off the §6.3 deadline |
-| the late-candidate sweep | the server | nightly, before the drift pass |
-| the drift chore (`labelPass`) | the server | nightly |
+| the late-candidate sweep | `pnpm chores storylines` | nightly, before the drift pass |
+| the drift chore (`labelPass`) | `pnpm chores storylines` | nightly |
 | `pnpm backfill:storylines` | its own process | an operator, on the whole archive |
 | `pnpm label:storylines` | its own process | an operator, on what needs it |
 
@@ -107,12 +107,15 @@ spacing, and retries were invisible to all four — a bad minute at the API
 multiplied the real rate by up to 3. One pacer inside the client fixes the
 category of bug rather than four instances of it.
 
-**The pacer's scope is one client, so one process.** The three server callers
-share the instance built in `server.ts`; each CLI builds its own. A CLI run
-alongside a live server is two pacers each admitting `GEMINI_MAX_RPM` — up to
-2x the ceiling (3x with two CLIs); the 429 path below is what holds the key
-then, and the operator's lever is `--label-rate` (STORYLINE-BACKFILL.md,
-"Operating it").
+**The pacer's scope is one client, so one process.** The server's ingest tail
+uses the instance built in `server.ts`; the chore runner and each CLI build
+their own from `wiring.createLabeler`. Two of them running at once is two
+pacers each admitting `GEMINI_MAX_RPM` — up to 2x the ceiling (3x with three);
+the 429 path below is what holds the key then. The nightly runner is the case
+nobody chooses — 04:00 UTC arrives whether or not the server is labelling — so
+it takes `--label-rate` like the backfill (STORYLINE-BACKFILL.md, "Operating
+it"). Note that `--max-labels` bounds only the drift pass: the sweeps relabel
+whatever they merge or attach, and that spend is bounded by what moved.
 
 It is a sliding 60-second window, not a per-minute counter — a counter
 resetting on the minute admits a full limit at :59 and another at :01 — and

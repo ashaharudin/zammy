@@ -9,6 +9,7 @@
     "start": "node --env-file-if-exists=../../.env dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run --passWithNoTests",
+    "chores": "tsc -b && node --env-file-if-exists=../../.env dist/chores-cli.js",
     "regroup": "tsc -b && node --env-file-if-exists=../../.env dist/regroup-cli.js",
     "story:df": "tsc -b && node --env-file-if-exists=../../.env dist/story-df-cli.js",
     "label:storylines": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-label-cli.js",

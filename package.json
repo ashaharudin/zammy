@@ -16,6 +16,7 @@
     "dev:web": "pnpm --filter @zammy/web dev",
     "prototype:storylines": "pnpm --filter @zammy/web dev --open /prototype/storylines",
     "db:migrate": "pnpm --filter @zammy/storage migrate",
+    "chores": "pnpm --filter @zammy/api chores",
     "regroup": "pnpm --filter @zammy/api regroup",
     "story:df": "pnpm --filter @zammy/api story:df",
     "label:storylines": "pnpm --filter @zammy/api label:storylines",
