@@ -22,38 +22,63 @@ export interface TrendingStoryline {
   id: string;
   /** Non-null by construction: the query refuses unlabelled storylines. */
   label: string;
+  /**
+   * The arc's headline vocabulary — what the API turns into the search a click
+   * runs (`cloudQuery`). Carried out of the read rather than fetched per word
+   * because it is one more column on a row the aggregate already groups by.
+   */
+  profileTokens: string[];
   /** Distinct member ARTICLES published inside the window — the size input. */
   windowArticles: number;
+  /** Distinct source domains inside the window — the breadth gate (>= 2). */
+  windowSources: number;
   /** Distinct member articles over the whole arc. */
   size: number;
-  /** Distinct source domains over the whole arc — the breadth gate. */
+  /** Distinct source domains over the whole arc. Reported, no longer the gate. */
   sourceCount: number;
-  /** The newest member article inside the window: "most recently updated". */
+  /** The newest member article inside the window: how recently this moved. */
   lastUpdated: Date;
 }
 
 /**
- * The breadth gate, carried over from the term cloud intact: fewer than two
- * distinct outlets over the whole arc and the storyline does not appear.
+ * The breadth gate: fewer than two distinct outlets and the storyline does not
+ * appear. Not a tuning knob — it is the one mechanism that measurably had to
+ * exist for the cloud to work at all (PROBE-FINDINGS 6b), and its value is
+ * "more than one newsroom", which has no second sensible setting.
  *
- * A constant rather than config because it is not a tuning knob — it is the one
- * mechanism that measurably had to exist for the cloud to work at all
- * (PROBE-FINDINGS 6b), and the value is "more than one newsroom", which has no
- * second sensible setting.
+ * Measured over the WINDOW, which is where ADR-0014 moved it from the arc.
+ * ADR-0013 asked the gate a question about the story — have several newsrooms
+ * ever covered this event — and answering it over the arc let a storyline
+ * qualify on strength it earned weeks ago: on live data 18 of 32 qualifying
+ * storylines had exactly one article from one outlet inside the window, and
+ * because the ordering was pure recency those were the words at the top of the
+ * board. Asked over the window, the gate answers the question the landing page
+ * is actually posing — are several newsrooms covering this NOW.
  *
- * Measured over the ARC and not over the window, unlike everything else here.
- * The question the gate asks is whether several newsrooms have covered this
- * event, which is a fact about the story rather than about the last few hours:
- * a three-week storyline that eleven outlets have carried is not disqualified
- * because today's single new article came from one of them.
+ * This subsumes the arc-wide gate rather than joining it: a window's articles
+ * are a subset of the arc's, so two domains inside the window are two domains
+ * over the arc. `sourceCount` stays in the row as a reported fact.
  */
 const MIN_SOURCE_DOMAINS = 2;
 
 /**
- * The cloud: storylines with at least one member article published inside
- * `[from, to)`, most recently updated first.
+ * The cloud: storylines several newsrooms covered inside `[from, to)`, the
+ * busiest and freshest first.
  *
- * Three exclusions, each with a reason that is not "tidiness":
+ * **The ordering is a score, not a recency sort** (ADR-0014). ADR-0013 ordered
+ * by `max(published)` alone and gave the two visual channels one question each,
+ * which read well and ranked badly: on live data "Trade Deal" (17 articles, 11
+ * outlets) sat at position 24 in cool blue while a single-article storyline led
+ * the board in red. So volume returns to the ordering, decayed by age exactly
+ * as ADR-0008 decayed it — `0.5 ^ (age / halfLifeHours)`, exponential for the
+ * reasons that ADR argued at length — and the two channels stay honest because
+ * the front end reads recency off `lastUpdated` rather than off array position.
+ *
+ * The decay is why this needs `to` as an instant and not just as a bound: age
+ * is measured from the window's end, so a cached response and a fresh one agree
+ * about the board while the cache lives.
+ *
+ * Four exclusions, each with a reason that is not "tidiness":
  *
  *  - **Aliases** (`merged_into is not null`) are pointers, not storylines. The
  *    survivor carries the coverage and the label.
@@ -64,6 +89,8 @@ const MIN_SOURCE_DOMAINS = 2;
  *    learned this the hard way with eight pills reading "unlabelled storyline"
  *    while the backfill's label pass was still running; a cloud of them would
  *    be worse, since a label IS the word here.
+ *  - **One newsroom inside the window** — see `MIN_SOURCE_DOMAINS`. A `having`
+ *    rather than a `where`, because it is a question about the group.
  *
  * `language` filters the member ARTICLES, which is the same per-language corpus
  * the term cloud scored (§10.1): a storyline is not language-scoped — nothing
@@ -72,7 +99,14 @@ const MIN_SOURCE_DOMAINS = 2;
  */
 export async function readTrendingStorylines(
   db: Kysely<Database>,
-  input: { language: string; from: Date; to: Date; limit: number },
+  input: {
+    language: string;
+    from: Date;
+    to: Date;
+    /** The decay's half-life in hours. Must be > 0; config's floor is 0.5. */
+    halfLifeHours: number;
+    limit: number;
+  },
 ): Promise<TrendingStoryline[]> {
   // Written out rather than assembled in Kysely: the arc-wide aggregate is a
   // lateral over a different join than the windowed one, which the builder
@@ -80,14 +114,18 @@ export async function readTrendingStorylines(
   const { rows } = await sql<{
     id: string;
     label: string;
+    profile_tokens: string[];
     window_articles: number;
+    window_sources: number;
     size: number;
     source_count: number;
     last_updated: Date;
   }>`
     select s.id,
            s.label,
+           s.profile_tokens,
            count(distinct a.id)::int as window_articles,
+           count(distinct a.source_domain)::int as window_sources,
            max(a.published) as last_updated,
            arc.size,
            arc.source_count
@@ -107,16 +145,28 @@ export async function readTrendingStorylines(
        and a.language = ${input.language}
        and a.published >= ${input.from}
        and a.published < ${input.to}
-       and arc.source_count >= ${MIN_SOURCE_DOMAINS}
-     group by s.id, s.label, arc.size, arc.source_count
-     order by max(a.published) desc, s.id
+     group by s.id, s.label, s.profile_tokens, arc.size, arc.source_count
+    having count(distinct a.source_domain) >= ${MIN_SOURCE_DOMAINS}
+     -- volume x recency (ADR-0014). The age is non-negative by construction:
+     -- the where clause bounds every member article above, so max < the end.
+     order by count(distinct a.id)
+                * power(
+                    0.5,
+                    extract(epoch from (${input.to}::timestamptz - max(a.published)))
+                      / 3600.0
+                      / ${input.halfLifeHours}
+                  ) desc,
+              max(a.published) desc,
+              s.id
      limit ${input.limit}
   `.execute(db);
 
   return rows.map((row) => ({
     id: row.id,
     label: row.label,
+    profileTokens: row.profile_tokens,
     windowArticles: row.window_articles,
+    windowSources: row.window_sources,
     size: row.size,
     sourceCount: row.source_count,
     lastUpdated: row.last_updated,

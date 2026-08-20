@@ -30,21 +30,33 @@ export function windowPhrase(window: { windowStart: string; windowEnd: string })
 }
 
 /**
- * The three facts behind one word: how much of this arc landed in the window,
- * when it last moved, and how big the whole arc is.
+ * The four facts behind one word: how much of this arc landed in the window,
+ * how many newsrooms carried it there, when it last moved, and how big the
+ * whole arc is.
  *
- * All three are in the cloud's `title` and the list's text, where they cost no
+ * All four are in the cloud's `title` and the list's text, where they cost no
  * layout — because the two visual channels each carry exactly one of them (size
  * is the window's article count, colour is recency) and neither is legible as a
- * number. The arc total is the one thing NO channel shows, and it is what tells
- * a three-week story apart from a three-hour one that happens to be busy.
+ * number. Two of them get no channel at all:
+ *
+ *  - **The outlet count** is the breadth GATE (ADR-0014), so it is the reason
+ *    this word is on the board rather than a detail about it: "2 articles from
+ *    2 outlets" is what separates a story several newsrooms are covering from
+ *    one newsroom filing twice.
+ *  - **The arc's total** tells a three-week story from a three-hour one that
+ *    happens to be busy.
  */
 export function cloudDetail(
-  storyline: Pick<TrendingStoryline, "windowArticles" | "size" | "lastUpdated">,
+  storyline: Pick<
+    TrendingStoryline,
+    "windowArticles" | "windowSources" | "size" | "lastUpdated"
+  >,
   window: { windowStart: string; windowEnd: string },
 ): string {
   const fresh = `${storyline.windowArticles} article${
     storyline.windowArticles === 1 ? "" : "s"
+  } from ${storyline.windowSources} outlet${
+    storyline.windowSources === 1 ? "" : "s"
   } in ${windowPhrase(window)}`;
   const updated = `updated ${relativeTime(storyline.lastUpdated)}`;
   // Only worth saying when the arc is bigger than the window's slice of it;

@@ -15,17 +15,24 @@ import { MONO } from "./theme.js";
  * <button> that runs the search.
  *
  * Two channels, one question each (ADR-0013). Size answers "how much is
- * happening", colour answers "how recently" — which is why nothing here sorts
- * or scores: the response arrives most recently updated first, so the palette
- * reads straight off the array index and the words the reader's eye lands on
- * first are the freshest.
+ * happening", colour answers "how recently" — and keeping them independent is
+ * why `rankColors` sorts by `lastUpdated` instead of reading array position.
+ * The response arrives ranked by volume AND recency together (ADR-0014), so
+ * position is no longer a recency signal; taking colour off the index is what
+ * stops both channels from answering the same question.
  *
- * The click runs the LABEL AS A SEARCH, and this is the one place in the app
- * that does. Everywhere else a label opens its storyline by UUID (ADR-0010,
- * ADR-0011, and `StorylinePills`), because a label names one specific arc and
- * the UUID is exact. The cloud is the exception on purpose: it is also the cold
- * -start answer (§9.3), and a click that opens a storyline mints no topic and
- * feeds the demand-driven loop nothing.
+ * The click runs a SEARCH rather than opening the storyline, and this is the one
+ * place in the app that does. Everywhere else a label opens its storyline by
+ * UUID (ADR-0010, ADR-0011, and `StorylinePills`), because a label names one
+ * specific arc and the UUID is exact. The cloud is the exception on purpose: it
+ * is also the cold-start answer (§9.3), and a click that opens a storyline mints
+ * no topic and feeds the demand-driven loop nothing.
+ *
+ * What it searches is `storyline.query`, not the label the button draws — the
+ * label's own words that its coverage actually says, resolved by the API
+ * (`cloudQuery`). Drawing one string and searching another is a real cost, and
+ * it buys the thing the cloud existed for: a four-word label run verbatim is
+ * four conjunctive upstream terms and returns an empty timeline (ADR-0014).
  *
  * Accessibility is not optional here (§10.5): a wordcloud is close to unusable
  * for screen readers, so the same data renders as an ordered list — always
@@ -62,16 +69,26 @@ const PALETTE = [
 ] as const;
 
 /**
- * Recency rank → palette bucket. The array's own order IS the rank (§10.4
- * returns most recently updated first), so this needs no comparison — and the
- * cloud and the list therefore cannot disagree about which word is freshest.
+ * Recency rank → palette bucket, ranked HERE rather than read off the array.
+ *
+ * Under ADR-0013 the response's own order was the recency rank and this
+ * function was an index lookup. ADR-0014 ranks the response by volume and
+ * recency together — so that `limit` still slices the storylines that matter
+ * most — which leaves array position answering the same question size already
+ * answers. Sorting by `lastUpdated` is what keeps the two channels apart.
+ *
+ * The cloud and the list still cannot disagree about which word is freshest:
+ * both read this one map, keyed by UUID rather than by position.
  */
 function rankColors(storylines: readonly TrendingStoryline[]): Map<string, string> {
+  const byRecency = [...storylines].sort(
+    (a, b) => Date.parse(b.lastUpdated) - Date.parse(a.lastUpdated),
+  );
   return new Map(
-    storylines.map((storyline, index) => [
+    byRecency.map((storyline, index) => [
       storyline.id,
       PALETTE[
-        Math.min(PALETTE.length - 1, Math.floor((index / storylines.length) * PALETTE.length))
+        Math.min(PALETTE.length - 1, Math.floor((index / byRecency.length) * PALETTE.length))
       ]!,
     ]),
   );
@@ -324,7 +341,7 @@ export function TrendingCloud({
               <button
                 key={word.storyline.id}
                 tabIndex={-1}
-                onClick={() => onSearch(word.storyline.label)}
+                onClick={() => onSearch(word.storyline.query)}
                 title={cloudDetail(word.storyline, bounds)}
                 style={{
                   position: "absolute",
@@ -355,7 +372,7 @@ export function TrendingCloud({
       {/* The accessible equivalent (§10.5): always in the tree for assistive
           tech; the toggle above makes it visible for everyone. The COUNTS and
           the update time are the signal — size and colour never carry meaning
-          alone, and recency is the whole ordering here. */}
+          alone, and the ranking they stand in for is not legible as either. */}
       {storylines.length > 0 && (
         <ol
           className={asList ? undefined : "sr-only"}
@@ -377,7 +394,7 @@ export function TrendingCloud({
           {storylines.map((storyline) => (
             <li key={storyline.id} style={{ marginBottom: "0.3rem" }}>
               <button
-                onClick={() => onSearch(storyline.label)}
+                onClick={() => onSearch(storyline.query)}
                 style={{
                   border: "none",
                   background: "none",

@@ -263,6 +263,12 @@ describe("storylines in storage", () => {
       storylineId: storyline.id,
       label: "Delta Flood",
       labelAt,
+      // The drift baseline and the provenance. One member group here, and
+      // "test" for the source, as every other suite spells it. Both were
+      // omitted until the tests were type-checked (§12), which wrote the
+      // baseline this label would later be measured against as nothing.
+      labelGroupCount: 1,
+      labelSource: "test",
     });
     expect(await readStoryline(harness.db, storyline.id)).toMatchObject({
       status: "active",

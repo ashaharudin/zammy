@@ -1,5 +1,5 @@
 ---
-status: partly superseded by ADR-0013 (the window still rolls and still ends at now; the weighted terms, the snapshot history and the baseline it describes are gone)
+status: partly superseded by ADR-0013, partly restored by ADR-0014 (the window still rolls and still ends at now; the snapshot history and the baseline are gone for good, and the terms with them, but the exponential recency decay this ADR chose came back under ADR-0014 as `TREND_HALF_LIFE_HOURS`, same shape and same 8h default, weighting storylines instead of terms)
 ---
 
 # The cloud rolls over a weighted 24-hour window
@@ -101,3 +101,23 @@ deliberately:
   `sqrt(df_domains)` breadth term, and every measurement and refusal in
   [ADR-0007](0007-the-cloud-stops-at-two-word-phrases.md) carry over untouched:
   those turned on df nesting and baseline size, not on how the period was cut.
+
+## Amended by ADR-0014: the decay came back
+
+ADR-0013 deleted the decay along with the score it weighted, and made recency
+the cloud's whole ordering. ADR-0014 put volume back into that ordering and
+needed the decay again the moment it did — a raw article count with no age term
+lets yesterday afternoon's eight-article story hold the top of a 24-hour board
+until it ages out.
+
+What returns is exactly this ADR's decision, not a new one: `0.5 ^ (age /
+half-life)`, exponential, defaulting to 8 hours, for the reason argued at length
+above — a linear ramp separates a 1-hour-old story from a 5-hour-old one by 17%
+while treating the 20-to-24-hour tail as significant. The knob is renamed
+`TREND_HALF_LIFE_HOURS` because what it decays is a storyline's coverage rather
+than a term's contribution, and `TERM_HALF_LIFE_HOURS` would name a unit the
+cloud no longer has (CONTEXT.md, **Term**).
+
+What does NOT come back is the baseline. `BASELINE_WINDOW_DAYS` and the trailing
+per-term mean stay deleted: "is this word perennial" is a question about words,
+and a storyline is an event.

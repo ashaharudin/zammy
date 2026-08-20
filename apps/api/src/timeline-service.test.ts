@@ -184,7 +184,7 @@ describe("truncation — a full final page means hidden history, not success", (
     }
     const deps = {
       ...harness.deps,
-      currents: new SupplementingClient(harness.counting),
+      currents: new SupplementingClient(harness.counting, harness.clock),
     };
 
     await readTimeline(deps, broadQuery(), { limit: 100 });
@@ -202,7 +202,11 @@ describe("truncation — a full final page means hidden history, not success", (
     harness = await createTestHarness({}, NOW);
 
     await readTimeline(harness.deps, broadQuery(), { limit: 100 });
-    harness.queue.startConsumer((job) => processSegmentJob(harness.deps, job));
+    harness.queue.startConsumer((job) =>
+      // Segment jobs only here; the breadth sample has its own handler
+      // (`processSampleJob`), and the union is what the consumer is handed.
+      job.kind === "sample" ? Promise.resolve() : processSegmentJob(harness.deps, job),
+    );
 
     await vi.waitFor(
       async () =>
@@ -399,7 +403,11 @@ describe("refresh-on-read (§6.4) — freshness is repaired by the next reader",
     expect(result.meta.ingest.pendingJobs).toBe(1);
 
     // The top-up closes the gap; the reader after them sees the fresher result.
-    harness.queue.startConsumer((job) => processSegmentJob(harness.deps, job));
+    harness.queue.startConsumer((job) =>
+      // Segment jobs only here; the breadth sample has its own handler
+      // (`processSampleJob`), and the union is what the consumer is handed.
+      job.kind === "sample" ? Promise.resolve() : processSegmentJob(harness.deps, job),
+    );
     await vi.waitFor(
       async () =>
         expect(await harness.queue.pendingCount(live.fingerprint)).toBe(0),

@@ -16,7 +16,9 @@ function storyline(id: string, windowArticles: number): TrendingStoryline {
   return {
     id,
     label: `Arc ${id}`,
+    query: `arc ${id}`,
     windowArticles,
+    windowSources: 2,
     size: windowArticles * 3,
     sourceCount: 2,
     lastUpdated: "2026-08-17T12:00:00.000Z",

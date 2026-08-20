@@ -1,0 +1,24 @@
+// Type-checking for the files tsconfig.json deliberately leaves out.
+//
+// The build config excludes tests and `test-support.ts` so `tsc -b` does not
+// emit them into dist/ — right for the build, and it silently meant the test
+// files were never type-checked at all: `typecheck` reads the same config. A
+// test fixture missing a required field compiled clean and failed at runtime as
+// a wrong VALUE (a null landing in SQL), which is the failure this exists to
+// stop. See ARCHITECTURE 12.
+//
+// So: same strictness, same references, no emit, everything included. Additive
+// on purpose — the build graph is untouched, and `typecheck` runs both passes
+// because only the build config has `declaration: true` and can surface the
+// declaration-emit errors that come with it.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["dist"]
+}

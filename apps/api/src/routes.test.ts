@@ -40,6 +40,7 @@ async function setup(): Promise<void> {
       samplePages: 1,
       sampleRefreshMinutes: 60,
       windowHours: 24,
+      halfLifeHours: 8,
     },
   };
   await registerQueryRoutes(app, { deps: harness.deps, defaultLanguage: "en" });

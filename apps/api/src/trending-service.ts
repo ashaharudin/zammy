@@ -1,6 +1,7 @@
 import { TRENDING_LIMIT_MAX, type TrendingResponse } from "@zammy/shared";
 import { ingestSightings, readTrendingStorylines, upsertTopic } from "@zammy/storage";
 import { fingerprintOf } from "./canonical.js";
+import { cloudQuery } from "./cloud-query.js";
 import { groupCreatedArticles, groupingDepsFor } from "./grouping-service.js";
 import { samplePendingId, type SampleJob } from "./ingest-queue.js";
 import { readCachedPage, writeCachedPage } from "./page-cache.js";
@@ -37,6 +38,13 @@ export interface TrendingConfig {
   sampleRefreshMinutes: number;
   /** How far back the cloud looks, in hours (§10.1, default 24). */
   windowHours: number;
+  /**
+   * The ranking decay's half-life in hours (§10.3, default 8) — how fast an
+   * article's contribution to a storyline's position ages out. Back from
+   * ADR-0008, which chose exponential decay and this default over a linear
+   * ramp, and which ADR-0013 deleted along with the score it weighted.
+   */
+  halfLifeHours: number;
 }
 
 export interface TrendingDeps extends TimelineDeps {
@@ -107,13 +115,14 @@ export async function readTrending(
   // The FULL ranked list, not this caller's slice: the cache key names a
   // language and nothing else, so a `?limit=4` request would otherwise cache
   // a four-word cloud and every reader behind it would see one for the next
-  // fifteen minutes. Storylines come back most recently updated first (§10.4),
+  // fifteen minutes. Storylines come back busiest-and-freshest first (§10.4),
   // so every limit is a prefix of the same list and readers never disagree
   // about what leads.
   const storylines = await readTrendingStorylines(deps.db, {
     language: query.language,
     from,
     to,
+    halfLifeHours: deps.trending.halfLifeHours,
     limit: TRENDING_LIMIT_MAX,
   });
   const pendingJobs = await deps.queue.pendingCount(
@@ -128,7 +137,12 @@ export async function readTrending(
     storylines: dedupeByLabel(storylines).map((storyline) => ({
       id: storyline.id,
       label: storyline.label,
+      // The click's search, resolved here rather than in the browser: it is a
+      // fact about the arc's coverage, and the front end holds no profile
+      // tokens to derive it from (ADR-0014, `cloudQuery`).
+      query: cloudQuery(storyline),
       windowArticles: storyline.windowArticles,
+      windowSources: storyline.windowSources,
       size: storyline.size,
       sourceCount: storyline.sourceCount,
       lastUpdated: storyline.lastUpdated.toISOString(),
@@ -154,17 +168,21 @@ export async function readTrending(
 }
 
 /**
- * One word per label, keeping the most recently updated claimant.
+ * One word per label, keeping the highest-ranked claimant.
  *
  * Labels are deliberately non-unique (ADR-0011): two storylines may be named
  * the same thing, and the dev archive holds three called "Trump
  * Administration". A timeline can tell them apart, because a pill has room for
  * a date qualifier; a cloud cannot — it would simply draw the same word twice,
  * at two sizes, in two colours, and a reader clicking either gets the same
- * search. So the cloud is a set of WORDS, and the freshest claimant keeps it.
+ * search. So the cloud is a set of WORDS, and one claimant keeps it.
  *
- * The rows arrive most-recently-updated first, so "first wins" IS "freshest
- * wins" and this needs no comparison of its own.
+ * The rows arrive in rank order, so "first wins" IS "best wins" and this needs
+ * no comparison of its own. Which claimant that names changed with ADR-0014 —
+ * the busiest-and-freshest rather than simply the freshest — and it changed for
+ * the better: of two storylines called "Climate Change", the one carrying six
+ * articles from six outlets is the one whose word this should be, and under a
+ * pure recency sort it lost to a one-article namesake that moved minutes later.
  */
 function dedupeByLabel<T extends { label: string }>(rows: readonly T[]): T[] {
   const seen = new Set<string>();

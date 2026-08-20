@@ -166,6 +166,10 @@ describe("the nightly label pass", () => {
       label: "Fausto Hawaii",
       labelAt: new Date("2026-08-01T00:00:00.000Z"),
       labelGroupCount: 2,
+      // An earlier model wrote it — provenance, which `readLabelCandidates`
+      // deliberately does not filter on (the labeler decides). Omitted until
+      // the tests were type-checked (§12).
+      labelSource: "gemini-2.9-flash",
     });
     for (const day of [YESTERDAY, YESTERDAY]) {
       await attachGroup(db, { storylineId: id, groupId: await group(day), ...TZ });
@@ -185,6 +189,10 @@ describe("the nightly label pass", () => {
       label: "Fausto Hawaii",
       labelAt: new Date("2026-08-01T00:00:00.000Z"),
       labelGroupCount: 2,
+      // An earlier model wrote it — provenance, which `readLabelCandidates`
+      // deliberately does not filter on (the labeler decides). Omitted until
+      // the tests were type-checked (§12).
+      labelSource: "gemini-2.9-flash",
     });
 
     const generator = saying("Hurricane Fausto");
@@ -248,6 +256,10 @@ describe("the nightly late-candidate sweep", () => {
       dormantStrictness: 1.5,
     },
     mergeBridges: 2,
+    // Off, which is the pre-gate path these tests have been taking all along:
+    // the field was absent until the tests were type-checked (§12) and read
+    // as falsy. The one test that is ABOUT the gate spreads this and sets true.
+    coherenceGate: false,
     storyDf: { windowDays: 14, timeZone: "UTC" },
     timeZone: "UTC",
   };

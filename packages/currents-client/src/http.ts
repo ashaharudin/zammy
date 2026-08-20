@@ -5,6 +5,7 @@ import {
   clampSearchParams,
   tagProvider,
   type CallOpts,
+  type CircuitBreakerOptions,
   type ClientLimits,
   type ClientLogger,
   type FetchLike,
@@ -64,7 +65,16 @@ export interface HttpCurrentsClientOptions {
   /** Base and ceiling for exponential backoff with full jitter. */
   backoffBaseMs?: number;
   backoffMaxMs?: number;
-  breaker?: { failureThreshold?: number; cooldownMs?: number };
+  /**
+   * Passed through to the transport's breaker verbatim, so it must be the
+   * transport's own type. It was hand-narrowed here to
+   * `{ failureThreshold?, cooldownMs? }` — a key `CircuitBreaker` does not read,
+   * so anyone following the type would have set it and silently got the default
+   * threshold of 5. Nothing in the app set it, and the tests passed the real
+   * `threshold`, so no behaviour was ever wrong; the type was. Found by
+   * type-checking the tests (§12).
+   */
+  breaker?: CircuitBreakerOptions;
   fetch?: FetchLike;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
