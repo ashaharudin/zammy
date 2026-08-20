@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { sql } from "kysely";
+import { sql, type Kysely } from "kysely";
 import { migrateToLatest } from "./migrator.js";
 import * as storylineTables from "./migrations/0007-storyline-tables.js";
 import * as storyTokenDf from "./migrations/0008-story-token-df.js";
@@ -19,6 +19,17 @@ import { createTestDatabase, type TestDatabase } from "./test-support.js";
 
 describe("migrateToLatest", () => {
   let harness: TestDatabase;
+
+  /**
+   * The harness connection as a migration sees it.
+   *
+   * A migration takes `Kysely<unknown>` — it runs against whatever schema is
+   * current, which is by definition not the one `Database` describes — and
+   * Kysely's type parameter is invariant, so a `Kysely<Database>` is not
+   * assignable to it. The real migrator passes an untyped instance; this is the
+   * same widening, named once instead of cast at sixteen call sites.
+   */
+  const migrationDb = (): Kysely<unknown> => harness.db as unknown as Kysely<unknown>;
 
   beforeAll(async () => {
     harness = await createTestDatabase();
@@ -99,16 +110,16 @@ describe("migrateToLatest", () => {
     // refuses the first (the key doing its job) and the second would silently
     // rebuild `storylines` without a column the ledger still claimed.
     expect(await hasDriftColumn()).toBe(true);
-    await labelSource.down(harness.db);
-    await labelDrift.down(harness.db);
-    await storylineBridges.down(harness.db);
-    await storylineTables.down(harness.db);
+    await labelSource.down(migrationDb());
+    await labelDrift.down(migrationDb());
+    await storylineBridges.down(migrationDb());
+    await storylineTables.down(migrationDb());
     expect(await hasStorylineTables()).toBe(0);
 
-    await storylineTables.up(harness.db);
-    await storylineBridges.up(harness.db);
-    await labelDrift.up(harness.db);
-    await labelSource.up(harness.db);
+    await storylineTables.up(migrationDb());
+    await storylineBridges.up(migrationDb());
+    await labelDrift.up(migrationDb());
+    await labelSource.up(migrationDb());
     expect(await hasStorylineTables()).toBe(3);
     expect(await hasDriftColumn()).toBe(true);
   });
@@ -122,10 +133,10 @@ describe("migrateToLatest", () => {
       return Number(rows[0]?.n ?? 0);
     };
 
-    await storylineBridges.down(harness.db);
+    await storylineBridges.down(migrationDb());
     expect(await hasBridges()).toBe(0);
 
-    await storylineBridges.up(harness.db);
+    await storylineBridges.up(migrationDb());
     expect(await hasBridges()).toBe(1);
   });
 
@@ -142,10 +153,10 @@ describe("migrateToLatest", () => {
       return Number(rows[0]?.n ?? 0);
     };
 
-    await storyTokenDf.down(harness.db);
+    await storyTokenDf.down(migrationDb());
     expect(await hasStoryDfTables()).toBe(0);
 
-    await storyTokenDf.up(harness.db);
+    await storyTokenDf.up(migrationDb());
     expect(await hasStoryDfTables()).toBe(2);
   });
 
@@ -165,7 +176,7 @@ describe("migrateToLatest", () => {
       return Number(rows[0]?.n ?? 0);
     };
 
-    await dropTermCloud.down(harness.db);
+    await dropTermCloud.down(migrationDb());
     expect(await termTables()).toBe(3);
     // Restored empty, and writable — the state the tables were in at launch.
     await sql`
@@ -173,7 +184,7 @@ describe("migrateToLatest", () => {
       values ('en', 'kelowna', 1.5, now())
     `.execute(harness.db);
 
-    await dropTermCloud.up(harness.db);
+    await dropTermCloud.up(migrationDb());
     expect(await termTables()).toBe(0);
   });
 
@@ -196,9 +207,9 @@ describe("migrateToLatest", () => {
     };
 
     expect(await exists()).toBe(true);
-    await formationRefusals.down(harness.db);
+    await formationRefusals.down(migrationDb());
     expect(await exists()).toBe(false);
-    await formationRefusals.up(harness.db);
+    await formationRefusals.up(migrationDb());
     expect(await exists()).toBe(true);
 
     // The CHECK is the invariant `recordFormationRefusal` relies on to make a

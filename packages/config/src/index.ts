@@ -467,15 +467,32 @@ const EnvSchema = z
     /**
      * How far back the wordcloud looks (ARCHITECTURE 10.1). The window rolls
      * with the clock rather than resetting at midnight (ADR-0008), so this is
-     * the only thing that decides what "now" covers — and since the cloud
-     * names the storylines the window UPDATED (ADR-0013), it is now the only
-     * cloud knob at all. `TERM_HALF_LIFE_HOURS` (the recency decay) and
-     * `BASELINE_WINDOW_DAYS` (the trailing per-term mean) went with the terms
-     * they weighted and suppressed; recency is the cloud's ordering now rather
-     * than a term of a score, and a storyline needs no suppressor because it is
-     * an event rather than a word.
+     * the only thing that decides what "now" covers. `BASELINE_WINDOW_DAYS`
+     * (the trailing per-term mean) went with the terms it suppressed and did
+     * not come back: a storyline needs no suppressor, because "is this word
+     * perennial" is a question about words (ADR-0013).
      */
     TREND_WINDOW_HOURS: z.coerce.number().int().min(1).max(168).default(24),
+
+    /**
+     * The half-life of the wordcloud's recency decay, in hours (§10.3). A
+     * storyline's position is its window article count times
+     * `0.5 ^ (age / this)`, so at the default a story that last moved 8 hours
+     * ago needs twice the coverage of one moving now to rank level with it.
+     *
+     * Back from ADR-0008's `TERM_HALF_LIFE_HOURS`, which ADR-0013 deleted when
+     * it made recency the cloud's whole ordering, and which ADR-0014 needed
+     * again the moment volume rejoined that ordering. Same shape and same
+     * default as before, and ADR-0008's argument for exponential over linear
+     * carries unchanged: a linear ramp separates a 1-hour-old story from a
+     * 5-hour-old one by 17% while treating the 20-to-24-hour tail as
+     * significant.
+     *
+     * Wants tuning against real traffic, in the terms that ADR set out: much
+     * shorter than `TREND_WINDOW_HOURS` and the older half of the window is
+     * decorative, much longer and the decay does nothing.
+     */
+    TREND_HALF_LIFE_HOURS: z.coerce.number().min(0.5).max(168).default(8),
 
     /**
      * The calendar day ARTICLE GROUPING is bounded by (§7.4, ADR-0005) — a

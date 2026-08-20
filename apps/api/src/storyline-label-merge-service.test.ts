@@ -275,14 +275,15 @@ describe("mergeAgreeingLabels", () => {
 
   it("collapses six arcs into one, as the archive's Hormuz component does", async () => {
     const ids: string[] = [];
-    for (const [from, to] of [
+    const spans: [string, string][] = [
       ["02", "17"],
       ["03", "14"],
       ["04", "17"],
       ["13", "14"],
       ["14", "17"],
       ["17", "17"],
-    ]) {
+    ];
+    for (const [from, to] of spans) {
       ids.push(
         await labelledStoryline({
           label: "Strait of Hormuz Crisis",
@@ -373,8 +374,15 @@ describe("mergeAgreeingLabels", () => {
     await setStorylineLabel(db, {
       storylineId: big,
       label: "Strait of Hormuz Crisis",
-      groupCount: 3,
-      source: "gemini-3.1-flash-lite",
+      // `groupCount` / `source` here until the tests were type-checked (§12):
+      // neither is a field, so both were dropped and the pre-merge baseline was
+      // never set. The assertion below is about the value the RELABEL writes, so
+      // nothing was wrong — the setup just did not say what it meant.
+      labelGroupCount: 3,
+      labelSource: "gemini-3.1-flash-lite",
+      // Also absent, and also silently written as nothing: `labelAt` is the
+      // drift clock every later label decision is measured from.
+      labelAt: new Date("2026-08-11T00:00:00.000Z"),
     });
 
     const report = await mergeAgreeingLabels({

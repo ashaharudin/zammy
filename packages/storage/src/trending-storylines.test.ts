@@ -12,18 +12,21 @@ import { readTrendingStorylines } from "./trending-storylines.js";
 import { createTestDatabase, type TestDatabase } from "./test-support.js";
 
 /**
- * The wordcloud read (ARCHITECTURE 10.4, ADR-0013): the storylines the rolling
- * window updated, most recently updated first.
+ * The wordcloud read (ARCHITECTURE 10.4, ADR-0013, ADR-0014): the storylines
+ * several newsrooms covered inside the rolling window, busiest and freshest
+ * first.
  *
  * Real Postgres, because the whole thing is one aggregate — a windowed join for
  * the recency and the window count, a lateral for the arc's size and breadth,
- * and the exclusions in between. A fake would agree with every one of these
- * assertions and with none of the SQL.
+ * the breadth gate in a `having`, and a decay in the `order by`. A fake would
+ * agree with every one of these assertions and with none of the SQL.
  */
 
 const ZONE = "UTC";
 const NOW = new Date("2026-08-17T12:00:00.000Z");
 const WINDOW = { from: new Date("2026-08-16T12:00:00.000Z"), to: NOW };
+/** ADR-0008's default, so the arithmetic below is the shipped arithmetic. */
+const HALF_LIFE_HOURS = 8;
 
 let counter = 0;
 
@@ -114,9 +117,14 @@ describe("readTrendingStorylines", () => {
   };
 
   const read = () =>
-    readTrendingStorylines(harness.db, { language: "en", ...WINDOW, limit: 50 });
+    readTrendingStorylines(harness.db, {
+      language: "en",
+      ...WINDOW,
+      halfLifeHours: HALF_LIFE_HOURS,
+      limit: 50,
+    });
 
-  it("orders by the newest member article — most recently updated first", async () => {
+  it("breaks a tie in volume by recency", async () => {
     await storyline("Older Arc", [
       { published: "2026-08-17T02:00:00.000Z", domain: "a.com" },
       { published: "2026-08-16T22:00:00.000Z", domain: "b.com" },
@@ -129,6 +137,50 @@ describe("readTrendingStorylines", () => {
     const cloud = await read();
     expect(cloud.map((s) => s.label)).toEqual(["Fresher Arc", "Older Arc"]);
     expect(cloud[0]!.lastUpdated.toISOString()).toBe("2026-08-17T11:30:00.000Z");
+  });
+
+  it("ranks a busier arc over a fresher one within a half-life", async () => {
+    // The failure ADR-0014 was written for: under a pure recency sort the
+    // one-article storyline that moved most recently led the board, and the
+    // storyline several newsrooms were actually covering sat far down it in
+    // cool blue. 6 * 0.5^(1.5/8) = 5.27 against 2 * 0.5^0 = 2.
+    await storyline("Widely Covered", [
+      { published: "2026-08-17T06:00:00.000Z", domain: "a.com" },
+      { published: "2026-08-17T07:00:00.000Z", domain: "b.com" },
+      { published: "2026-08-17T08:00:00.000Z", domain: "c.com" },
+      { published: "2026-08-17T09:00:00.000Z", domain: "d.com" },
+      { published: "2026-08-17T10:00:00.000Z", domain: "e.com" },
+      { published: "2026-08-17T10:30:00.000Z", domain: "f.com" },
+    ]);
+    await storyline("Just Landed", [
+      { published: "2026-08-17T11:59:00.000Z", domain: "a.com" },
+      { published: "2026-08-17T11:58:00.000Z", domain: "b.com" },
+    ]);
+
+    expect((await read()).map((s) => s.label)).toEqual(["Widely Covered", "Just Landed"]);
+  });
+
+  it("lets the decay overturn volume once the busier arc is old enough", async () => {
+    // The other half of the same knob, and the reason the ordering is a decay
+    // rather than "volume, then recency": yesterday's big story must not hold
+    // the top of the board for the rest of the window. Twenty-two hours at an
+    // 8-hour half-life leaves 8 * 0.5^(22/8) = 1.19 against 2 * 0.5^0 = 2.
+    await storyline("Yesterday's Story", [
+      { published: "2026-08-16T13:00:00.000Z", domain: "a.com" },
+      { published: "2026-08-16T13:10:00.000Z", domain: "b.com" },
+      { published: "2026-08-16T13:20:00.000Z", domain: "c.com" },
+      { published: "2026-08-16T13:30:00.000Z", domain: "d.com" },
+      { published: "2026-08-16T13:40:00.000Z", domain: "e.com" },
+      { published: "2026-08-16T13:50:00.000Z", domain: "f.com" },
+      { published: "2026-08-16T13:55:00.000Z", domain: "g.com" },
+      { published: "2026-08-16T14:00:00.000Z", domain: "h.com" },
+    ]);
+    await storyline("This Hour", [
+      { published: "2026-08-17T11:59:00.000Z", domain: "a.com" },
+      { published: "2026-08-17T11:58:00.000Z", domain: "b.com" },
+    ]);
+
+    expect((await read()).map((s) => s.label)).toEqual(["This Hour", "Yesterday's Story"]);
   });
 
   it("counts the WINDOW's articles for size and the whole arc separately", async () => {
@@ -144,8 +196,9 @@ describe("readTrendingStorylines", () => {
 
     const [only] = await read();
     expect(only!.windowArticles).toBe(2);
+    expect(only!.windowSources).toBe(2); // the gate: a.com and c.com, inside
     expect(only!.size).toBe(4);
-    expect(only!.sourceCount).toBe(3); // arc-wide breadth, not the window's
+    expect(only!.sourceCount).toBe(3); // arc-wide breadth, reported not gated
   });
 
   it("drops a storyline whose coverage all aged out of the window", async () => {
@@ -157,8 +210,8 @@ describe("readTrendingStorylines", () => {
     expect(await read()).toEqual([]);
   });
 
-  it("gates on two source domains over the arc (the Jenkins-burst class)", async () => {
-    // Five articles, one outlet, inside the window: a run of near-identical
+  it("gates on two source domains (the Jenkins-burst class)", async () => {
+    // Four articles, one outlet, inside the window: a run of near-identical
     // advisories is not what several newsrooms are covering (PROBE-FINDINGS 6b).
     await storyline("Single Outlet Advisories", [
       { published: "2026-08-17T08:00:00.000Z", domain: "loud.com" },
@@ -172,6 +225,21 @@ describe("readTrendingStorylines", () => {
     ]);
 
     expect((await read()).map((s) => s.label)).toEqual(["Two Newsrooms"]);
+  });
+
+  it("measures that gate over the WINDOW, not over the arc (ADR-0014)", async () => {
+    // The behaviour change. This arc is broadly covered — eleven outlets over
+    // three weeks — and today it gained one article, from one of them. ADR-0013
+    // asked the gate about the story and let it through; asked about the window,
+    // the honest answer is that several newsrooms are not covering this now.
+    await storyline("Broad Arc, Quiet Today", [
+      { published: "2026-07-28T09:00:00.000Z", domain: "a.com" },
+      { published: "2026-07-29T09:00:00.000Z", domain: "b.com" },
+      { published: "2026-08-01T09:00:00.000Z", domain: "c.com" },
+      { published: "2026-08-17T11:00:00.000Z", domain: "a.com" },
+    ]);
+
+    expect(await read()).toEqual([]);
   });
 
   it("refuses provisional, unlabelled and merged-away storylines", async () => {
@@ -224,8 +292,13 @@ describe("readTrendingStorylines", () => {
     // A storyline is not language-scoped — nothing about an event is — so it
     // appears in the cloud of every language that covered it, sized by that
     // language's articles.
+    // Each language needs its own two newsrooms: the breadth gate is applied
+    // to the window AFTER the language filter (ADR-0014), so a storyline is
+    // held to "several newsrooms are covering this" once per cloud it appears
+    // in, not once for the story as a whole.
     const groups = await Promise.all([
       article({ published: "2026-08-17T11:00:00.000Z", domain: "a.com", language: "en" }),
+      article({ published: "2026-08-17T10:45:00.000Z", domain: "d.com", language: "en" }),
       article({ published: "2026-08-17T10:00:00.000Z", domain: "b.com", language: "de" }),
       article({ published: "2026-08-17T09:00:00.000Z", domain: "c.com", language: "de" }),
     ]);
@@ -241,27 +314,31 @@ describe("readTrendingStorylines", () => {
       storylineId: created.id,
       label: "Bilingual Arc",
       labelAt: NOW,
-      labelGroupCount: 3,
+      labelGroupCount: 4,
       labelSource: "test",
     });
 
     const german = await readTrendingStorylines(harness.db, {
       language: "de",
       ...WINDOW,
+      halfLifeHours: HALF_LIFE_HOURS,
       limit: 50,
     });
     expect(german).toHaveLength(1);
     expect(german[0]!.windowArticles).toBe(2);
+    expect(german[0]!.windowSources).toBe(2); // b.com and c.com — the German half
     expect(german[0]!.lastUpdated.toISOString()).toBe("2026-08-17T10:00:00.000Z");
     // The arc's own size and breadth are language-blind: they describe the story.
-    expect(german[0]!.size).toBe(3);
-    expect(german[0]!.sourceCount).toBe(3);
+    expect(german[0]!.size).toBe(4);
+    expect(german[0]!.sourceCount).toBe(4);
 
     const english = await read();
-    expect(english[0]!.windowArticles).toBe(1);
+    expect(english[0]!.windowArticles).toBe(2);
+    expect(english[0]!.windowSources).toBe(2); // a.com and d.com — the English half
+    expect(english[0]!.size).toBe(4);
   });
 
-  it("honours the limit, keeping the freshest end of the list", async () => {
+  it("honours the limit, keeping the top of the ranking", async () => {
     for (const hour of ["06", "07", "08"]) {
       await storyline(`Arc ${hour}`, [
         { published: `2026-08-17T${hour}:00:00.000Z`, domain: "a.com" },
@@ -272,8 +349,11 @@ describe("readTrendingStorylines", () => {
     const top = await readTrendingStorylines(harness.db, {
       language: "en",
       ...WINDOW,
+      halfLifeHours: HALF_LIFE_HOURS,
       limit: 2,
     });
+    // Equal volume, so the decay alone separates them and the limit is still a
+    // prefix of the one ranking every other caller sees (§10.4).
     expect(top.map((s) => s.label)).toEqual(["Arc 08", "Arc 07"]);
   });
 });

@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: partly superseded by ADR-0014 (the unit, the exclusions and the search-not-UUID click stand; the arc-wide breadth gate, the pure-recency ordering and running the label verbatim do not)
 ---
 
 # The cloud names recently updated storylines

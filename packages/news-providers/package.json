@@ -9,7 +9,7 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc -b",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {

@@ -1,0 +1,110 @@
+import { describe, expect, it } from "vitest";
+import { CLOUD_QUERY_TERMS, cloudQuery } from "./cloud-query.js";
+
+/**
+ * The search a cloud word runs (ADR-0014).
+ *
+ * Every case here is a real storyline from the dev archive, because the failure
+ * this replaced was invisible to reasoning and obvious in the data: the labels
+ * read perfectly and returned nothing. The archive's profiles are quoted as
+ * they were stored, folded, so the assertions are about the fold meeting the
+ * corpus rather than about a plausible-looking string.
+ */
+
+describe("cloudQuery", () => {
+  it("keeps the label words the coverage says and drops the prose", () => {
+    // The bug, exactly: "jason arday plagiarism controversy" was four
+    // conjunctive upstream terms and returned 0 articles, while the arc it
+    // named held three (bbc.co.uk, dailymail.com, mises.org).
+    expect(
+      cloudQuery({
+        label: "Jason Arday plagiarism controversy",
+        profileTokens: ["academic", "arday", "cambridge", "jason", "professor", "university"],
+      }),
+    ).toBe("jason arday");
+  });
+
+  it("takes the label's leading words, where the naming ones are", () => {
+    // Labels are written subject-first, so the cap cuts the prose off the end
+    // rather than the name off the front.
+    expect(
+      cloudQuery({
+        label: "Lindsay Clancy murder trial",
+        profileTokens: ["clancy", "lindsay", "murder", "trial"],
+      }),
+    ).toBe("lindsay clancy");
+  });
+
+  it("spends at most CLOUD_QUERY_TERMS terms, because upstream ANDs them", () => {
+    const query = cloudQuery({
+      label: "Hashemi Family ICE Detention",
+      profileTokens: ["detention", "family", "hashemi", "ice"],
+    });
+
+    expect(query.split(" ")).toHaveLength(CLOUD_QUERY_TERMS);
+    expect(query).toBe("hashemi family");
+  });
+
+  it("is happy with a single grounded word", () => {
+    // "Jayden Daniels NIL dispute" grounded only `jayden` on live data. One
+    // term is a wide search, which is the failure mode worth having.
+    expect(
+      cloudQuery({
+        label: "Jayden Daniels NIL dispute",
+        profileTokens: ["commanders", "jayden", "quarterback"],
+      }),
+    ).toBe("jayden");
+  });
+
+  it("folds plurals to the corpus spelling before testing membership", () => {
+    // `labelWords` is the fold precisely so both sides meet: the label says
+    // "Protections", the coverage says `protection`, and a raw lowercase
+    // intersection would have dropped the word that names the story.
+    expect(
+      cloudQuery({
+        label: "Trump Forest Protections Repeal",
+        profileTokens: ["forest", "protection", "repeal", "trump"],
+      }),
+    ).toBe("trump forest");
+  });
+
+  it("folds possessives too, which a second regex got wrong once", () => {
+    // The `dillard'` lesson (see trimWordPunctuation): `singular` alone leaves
+    // the apostrophe stranded and the two sides never meet.
+    expect(
+      cloudQuery({
+        label: "Dillard's Earnings Beat",
+        profileTokens: ["beat", "dillard", "earning"],
+      }),
+    ).toBe("dillard earning");
+  });
+
+  it("keeps label order rather than the profile's, and de-duplicates", () => {
+    // profile_tokens are stored alphabetically; reading the query off them
+    // would put "climate" before "florida" and name the wrong subject.
+    expect(
+      cloudQuery({
+        label: "Florida Textbook Climate Revision",
+        profileTokens: ["climate", "florida", "revision", "textbook"],
+      }),
+    ).toBe("florida textbook");
+  });
+
+  it("falls back to the profile when the label shares nothing with it", () => {
+    // A label naming its arc in words none of its coverage uses. Headline words
+    // with no claim to name the event still beat prose nothing can match.
+    expect(
+      cloudQuery({
+        label: "An Unfolding Situation",
+        profileTokens: ["kelowna", "wildfire"],
+      }),
+    ).toBe("kelowna wildfire");
+  });
+
+  it("falls back to the label when there is no profile at all", () => {
+    // Unreachable through the read (a labelled, promoted storyline has a
+    // profile, and merged-away ones are excluded before this runs), but an
+    // empty query is a 400 from canonicalize on a word the reader can see.
+    expect(cloudQuery({ label: "Fort Hood Crash", profileTokens: [] })).toBe("Fort Hood Crash");
+  });
+});

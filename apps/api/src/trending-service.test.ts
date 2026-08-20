@@ -62,6 +62,7 @@ function trendingDeps(h: TestHarness, overrides: Partial<TrendingDeps["trending"
       samplePages: 1,
       sampleRefreshMinutes: 60,
       windowHours: 24,
+      halfLifeHours: 8,
       ...overrides,
     },
   };
@@ -398,8 +399,114 @@ describe("the window rolls (§10.1, ADR-0008)", () => {
   }, 30_000);
 });
 
+describe("the click's search (§10.5, ADR-0014)", () => {
+  it("carries the label's grounded words as `query`, not the label itself", async () => {
+    // The bug this closes, end to end: the cloud drew "Jason Arday plagiarism
+    // controversy" and clicking it searched all four words, which upstream ANDs
+    // against body text and answered with nothing — while three articles on
+    // that very arc sat in the store. The word still READS as its label; what a
+    // click spends is the part of it the coverage actually says.
+    harness = await createTestHarness({}, NOW);
+    const deps = trendingDeps(harness);
+
+    const storyline = await seedStoryline(harness, "Jason Arday plagiarism controversy", [
+      { title: "Academic Who Accused Jason Arday Suspended", domain: "bbc.co.uk", ageHours: 1 },
+      { title: "Jason Arday Book Released With No Mention", domain: "dailymail.com", ageHours: 2 },
+    ]);
+    // Set directly: what is under test is that the read carries the profile out
+    // and the service turns it into a query. How a profile comes to hold these
+    // tokens is `refreshProfileTokens`' own business, and tested with it.
+    await harness.deps.db
+      .updateTable("storylines")
+      .set({
+        profile_tokens: ["academic", "arday", "cambridge", "jason", "professor", "university"],
+      })
+      .where("id", "=", storyline)
+      .execute();
+
+    const cloud = await readTrending(deps, { language: "en", limit: 50 });
+
+    expect(cloud.storylines[0]!.label).toBe("Jason Arday plagiarism controversy");
+    expect(cloud.storylines[0]!.query).toBe("jason arday");
+    // Two terms, so `canonicalize` mints a topic upstream can answer AND the
+    // keywords stay a subset of `profile_tokens` — which is what makes the
+    // stored arc surface as a pill even on a run that fetches nothing.
+    expect(cloud.storylines[0]!.query.split(" ")).toHaveLength(2);
+  }, 30_000);
+
+  it("falls back to the label when a storyline has no profile at all", async () => {
+    harness = await createTestHarness({}, NOW);
+    const deps = trendingDeps(harness);
+    await seedStoryline(harness, "Truro Verdict", [
+      { title: "Verdict Delivered In The Truro Case", domain: "a.com", ageHours: 2 },
+      { title: "Appeal Expected After The Truro Ruling", domain: "b.com", ageHours: 3 },
+    ]);
+
+    const cloud = await readTrending(deps, { language: "en", limit: 50 });
+    expect(cloud.storylines[0]!.query).toBe("Truro Verdict");
+  }, 30_000);
+});
+
+describe("the ranking (§10.3, ADR-0014)", () => {
+  it("leads with the widely-covered arc over the one that moved last", async () => {
+    // The complaint that produced ADR-0014: the board's reddest, largest words
+    // were its least-covered storylines, because a single-article arc that
+    // landed at 16:48 outranked a 17-article one from the same window.
+    harness = await createTestHarness({}, NOW);
+    const deps = trendingDeps(harness);
+
+    await seedStoryline(harness, "Trade Deal", [
+      { title: "Trade Deal Signed After Late Talks", domain: "a.com", ageHours: 4 },
+      { title: "Markets Rise On The Trade Deal", domain: "b.com", ageHours: 5 },
+      { title: "Unions Criticise The Trade Deal", domain: "c.com", ageHours: 5.5 },
+      { title: "Trade Deal Text Published In Full", domain: "d.com", ageHours: 6 },
+      { title: "What The Trade Deal Changes", domain: "e.com", ageHours: 6.5 },
+      { title: "Trade Deal Reaction From Ottawa", domain: "f.com", ageHours: 7 },
+    ]);
+    await seedStoryline(harness, "Champagne Harvest Climate Impact", [
+      { title: "Champagne Harvest Starts Early Again", domain: "g.com", ageHours: 0.2 },
+      { title: "Growers Watch The Champagne Harvest", domain: "h.com", ageHours: 0.3 },
+    ]);
+
+    const cloud = await readTrending(deps, { language: "en", limit: 50 });
+    expect(cloud.storylines.map((s) => s.label)).toEqual([
+      "Trade Deal",
+      "Champagne Harvest Climate Impact",
+    ]);
+    // Recency is still reported per word — the palette reads it, so it has to
+    // survive an ordering that is no longer recency (§10.5).
+    expect(Date.parse(cloud.storylines[1]!.lastUpdated)).toBeGreaterThan(
+      Date.parse(cloud.storylines[0]!.lastUpdated),
+    );
+  }, 30_000);
+
+  it("refuses an arc no second newsroom covered inside the window", async () => {
+    // Broadly covered over three weeks, one article from one outlet today.
+    // ADR-0013's arc-wide gate admitted this; the window's gate does not.
+    harness = await createTestHarness({}, NOW);
+    const deps = trendingDeps(harness);
+
+    const quiet = await seedStoryline(harness, "Long Running Inquiry", [
+      { title: "Inquiry Opens Into The Contract", domain: "a.com", ageHours: 300 },
+      { title: "Second Witness Called At The Inquiry", domain: "b.com", ageHours: 250 },
+      { title: "Inquiry Hears From The Regulator", domain: "c.com", ageHours: 200 },
+    ]);
+    const [today] = await storeArticles(harness, [
+      { title: "Inquiry Resumes After The Recess", domain: "a.com", ageHours: 1 },
+    ]);
+    await attachGroup(harness.deps.db, {
+      storylineId: quiet,
+      groupId: today!,
+      timeZone: "UTC",
+    });
+
+    const cloud = await readTrending(deps, { language: "en", limit: 50 });
+    expect(cloud.storylines).toEqual([]);
+  }, 30_000);
+});
+
 describe("one word per label (§10.2)", () => {
-  it("keeps the freshest claimant when two arcs are named the same thing", async () => {
+  it("keeps the highest-ranked claimant when two arcs are named the same thing", async () => {
     // Labels are deliberately non-unique (ADR-0011) and the dev archive holds
     // three called "Trump Administration". A pill has room for the date
     // qualifier that tells them apart; a cloud would simply draw the same word
@@ -422,14 +529,41 @@ describe("one word per label (§10.2)", () => {
 
     const cloud = await readTrending(deps, { language: "en", limit: 50 });
 
-    // The word appears once, spelled as its freshest claimant spells it, and
-    // the arc it points at is that claimant — not the older namesake, whose
-    // articles are not folded in either.
+    // The word appears once, spelled as its winning claimant spells it, and the
+    // arc it points at is that claimant — not the namesake, whose articles are
+    // not folded in either. Equal volume here, so the decay picks the fresher.
     expect(cloud.storylines.map((s) => s.label)).toEqual([
       "hormuz strait crisis",
       "Truro Verdict",
     ]);
     expect(cloud.storylines[0]!.id).toBe(fresher);
     expect(cloud.storylines[0]!.windowArticles).toBe(2);
+  }, 30_000);
+
+  it("gives the word to the better-covered namesake, not merely the later one", async () => {
+    // What the ranking bought here (ADR-0014): of two arcs called the same
+    // thing, the word should belong to the one several newsrooms are actually
+    // covering. Under a pure recency sort a two-article namesake that moved
+    // twenty minutes later took it.
+    harness = await createTestHarness({}, NOW);
+    const deps = trendingDeps(harness);
+
+    const covered = await seedStoryline(harness, "Climate Change", [
+      { title: "Climate Change Report Lands In Geneva", domain: "a.com", ageHours: 3 },
+      { title: "Ministers Respond To Climate Change Data", domain: "b.com", ageHours: 3.2 },
+      { title: "Climate Change Costs Revised Upward", domain: "c.com", ageHours: 3.4 },
+      { title: "Cities Plan For Climate Change Heat", domain: "d.com", ageHours: 3.6 },
+      { title: "Climate Change Talks Set For October", domain: "e.com", ageHours: 3.8 },
+      { title: "Farmers On Climate Change Rainfall", domain: "f.com", ageHours: 4 },
+    ]);
+    await seedStoryline(harness, "climate change", [
+      { title: "Climate Change Panel Names New Chair", domain: "g.com", ageHours: 2 },
+      { title: "Climate Change Grant Awarded In Perth", domain: "h.com", ageHours: 2.2 },
+    ]);
+
+    const cloud = await readTrending(deps, { language: "en", limit: 50 });
+    expect(cloud.storylines).toHaveLength(1);
+    expect(cloud.storylines[0]!.id).toBe(covered);
+    expect(cloud.storylines[0]!.windowArticles).toBe(6);
   }, 30_000);
 });

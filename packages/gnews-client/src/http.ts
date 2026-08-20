@@ -3,6 +3,7 @@ import {
   clampSearchParams,
   tagProvider,
   type CallOpts,
+  type CircuitBreakerOptions,
   type ClientLimits,
   type ClientLogger,
   type FetchLike,
@@ -51,7 +52,8 @@ export interface HttpGnewsClientOptions {
   maxRetries?: number;
   backoffBaseMs?: number;
   backoffMaxMs?: number;
-  breaker?: { failureThreshold?: number; cooldownMs?: number };
+  /** The transport's own type — see the same field on `HttpCurrentsClient`. */
+  breaker?: CircuitBreakerOptions;
   fetch?: FetchLike;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;

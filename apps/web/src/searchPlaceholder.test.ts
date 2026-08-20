@@ -5,14 +5,17 @@ import { searchPlaceholder } from "./searchPlaceholder.js";
 /**
  * The hero search bar's placeholder (ARCHITECTURE 10): the examples it offers
  * should be what has actually just happened, not three keywords frozen in the
- * source.
+ * source — and they should be searches that RETURN something, which is what
+ * offering `query` instead of `label` is for (ADR-0014).
  */
 
-function storyline(label: string, minutesAgo: number): TrendingStoryline {
+function storyline(label: string, query: string, minutesAgo: number): TrendingStoryline {
   return {
     id: `id-${label}`,
     label,
+    query,
     windowArticles: 3,
+    windowSources: 2,
     size: 9,
     sourceCount: 2,
     lastUpdated: new Date(Date.UTC(2026, 7, 17, 12, 0, 0) - minutesAgo * 60_000).toISOString(),
@@ -20,37 +23,41 @@ function storyline(label: string, minutesAgo: number): TrendingStoryline {
 }
 
 describe("searchPlaceholder", () => {
-  it("offers the three most recently updated storylines as examples", () => {
+  it("offers the leading storylines' searches, not their labels", () => {
+    // The label is what the board draws; the query is what a click runs and
+    // therefore what ghost text should suggest typing. A label typed verbatim
+    // is a conjunctive upstream query that returns nothing (ADR-0014).
     const placeholder = searchPlaceholder([
-      storyline("Gaza Ceasefire Talks", 5),
-      storyline("Federal Reserve Rate Cut", 40),
-      storyline("Nvidia Chip Export Ban", 90),
-      storyline("Wimbledon Final", 600),
+      storyline("Gaza Ceasefire Talks", "gaza ceasefire", 5),
+      storyline("Federal Reserve Rate Cut", "federal reserve", 40),
+      storyline("Nvidia Chip Export Ban", "nvidia chip", 90),
+      storyline("Wimbledon Final", "wimbledon", 600),
     ]);
 
-    expect(placeholder).toBe(
-      "e.g. gaza ceasefire talks, federal reserve rate cut, nvidia chip export ban…",
-    );
+    expect(placeholder).toBe("e.g. gaza ceasefire, federal reserve, nvidia chip…");
   });
 
-  it("trusts the order it was handed, because that order IS recency", () => {
-    // The API returns most recently updated first (ADR-0013) and the cloud's
-    // palette reads the same array index, so re-sorting here could only make
-    // the placeholder disagree with the words on the board.
+  it("trusts the order it was handed, because that order IS the cloud's ranking", () => {
+    // The API returns the board's own ranking — busiest and freshest first
+    // (ADR-0014) — so re-sorting here could only make the placeholder disagree
+    // with which words the reader's eye is being drawn to.
     const placeholder = searchPlaceholder([
-      storyline("Wimbledon Final", 600),
-      storyline("Gaza Ceasefire Talks", 5),
-      storyline("Nvidia Chip Export Ban", 90),
+      storyline("Wimbledon Final", "wimbledon", 600),
+      storyline("Gaza Ceasefire Talks", "gaza ceasefire", 5),
+      storyline("Nvidia Chip Export Ban", "nvidia chip", 90),
     ]);
 
-    expect(placeholder).toBe("e.g. wimbledon final, gaza ceasefire talks, nvidia chip export ban…");
+    expect(placeholder).toBe("e.g. wimbledon, gaza ceasefire, nvidia chip…");
   });
 
   it("keeps the stock examples while the window is still thin", () => {
     // Loading, an errored fetch, and a cold-start deployment all arrive here.
     expect(searchPlaceholder([])).toBe("e.g. ai regulation, wildfires, interest rates…");
     expect(
-      searchPlaceholder([storyline("Gaza Ceasefire Talks", 5), storyline("Wimbledon Final", 600)]),
+      searchPlaceholder([
+        storyline("Gaza Ceasefire Talks", "gaza ceasefire", 5),
+        storyline("Wimbledon Final", "wimbledon", 600),
+      ]),
     ).toBe("e.g. ai regulation, wildfires, interest rates…");
   });
 });

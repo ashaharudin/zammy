@@ -24,16 +24,21 @@ import { FIXTURES_DIR, makeClient, quotaHeaders, stubFetch } from "./test-suppor
  * would have tested the wrong shape.
  */
 
+// `object` rather than `unknown`: every field is a captured HTTP response body,
+// so all nine are JSON objects, and the point of the file — that no shape is
+// asserted here — is unaffected. `unknown` additionally meant these could not be
+// handed to `stubFetch` as a body without a cast, which is how four of them were
+// being used all along, unchecked (§12).
 interface ErrorFixture {
-  unauthorized_401: unknown;
-  page_size_over_tier_400: unknown;
-  page_number_zero_400: unknown;
-  page_number_over_cap_400: unknown;
-  lookback_exceeded_400: unknown;
-  past_end_page_200_empty: unknown;
-  reference_languages: unknown;
-  reference_regions: unknown;
-  reference_categories: unknown;
+  unauthorized_401: object;
+  page_size_over_tier_400: object;
+  page_number_zero_400: object;
+  page_number_over_cap_400: object;
+  lookback_exceeded_400: object;
+  past_end_page_200_empty: object;
+  reference_languages: object;
+  reference_regions: object;
+  reference_categories: object;
 }
 
 let fixture: ErrorFixture;

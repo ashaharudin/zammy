@@ -37,7 +37,11 @@ describe("IngestQueue", () => {
 
     await queue.enqueueSegment(segment());
     queue.startConsumer(async (job) => {
-      processed.push(job);
+      // The consumer is handed the JOB UNION; a segment is anything that is not
+      // the breadth sample, exactly as `server.ts` discriminates it. These tests
+      // enqueue only segments, so the guard never fails — it is what makes that
+      // claim checkable rather than assumed (§12).
+      if (job.kind !== "sample") processed.push(job);
     });
 
     await vi.waitFor(() => expect(processed).toHaveLength(1), { timeout: 5_000 });
@@ -56,7 +60,7 @@ describe("IngestQueue", () => {
     await queue.enqueueSegment(segment({ startPage: 3 })); // genuinely different
 
     queue.startConsumer(async (job) => {
-      processed.push(job);
+      if (job.kind !== "sample") processed.push(job);
     });
 
     await vi.waitFor(() => expect(processed).toHaveLength(2), { timeout: 5_000 });

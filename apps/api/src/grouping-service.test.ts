@@ -5,6 +5,7 @@ import { ingestSightings, recordCoverage, upsertTopic } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
 import { groupCreatedArticles } from "./grouping-service.js";
 import { readTrailingCorpus } from "./story-df.js";
+import type { LinkerConfig } from "./storyline-linker.js";
 import { readTimeline } from "./timeline-service.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
 
@@ -26,6 +27,29 @@ const NOW = new Date("2026-08-11T22:00:00.000Z");
 const WINDOW = {
   from: new Date("2026-08-11T00:00:00.000Z"),
   to: new Date("2026-08-12T00:00:00.000Z"),
+};
+
+/**
+ * The storyline layer switched off, spelled in full.
+ *
+ * `grouping` is spread whole over the harness default, so a test that names it
+ * must supply the linker too — `enabled: false` is how the layer is turned off
+ * (ADR-0011), and the measured rules are carried along because the config wants
+ * them whether or not they are consulted.
+ */
+const LINKER_OFF: LinkerConfig = {
+  enabled: false,
+  rules: {
+    anchorMaxShare: 0.002,
+    anchorDfFloor: 10,
+    massThreshold: 20,
+    dormancyDays: 90,
+    dormantStrictness: 1.5,
+  },
+  mergeBridges: 2,
+  coherenceGate: false,
+  storyDf: { windowDays: 14, timeZone: "UTC" },
+  timeZone: "UTC",
 };
 
 let harness: TestHarness;
@@ -200,6 +224,7 @@ describe("grouping, end to end", () => {
             dormantStrictness: 1.5,
           },
           mergeBridges: 2,
+          coherenceGate: false, // the pre-gate path these tests already took (§12)
           storyDf: { windowDays: 14, timeZone: "UTC" },
           timeZone: "UTC",
         },
@@ -253,7 +278,13 @@ describe("the trailing corpus rides the ingest path (ADR-0011)", () => {
         enabled: true,
         threshold: 0.5,
         timeZone: "UTC",
-        storyline: { enabled: false, anchorMaxShare: 0.05, massThreshold: 8 },
+        // `storyline: { enabled: false, ... }` until the tests were
+        // type-checked (§12) — a key the config lost when ADR-0011 replaced
+        // it with `linker`. It was silently dropped, and since `grouping` is
+        // spread whole over the harness default, that left `linker` ABSENT
+        // rather than disabled. The layer was off either way, so this test's
+        // claim held by accident; said properly, it holds on purpose.
+        linker: { ...LINKER_OFF },
       },
     });
 
@@ -432,6 +463,7 @@ describe("labels arrive without an operator (ADR-0011)", () => {
       dormantStrictness: 1.5,
     },
     mergeBridges: 2,
+    coherenceGate: false, // the pre-gate path these tests already took (§12)
     storyDf: { windowDays: 14, timeZone: "UTC" },
     timeZone: "UTC",
   };
@@ -439,12 +471,13 @@ describe("labels arrive without an operator (ADR-0011)", () => {
   it("labels a storyline the ingest path just promoted, with no CLI run", async () => {
     harness = await createTestHarness(
       {
-        storylinesV2: true,
         grouping: {
           enabled: true,
           threshold: 0.5,
           timeZone: "UTC",
-          storyline: { enabled: false, anchorMaxShare: 0.05, massThreshold: 8 },
+          // A dead `storyline: { ... }` key sat here too, silently ignored
+          // since ADR-0011 renamed it: `linker` below is the real config, and
+          // was already doing the work (§12).
           linker: LINKER,
         },
       },

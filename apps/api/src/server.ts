@@ -227,6 +227,7 @@ export async function buildApp(config: Config): Promise<App> {
       samplePages: config.SAMPLE_PAGES,
       sampleRefreshMinutes: config.SAMPLE_REFRESH_MINUTES,
       windowHours: config.TREND_WINDOW_HOURS,
+      halfLifeHours: config.TREND_HALF_LIFE_HOURS,
     },
   };
 

@@ -30,6 +30,9 @@ function scriptedClient(rawCounts: number[], errorAt?: number): NewsClient & {
   const client: NewsClient & { requests: SearchParams[] } = {
     requests,
     provider: "scripted",
+    // Its own coverage provider, as any single (non-composite) client is
+    // (ADR-0012). Paging does not read this; the interface requires it.
+    coverageProvider: "scripted",
     limits,
     async search(params: SearchParams, _opts?: CallOpts): Promise<SearchResult> {
       requests.push(params);

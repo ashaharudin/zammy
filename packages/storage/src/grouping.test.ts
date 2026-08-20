@@ -7,9 +7,7 @@ import {
   mergeGroups,
   readGroupCandidates,
   readStaleTokenArticles,
-  readStorylineDay,
   recordGrouping,
-  setStoryline,
 } from "./grouping.js";
 import {
   createTestDatabase,
@@ -34,6 +32,10 @@ const TOPIC = testFingerprint("620");
 
 const DAY_FROM = new Date("2026-08-11T00:00:00.000Z");
 const DAY_TO = new Date("2026-08-12T00:00:00.000Z");
+/** The zone the day bounds above are written in, and that mergeGroups re-buckets
+ *  slots by. Omitted at both call sites until the tests were type-checked, which
+ *  left the re-derivation bucketing by nothing at all (§12). */
+const ZONE = "UTC";
 
 let counter = 0;
 function story(overrides: {
@@ -116,6 +118,7 @@ describe("article groups in storage", () => {
     await recordGrouping(harness.db, {
       articleId: wireId,
       titleTokens: ["bank", "canada", "holds", "interest", "rate"],
+      tokensVersion: 2,
       groupId: null,
     });
 
@@ -224,6 +227,7 @@ describe("article groups in storage", () => {
     await recordGrouping(harness.db, {
       articleId: joinerId,
       titleTokens: [...tokens, "overnight"],
+      tokensVersion: 2,
       groupId: seedId,
     });
 
@@ -269,6 +273,7 @@ describe("article groups in storage", () => {
     await recordGrouping(harness.db, {
       articleId: earlierId,
       titleTokens: [...tokens, "crash"],
+      tokensVersion: 2,
       groupId: seedId,
     });
 
@@ -290,6 +295,7 @@ describe("article groups in storage", () => {
     await recordGrouping(harness.db, {
       articleId: later.createdArticles[0]!.id,
       titleTokens: [...tokens, "evening"],
+      tokensVersion: 2,
       groupId: seedId,
     });
 
@@ -429,7 +435,7 @@ describe("what the storyline layer reads from storage", () => {
     await recordGrouping(harness.db, { articleId: a2, titleTokens: ["merge", "test"], tokensVersion: 4, groupId: a1 });
     await recordGrouping(harness.db, { articleId: b2, titleTokens: ["merge", "test"], tokensVersion: 4, groupId: b1 });
 
-    const outcome = await mergeGroups(harness.db, { winnerGroupId: a1, loserGroupId: b1 });
+    const outcome = await mergeGroups(harness.db, { winnerGroupId: a1, loserGroupId: b1, timeZone: ZONE });
     expect(outcome.merged).toBe(true);
 
     for (const id of [a1, a2, b1, b2]) {
@@ -440,7 +446,7 @@ describe("what the storyline layer reads from storage", () => {
     }
 
     // Idempotent: the loser is empty now, so a replay is a no-op.
-    expect((await mergeGroups(harness.db, { winnerGroupId: a1, loserGroupId: b1 })).merged).toBe(
+    expect((await mergeGroups(harness.db, { winnerGroupId: a1, loserGroupId: b1, timeZone: ZONE })).merged).toBe(
       false,
     );
   });

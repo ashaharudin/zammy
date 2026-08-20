@@ -955,10 +955,10 @@ Making spend user-triggered means users can drive spend:
 
 ## 10. Landing page — storyline wordcloud
 
-The storylines the last 24 hours **updated**, most recently updated first, each word that
-storyline's label — "Fort Hood Crash", not "fort hood" — sized by articles gained inside the window,
-coloured by recency, clicking a word running that name as a search. It doubles as the cold-start
-answer (§9.3): the landing page is never blank.
+The storylines the last 24 hours **updated**, busiest and freshest first, each word that storyline's
+label — "Fort Hood Crash", not "fort hood" — sized by articles gained inside the window, coloured by
+recency, clicking a word running a search built from that arc's own coverage. It doubles as the
+cold-start answer (§9.3): the landing page is never blank.
 
 **The window rolls; it does not reset.** The cloud covers `TREND_WINDOW_HOURS` (default 24) back
 from now ([ADR-0008](adr/0008-the-cloud-rolls-over-a-weighted-24-hour-window.md)), which retired the
@@ -1080,7 +1080,7 @@ Four exclusions, three of which the surfaced pills already made (§7.3):
 - **Unlabelled** storylines — fine in a timeline (slots simply carry no gutter label), but in a
   cloud the label *is* the word. `findSurfacedStorylines` learned this by shipping without the rule:
   eight pills reading "unlabelled storyline" while the backfill's label pass was still running.
-- **Fewer than two distinct source domains over the whole arc** — the one mechanism that survives
+- **Fewer than two distinct source domains inside the window** — the one mechanism that survives
   the term scorer intact, because the probe proved it necessary.
 
 **The breadth gate, and why the probe still matters.** Naive document-frequency over a live
@@ -1092,28 +1092,44 @@ written by a model reading real headlines), but **not the first**: eight advisor
 newsroom are eight groups, and eight groups can link into a real arc that is nonetheless not what
 several newsrooms are covering. So a storyline needs `>= 2` distinct source domains to appear.
 
-Measured over the **whole arc**, unlike every other count here, deliberately: the question is
-whether several newsrooms have covered this event — a fact about the story. A three-week storyline
-carried by eleven outlets is not disqualified because today's one new article came from one of them.
+Measured over the **window** ([ADR-0014](adr/0014-the-cloud-ranks-by-volume-and-searches-what-the-coverage-says.md)),
+where ADR-0013 measured it over the whole arc. Asked about the arc, the gate answers a question about
+the *story* — have several newsrooms ever covered this — on a page that is asking about *now*, and it
+admitted exactly what the live board filled up with: 18 of 32 qualifying storylines had one article
+from one outlet inside the window, qualifying on breadth earned weeks earlier. The arc's own breadth
+survives as `sourceCount`, reported and no longer gating; the window's gate subsumes it, since a
+window's articles are a subset of the arc's. Applied after the language filter, so a storyline is
+held to "several newsrooms are covering this" once per cloud it appears in.
 
-**Two channels, one question each.** The term cloud folded recency, volume and breadth into one
-score, so a reader could not tell a busy old story from a quiet new one. Here they separate:
+**Two channels, one question each — and a ranking that is neither.** The term cloud folded recency,
+volume and breadth into one score and gave *size* the result, so a reader could not tell a busy old
+story from a quiet new one. Here the two channels answer one question each, and the thing that
+decides which words are on the board at all is a third quantity that gets no channel:
 
 ```
-order  = max(published) over the arc's articles inside the window, DESC   -- "how recently"
-size   ∝ sqrt(count of the arc's articles inside the window)              -- "how much"
+rank   = count(articles inside the window) * 0.5 ^ (age / TREND_HALF_LIFE_HOURS)   -- what leads
+size   ∝ sqrt(count of the arc's articles inside the window)                       -- "how much"
+colour = rank of max(published) among the words on the board                        -- "how recently"
 ```
 
-- **Recency is the ordering**, so it is also the palette (§10.5) and the accessible list's order.
-  No half-life, no decay: ADR-0008's `0.5 ^ (age / TERM_HALF_LIFE_HOURS)` existed to keep an old
-  term from ranking level with a breaking one *inside a single score*; an ordering answers that
-  directly. The 24-hour edge is a plain cliff again — honest here in a way it was not for terms: a
-  storyline that has not gained an article in a day is not, on this page, happening.
+- **Volume decayed by age is the ordering**, so `limit` slices the storylines that matter most and
+  the accessible `<ol>` leads with them. ADR-0013 ordered by recency alone and left nothing deciding
+  prominence: position and colour, a cloud's two loudest signals, both pointed at "whatever landed
+  last", and `sqrt` put every single-article word at the font floor together where size separated
+  nothing. The decay's shape and half-life are ADR-0008's, unchanged, and it is a decay rather than
+  "volume, then recency" because the tiebreak version cannot let go — yesterday afternoon's
+  eight-article story would hold the top of the board until it aged out.
 - **Size is the window's article count, not the arc's** — a storyline running since March would
   otherwise be the biggest word on the board every day for a month.
+- **Colour is ranked in the browser, not read off the response order** (§10.5). Under ADR-0013 array
+  position *was* the recency rank; now that it is the ranking, keying colour to it would make size
+  and colour answer the same question and put the cloud back inside one conflated score.
 - **The arc's total size gets no channel**, appearing in the `title` and the accessible `<ol>`
   instead. It is the one fact separating a three-week story from a three-hour one, and no visual
-  channel is legible as a number.
+  channel is legible as a number. The window's **outlet count** joins it there, because it is the
+  gate: "6 articles from 2 outlets in the last 24 hours" says why the word qualified.
+- **The 24-hour edge is still a plain cliff**, and honest: a storyline that has not gained an
+  article in a day is not, on this page, happening.
 
 **The cloud is only as good as the labels.** A bad label is now a bad word on the landing page,
 where before the worst it could do was mis-name one timeline gutter. That raises the stakes on
@@ -1146,21 +1162,25 @@ accumulated history took a week of real traffic and cannot be rebuilt, which is 
 deleting prune; the nightly chore now prunes only the linker's trailing corpus.
 
 The read is one aggregate: a windowed join for recency and window count, a lateral for the arc's
-size and breadth, exclusions in `where`, ordered by `max(published) DESC, id`, limited
-(`packages/storage/src/trending-storylines.ts`).
+size and breadth, exclusions in `where`, the breadth gate in a `having`, ordered by the decayed
+volume score, limited (`packages/storage/src/trending-storylines.ts`). It also carries the
+storyline's `profile_tokens` out, which is what the service turns into each word's `query`
+(`apps/api/src/cloud-query.ts`).
 
 `GET /api/v1/trending?language=&limit=50` → `{ windowStart, windowEnd, language, storylines: [{ id,
-label, windowArticles, size, sourceCount, lastUpdated }], meta }`, with the same `meta.ingest` block
-as §6.1 so the front end can show a warming cloud with existing machinery. Redis-cached under
-`<queue>:trending:<language>` for ~15 minutes — scoped to the ingest queue as its pending keys are,
-so a test run and a dev server sharing one Redis cannot write each other's cloud or sample lock. The
-contract changed wholesale with the unit: `term`, `isBigram`, `uniqueArticles` and `score` are gone,
-no compatibility shim — front end and API ship together.
+label, query, windowArticles, windowSources, size, sourceCount, lastUpdated }], meta }`, with the
+same `meta.ingest` block as §6.1 so the front end can show a warming cloud with existing machinery.
+Redis-cached under `<queue>:trending:<language>` for ~15 minutes — scoped to the ingest queue as its
+pending keys are, so a test run and a dev server sharing one Redis cannot write each other's cloud or
+sample lock. The contract changed wholesale with the unit: `term`, `isBigram`, `uniqueArticles` and
+`score` are gone, and `query`/`windowSources` arrived with ADR-0014. No compatibility shim either
+time — front end and API ship together.
 
 **What is cached is the whole list; `limit` slices it on the way out.** The key names a language and
 nothing else, so caching one caller's slice would let a `?limit=4` request serve a four-word cloud
-to everyone for fifteen minutes — observed, not hypothetical. Recency-then-id ordering makes every
-limit a prefix of one list, so readers asking for different amounts never disagree about what leads.
+to everyone for fifteen minutes — observed, not hypothetical. A single total ordering (score, then
+recency, then id) makes every limit a prefix of one list, so readers asking for different amounts
+never disagree about what leads.
 
 **No `day` parameter, no archive read.** The old contract could serve a closed day; a rolling window
 has no addressable periods (ADR-0008). A stale `?day=` is stripped rather than rejected, so an old
@@ -1179,12 +1199,20 @@ apart see the same cloud.
   load-bearing. Measured: `artificial intelligence` (23 chars) never places at 56px on a 700px
   board.
 - **Colour is the warm→cool ramp keyed to recency rank**: freshest burns red, the quiet end cools to
-  blue. (It read score rank before, conflating volume with freshness.) Decorative — the cloud is
-  `aria-hidden` — and colour never carries meaning alone.
-- Each word is a real `<button>` navigating to `/?q=<label>`, so the cloud feeds demand-driven
-  ingestion and browsing populates topics. **The one place a label's words are executed as a
-  search** — pills and gutter open the storyline by UUID. The reversal and its cost (keyword match
-  over headlines, not the arc) is ADR-0013.
+  blue. Ranked in `rankColors` from `lastUpdated` rather than read off array position, which is what
+  the response order used to be (§10.3). Decorative — the cloud is `aria-hidden` — and colour never
+  carries meaning alone.
+- Each word is a real `<button>` navigating to `/?q=<query>`, so the cloud feeds demand-driven
+  ingestion and browsing populates topics. **The one place a label is executed as a search** — pills
+  and gutter open the storyline by UUID. The reversal and its cost (keyword match over headlines,
+  not the arc) is ADR-0013.
+- **What it searches is not the label it draws.** `query` is the label's own words that the arc's
+  coverage actually says, capped at two terms — "Jason Arday plagiarism controversy" clicks through
+  as `jason arday` (ADR-0014). Running the label verbatim made a 2–5 word label into that many
+  conjunctive upstream terms, matched against body text the response never includes
+  (PROBE-FINDINGS 3), and returned empty timelines for arcs already in the store. Because every term
+  comes from `profile_tokens`, the search's keywords are a subset of them by construction, so
+  `findSurfacedStorylines` (§7.3) surfaces the arc as a pill even when upstream returns nothing.
 - **Accessibility is not optional.** A wordcloud is near-unusable for screen readers and keyboard
   users, so the same data renders as an ordered `<ol>` of labels with counts and update times —
   visually hidden by default, toggleable for everyone. Size and colour are decorative; the numbers
@@ -1235,6 +1263,24 @@ apart see the same cloud.
   Two cases earn explicit **integration** tests because they are races rather than logic: **User B
   reading mid-ingestion** must never block on User A's lock (§6.5), and `hasMore === false` while
   `ingest.state === "in_progress"` must not render as end-of-results (§6.1).
+
+  **Test files are type-checked, by their own tsconfig.** Every package's `tsconfig.json` excludes
+  `*.test.ts` and `test-support.ts` so `tsc -b` does not emit them into `dist/`, and `typecheck` read
+  that same config — so for every package except `apps/web`, the test files were never checked at
+  all. Each package therefore also carries a `tsconfig.test.json`: same strictness, same project
+  references, `noEmit`, nothing excluded, and `typecheck` runs both passes (the build config is the
+  only one with `declaration: true`, so it is the only one that surfaces declaration-emit errors).
+
+  This is not hygiene. A stale test fixture does not fail — it passes, having tested something
+  quieter than what it claims, and Vite's transform hides even a dead import because it only errors
+  where a binding is USED. Turning the check on found: a config field a test omitted reaching SQL as
+  `null` and ordering a whole result set by nothing; a `mergeGroups` call re-deriving day slots
+  bucketed by no timezone; `label_source` left NULL by a misspelled key, which silently removed that
+  storyline from the label-merge candidate set the test was about; a `NewsClient` fake missing
+  `coverageProvider`; two imports of functions that no longer exist; two dead config keys
+  (`storyline`, `storylinesV2`) that had been renamed out from under their tests. It also found a
+  public option type that advertised `breaker.failureThreshold`, a key `CircuitBreaker` never reads —
+  a latent trap for the first caller to trust it. Every one of these was invisible while green.
 
   **Recorded-payload regression tests.** Three behaviours were shown to fail under the obvious
   implementation, so each gets a test bound to real captured data in [`fixtures/`](../fixtures) —
@@ -1323,7 +1369,11 @@ entries — `APP_TIMEZONE` for the cloud's day, and closed days freeze — were 
 ADR after all ([0008](adr/0008-the-cloud-rolls-over-a-weighted-24-hour-window.md)). And the unit
 those term ADRs were about was itself replaced by the storyline label
 ([0013](adr/0013-the-cloud-names-recently-updated-storylines.md)), which keeps 0006's and 0007's
-findings as gates on the shared tokenizer and keeps 0008's roll as it stands.
+findings as gates on the shared tokenizer and keeps 0008's roll as it stands. Two of 0013's own
+choices were then reversed by what the live board looked like — the arc-wide breadth gate and the
+pure-recency ordering — along with the click that ran a label verbatim and returned nothing
+([0014](adr/0014-the-cloud-ranks-by-volume-and-searches-what-the-coverage-says.md)), which brings
+0008's decay and its half-life back with it.
 
 Resolved by decision: **deployment target is AWS** (§4.1) — correcting the earlier claim that the
 deployment choice would not affect the architecture. It does, in two places: the job queue needs
