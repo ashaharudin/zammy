@@ -297,6 +297,40 @@ describe("readTrendingStorylines", () => {
     expect((await read()).map((s) => s.label)).toEqual(["The Survivor"]);
   });
 
+  it("refuses a bigram label, and keeps one whose provenance predates the column", async () => {
+    // The cloud is the one place a label's words are executed as a search
+    // (ADR-0013/0014), so a label that names vocabulary rather than an event
+    // mints a topic for a story that does not exist.
+    const bigram = await storyline("Investing Com", [
+      { published: "2026-08-17T11:00:00.000Z", domain: "a.com" },
+      { published: "2026-08-17T11:10:00.000Z", domain: "b.com" },
+    ]);
+    await setStorylineLabel(harness.db, {
+      storylineId: bigram,
+      label: "Investing Com",
+      labelWords: ["investing", "com"],
+      labelAt: NOW,
+      labelGroupCount: 2,
+      labelSource: "bigram",
+    });
+
+    // Provenance predating migration 0011 is UNKNOWN, not disqualifying. This
+    // is the case a bare `label_source <> 'bigram'` would silently drop, since
+    // that comparison is NULL for this row — over half the cloud in the dev
+    // archive. It is the reason the predicate is written with `coalesce`.
+    const preMigration = await storyline("Tropical Storm Lala", [
+      { published: "2026-08-17T10:00:00.000Z", domain: "a.com" },
+      { published: "2026-08-17T10:10:00.000Z", domain: "b.com" },
+    ]);
+    await harness.db
+      .updateTable("storylines")
+      .set({ label: "Tropical Storm Lala", label_source: null, label_at: NOW })
+      .where("id", "=", preMigration)
+      .execute();
+
+    expect((await read()).map((s) => s.label)).toEqual(["Tropical Storm Lala"]);
+  });
+
   it("scopes to the language of the COVERAGE, not of the storyline", async () => {
     // A storyline is not language-scoped — nothing about an event is — so it
     // appears in the cloud of every language that covered it, sized by that
