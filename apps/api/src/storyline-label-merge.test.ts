@@ -104,8 +104,17 @@ describe("sharedLabels", () => {
       arc("b", "Strait of Hormuz Crisis", "2026-08-04", "2026-08-09"),
       arc("c", "Fort Hood Crash", "2026-08-01", "2026-08-02"),
     ]);
-    expect([...components.keys()]).toEqual(["strait of hormuz crisi"]);
-    expect(components.get("strait of hormuz crisi")).toHaveLength(2);
+    expect([...components.keys()]).toEqual(["crisi hormuz of strait"]);
+    expect(components.get("crisi hormuz of strait")).toHaveLength(2);
+  });
+
+  it("groups labels that differ only by word order", () => {
+    const components = sharedLabels([
+      arc("a", "Canada US Trade Deal", "2026-08-07", "2026-08-20"),
+      arc("b", "US Canada Trade Deal", "2026-08-12", "2026-08-20"),
+    ]);
+    expect([...components.keys()]).toEqual(["canada deal trade us"]);
+    expect(components.get("canada deal trade us")).toHaveLength(2);
   });
 
   it("groups labels that differ only by case or plural", () => {
