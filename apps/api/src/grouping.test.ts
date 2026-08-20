@@ -5,7 +5,6 @@ import {
   rankedMatches,
   headlineFigures,
   headlineTokens,
-  singular,
   titleSimilarity,
   type GroupCandidate,
 } from "./grouping.js";
