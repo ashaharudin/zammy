@@ -117,6 +117,32 @@ export function singular(token: string): string {
 }
 
 /**
+ * The surface spellings that `singular` folds to `token` — the inverse of the
+ * fold above, for the one caller that must compare a folded word against text
+ * nobody has folded.
+ *
+ * Storyline surfacing (ADR-0011) matches search keywords against a storyline's
+ * profile tokens, which arrive folded, AND against its LABEL, which is a
+ * sentence the model wrote and is stored verbatim. Folding the label in SQL
+ * would mean a second `singular` written in another language — the duplicate
+ * stemmer this file's own comment refuses — so the folded side hands the raw
+ * side the spellings it would accept instead, and the comparison happens on
+ * surface forms.
+ *
+ * Candidates are GENERATED and then CHECKED against `singular`, rather than
+ * derived by inverting its rules by hand: that way this function cannot drift
+ * from the fold it inverts, only fail to enumerate. `movie` is the known gap —
+ * `movies` folds to `moviy`, so no candidate of `movie` reaches it — and it
+ * costs nothing on either side, because a reader typing "movies" folds to
+ * `moviy` too and meets the label there.
+ */
+export function surfaceForms(token: string): readonly string[] {
+  const candidates = [token, `${token}s`];
+  if (token.endsWith("y")) candidates.push(`${token.slice(0, -1)}ies`);
+  return [...new Set(candidates.filter((form) => singular(form) === token))];
+}
+
+/**
  * The figures a headline quotes, with thousands separators removed so `36,800`
  * and `36800` are one figure.
  *

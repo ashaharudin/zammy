@@ -208,8 +208,10 @@ export type TimelineEntry = z.infer<typeof TimelineEntry>;
 export const TimelinePage = z.object({
   topic: TopicSummary,
   /**
-   * Storylines this SEARCH surfaced — matched when the query's keywords are a
-   * subset of a storyline's profile tokens (ADR-0011, Search and navigation).
+   * Storylines this SEARCH surfaced — matched when every keyword is found in a
+   * storyline's own vocabulary: its profile tokens OR its label (ADR-0011,
+   * Search and navigation, as amended). Per keyword across the two, so one may
+   * come from the profile and the next from the label.
    *
    * Surfaced, never filtered: a search is never limited to a storyline, so
    * these sit beside the results rather than narrowing them. Empty under the

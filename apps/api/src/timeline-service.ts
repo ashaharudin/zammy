@@ -46,7 +46,7 @@ import {
   type GroupingDeps,
 } from "./grouping-service.js";
 import { chooseRepresentative } from "./source-authority.js";
-import { singular } from "./grouping.js";
+import { singular, surfaceForms } from "./grouping.js";
 
 /**
  * The query planner (ARCHITECTURE 6.3) — how a page gets filled, or ideally
@@ -308,11 +308,16 @@ async function planAndRead(
   });
 
   // Storylines this SEARCH surfaces, beside the results rather than narrowing
-  // them (ADR-0011). Keywords are folded the way `story_tokens` and therefore
+  // them (ADR-0011). Each keyword is offered in both the vocabularies a
+  // storyline speaks in: folded the way `story_tokens` and therefore
   // `profile_tokens` were, or a search for "storms" would miss a profile that
-  // says "storm".
+  // says "storm", and unfolded again into the spellings a LABEL might use, which
+  // is stored as the model wrote it.
   const surfaced = await findSurfacedStorylines(deps.db, {
-    tokens: query.keywords.map(singular),
+    keywords: query.keywords.map((keyword) => {
+      const token = singular(keyword);
+      return { token, labelForms: surfaceForms(token) };
+    }),
     limit: SURFACED_STORYLINE_LIMIT,
   });
 

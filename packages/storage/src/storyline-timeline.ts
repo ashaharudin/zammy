@@ -196,14 +196,43 @@ export async function readStorylineTimelinePage(
 }
 
 /**
- * Storylines a SEARCH surfaces: those whose profile tokens contain every
- * keyword (ADR-0011 — "search keywords ⊆ profile tokens").
+ * One keyword, as surfacing matches it: the two vocabularies a storyline speaks
+ * in, and one spelling of the keyword for each.
+ */
+export interface SurfacingKeyword {
+  /** Folded the way `story_tokens` and so `profile_tokens` were. */
+  token: string;
+  /**
+   * The surface spellings that fold to `token`, for the LABEL side — a label is
+   * stored as the model wrote it, and folding it here would mean a second
+   * stemmer written in SQL. The caller owns the fold and therefore owns its
+   * inverse (`surfaceForms`); this module only compares.
+   */
+  labelForms: readonly string[];
+}
+
+/**
+ * Storylines a SEARCH surfaces: those whose own vocabulary contains every
+ * keyword (ADR-0011 — "search keywords ⊆ profile tokens", widened to the label).
  *
- * Containment, not overlap. A search for "fausto hawaii" should surface the
- * storm, not every storyline that has ever said "hawaii"; the GIN index answers
- * `@>` as readily as `&&`, so the stricter reading costs nothing. Aliases are
- * excluded — a pointer has no profile — and provisional storylines with them:
- * a storyline-of-one is not a story to surface, it is the slot itself.
+ * Two places a storyline says what it is about, and a keyword may be found in
+ * either: its **profile tokens**, the words half its member groups carry, and
+ * its **label**, the words the model chose to name it by. The label is not a
+ * restatement of the profile — the majority rule means a word only a minority
+ * of groups use is absent from the profile even when it is the very word that
+ * names the event, and "Fort Hood Crash" surfaced for neither `hood` nor
+ * `crash` while both sat in the label on screen. Reading only the profile also
+ * made the cloud a one-way door: a label the reader was just shown, typed back
+ * in, found nothing.
+ *
+ * Containment, not overlap, and containment per KEYWORD across both
+ * vocabularies rather than within one — "fausto hawaii" surfaces the storm
+ * whose label says Fausto and whose profile says hawaii. A search for "fausto
+ * hawaii" should not surface every storyline that has ever said "hawaii"; the
+ * GIN index answers `@>` as readily as `&&`, so the stricter reading costs
+ * nothing on the profile side. Aliases are excluded — a pointer has no profile
+ * — and provisional storylines with them: a storyline-of-one is not a story to
+ * surface, it is the slot itself.
  *
  * UNLABELLED storylines are excluded too, and that one was learned by looking:
  * eight pills reading "unlabelled storyline" is what the browser showed while
@@ -211,10 +240,11 @@ export async function readStorylineTimelinePage(
  * valid thing to RENDER — its slots simply carry no gutter label (ADR-0011) —
  * but it is not a thing to OFFER, because a surfacing pill is a name plus a
  * size and without the name there is nothing for the reader to choose between.
+ * It is also, now, the only storyline with nothing to match on the label side.
  */
 export async function findSurfacedStorylines(
   db: Kysely<Database>,
-  input: { tokens: readonly string[]; limit: number },
+  input: { keywords: readonly SurfacingKeyword[]; limit: number },
 ): Promise<
   {
     id: string;
@@ -225,11 +255,40 @@ export async function findSurfacedStorylines(
     status: StorylineStatus;
   }[]
 > {
-  if (input.tokens.length === 0) return [];
+  if (input.keywords.length === 0) return [];
 
-  // The size subquery counts member ARTICLES, and counts them per storyline
-  // rather than per matched search — a storyline's size is a fact about the
-  // story, not about the words that found it.
+  // The label, split into words the same way `profile_tokens` were split off a
+  // headline: lowercased, on runs of non-alphanumerics. Splitting rather than
+  // tokenizing is what makes "Dillard's Tariff Refund" answer to `dillard`
+  // without this file learning the possessive rule the tokenizer already knows
+  // (`trimWordPunctuation`) — the stray `s` it also yields matches nothing a
+  // reader would type.
+  //
+  // Spelled to match `storylines_label_words_idx` (migration 0016) EXACTLY: a
+  // GIN expression index only answers the expression it was built on, and the
+  // difference here is a 15ms sequential scan over every storyline.
+  const labelWords = sql`regexp_split_to_array(lower(s.label), '[^[:alnum:]]+')`;
+
+  // One conjunct per keyword: found in the profile, or found in the label.
+  // Spelled as `@>` on the profile side so the GIN index still answers it, and
+  // as `&&` on the label side because the keyword arrives as several candidate
+  // spellings of which any one is a match.
+  const matches = sql.join(
+    input.keywords.map(
+      (keyword) => sql`(
+        s.profile_tokens @> array[${keyword.token}]::text[]
+        or ${labelWords} && ${[...keyword.labelForms]}::text[]
+      )`,
+    ),
+    sql` and `,
+  );
+
+  // The match is settled over `storylines` alone before any day row is touched:
+  // the label split is a per-row regex, and joining first would run it once per
+  // covered DAY of every candidate. The size subquery counts member ARTICLES,
+  // and counts them per storyline rather than per matched search — a
+  // storyline's size is a fact about the story, not about the words that found
+  // it.
   const { rows } = await sql<{
     id: string;
     label: string | null;
@@ -238,20 +297,24 @@ export async function findSurfacedStorylines(
     span_to: Date;
     size: string;
   }>`
-    select s.id, s.label, s.status,
+    with matched as (
+      select s.id, s.label, s.status
+      from storylines s
+      where s.merged_into is null
+        and s.status <> 'provisional'
+        and s.label is not null
+        and ${matches}
+    )
+    select m.id, m.label, m.status,
            min(d.day_slot_published) as span_from,
            max(d.day_slot_published) as span_to,
            (select count(*) from storyline_groups sg
               join articles a on a.group_id = sg.group_id
-             where sg.storyline_id = s.id) as size
-    from storylines s
-    join storyline_days d on d.storyline_id = s.id
-    where s.merged_into is null
-      and s.status <> 'provisional'
-      and s.label is not null
-      and s.profile_tokens @> ${[...input.tokens]}::text[]
-    group by s.id, s.label, s.status
-    order by max(d.day_slot_published) desc, s.id
+             where sg.storyline_id = m.id) as size
+    from matched m
+    join storyline_days d on d.storyline_id = m.id
+    group by m.id, m.label, m.status
+    order by max(d.day_slot_published) desc, m.id
     limit ${input.limit}
   `.execute(db);
 

@@ -107,5 +107,7 @@ label, though — the cloud searches the label's words that the arc's own covera
 nothing. Agreement between two
 labels is also merge evidence: storylines independently given the same grounded label, with
 overlapping or near-touching spans, merge on that alone — a big running story can outgrow the token
-bridge's reach.
+bridge's reach. A label is also a **match** surface, which is not the same as being an identity: a
+search surfaces storylines whose profile tokens *or* label words contain every keyword (ADR-0011,
+amended), so a label the cloud showed can be typed back in and find its story.
 _Avoid_: term, keyword, phrase, tag, title

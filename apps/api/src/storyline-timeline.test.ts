@@ -543,6 +543,110 @@ describe("surfacing storylines beside a search", () => {
     );
     expect(result.storylines).toEqual([]);
   });
+
+  it("surfaces a storyline whose LABEL holds a keyword its profile does not", async () => {
+    // The gap the profile alone leaves: the model names the event with a word
+    // the coverage barely uses, and the profile's majority rule drops it. The
+    // label is the name the reader was shown — in the cloud, in the gutter —
+    // so typing it back in has to find the story.
+    const query = await seed([
+      sighting({ domain: "a.example", title: "Hurricane Fausto nears Hawaii", published: MONDAY }),
+      sighting({
+        domain: "b.example",
+        title: "Hurricane Fausto weakens west of Hawaii",
+        published: TUESDAY,
+      }),
+    ]);
+    const storyline = await storylineOf(await groupIds(), "Pacific Storm Fausto");
+
+    const result = await readTimeline(
+      harness.deps,
+      { ...query, keywords: ["pacific"] },
+      { limit: 25 },
+    );
+    expect(result.storylines.map((s) => s.id)).toEqual([storyline]);
+  });
+
+  it("folds plurals across the label too, which is stored as the model wrote it", async () => {
+    // Keywords arrive folded because `profile_tokens` are; a label is not, so
+    // the folded keyword is offered back to it in the spellings the fold would
+    // have produced it from. Both directions: a plural label found by a
+    // singular keyword, and a plural keyword found by the singular profile.
+    const query = await seed([
+      sighting({ domain: "a.example", title: "Hurricane Fausto nears Hawaii", published: MONDAY }),
+      sighting({
+        domain: "b.example",
+        title: "Hurricane Fausto weakens west of Hawaii",
+        published: TUESDAY,
+      }),
+    ]);
+    const storyline = await storylineOf(await groupIds(), "Pacific Storms");
+
+    const label = await readTimeline(harness.deps, { ...query, keywords: ["storm"] }, { limit: 25 });
+    expect(label.storylines.map((s) => s.id)).toEqual([storyline]);
+
+    await dropCachedPages(query.fingerprint);
+    const profile = await readTimeline(
+      harness.deps,
+      { ...query, keywords: ["hurricanes"] },
+      { limit: 25 },
+    );
+    expect(profile.storylines.map((s) => s.id)).toEqual([storyline]);
+  });
+
+  it("reads both vocabularies as one, per keyword", async () => {
+    // Containment is per keyword across the profile AND the label together,
+    // not within either alone: "fausto pacific" is one word from each, and it
+    // is the same storyline both times.
+    const query = await seed([
+      sighting({ domain: "a.example", title: "Hurricane Fausto nears Hawaii", published: MONDAY }),
+      sighting({
+        domain: "b.example",
+        title: "Hurricane Fausto weakens west of Hawaii",
+        published: TUESDAY,
+      }),
+    ]);
+    const storyline = await storylineOf(await groupIds(), "Pacific Storm");
+
+    const split = await readTimeline(
+      harness.deps,
+      { ...query, keywords: ["fausto", "pacific"] },
+      { limit: 25 },
+    );
+    expect(split.storylines.map((s) => s.id)).toEqual([storyline]);
+
+    // And widening the surface does not loosen containment: a keyword in
+    // neither vocabulary still refuses the match.
+    await dropCachedPages(query.fingerprint);
+    const missing = await readTimeline(
+      harness.deps,
+      { ...query, keywords: ["pacific", "typhoon"] },
+      { limit: 25 },
+    );
+    expect(missing.storylines).toEqual([]);
+  });
+
+  it("finds a label's possessive by the name inside it", async () => {
+    // "Dillard's Tariff Refund" answers to `dillard`: the label is split on
+    // runs of non-alphanumerics, so the possessive comes apart the way the
+    // tokenizer's own fold would have taken it off (`trimWordPunctuation`).
+    const query = await seed([
+      sighting({ domain: "a.example", title: "Hurricane Fausto nears Hawaii", published: MONDAY }),
+      sighting({
+        domain: "b.example",
+        title: "Hurricane Fausto weakens west of Hawaii",
+        published: TUESDAY,
+      }),
+    ]);
+    const storyline = await storylineOf(await groupIds(), "Dillard's Tariff Refund");
+
+    const result = await readTimeline(
+      harness.deps,
+      { ...query, keywords: ["dillard"] },
+      { limit: 25 },
+    );
+    expect(result.storylines.map((s) => s.id)).toEqual([storyline]);
+  });
 });
 
 describe("after the cutover", () => {

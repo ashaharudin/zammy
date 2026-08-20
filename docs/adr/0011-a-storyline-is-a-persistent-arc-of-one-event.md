@@ -330,3 +330,35 @@ untouched: one word is an entity, never an event.
 
 `validateLabel` and the prompt in `storyline-label.ts` carry the new range; the
 prompt half remains free to iterate, and the contract half is now 2–5.
+
+## Amended 2026-08-20: surfacing reads the label as well as the profile
+
+**"Search keywords ⊆ profile tokens" is superseded. The rule is now: search
+keywords ⊆ profile tokens ∪ label words**, per keyword rather than per side —
+"fausto pacific" surfaces the storyline whose profile says `fausto` and whose
+label says "Pacific". Everything else about surfacing stands: containment and
+not overlap, beside the results and never narrowing them, aliases and
+provisional and unlabelled storylines excluded.
+
+The profile alone was the wrong reading of "what a storyline is about", for two
+reasons that only showed up once labels were real:
+
+- **The majority rule is a filter on vocabulary, not on aboutness.** Profile
+  tokens are the words at least half the member groups carry, which is exactly
+  right for the linker — it is the percolation damper — and wrong for search: a
+  word only a minority of the coverage uses is dropped even when it is the word
+  the model chose to name the event by. "Fort Hood Crash" answered to neither
+  `hood` nor `crash` while both sat in the label on screen.
+- **The cloud was a one-way door.** ADR-0013 made the label the cloud's word, so
+  a reader is shown labels before they type anything. A label typed back into
+  the box, verbatim, found nothing — the one search a reader has been actively
+  invited to make.
+
+The label is still **presentation, never identity** (labels are non-unique, and
+navigation still rides the UUID). What changes is that it is now also a MATCH
+surface: a name is what a reader has to go on, so it must be a name search can
+reach. Matching is on surface spellings offered by the folded side
+(`surfaceForms`, the checked inverse of `singular`) rather than by folding the
+label in SQL, because a second stemmer in another language is the failure this
+codebase already refuses for tokenizers; the cost is one GIN expression index
+(migration 0016).
