@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { RawSighting, normalizeSightings } from "@zammy/currents-client";
-import { contentTokenPairs, contentTokens, isVerb, properNounEvidence } from "./headline-tokens.js";
+import {
+  contentTokenPairs,
+  contentTokens,
+  isVerb,
+  properNounEvidence,
+  stripSourceAttribution,
+} from "./headline-tokens.js";
 import { singular } from "./grouping.js";
 
 /**
@@ -108,6 +114,100 @@ describe("a typographic apostrophe does not split a contraction (issue #101)", (
 
   it("keeps a curly-quoted name whole (Xi'an)", () => {
     expect(contentTokens("Xi’an protest grows")).toEqual(["xi'an", "protest", "grows"]);
+  });
+});
+
+describe("the outlet's own name is not vocabulary", () => {
+  // Currents ships the title as the outlet wrote its <title> tag. Left in, the
+  // attribution is a token like any other and the WORST kind: it is carried by
+  // every article from that outlet whatever the article is about. Measured on
+  // the dev archive (2026-08-21): `winnipeg`, `globalnew`, `ca` and `manitoba`
+  // together are worth mass 19.88 against a linker floor of 20, which is how
+  // ten unrelated Manitoba stories became one arc called "Manitoba Beekeepers".
+
+  it("peels the site, then the edition behind it", () => {
+    expect(
+      stripSourceAttribution(
+        "Manitoba beekeepers feeling sting of potential 50 per cent tariff - Winnipeg | Globalnews.ca",
+      ),
+    ).toBe("Manitoba beekeepers feeling sting of potential 50 per cent tariff");
+  });
+
+  it("keeps the outlet's words out of the tokens the layers match on", () => {
+    // The composition every title TOKENIZER now uses: `headlineTokens`,
+    // `storyTokens`, `properNounEvidence`, `headlineFigures` and the bigram
+    // extractor all strip before they read the title. `contentTokens` itself
+    // does not, because it is also handed descriptions and
+    // `${title} ${description}`, where there is no end to peel from.
+    //
+    // Not every reader of a title: `buildLabelPrompt` still shows the model the
+    // raw title, deliberately. Its wording is a measured artifact, and the
+    // grounding vocabulary it is checked against comes from `storyTokens`,
+    // which strips — so an outlet name the model echoes fails grounding rather
+    // than becoming a label.
+    const tokens = contentTokens(
+      stripSourceAttribution(
+        "Angler reels in training grenade from Red River in Selkirk: RCMP - Winnipeg | Globalnews.ca",
+      ),
+    );
+    for (const attribution of ["winnipeg", "globalnews", "ca"]) {
+      expect(tokens, `attribution "${attribution}" survived`).not.toContain(attribution);
+    }
+    expect(tokens).toContain("grenade");
+    expect(tokens).toContain("selkirk");
+  });
+
+  it.each([
+    ["Bitcoin rise stalls again - Reuters", "Bitcoin rise stalls again"],
+    ["Seoul talks resume - The Korea Times", "Seoul talks resume"],
+    ["Oil holds above eighty - OilPrice.com", "Oil holds above eighty"],
+    ["Lagos port backlog clears - Businessday NG", "Lagos port backlog clears"],
+    ["Quarterly results land - Arkansas Democrat Gazette", "Quarterly results land"],
+  ])("peels attribution from %s", (title, expected) => {
+    expect(stripSourceAttribution(title)).toBe(expected);
+  });
+
+  it.each([
+    // A verb makes it the headline's own tail, however short.
+    "Kabul blast kills twelve - dozens remain missing",
+    // So does length.
+    "Ferry service resumes - he has a bad record with them",
+    // And a stopword anywhere but the front.
+    "Harvest ends early - and faster than expected",
+    // A leading function word is exempt only when it is an ARTICLE. No outlet
+    // is called "Some ..." or "Their ...", so these are tails too.
+    "Ottawa tables budget - some quiet relief",
+    "Rates hold steady - their fourth such call",
+  ])("leaves a headline's own tail alone: %s", (title) => {
+    expect(stripSourceAttribution(title)).toBe(title);
+  });
+
+  it("keeps a masthead that carries a function word inside it", () => {
+    // The shape rule's known blind spot, pinned so it is a decision rather
+    // than a surprise: `and` is not at the front, so the segment reads as
+    // prose and the chrome survives. Catching it needs the segment's own
+    // capitalization, or `source_domain` — see `ARTICLES` and the module
+    // comment. "top of the table" is why the loose rule is not taken.
+    expect(stripSourceAttribution("Ottawa unveils plan - the Globe and Mail")).toBe(
+      "Ottawa unveils plan - the Globe and Mail",
+    );
+  });
+
+  it("peels a short verbless tail that reads like a name", () => {
+    // The other side of the same coin, and the cost the module comment quotes:
+    // an article plus two content words is the shape of "The Korea Times", so
+    // this is indistinguishable by shape alone. Two tokens on one article.
+    expect(stripSourceAttribution("Trump wins Ohio - a stunning upset")).toBe("Trump wins Ohio");
+  });
+
+  it("never peels a headline down to nothing", () => {
+    // Two words is the floor, which is what lets "Bitcoin Rise - Reuters" work
+    // at all. Below it there is no headline left to name.
+    expect(stripSourceAttribution("Reuters - Fortune")).toBe("Reuters - Fortune");
+  });
+
+  it("leaves a title that is nothing but attribution to the stopword list", () => {
+    expect(stripSourceAttribution("Globalnews.ca")).toBe("Globalnews.ca");
   });
 });
 
@@ -312,6 +412,60 @@ describe("properNounEvidence needs prose, not Title Case (issue #100)", () => {
 
     expect(evidence("kelowna")).toBe(true);
     expect(evidence("chiefs")).toBe(false);
+  });
+});
+
+describe("properNounEvidence counts members, not occurrences", () => {
+  // `minMembers` is what the bigram label's verb gate raises to overrule the
+  // lexicon. It has to count MEMBERS: an article that repeats its own Title
+  // Case headline inside its description supplies two occurrences of the same
+  // word from one source, which is exactly how `Gigabyte Brings` outranked a
+  // `brings` the lexicon already held.
+  const selfQuoting = [
+    {
+      title: "Gigabyte Brings Aorus Infinity to Gamescom",
+      description:
+        "Gigabyte is heading to Gamescom under the Aorus theme. " +
+        "Gigabyte Brings Aorus Infinity to Gamescom The series delivers a build.",
+    },
+    { title: "Arsenal chase another title", description: "Adam explores the chances." },
+  ];
+
+  it("promotes a twice-sighted word on one member's word by default", () => {
+    const evidence = properNounEvidence(selfQuoting);
+    expect(evidence("brings")).toBe(true);
+  });
+
+  it("refuses it once a second member is required", () => {
+    const evidence = properNounEvidence(selfQuoting);
+    expect(evidence("brings", 2)).toBe(false);
+    // Not a blanket refusal of the corpus: `gigabyte` is sighted in the same
+    // one member and answers the same way, which is the point — the bar is
+    // about how many SOURCES agree, not about which word is asked for.
+    expect(evidence("gigabyte", 2)).toBe(false);
+  });
+
+  it("promotes a word two members write mid-prose", () => {
+    const evidence = properNounEvidence([
+      { title: "Rose arrives in Memphis", description: "The winner Justin Rose looks sharp." },
+      { title: "Champ still pushing", description: "The Englishman Justin Rose defends here." },
+    ]);
+    expect(evidence("rose", 2)).toBe(true);
+    // A third member's word is a real step further, and the one that would
+    // cost this golfer his surname.
+    expect(evidence("rose", 3)).toBe(false);
+  });
+
+  it("still lets one lowercase occurrence disqualify at any bar", () => {
+    // The lowercase test is corpus-wide and unchanged: a word seen lowercase
+    // ANYWHERE is not a name, however many members capitalize it.
+    const evidence = properNounEvidence([
+      { title: "Kelowna chiefs urge inquiry", description: "The Chiefs met in Kelowna." },
+      { title: "Critics answered", description: "The Chiefs replied from Kelowna." },
+    ]);
+    expect(evidence("chiefs", 1)).toBe(false);
+    expect(evidence("chiefs", 2)).toBe(false);
+    expect(evidence("kelowna", 2)).toBe(true);
   });
 });
 

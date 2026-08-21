@@ -9,7 +9,8 @@ a hand-curated lexicon of ~600 English news verbs
 (`apps/api/src/verb-lexicon.ts`) rather than by morphology or corpus
 statistics. Two guards restrain it: a word carrying proper-noun evidence is
 never read as a verb, and a past participle counts only after the first word —
-in front it modifies ("armed forces"), after a name it predicates.
+in front it modifies ("armed forces"), after a name it predicates. (The first
+guard now carries a per-caller threshold — see "Amended 2026-08-21" below.)
 
 This closes the second junk class the propriety gate opened. Requiring a proper
 noun in every term (§10.3) removed phrases of two common words but let one name
@@ -91,3 +92,41 @@ cloud — but the failure mode to fix first if headline-only sources are added.
 **It does nothing for the adjective/title + name class** — `president trump`,
 `late sen`, `potential iranian`, `graham darline` are nominals and survive.
 Still open.
+
+## Amended 2026-08-21: the proper-noun guard now has a threshold, and it differs by caller
+
+"A word carrying proper-noun evidence is never read as a verb" was unconditional
+above. It is now unconditional only for **grounding**; the **verb gate** asks for
+that evidence from two distinct members.
+
+The guard was never free, and one shape made it free enough to break: a press
+release that quotes its own Title Case headline inside its own body. The sentence
+split glues that Title Case run onto the prose sentence after it, so a single
+article supplies both the mid-segment capital and the lowercase word that makes
+the segment count as prose — and on a storyline of two or three members, one
+article was the whole corpus. `Gigabyte Brings` and `Lufthansa Discover` were
+labelled that way with `brings` and `discover` already in the lexicon: the guard
+outranked it on evidence one article had manufactured about itself.
+
+The two gates are asymmetric because their errors are:
+
+- **Grounding** stays at one member. A wrong refusal there costs a real label
+  outright, and the note above ("neither guard is justified by this corpus")
+  argues for keeping the cheap side cheap.
+- **The verb gate** asks for two. A wrong `true` there admits a clause the
+  lexicon had already caught — the exact junk class this ADR exists to refuse.
+
+An article echoing itself is one source. Measured over 3,471 live multi-group
+storylines: 13 labels move, nine of them clauses refused, against one real name
+lost (`Flying Eagles` → `Eagles Cruise`). A bar of three was tried and rejected —
+it costs `Justin Rose` and moves nothing else.
+
+The lexicon's bare-form classification was widened in the same change, on a
+separate hole: headline style puts a plural subject in front of the *bare* verb
+("Brewers place RHP … on 15-day IL"), which the `-s`/`-ing`/`-ed` routes cannot
+reach. See docs/STORYLINE-LABELS.md for that half.
+
+**A lemma belongs to exactly one classification list**, and that is now checked
+mechanically rather than by re-reading the file: `ok` was copied into a second
+list in this very change, behaviourally inert and therefore invisible to every
+test that asserts only observable gating.

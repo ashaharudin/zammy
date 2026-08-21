@@ -56,7 +56,8 @@ const CaCert = z
  * never heal, and nothing downstream surfaces it: the boot failure is a warning
  * the app deliberately swallows (server.ts), and a load balancer watching
  * `/readyz` sees HTTP 200 and routes traffic to an instance whose ingest queue
- * silently does nothing (DEPLOYMENT-OCI §2.4).
+ * silently does nothing (DEPLOYMENT-OCI §2.4, archival — the failure mode is the
+ * load balancer's, not that target's).
  *
  * Three things are checked, because each fails silently in its own way:
  * `http://cache:6379` parses fine and is just as dead, `redis//cache:6379`
@@ -240,9 +241,10 @@ const EnvSchema = z
      * our own proxy observed rather than one the caller chose.
      *
      * Set it to the number of proxies between the internet and this process:
-     * **1** behind the OCI load balancer alone (DEPLOYMENT-OCI §4), **2** if a
-     * TLS-terminating proxy is ever put in front of that (§9.2). Local dev talks
-     * to the port directly, so the default is 0.
+     * **1** behind a single load balancer that terminates TLS, **2** if another
+     * proxy is ever put in front of that. Local dev talks to the port directly,
+     * so the default is 0. (Worked through for the OCI load balancer in
+     * DEPLOYMENT-OCI §4 and §9.2, archival; the arithmetic is the same for any.)
      *
      * **Over-counting is as bad as `true`, so do not round up "to be safe".**
      * Measured against Fastify with `X-Forwarded-For: 9.9.9.9, 5.5.5.5`: a count
@@ -391,6 +393,12 @@ const EnvSchema = z
      * How many member headlines the label is generated from. ~10 per ADR-0011:
      * enough for the model to see what the story IS rather than what its latest
      * turn was, and few enough that the prompt stays a flash-tier call.
+     *
+     * It also arms the bigram fallback's support floor, which is the one reason
+     * to think twice before lowering it: that floor reads the SAMPLE it was
+     * handed, not the storyline, so a value under 5 turns it off for arcs of any
+     * size (`SUPPORT_FLOOR_AT_MEMBERS`, `bigram-label.ts`) and the all-support-1
+     * lottery it exists to stop comes back.
      */
     STORYLINE_LABEL_SAMPLE: z.coerce.number().int().min(2).max(40).default(10),
     /**

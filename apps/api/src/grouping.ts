@@ -1,5 +1,5 @@
 import type { GroupCandidate } from "@zammy/storage";
-import { contentTokens } from "./headline-tokens.js";
+import { contentTokens, stripSourceAttribution } from "./headline-tokens.js";
 
 /**
  * Article grouping (ARCHITECTURE 14.3) — the write-time decision: does this
@@ -69,8 +69,45 @@ const MIN_SHARED_TOKENS = 2;
  *   5 — typographic apostrophe (U+2019) folded to ASCII before splitting
  *       (issue #101), so "doesn't" survives whole instead of splitting into
  *       "doesn" + "t" at the curly quote.
+ *   6 — the outlet's own name peeled off the end of a title
+ *       (`stripSourceAttribution`). Rows below 6 carry `winnipeg`,
+ *       `globalnew`, `ca` and the like as if they were subject matter, which
+ *       is what the storyline linker then matched them on.
+ *   7 — verb-lexicon entries added for the label gate, which the peel above
+ *       reads too. `isAttribution` refuses a trailing segment holding a verb
+ *       form, so `homer` entering the lexicon stops "Andrea Cline Obituary -
+ *       Homer Glen, IL" being peeled and the town survives into the tokens.
+ *
+ * `pnpm regroup --tokens-only` is not the whole repair for 6, because that
+ * version changed `story_tokens` rather than only `title_tokens`. Three steps,
+ * in order, and each one's absence is silent:
+ *
+ *   1. `pnpm regroup --tokens-only` — re-derives the stored tokens.
+ *   2. `pnpm story:df --rebuild` — `recordGrouping` writes `story_tokens` but
+ *      never `story_token_days` (docs/TRAILING-CORPUS.md), so every df the
+ *      linker reads still counts the peeled tokens until this runs.
+ *   3. `pnpm backfill:storylines --restart` — ADR-0011 refuses to split an
+ *      existing arc, so arcs already built on the old vocabulary can only be
+ *      replayed. `--restart` mints new UUIDs and discards the label inventory
+ *      with them; the cloud is empty until a label campaign runs, and the
+ *      timeline is unaffected.
+ *
+ * **Version 7 pays step 1 only, deliberately.** Its backlog is ONE article of
+ * 28,294 distinct titles — the measured delta, not an estimate. Step 2 would be
+ * a rounding error on three tokens' df, and step 3 is not payable at all:
+ * `--restart` discards the label inventory, which is the thing version 7 was
+ * made to improve. It is versioned anyway because the rule above is what keeps
+ * a materialized derivation honest, and a row nobody counted is the failure the
+ * version exists to prevent. Say which steps a bump pays for; do not leave the
+ * chain looking whole when it was not run.
+ *
+ * A LEXICON change reaching the tokenizer at all is the coupling version 6
+ * introduced and did not say out loud: the peel decides what a title's last
+ * segment is partly by asking the ADR-0006 lexicon whether it states
+ * something. Anything touching verb-lexicon.ts therefore has to be diffed
+ * against the archive's titles before it can claim to be label-only.
  */
-export const TOKENIZER_VERSION = 5;
+export const TOKENIZER_VERSION = 7;
 
 /**
  * The distinct content-bearing tokens of a headline (§10.2's tokenizer),
@@ -84,7 +121,7 @@ export const TOKENIZER_VERSION = 5;
  * returning surface forms to §10.3.
  */
 export function headlineTokens(title: string): string[] {
-  return [...new Set(contentTokens(title).map(singular))];
+  return [...new Set(contentTokens(stripSourceAttribution(title)).map(singular))];
 }
 
 /**
@@ -131,7 +168,11 @@ export function singular(token: string): string {
  * data because of it.
  */
 export function headlineFigures(title: string): Set<string> {
-  const found = title.match(/\d[\d.,]*/g) ?? [];
+  // Peeled first, or an outlet's own number becomes the story's: "Fox 5
+  // Atlanta" and "WGN 9" quote {5} and {9}, share nothing, and
+  // `figuresContradict` then refuses two reports of one event on the strength
+  // of two channel numbers.
+  const found = stripSourceAttribution(title).match(/\d[\d.,]*/g) ?? [];
   return new Set(
     found.map((figure) => figure.replaceAll(",", "").replace(/[.,]+$/, "")).filter(Boolean),
   );

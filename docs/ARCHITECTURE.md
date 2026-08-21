@@ -1,6 +1,6 @@
 # Zammy — Architectural Proposal
 
-**Status:** Phases 0–5f and 7a built (§13); OCI deploy in progress · **Scope:** the design; decisions live in ADRs
+**Status:** Phases 0–5f and 7a built (§13); **no deploy target — OCI abandoned 2026-08-21** (DEPLOYMENT-OCI is archival) · **Scope:** the design; decisions live in ADRs
 
 A news aggregator that takes keywords from a user and returns a time-ordered timeline of headlines
 and topic summaries, backed by [Currents API](https://currentsapi.services/en/docs/).
@@ -151,9 +151,15 @@ request *and* generates the TS type), **Kysely** for typed SQL — deliberately 
 ([ADR-0003](adr/0003-kysely-and-hand-written-sql-instead-of-an-orm.md)). Migrations use Kysely's
 `Migrator` and run as a discrete deploy step, never on boot.
 
-### 4.1 Deployment target — AWS; local development on Docker Compose
+### 4.1 Deployment target — none chosen; AWS is the standing plan; local development on Docker Compose
 
-**Decided.** The deployment target is **AWS**. Docker Compose is the **local development
+**Open, as of 2026-08-21.** There is no deployment target: OCI was abandoned on free-Ampere
+capacity (DEPLOYMENT-OCI, archival) and nothing has replaced it. **AWS as described below is the
+standing plan, not a decision** — it was chosen once, superseded by OCI, and is now simply the
+best-documented candidate. It remains a Terraform rewrite rather than an application rewrite, which
+is the property that survived both changes of target.
+
+Docker Compose is the **local development
 environment**, not a deployment target — built as a faithful rehearsal of production. The **same
 images** run in both, differing only by environment variables. No code path may branch on
 environment; the moment one does, local development stops predicting production.
@@ -907,9 +913,14 @@ The worker also handles coverage-span merging and a daily `/available/*` refresh
 **The nightly chores are not in this process.** Retention (§7.5) and the storyline lifecycle pass
 (ADR-0011) are one-shot runs of `apps/api/src/chores-cli.ts` — `pnpm chores retention`, `pnpm chores
 storylines` — on the platform's scheduler: systemd timers at 03:00/04:00 UTC on the staging VM
-(`deploy/staging/cloud-init.yaml`), OCI Resource Scheduler in production (DEPLOYMENT-OCI §1). They
-were a BullMQ job scheduler registered at boot, which bought exactly-once across N instances from
-Redis-shared state; the runner buys it from a Postgres advisory lock, one key per pass.
+(`deploy/staging/cloud-init.yaml`), OCI Resource Scheduler in production (DEPLOYMENT-OCI §1) —
+both **archival**, as no OCI staging VM was ever created and OCI was abandoned 2026-08-21; whatever
+target replaces it needs its own scheduler for these, and the requirement is the pass, not the
+mechanism.
+
+The chores were once a BullMQ job scheduler registered at boot, which bought exactly-once across N
+instances from Redis-shared state; the runner buys it from a Postgres advisory lock, one key per
+pass.
 
 Two consequences, neither of them visible in the api's logs. A schedule the app registers cannot be
 forgotten, while an external one is absent until someone configures it — so if nothing schedules the
@@ -1019,6 +1030,15 @@ anyone searches. The corpus is a union of two sources:
 linker turns "forty articles arrived" into "this arc gained two groups". The sampler's job is corpus
 and nothing else — it computes nothing the cloud reads — and an article ingested without tokens can
 never join a group, so it can never reach a storyline the cloud can name.
+
+**Nor can a storyline with no name.** The cloud query requires a label (§10.3), and the labeller
+runs on a tail the linker starts and drops, because on the timeline's sync-fill path a ~8s model
+call cannot sit inside the §6.3 deadline. The sample job is the exception that must hold that tail:
+nothing is waiting on it, and returning before the names exist publishes a cloud missing everything
+the sample just grew — then caches it, because a finished sample job reads as `state: "complete"`.
+Measured on the dev archive at a 60-minute cadence, that was the whole hour's landing page: sixteen
+of nineteen qualifying storylines were named in the ~3 minutes after the job cleared the cache, and
+the visitor whose arrival triggered the sample was the one guaranteed to miss them.
 
 A single snapshot buys ~40 articles where the old category-sliced `/search` sample bought a few
 hundred for 12–24 calls, so the freed budget goes into **cadence** rather than depth: a sample is
@@ -1325,8 +1345,12 @@ apart see the same cloud.
 ## 13. Delivery phases
 
 > **Two numbering schemes exist in this repo, and they are unrelated.** These are the *product*
-> phases; the OCI rollout has its own 0–5 in [DEPLOYMENT-OCI §7](DEPLOYMENT-OCI.md). "Phase 3" means
-> the Query Service here and "first end-to-end deploy" there. Say which you mean.
+> phases; the OCI rollout had its own 0–5 in [DEPLOYMENT-OCI §7](DEPLOYMENT-OCI.md) (archival since
+> 2026-08-21). "Phase 3" means the Query Service here and "first end-to-end deploy" there. Say
+> which you mean.
+>
+> Status column: ✅ built · 🔄 in progress · ⬜ not started · ⛔ blocked on something outside the
+> phase.
 
 | Phase | Deliverable | Status |
 | --- | --- | --- |
@@ -1342,7 +1366,7 @@ apart see the same cloud.
 | 5c | **Article grouping (§14.3):** `group_id` / `group_published` / `title_tokens` on `articles`, write-time grouping after the collapse, the keyset moved onto the group axis, per-topic representative from the source-authority list, the "related" disclosure. | ✅ |
 | 5e | **Storylines:** day-clustered slots (ADR-0009), then the persistent arc that superseded them (ADR-0011) — `storylines` / `storyline_days`, the linker, bridges and auto-merge, the timeline paged over storyline-days. Migration 0012 dropped the day-bounded model and its flag. | ✅ |
 | 5f | **Storyline labels (ADR-0011, "Labels"):** Gemini-generated names at promotion, merge and drift, bigram fallback when no key is set, plus `label_source` so a relabel campaign can resume. | ✅ |
-| 6 | ~~**AWS deploy**~~ — superseded. Target moved to **OCI** on 2026-08-14; plan and phase table in [DEPLOYMENT-OCI.md](DEPLOYMENT-OCI.md). CI publishes arm64 to OCIR; staging has a cloud-init bootstrap. | 🔄 in progress |
+| 6 | **Deploy** — no target. AWS superseded by **OCI** on 2026-08-14; OCI then **abandoned 2026-08-21** for lack of free Ampere capacity, [DEPLOYMENT-OCI.md](DEPLOYMENT-OCI.md) now archival. Phase 1 network/vault/LB was applied and is left standing inside Always Free; the staging VM never landed. No application code was reverted. | ⛔ blocked — needs a new target |
 | 7a | **Second provider behind the client interface:** `@zammy/news-client` core + per-provider adapters + the composite, GNews added, `provider` column on `articles`/`sightings` (§5.6, ADR-0012). | ✅ |
 | 7b | Topic summaries into `topics.summary`. The schema reserves the columns (§7.2); nothing generates them. | ⬜ not started |
 
@@ -1399,7 +1423,8 @@ pure-recency ordering — along with the click that ran a label verbatim and ret
 ([0014](adr/0014-the-cloud-ranks-by-volume-and-searches-what-the-coverage-says.md)), which brings
 0008's decay and its half-life back with it.
 
-Resolved by decision: **deployment target is AWS** (§4.1) — correcting the earlier claim that the
+Resolved by decision, then reopened: the target was AWS, then OCI, and since 2026-08-21 there is
+**no target** (§4.1). What the original decision corrected still stands — the earlier claim that the
 deployment choice would not affect the architecture. It does, in two places: the job queue needs
 at-least-once delivery rather than a naive `LPOP`, and the breadth-sample trigger needs a lock a
 single host would not need. Fargate keeping CPU allocated settles scale-to-zero, so the consumer

@@ -362,8 +362,19 @@ tokens, replayed over the whole archive:
 
 Ten piles for ten real storylines — 1:1, the same trade as every threshold, for
 the price of re-deriving `story_tokens` across the archive and rebuilding
-`story_token_days`. Not shipped. (It may still be right on other grounds; it is
-not a fix for *this*.)
+`story_token_days`. Not a fix for *this*, and refused on that basis.
+
+**Shipped later, on other grounds (2026-08-21, `TOKENIZER_VERSION` 6).** The
+replay above stripped each article's *own* source identity, matched against its
+domain. What shipped is narrower and needs no domain: `stripSourceAttribution`
+peels trailing segments that are attribution-SHAPED, which catches the case this
+table could not price separately — a title suffix whose tokens are worth **mass
+19.88 against a floor of 20** on the trailing fortnight to 2026-08-21, so a
+Global News dateline was one coincidence short of a storyline on its own. The
+1:1 trade recorded here still stands as the honest expectation for the general
+case; it was the *specific* arithmetic of one outlet's suffix that decided it.
+The price was paid as stated — see `TOKENIZER_VERSION` in `grouping.ts` for the
+three-step repair a bump like this obliges.
 
 Wire and journal boilerplate is likewise real and likewise a minority: 41 of
 338 declined storylines (12.1%) are built entirely from press-release, filings,
@@ -420,7 +431,7 @@ conclusion and offers the decline, and `readCoherenceReply`, which returns
 | reply | meaning | what may act on it |
 | --- | --- | --- |
 | `named` | a usable, grounded label | use the name |
-| `incoherent` | the model explicitly said NOT ONE STORY | **the only case that may refuse a formation** |
+| `incoherent` | the model refused — the NOT ONE STORY sentinel, or one of a narrow list of start-anchored paraphrases | **the only case that may refuse a formation** |
 | `unusable` | unavailable, timed out, out of quota, contract broken | keep the storyline; bigram fallback — today's behaviour, unchanged |
 
 The three-way split is the whole safety argument, and it is not theoretical:
@@ -471,6 +482,30 @@ got wrong (`56ce166f`, the Maple Ridge bear attack covered twice; `66cb6c4d`,
 the US-Iran deal expiring; `30111d24`, two nearly identical winery listicles),
 ~7 genuine misses (two Diddy stories, two Star Trek pieces, two market
 week-ahead columns).
+
+#### The matrix above predates the current reader (2026-08-21)
+
+Both cells were produced by a `readCoherenceReply` that has since been
+**replaced twice**: once to read paraphrased refusals (issue #98), and once
+again to test the declines BEFORE `validateLabel`. The numbers therefore
+describe a reader that no longer exists, and a rerun is owed before either
+figure is quoted as current.
+
+The second change was not cosmetic. `NOT ONE STORY` is three words and
+`validateLabel` grounds on one capitalized word, so coverage saying "story"
+anywhere makes the sentinel a contract-passing label — and the transcript shows
+it happening: **4 of the run's `named` verdicts carry the label `NOT ONE STORY`
+literally**, one of them in the *declined* set, where the gate should have
+caught the pile and instead named it after the refusal. Correcting those four
+raises both columns (the catch rate and the destroy rate), so the fix does not
+flatter the gate.
+
+`--report` cannot re-derive the corrected matrix: the transcript recorded the
+*verdict*, not the reply it was read from, so rows already scored `named` or
+`incoherent` cannot be re-scored offline. The transcript now carries the reply
+(`Row.raw`) so the next reader change can be replayed for free, but that helps
+only runs from this change onward. Correcting the cells above needs a real
+rerun: one model call per candidate against a 500/day/model free-tier ceiling.
 
 **Second-order finding, the more important one.** If ~26% of the sampled
 two-group *named* storylines are piles, the reported failure is materially
@@ -527,7 +562,7 @@ name the story has thereby said it is one.
 
 | verdict | what happens |
 | --- | --- |
-| explicit `NOT ONE STORY` | a refusal is recorded; both groups keep their own provisional storylines and keep rendering as ordinary slots |
+| a refusal — `NOT ONE STORY`, or a paraphrase on `DECLINE_PREFIXES` | a refusal is recorded; both groups keep their own provisional storylines and keep rendering as ordinary slots |
 | a usable name | the withheld merge is performed, the storyline promoted, and that name written (`label_source` = the model id) |
 | **anything else** | the withheld merge is performed, promoted, bigram fallback — **exactly the pre-gate outcome** |
 

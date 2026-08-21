@@ -58,8 +58,16 @@ export interface GroupingDeps {
   /**
    * Where the label tail goes. Labelling runs AFTER the batch, off the §6.3
    * sync-fill deadline a reader is waiting on, so the default is to start it and
-   * walk away. A caller that needs to know when it finished — a test, or a
-   * script that exits — hands in something that keeps the promise.
+   * walk away. A caller that needs to know when it finished hands in something
+   * that keeps the promise.
+   *
+   * Two do. A test needs it for the obvious reason — a dropped tail is a
+   * dangling assertion. The §10.1 breadth sample needs it for a subtler one: no
+   * reader is waiting on that job, and the cloud it feeds cannot see an
+   * unlabelled storyline at all, so returning before the names exist publishes
+   * an emptied cloud and caches it (`processSampleJob`). Dropping this promise
+   * is a latency decision, and it is only correct where there is latency to
+   * protect.
    */
   labelTail?: (task: Promise<void>) => void;
   metrics?: Metrics;
@@ -75,19 +83,28 @@ export interface GroupingDeps {
  * candidates to everything ingested afterwards. The sampler was exactly that
  * bug for one release.
  */
-export function groupingDepsFor(deps: {
-  db: Kysely<Database>;
-  config: { grouping: GroupingDeps["config"] };
-  labeler?: Omit<LabelerDeps, "db">;
-  metrics?: Metrics;
-  log?: { warn: (obj: object, msg: string) => void };
-}): GroupingDeps {
+export function groupingDepsFor(
+  deps: {
+    db: Kysely<Database>;
+    config: { grouping: GroupingDeps["config"] };
+    labeler?: Omit<LabelerDeps, "db">;
+    metrics?: Metrics;
+    log?: { warn: (obj: object, msg: string) => void };
+  },
+  /**
+   * The one field a CALLER decides rather than the service wiring: whether it
+   * keeps the label tail. Passed here rather than spread over the result so the
+   * mapping above stays the only place grouping deps are assembled.
+   */
+  labelTail?: (task: Promise<void>) => void,
+): GroupingDeps {
   return {
     db: deps.db,
     config: deps.config.grouping,
     ...(deps.labeler ? { labeler: deps.labeler } : {}),
     ...(deps.metrics ? { metrics: deps.metrics } : {}),
     ...(deps.log ? { log: deps.log } : {}),
+    ...(labelTail ? { labelTail } : {}),
   };
 }
 

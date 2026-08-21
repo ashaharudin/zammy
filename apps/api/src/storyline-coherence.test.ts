@@ -147,6 +147,63 @@ describe("readCoherenceReply", () => {
     expect(reply).toMatchObject({ kind: "unusable" });
     if (reply.kind === "unusable") expect(reply.reason).toContain("I cannot determine this");
   });
+
+  it("reads a paraphrased refusal as a refusal, not a contract failure", () => {
+    // The live bug: a model that declines in its own words still fails
+    // validateLabel (it's a sentence), and reading that failure as `unusable`
+    // forms the very pile the model just refused.
+    expect(
+      readCoherenceReply("None of these headlines cover the same news story.", members),
+    ).toEqual({ kind: "incoherent" });
+    expect(readCoherenceReply("These are not one story.", members)).toEqual({
+      kind: "incoherent",
+    });
+  });
+
+  it("reads the EXACT sentinel as a refusal even when the coverage grounds it", () => {
+    // The regression this ordering exists to prevent. `validateLabel` grounds
+    // on ONE capitalized word and `story` is not a stopword, so coverage that
+    // says "story" anywhere makes "NOT ONE STORY" a contract-passing, grounded
+    // three-word label. Validating before testing for a decline therefore took
+    // the model that obeyed the prompt EXACTLY and named the storyline after
+    // its own refusal — strictly worse than the bug in issue #98, which at
+    // least only lost paraphrases.
+    const storyMembers: LabelMember[] = [
+      {
+        title: "Off-duty police officer fatally shot outside Pa. lounge",
+        description: "This story has been updated with the department's statement.",
+        published: new Date("2026-08-04T10:00:00Z"),
+      },
+      {
+        title: "Family of L.A. father fatally shot by off-duty ICE officer demanding justice",
+        description: "Related stories from our archive appear below.",
+        published: new Date("2026-08-12T10:00:00Z"),
+      },
+    ];
+
+    expect(readCoherenceReply(INCOHERENT_SENTINEL, storyMembers)).toEqual({ kind: "incoherent" });
+    expect(readCoherenceReply("NOT ONE STORY.", storyMembers)).toEqual({ kind: "incoherent" });
+    expect(readCoherenceReply('"not one story"', storyMembers)).toEqual({ kind: "incoherent" });
+  });
+
+  it("prefers a valid, grounded label over a decline word it happens to start with", () => {
+    // The declines are tested before the contract, so the list may hold no
+    // phrase a real label can open with. `UNRELATED` was suggested by issue #98
+    // and withheld for this exact name: it is a grounded, contract-passing
+    // label, and admitting the bare word would refuse it durably.
+    const unrelatedMembers: LabelMember[] = [
+      {
+        title: "Unrelated Films Festival opens in Cannes",
+        description: "The Unrelated Films Festival kicked off its tenth edition.",
+        published: new Date("2026-08-04T10:00:00Z"),
+      },
+    ];
+
+    expect(readCoherenceReply("Unrelated Films Festival", unrelatedMembers)).toEqual({
+      kind: "named",
+      label: "Unrelated Films Festival",
+    });
+  });
 });
 
 describe("mayRefuseFormation", () => {

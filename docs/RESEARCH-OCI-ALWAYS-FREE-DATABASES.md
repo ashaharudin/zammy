@@ -1,5 +1,23 @@
 # Research — OCI Always Free database services as a Postgres replacement
 
+
+> ## ⛔ ARCHIVAL — NOT IN USE
+>
+> **zammy is not deploying on OCI (decided 2026-08-21 — see
+> [DEPLOYMENT-OCI](DEPLOYMENT-OCI.md) for the reasoning and the capacity evidence).** So the
+> question this document asks is no longer live: there is no OCI tenancy to host an Always Free
+> database.
+>
+> **Its answer is still the answer, though, and that part was never OCI-specific.** The research
+> concluded that self-hosted Postgres stays — on the strength of what the managed offerings would
+> have cost us in schema and query rewrites, not on price or tier limits. Any *future* managed
+> database on any provider faces the same test, so this doc is worth keeping as the standard to
+> re-apply rather than a decision to re-litigate.
+>
+> Treat every OCI-specific tier limit, shape and service claim below as **frozen at 2026-08-18**
+> and unverified since. In particular, do not action §7's could-not-verify list: those checks
+> needed a live tenancy, and there is no longer one to run them against.
+
 **Question:** could zammy use the Oracle Cloud Always Free database offerings — Oracle Autonomous
 Database, MySQL HeatWave, and/or Oracle NoSQL Database Cloud Service — instead of self-hosted
 Postgres?
