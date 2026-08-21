@@ -24,7 +24,7 @@ import type { LinkOutcome } from "./storyline-linker.js";
  *
  * | verdict | action |
  * | --- | --- |
- * | an explicit "NOT ONE STORY" | record a refusal; the groups stay apart |
+ * | a refusal — the "NOT ONE STORY" sentinel, or a paraphrase of it | record a refusal; the groups stay apart |
  * | a usable name | perform the merge, promote, and write that name |
  * | anything else | perform the merge, promote, and fall back to bigrams |
  *
