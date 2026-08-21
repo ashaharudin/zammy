@@ -1,6 +1,5 @@
 import { loadConfig } from "@zammy/config";
 import {
-  createDb,
   readLabelMergeCandidates,
   readStorylineCoverageText,
 } from "@zammy/storage";
@@ -17,6 +16,7 @@ import {
   mergeAgreeingLabels,
   planLabelMerges,
 } from "./storyline-label-merge-service.js";
+import { createConfiguredDb } from "./wiring.js";
 
 /**
  * `pnpm merge:storyline-labels [--dry-run] [--grace=N]` — the label-agreement
@@ -35,7 +35,7 @@ const flag = (name: string): string | undefined =>
 const dryRun = args.includes("--dry-run");
 
 const config = loadConfig();
-const db = createDb(config.DATABASE_URL);
+const db = createConfiguredDb(config);
 /**
  * A numeric flag, or exit. `Number("abc")` is NaN and NaN fails the comparison
  * it lands in — which for `--grace` fails safe (`spansTouch` refuses) and for

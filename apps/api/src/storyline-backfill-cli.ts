@@ -1,9 +1,10 @@
 import { loadConfig } from "@zammy/config";
-import { createDb, readStorylineStats } from "@zammy/storage";
+import { readStorylineStats } from "@zammy/storage";
 import { createGeminiClient, type TextGenerator } from "./gemini.js";
 import { backfillStorylines } from "./storyline-backfill.js";
 import { runBridgeSweep, type LinkerConfig } from "./storyline-linker.js";
 import { labelLinkedStorylines } from "./storyline-label-service.js";
+import { createConfiguredDb } from "./wiring.js";
 
 /**
  * `pnpm backfill:storylines [--restart] [--labels-only] [--no-labels]
@@ -65,7 +66,7 @@ const relabel = args.includes("--relabel");
 const relabelAll = args.includes("--relabel-all");
 
 const config = loadConfig();
-const db = createDb(config.DATABASE_URL);
+const db = createConfiguredDb(config);
 
 const generator: TextGenerator | null = config.GEMINI_API_KEY
   ? createGeminiClient({

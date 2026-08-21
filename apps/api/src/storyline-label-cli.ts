@@ -1,5 +1,5 @@
 import { loadConfig } from "@zammy/config";
-import { createDb, readLabelCandidates } from "@zammy/storage";
+import { readLabelCandidates } from "@zammy/storage";
 import { sql } from "kysely";
 import { createGeminiClient, type TextGenerator } from "./gemini.js";
 import {
@@ -11,6 +11,7 @@ import {
   type LabelMember,
 } from "./storyline-label.js";
 import { labelStoryline, type LabelOutcome } from "./storyline-label-service.js";
+import { createConfiguredDb } from "./wiring.js";
 
 /**
  * `pnpm label:storylines [--limit=N] [--dry-run]` — the labeler's
@@ -29,7 +30,7 @@ const dryRun = args.includes("--dry-run");
 const limit = Number(flag("limit") ?? 200);
 
 const config = loadConfig();
-const db = createDb(config.DATABASE_URL);
+const db = createConfiguredDb(config);
 
 const generator: TextGenerator | null = config.GEMINI_API_KEY
   ? createGeminiClient({

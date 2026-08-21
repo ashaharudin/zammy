@@ -8,7 +8,7 @@ import { Redis } from "ioredis";
 import { type Config, redactConfig } from "@zammy/config";
 import type { CurrentsClient } from "@zammy/currents-client";
 import { createNewsClient } from "@zammy/news-providers";
-import { createDb } from "@zammy/storage";
+import { createDb, databaseSsl } from "@zammy/storage";
 import { registerHealthRoutes } from "./health.js";
 import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
 import { IngestQueue } from "./ingest-queue.js";
@@ -83,7 +83,17 @@ export async function buildApp(config: Config): Promise<App> {
     trustProxy: trustedProxyOption(config.TRUSTED_PROXY_HOPS),
   });
 
-  const pool = new Pool({ connectionString: config.DATABASE_URL, max: 10 });
+  // One pool for the request path, shared with Kysely and with /readyz below.
+  // Its size is config, not a literal: 10 suits a server whose replica count is
+  // known, and an elastic-instance platform where every instance holds its own
+  // pool wants 1–2 (RESEARCH-VERCEL-SUPABASE §4.3). TLS is decided here rather
+  // than in the URL, because node-postgres would silently ignore it there
+  // (@zammy/storage's databaseSsl).
+  const pool = new Pool({
+    connectionString: config.DATABASE_URL,
+    max: config.DATABASE_POOL_MAX,
+    ssl: databaseSsl({ mode: config.DATABASE_SSL, caCert: config.DATABASE_CA_CERT }),
+  });
   const redis = new Redis(config.REDIS_URL, {
     maxRetriesPerRequest: 2,
     // Redis is pure cache: never let a reconnect storm block a request that

@@ -1,6 +1,7 @@
 import { loadConfig } from "@zammy/config";
-import { createDb, rebuildStoryDf, readStoryDf } from "@zammy/storage";
+import { rebuildStoryDf, readStoryDf } from "@zammy/storage";
 import { storyDfDay, trailingWindow } from "./story-df.js";
+import { createConfiguredDb } from "./wiring.js";
 
 /**
  * `pnpm story:df [--rebuild] [--days=N] [--language=en]` — the trailing
@@ -34,7 +35,7 @@ const dfConfig = {
   windowDays: config.STORYLINE_DF_WINDOW_DAYS,
   timeZone: config.APP_TIMEZONE,
 };
-const db = createDb(config.DATABASE_URL);
+const db = createConfiguredDb(config);
 
 try {
   const now = new Date();

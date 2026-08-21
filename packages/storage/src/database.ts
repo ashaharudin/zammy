@@ -310,10 +310,63 @@ export interface Database {
   storyline_formation_refusals: StorylineFormationRefusalsTable;
 }
 
+/** How TLS to Postgres is decided. libpq's names, minus the modes nobody here wants. */
+export type DatabaseSslMode = "disable" | "require" | "verify-full";
+
+export interface DatabaseSslSettings {
+  mode: DatabaseSslMode;
+  /** PEM chain. Required by `verify-full`, meaningless otherwise. */
+  caCert?: string | undefined;
+}
+
+/** What `pg` accepts as its `ssl` option: off, or a TLS configuration. */
+export type DatabaseSslOption = false | { ca?: string; rejectUnauthorized: boolean };
+
+/**
+ * Build `pg`'s `ssl` option from validated settings.
+ *
+ * TLS lives here rather than in the connection string on purpose: node-postgres
+ * silently ignores this object whenever the URL carries `sslmode`, so a URL and
+ * an `ssl` option that disagree resolve in favour of the URL with nothing said
+ * about it (@zammy/config's `PostgresUrl` refuses such a URL for that reason).
+ *
+ * `require` is spelled out as unverified rather than dressed up: it encrypts and
+ * trusts whatever answers. That is a real, common choice against a managed
+ * Postgres whose CA is not to hand; what it must not be is the thing that
+ * *looks* like verification.
+ *
+ * Throws on `verify-full` with no certificate. @zammy/config catches that at
+ * boot for every process that loads it, but `migrate-cli` reads the environment
+ * raw (it sits below the config package), so the check has to exist here too.
+ */
+export function databaseSsl(settings: DatabaseSslSettings): DatabaseSslOption {
+  if (settings.mode === "disable") return false;
+  if (settings.mode === "require") return { rejectUnauthorized: false };
+  const ca = normalizePem(settings.caCert);
+  if (!ca) {
+    throw new Error("DATABASE_SSL=verify-full requires DATABASE_CA_CERT (a PEM chain)");
+  }
+  return { ca, rejectUnauthorized: true };
+}
+
+/**
+ * A PEM pasted into a dashboard field arrives as one line with the newlines
+ * escaped; Node's TLS stack needs them real. Harmless on a PEM that already has
+ * them, since a literal backslash-n cannot appear in base64.
+ */
+function normalizePem(raw: string | undefined): string | undefined {
+  const value = raw?.trim();
+  if (!value) return undefined;
+  return value.replaceAll("\\n", "\n");
+}
+
 /**
  * A Kysely instance over a pg pool — either a fresh one from a connection
  * string, or an existing pool the app already health-checks. `destroy()` ends
  * the pool in both cases, so an app sharing its pool must not end it twice.
+ *
+ * `ssl` applies only to a pool built here; a caller passing its own pool has
+ * already decided its TLS (server.ts does, so `/readyz` and Kysely share one).
  *
  * NOTE: `migrateToLatest` needs a pool of at least two connections — it pins one
  * for the advisory lock while the migrator borrows others. The default (10) is
@@ -321,11 +374,15 @@ export interface Database {
  */
 export function createDb(
   connection: string | pg.Pool,
-  options: { max?: number } = {},
+  options: { max?: number; ssl?: DatabaseSslOption } = {},
 ): Kysely<Database> {
   const pool =
     typeof connection === "string"
-      ? new pg.Pool({ connectionString: connection, max: options.max ?? 10 })
+      ? new pg.Pool({
+          connectionString: connection,
+          max: options.max ?? 10,
+          ssl: options.ssl ?? false,
+        })
       : connection;
   return new Kysely<Database>({ dialect: new PostgresDialect({ pool }) });
 }
