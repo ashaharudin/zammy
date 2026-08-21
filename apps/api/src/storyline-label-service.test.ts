@@ -276,7 +276,9 @@ describe("the labeler", () => {
             },
           ],
         ),
-      ).resolves.toBeUndefined();
+        // Resolves rather than rejects — and to nothing labelled, so the
+        // collision trigger reading this return has no name to count.
+      ).resolves.toEqual([]);
     });
   });
 

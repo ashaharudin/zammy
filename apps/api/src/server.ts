@@ -182,6 +182,17 @@ export async function buildApp(config: Config): Promise<App> {
         // exist to re-offer the linker what it declined, and an offer judged at
         // a different bar is a different decision (`wiring.ts`).
         linker: createLinkerConfig(config),
+        // The collision-triggered label merge: the nightly repair, run by the
+        // ingest tail at the moment a label write creates the collision. The
+        // rules are the chore's own knobs — a merge decided at a different
+        // grace or valve than the nightly pass would be a different decision.
+        labelMerge: {
+          rules: {
+            graceDays: config.STORYLINE_LABEL_MERGE_GRACE_DAYS,
+            maxComponent: config.STORYLINE_LABEL_MERGE_MAX_COMPONENT,
+          },
+          threshold: config.STORYLINE_LABEL_MERGE_TRIGGER,
+        },
       },
     },
     now: () => new Date(),

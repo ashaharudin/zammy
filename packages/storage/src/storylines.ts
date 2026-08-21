@@ -652,6 +652,39 @@ export async function readLabelMergeCandidates(
 }
 
 /**
+ * How many live, promoted, model-labelled storylines carry the given label
+ * words — the cheap pre-check the ingest tail's collision trigger runs on every
+ * label it writes, so the full candidate read (a spans aggregate over every
+ * labelled storyline) is paid only when a label is actually shared.
+ *
+ * The lifecycle filters are `readLabelMergeCandidates`' own, minus the
+ * `storyline_days` join: a storyline with no day slots is counted here and then
+ * excluded there, which can only over-fire the trigger into a planner that
+ * refuses — never under-fire it. Same shape for the comparison itself: `@>`
+ * and `<@` are SET operators, so a label with a repeated word matches its
+ * deduplicated twin here and is told apart by `labelKey`'s multiset in the
+ * planner. Both containments, so the partial GIN index on `label_words`
+ * carries the scan.
+ */
+export async function countStorylinesSharingLabelWords(
+  db: Kysely<Database>,
+  words: readonly string[],
+): Promise<number> {
+  if (words.length === 0) return 0;
+  const { rows } = await sql<{ n: string }>`
+    select count(*) as n
+    from storylines s
+    where s.merged_into is null
+      and s.status <> 'provisional'
+      and s.label_source is not null
+      and s.label_source <> 'bigram'
+      and s.label_words @> ${[...words]}::text[]
+      and s.label_words <@ ${[...words]}::text[]
+  `.execute(db);
+  return Number(rows[0]?.n ?? 0);
+}
+
+/**
  * Every member article's title and description for a set of storylines — the
  * corpus the label-agreement merge derives its proper-noun evidence from.
  *

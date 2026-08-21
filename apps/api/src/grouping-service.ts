@@ -21,6 +21,8 @@ import {
   type LinkerConfig,
 } from "./storyline-linker.js";
 import { labelLinkedStorylines, type LabelerDeps } from "./storyline-label-service.js";
+import { mergeCollidingLabels } from "./storyline-label-merge-trigger.js";
+import type { LabelMergeRules } from "./storyline-label-merge.js";
 import type { Metrics } from "./metrics.js";
 
 /**
@@ -48,6 +50,13 @@ export interface GroupingDeps {
      * renders as plain slots.
      */
     linker: LinkerConfig;
+    /**
+     * The collision-triggered label merge (`storyline-label-merge-trigger.ts`),
+     * run at the end of the label tail on the labels it just wrote. Absent —
+     * or present with `threshold: 0` — labels are written and collisions wait
+     * for the nightly pass, which is the pre-trigger behaviour.
+     */
+    labelMerge?: { rules: LabelMergeRules; threshold: number };
   };
   /**
    * The labeler, for the promotion and merge triggers (ADR-0011). Absent means
@@ -242,17 +251,36 @@ export async function groupCreatedArticles(
     // linker above runs inside the §6.3 deadline a reader is waiting on. The
     // tail never throws, which is what makes starting-and-dropping it safe.
     if (deps.labeler && outcomes.length > 0) {
+      const labeler = deps.labeler;
+      const labelMerge = deps.config.labelMerge;
       const tail = labelLinkedStorylines(
         {
           db: deps.db,
-          labeler: deps.labeler,
+          labeler,
           // Deferred formations are resolved in this tail, and performing the
           // merge the linker withheld recomputes day slots.
           formations: { timeZone: deps.config.linker.timeZone },
           ...(deps.log ? { log: deps.log } : {}),
         },
         outcomes,
-      );
+      ).then(async (labelled) => {
+        // The collision-triggered merge, on the names this batch just wrote —
+        // the one moment a label collision can come into being. Behind the
+        // same dropped promise as the labelling, and safe there for the same
+        // reason: it never throws, and the nightly pass is its retry.
+        if (!labelMerge || labelMerge.threshold <= 0 || labelled.length === 0) return;
+        await mergeCollidingLabels(
+          {
+            db: deps.db,
+            rules: labelMerge.rules,
+            threshold: labelMerge.threshold,
+            timeZone: deps.config.timeZone,
+            labeler,
+            ...(deps.log ? { log: deps.log } : {}),
+          },
+          labelled,
+        );
+      });
       if (deps.labelTail) deps.labelTail(tail);
       else void tail;
     }

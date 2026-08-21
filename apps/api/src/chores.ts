@@ -328,15 +328,19 @@ export async function runBridgeSweepChore(
  * that were independently given the same name by the model, and whose coverage
  * runs together, become one.
  *
- * Nightly rather than on the ingest path because the evidence only exists after
- * the fact. A label is written by the tail the linker starts and does not wait
- * for, so at the moment two arcs become mergeable neither of them is named yet;
- * asking on the write path would ask before the answer exists.
+ * Nightly AND on the ingest path, and the two runs answer different misses. The
+ * evidence only exists after the fact — a label is written by the tail the
+ * linker starts and does not wait for, so at the moment two arcs become
+ * mergeable neither of them is named yet. The ingest tail therefore asks again
+ * the moment it writes a label (`storyline-label-merge-trigger.ts`, scoped to
+ * that one label); this pass is the unscoped backstop for whatever the trigger
+ * missed — a crashed tail, a disabled trigger, a collision assembled by drift
+ * relabels that never went through the tail at all.
  *
- * It runs AFTER the label pass for the same reason, which is why the caller
- * orders it last: a storyline labelled tonight should be eligible tonight, not
- * tomorrow. That ordering is also what makes the pass converge — each night's
- * new labels are the next night's candidates.
+ * It runs AFTER the label pass for that same after-the-fact reason, which is
+ * why the caller orders it last: a storyline labelled tonight should be
+ * eligible tonight, not tomorrow. That ordering is also what makes the pass
+ * converge — each night's new labels are the next night's candidates.
  */
 export async function runLabelMergeChore(
   deps: ChoreDeps & {
