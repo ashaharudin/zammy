@@ -189,6 +189,21 @@ describe("validateLabel", () => {
     expect(validateLabel("Xi'an Fire", members)).toBe("Xi'an Fire");
   });
 
+  it("grounds a possessive proper noun (issue #101)", () => {
+    // `singular("dillard's")` is `"dillard'"` — a stranded apostrophe — because
+    // `singular` only drops a trailing `s`. The corpus side folds through
+    // `trimWordPunctuation` first and stores `dillard`, so grounding must fold
+    // the label word the same way or a possessive name can never ground a label.
+    const members: LabelMember[] = [
+      {
+        title: "Dillard's posts tariff windfall",
+        description: "The retailer Dillard's said tariffs boosted earnings.",
+        published: new Date("2026-03-01T00:00:00Z"),
+      },
+    ];
+    expect(validateLabel("Dillard's Windfall", members)).toBe("Dillard's Windfall");
+  });
+
   it("does NOT enforce 'the event, not just the entity' — and cannot", () => {
     // "Fort Hood Crash" and "Donald Trump" are both two capitalized grounded
     // words; no test over tokens separates them. The prompt carries this

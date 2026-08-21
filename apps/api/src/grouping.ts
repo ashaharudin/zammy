@@ -66,8 +66,11 @@ const MIN_SHARED_TOKENS = 2;
  *       `headlineTokens` itself is unchanged, but rows below 4 have no
  *       `story_tokens` and are invisible to the storyline layer until
  *       re-derived.
+ *   5 — typographic apostrophe (U+2019) folded to ASCII before splitting
+ *       (issue #101), so "doesn't" survives whole instead of splitting into
+ *       "doesn" + "t" at the curly quote.
  */
-export const TOKENIZER_VERSION = 4;
+export const TOKENIZER_VERSION = 5;
 
 /**
  * The distinct content-bearing tokens of a headline (§10.2's tokenizer),

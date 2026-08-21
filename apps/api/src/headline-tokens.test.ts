@@ -99,6 +99,18 @@ describe("tokenization survives identifiers (§10.2)", () => {
   });
 });
 
+describe("a typographic apostrophe does not split a contraction (issue #101)", () => {
+  it("keeps a curly-quoted contraction whole, matching the ASCII spelling", () => {
+    expect(contentTokens("Girlfriend doesn’t get my imessages")).toEqual(
+      contentTokens("Girlfriend doesn't get my imessages"),
+    );
+  });
+
+  it("keeps a curly-quoted name whole (Xi'an)", () => {
+    expect(contentTokens("Xi’an protest grows")).toEqual(["xi'an", "protest", "grows"]);
+  });
+});
+
 describe("wire-service and desk furniture (ADR-0007)", () => {
   // Both recorded corpora together — `los angeles ap` only exists across the
   // two, and the whole point of this class is that it is reproduced across
