@@ -177,12 +177,10 @@ function bestBigram(
  * overrule the verb lexicon.
  *
  * The override exists for "Ken Burns" and "Patriot Games" — real names the
- * lexicon holds as verbs — and on a storyline of two or three articles the
- * evidence it wants is nearly free. Free in one shape especially: a press
- * release quoting its own Title Case headline inside its body, which is how
- * `Gigabyte Brings` outranked the lexicon's `brings` on ONE article's
- * self-quotation. An article echoing itself is one source, so the bar is
- * counted in members.
+ * lexicon holds as verbs — and on a small storyline the evidence it wants is
+ * nearly free. `properNounEvidence`'s `minMembers` carries the shape that makes
+ * it free and why members are the unit; `Gigabyte Brings` is what it cost here.
+ * This constant only decides the bar.
  *
  * Two, measured over 3,471 live multi-group storylines (2026-08-21) relabelled
  * offline from their own coverage. Raising the bar from one to two moves 13

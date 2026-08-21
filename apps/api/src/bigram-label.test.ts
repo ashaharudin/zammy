@@ -420,9 +420,9 @@ describe("bigramLabel", () => {
      * `isVerb` refuses to read a word as a verb when the corpus's own case says
      * it is a name — that is what keeps "Ken Burns" and "Patriot Games". On a
      * storyline of two or three members the evidence it wants is nearly free,
-     * and free in one shape especially: a press release that quotes its own
-     * Title Case headline inside its body. So the OVERRIDE (not the grounding
-     * gate beside it) asks for two members' word.
+     * and free in one shape especially — see `minMembers` in
+     * headline-tokens.ts. So the OVERRIDE (not the grounding test) counts
+     * members, and this pins the bar at two.
      */
 
     it("refuses a verb a press release capitalized in its own body", () => {

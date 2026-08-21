@@ -78,20 +78,6 @@ const MIN_SHARED_TOKENS = 2;
  *       form, so `homer` entering the lexicon stops "Andrea Cline Obituary -
  *       Homer Glen, IL" being peeled and the town survives into the tokens.
  *
- * Version 7's backlog is ONE article of 28,294 distinct titles — that is the
- * measured delta, not an estimate — so its repair is step 1 alone. Step 2 is
- * a rounding error on three tokens' df and step 3 is not payable: `--restart`
- * discards the label inventory, which is the thing version 7 was made to
- * improve. It is versioned anyway because the rule above is what keeps a
- * materialized derivation honest, and a row nobody counted is the failure it
- * exists to prevent.
- *
- * A LEXICON change reaching the tokenizer at all is the coupling version 6
- * introduced and did not say out loud: the peel decides what a title's last
- * segment is partly by asking the ADR-0006 lexicon whether it states
- * something. Anything touching verb-lexicon.ts therefore has to be diffed
- * against the archive's titles before it can claim to be label-only.
- *
  * `pnpm regroup --tokens-only` is not the whole repair for 6, because that
  * version changed `story_tokens` rather than only `title_tokens`. Three steps,
  * in order, and each one's absence is silent:
@@ -105,6 +91,21 @@ const MIN_SHARED_TOKENS = 2;
  *      replayed. `--restart` mints new UUIDs and discards the label inventory
  *      with them; the cloud is empty until a label campaign runs, and the
  *      timeline is unaffected.
+ *
+ * **Version 7 pays step 1 only, deliberately.** Its backlog is ONE article of
+ * 28,294 distinct titles — the measured delta, not an estimate. Step 2 would be
+ * a rounding error on three tokens' df, and step 3 is not payable at all:
+ * `--restart` discards the label inventory, which is the thing version 7 was
+ * made to improve. It is versioned anyway because the rule above is what keeps
+ * a materialized derivation honest, and a row nobody counted is the failure the
+ * version exists to prevent. Say which steps a bump pays for; do not leave the
+ * chain looking whole when it was not run.
+ *
+ * A LEXICON change reaching the tokenizer at all is the coupling version 6
+ * introduced and did not say out loud: the peel decides what a title's last
+ * segment is partly by asking the ADR-0006 lexicon whether it states
+ * something. Anything touching verb-lexicon.ts therefore has to be diffed
+ * against the archive's titles before it can claim to be label-only.
  */
 export const TOKENIZER_VERSION = 7;
 

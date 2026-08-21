@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { PAST_FORMS, VERB_FORMS } from "./verb-lexicon.js";
 
@@ -67,6 +68,50 @@ describe("each lemma carries exactly one classification", () => {
   // The lists are module-private, so this is asserted where it is
   // observable: a lemma routed as PAST_ONLY must not have leaked an -s or
   // -ing form into VERB_FORMS.
+
+  it("has no lemma in two classification lists, whatever it derives to", () => {
+    // Read from the SOURCE, because the observable assertions below cannot see
+    // this. `ok` was added to FINITE_ONLY_LEMMAS while it still sat in
+    // PAST_ONLY_LEMMAS, and nothing caught it: both routes derive "oked", the
+    // Set dedupes, and only the finite list adds "oks", so every behavioural
+    // test still passed. A duplicate is a latent contradiction — the moment
+    // either list's routes change, the more permissive one silently wins — and
+    // the file's own rule ("the three are alternatives, one classification per
+    // lemma") is the thing worth pinning, not the symptom it happens to have.
+    //
+    // The three lists are module-private on purpose, so this parses them rather
+    // than exporting them for a test. `place` moving correctly and `ok` being
+    // copied in the same change is the argument for making the check mechanical
+    // rather than trusting a re-read.
+    const source = readFileSync(new URL("./verb-lexicon.ts", import.meta.url), "utf8");
+    const lemmas = (name: string): string[] => {
+      const block = new RegExp(`const ${name}[^=]*=\\s*\\[(.*?)\\] as const;`, "s").exec(source);
+      expect(block, `${name} not found — did it stop being an "as const" array?`).not.toBeNull();
+      return [...block![1]!.matchAll(/"([^"]+)"/g)].map((match) => match[1]!);
+    };
+
+    const classifications = {
+      VERB_LEMMAS: lemmas("VERB_LEMMAS"),
+      FINITE_ONLY_LEMMAS: lemmas("FINITE_ONLY_LEMMAS"),
+      PAST_ONLY_LEMMAS: lemmas("PAST_ONLY_LEMMAS"),
+    };
+
+    for (const [name, list] of Object.entries(classifications)) {
+      expect(list.length, `${name} parsed empty`).toBeGreaterThan(10);
+      const repeated = [...new Set(list.filter((l, i) => list.indexOf(l) !== i))];
+      expect(repeated, `${name} repeats a lemma`).toEqual([]);
+    }
+
+    const names = Object.keys(classifications) as Array<keyof typeof classifications>;
+    for (let a = 0; a < names.length; a += 1) {
+      for (let b = a + 1; b < names.length; b += 1) {
+        const shared = classifications[names[a]!].filter((lemma) =>
+          classifications[names[b]!].includes(lemma),
+        );
+        expect(shared, `${names[a]!} and ${names[b]!} share a lemma`).toEqual([]);
+      }
+    }
+  });
 
   it("gates the -s of jump without gating its -ing", () => {
     // "AGL Jumps" is a clause; "Ski Jumping" and "Show Jumping" are names.

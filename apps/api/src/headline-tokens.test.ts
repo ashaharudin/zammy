@@ -415,10 +415,10 @@ describe("properNounEvidence needs prose, not Title Case (issue #100)", () => {
   });
 });
 
-describe("properNounEvidence counts members, not sightings", () => {
+describe("properNounEvidence counts members, not occurrences", () => {
   // `minMembers` is what the bigram label's verb gate raises to overrule the
   // lexicon. It has to count MEMBERS: an article that repeats its own Title
-  // Case headline inside its description supplies two sightings of the same
+  // Case headline inside its description supplies two occurrences of the same
   // word from one source, which is exactly how `Gigabyte Brings` outranked a
   // `brings` the lexicon already held.
   const selfQuoting = [
@@ -456,7 +456,7 @@ describe("properNounEvidence counts members, not sightings", () => {
     expect(evidence("rose", 3)).toBe(false);
   });
 
-  it("still lets one lowercase sighting disqualify at any bar", () => {
+  it("still lets one lowercase occurrence disqualify at any bar", () => {
     // The lowercase test is corpus-wide and unchanged: a word seen lowercase
     // ANYWHERE is not a name, however many members capitalize it.
     const evidence = properNounEvidence([

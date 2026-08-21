@@ -216,7 +216,7 @@ const PAST_ONLY_LEMMAS = [
   "judge", "kick", "lack", "land", "last", "launch", "lead", "lift", "limit",
   "link", "list", "live", "load", "lock", "look", "love", "manage", "mark",
   "match", "matter", "mean", "measure", "mind", "miss", "mix", "monitor",
-  "move", "murder", "name", "note", "notice", "object", "offer", "ok", "open",
+  "move", "murder", "name", "note", "notice", "object", "offer", "open",
   "operate", "order", "pass", "pause", "pay", "pick", "plan", "play", "pledge",
   "point", "pour", "pray", "praise", "present", "press", "protest", "prove",
   "pull", "purchase", "push", "question", "quote", "raise", "rally", "record",

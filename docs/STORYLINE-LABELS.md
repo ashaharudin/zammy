@@ -356,7 +356,7 @@ the sentence split glues that Title Case run onto the prose sentence after it,
 and one article supplies both the mid-segment capital and the lowercase word
 that makes the segment count as prose.
 
-So `properNounEvidence` now counts MEMBERS rather than sightings, and the
+So `properNounEvidence` now counts MEMBERS rather than occurrences, and the
 bigram label reads it at two bars. The grounding gate keeps the old one: it
 asks "is either word a name?", where a wrong refusal costs a real label
 outright. The verb gate asks for two members, because there a wrong `true`

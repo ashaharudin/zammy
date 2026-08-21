@@ -298,7 +298,7 @@ export function trimWordPunctuation(token: string): string {
  * glues it to the prose that follows, and one article has both capitalized
  * `brings` and a lowercase word to prove the segment is prose — so a verb the
  * lexicon holds is promoted to a name on one article's self-quotation.
- * Counting MEMBERS rather than sightings is what separates that from
+ * Counting MEMBERS rather than occurrences is what separates that from
  * corroboration; an article echoing itself is one source. Defaults to 1, which
  * is every existing caller: the grounding test the bigram label and the
  * label-agreement merge run wants the cheap answer, because there refusing
