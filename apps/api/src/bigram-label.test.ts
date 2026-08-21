@@ -209,6 +209,27 @@ describe("bigramLabel", () => {
   });
 
   describe("the bare-verb-lemma gate (issue #100)", () => {
+    it("gates a past participle the deriver used to misspell (agreed)", () => {
+      // The other half of the "agree deal" story issue #100 filed. The bare
+      // and -s/-ing forms of "agree" were gated, but `participles` built the
+      // past as "agreeed", so "agreed" itself was in no set at all and this
+      // corpus yielded "Kelowna Agreed" — a clause wearing a name's clothes.
+      // Nothing else here earns proper-noun evidence, so the right answer is
+      // no label: ADR-0011's "prefer none to a misleading one".
+      expect(
+        bigramLabel([
+          article(
+            "Kelowna agreed a new deal",
+            "The terms were agreed in Kelowna on Tuesday.",
+          ),
+          article(
+            "Terms agreed, Kelowna confirms",
+            "Kelowna said the terms were agreed overnight.",
+          ),
+        ]),
+      ).toBe(null);
+    });
+
     it("gates a bare verb lemma beside a name, not only its -s/-ing forms", () => {
       // "urge" (bare) is ungated by the -s/-ing-only lexicon before this fix:
       // "urges"/"urging" were caught, but the bare form beside a name was not.

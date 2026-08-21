@@ -39,12 +39,13 @@
 const VERB_LEMMAS = [
   // saying, claiming, arguing — the largest class in headlines
   "accept", "accuse", "acknowledge", "admit", "allege", "argue", "assert",
-  "assure", "clarify", "complain", "concede", "condemn", "confess", "confirm",
-  "criticize", "decry", "declare", "denounce", "deny", "describe", "disclose",
-  "discuss", "dismiss", "explain", "express", "hail", "highlight", "insist",
-  "mention", "mock", "mull", "predict", "pretend", "propose", "recommend",
-  "reflect", "refuse", "reiterate", "reject", "represent", "respond", "reveal",
-  "slam", "suggest", "suppose", "testify", "threaten", "tout", "urge", "vow",
+  "assure", "blame", "clarify", "complain", "concede", "condemn", "confess",
+  "confirm", "criticize", "decry", "declare", "denounce", "deny", "describe",
+  "disclose", "discuss", "dismiss", "explain", "express", "hail", "highlight",
+  "insist", "mention", "mock", "mull", "predict", "pretend", "propose",
+  "recommend", "reflect", "refuse", "reiterate", "reject", "represent",
+  "respond", "reveal", "slam", "suggest", "suppose", "testify", "threaten",
+  "tout", "urge", "vow",
   // deciding, allowing, requiring
   "achieve", "adopt", "advise", "agree", "allow", "appoint", "approve",
   "authorize", "choose", "decide", "deserve", "determine", "elect", "enable",
@@ -54,35 +55,36 @@ const VERB_LEMMAS = [
   "promote", "quit", "require", "resolve", "select", "settle", "submit",
   // motion and change of state
   "advance", "arrive", "ascend", "become", "begin", "climb", "come", "depart",
-  "descend", "disappear", "emerge", "escalate", "escape", "expand", "explode",
-  "flee", "float", "fly", "follow", "go", "grow", "halt", "happen", "leave",
-  "lean", "leap", "melt", "migrate", "occur", "proceed", "remain", "resume",
-  "revive", "rise", "shrink", "sink", "slide", "slip", "stay", "strengthen",
-  "swim", "tighten", "topple", "undergo", "vanish", "weaken", "worsen",
+  "descend", "die", "disappear", "emerge", "escalate", "escape", "expand",
+  "explode", "flee", "float", "fly", "follow", "go", "grow", "halt", "happen",
+  "leave", "lean", "leap", "melt", "migrate", "occur", "proceed",
+  "remain", "resume", "revive", "rise", "shrink", "sink", "slide", "slip",
+  "stay", "strengthen", "swim", "tighten", "topple", "undergo", "vanish",
+  "weaken", "worsen",
   // acting on someone or something
-  "abandon", "attend", "attract", "avoid", "await", "betray", "capture",
-  "carry", "celebrate", "collect", "combine", "compel", "confront", "connect",
-  "consider", "consult", "contain", "continue", "contribute", "convict",
-  "convince", "create", "crush", "defend", "defy", "deliver", "deploy",
-  "deport", "destroy", "detain", "develop", "devote", "disrupt", "dissolve",
-  "distribute", "divide", "dominate", "donate", "downplay", "earn", "educate",
-  "eliminate", "embrace", "employ", "enhance", "enter", "erase", "establish",
-  "evacuate", "examine", "exceed", "exclude", "execute", "exploit", "explore",
-  "expose", "extend", "gather", "generate", "give", "govern", "grab", "greet",
-  "hurt", "identify", "ignore", "illustrate", "impose", "impress", "improve",
-  "include", "inherit", "initiate", "injure", "insert", "inspect", "inspire",
-  "install", "interrupt", "intervene", "introduce", "invade", "invent",
-  "investigate", "invite", "involve", "isolate", "join", "knock", "lend",
-  "locate", "lose", "maintain", "marry", "modify", "navigate", "neglect",
-  "negotiate", "obtain", "occupy", "offend", "organize", "overcome",
-  "overturn", "prepare", "preserve", "produce", "prosecute", "protect",
-  "provide", "publish", "punish", "pursue", "reach", "rebuild", "receive",
-  "recognize", "recover", "reduce", "remove", "renew", "repeat", "replace",
-  "rescue", "restore", "restrict", "retain", "reverse", "revise", "satisfy",
-  "save", "scare", "scramble", "secure", "seek", "seize", "sell", "send",
-  "separate", "serve", "solve", "steal", "sue", "suffer", "surround",
-  "survive", "suspend", "sustain", "terminate", "transform", "translate",
-  "undermine", "unveil", "vie", "violate", "welcome",
+  "abandon", "attend", "attract", "avoid", "await", "beat", "betray", "bring",
+  "capture", "carry", "celebrate", "collect", "combine", "compel", "confront",
+  "connect", "consider", "consult", "contain", "continue", "contribute",
+  "convict", "convince", "create", "crush", "defend", "defy", "deliver",
+  "deploy", "deport", "destroy", "detain", "develop", "devote", "disrupt",
+  "dissolve", "distribute", "divide", "dominate", "donate", "downplay", "earn",
+  "educate", "eliminate", "embrace", "employ", "enhance", "enter", "erase",
+  "establish", "evacuate", "examine", "exceed", "exclude", "execute",
+  "exploit", "explore", "expose", "extend", "gather", "generate", "give",
+  "govern", "grab", "greet", "hurt", "identify", "ignore", "illustrate",
+  "impose", "impress", "improve", "include", "inherit", "initiate", "injure",
+  "insert", "inspect", "inspire", "install", "interrupt", "intervene",
+  "introduce", "invade", "invent", "investigate", "invite", "involve",
+  "isolate", "join", "knock", "lend", "locate", "lose", "maintain", "marry",
+  "modify", "navigate", "neglect", "negotiate", "obtain", "occupy", "offend",
+  "organize", "overcome", "overturn", "prepare", "preserve", "produce",
+  "prosecute", "protect", "provide", "publish", "punish", "pursue", "reach",
+  "rebuild", "receive", "recognize", "recover", "reduce", "remove", "renew",
+  "repeat", "replace", "rescue", "restore", "restrict", "retain", "reverse",
+  "revise", "rip", "satisfy", "save", "scare", "scramble", "secure", "seek",
+  "seize", "sell", "send", "separate", "serve", "solve", "steal", "sue",
+  "suffer", "surround", "survive", "suspend", "sustain", "terminate",
+  "transform", "translate", "undermine", "unveil", "vie", "violate", "welcome",
   // mental states, perception, stance
   "apologize", "appear", "assume", "believe", "belong", "calculate", "compare",
   "compete", "comply", "conclude", "consist", "cooperate", "cope", "dare",
@@ -123,13 +125,13 @@ const VERB_LEMMAS = [
 const BARE_NOUN_LEMMAS: ReadonlySet<(typeof VERB_LEMMAS)[number]> = new Set<
   (typeof VERB_LEMMAS)[number]
 >([
-  "advance", "capture", "climb", "combine", "convict", "crush", "divide",
-  "elect", "escape", "exploit", "express", "float", "fly", "grab", "hail",
-  "halt", "highlight", "lean", "leap", "leave", "mock", "neglect", "permit",
-  "preserve", "produce", "reach", "rebuild", "recall", "refuse", "rescue",
-  "resume", "reveal", "reverse", "rise", "save", "scare", "secure", "select",
-  "sink", "slam", "slide", "slip", "stay", "vow", "wait", "wake", "welcome",
-  "wonder",
+  "advance", "blame", "capture", "climb", "combine", "convict", "crush",
+  "divide", "elect", "escape", "exploit", "express", "float", "fly", "grab",
+  "hail", "halt", "highlight", "lean", "leap", "leave", "mock",
+  "neglect", "permit", "preserve", "produce", "reach", "rebuild", "recall",
+  "refuse", "rescue", "resume", "reveal", "reverse", "rip", "rise", "save",
+  "scare", "secure", "select", "sink", "slam", "slide", "slip", "stay", "vow",
+  "wait", "wake", "welcome", "wonder",
 ]);
 
 /** VERB_LEMMAS minus the ones whose bare form is a noun. */
@@ -139,10 +141,18 @@ const BARE_VERBAL_LEMMAS = VERB_LEMMAS.filter((lemma) => !BARE_NOUN_LEMMAS.has(l
  * Only the -ing has nominalized: a WARNING, a HEARING, the SPENDING, a
  * BUILDING, a MEETING. The -s form of each is still purely verbal ("Trump
  * warns", "court hears"), so these fire on -s and -ed but never on -ing.
+ *
+ * `jump` sat in PAST_ONLY_LEMMAS until a live "AGL Jumps" label showed the -s
+ * reading the list down there assumed. Both readings are real — "ski jumps"
+ * is a plural noun and "AGL jumps" is a clause — but the sports noun is the
+ * rarer of the two in headlines, and the -ING is where the nominalization
+ * really sits ("show jumping", "ski jumping", "base jumping"). So it belongs
+ * here, gated on -s and -ed with its -ing left alone, and NOT in two lists at
+ * once: the three are alternatives, one classification per lemma.
  */
 const FINITE_ONLY_LEMMAS = [
-  "build", "ease", "heal", "hear", "hire", "kill", "learn", "meet", "plead",
-  "shoot", "spend", "warn",
+  "build", "ease", "heal", "hear", "hire", "jump", "kill", "learn", "meet",
+  "plead", "shoot", "spend", "warn",
 ] as const;
 
 /**
@@ -160,7 +170,7 @@ const PAST_ONLY_LEMMAS = [
   "fold", "force", "form", "fund", "gain", "grant", "guarantee", "guide",
   "hand", "handle", "hang", "harm", "head", "help", "hide", "hit", "hold",
   "hope", "host", "hunt", "import", "increase", "influence", "invest", "issue",
-  "judge", "jump", "kick", "lack", "land", "last", "launch", "lead", "lift",
+  "judge", "kick", "lack", "land", "last", "launch", "lead", "lift",
   "limit", "link", "list", "live", "load", "lock", "look", "love", "manage",
   "mark", "match", "matter", "mean", "measure", "mind", "miss", "mix",
   "monitor", "move", "murder", "name", "note", "notice", "object", "offer",
@@ -188,18 +198,19 @@ const PAST_ONLY_LEMMAS = [
  * "born", which in practice reaches us inside names and fixed phrases.
  */
 const IRREGULAR_PAST = [
-  "arose", "arisen", "awoke", "became", "began", "begun", "bent", "blew",
-  "blown", "bought", "bred", "brought", "built", "burnt", "came", "caught",
-  "chose", "chosen", "clung", "crept", "dealt", "drawn", "drew", "driven",
-  "drove", "dug", "fallen", "fell", "fled", "flew", "flown", "forgave",
-  "forgot", "forgotten", "fought", "froze", "frozen", "gave", "given", "grew",
-  "grown", "heard", "held", "hid", "hidden", "hung", "kept", "knelt", "knew",
-  "laid", "lain", "lay", "leapt", "led", "left", "lent", "lost", "meant",
-  "met", "overcame", "overtook", "paid", "rang", "ridden", "rode", "risen",
-  "rose", "rung", "sang", "sank", "sat", "sold", "sought", "spent", "spoke",
-  "spoken", "stole", "stolen", "stood", "struck", "stuck", "sung", "sunk",
-  "swept", "swore", "sworn", "taught", "threw", "thrown", "tore", "torn",
-  "underwent", "withdrawn", "withdrew", "wore", "worn", "written", "wrote",
+  "arose", "arisen", "awoke", "beaten", "became", "began", "begun", "bent",
+  "blew", "blown", "bought", "bred", "brought", "built", "burnt", "came",
+  "caught", "chose", "chosen", "clung", "crept", "dealt", "drawn", "drew",
+  "driven", "drove", "dug", "fallen", "fell", "fled", "flew", "flown",
+  "forgave", "forgot", "forgotten", "fought", "froze", "frozen", "gave",
+  "given", "grew", "grown", "heard", "held", "hid", "hidden", "hung", "kept",
+  "knelt", "knew", "laid", "lain", "lay", "leapt", "led", "left", "lent",
+  "lost", "meant", "met", "overcame", "overtook", "paid", "rang", "ridden",
+  "rode", "risen", "rose", "rung", "sang", "sank", "sat", "sold", "sought",
+  "spent", "spoke", "spoken", "stole", "stolen", "stood", "struck", "stuck",
+  "sung", "sunk", "swept", "swore", "sworn", "taught", "threw", "thrown",
+  "tore", "torn", "underwent", "withdrawn", "withdrew", "wore", "worn",
+  "written", "wrote",
 ] as const;
 
 /** -s / -es / -ies. */
@@ -215,8 +226,26 @@ function thirdPerson(lemma: string): string[] {
  * lemmas get BOTH spellings and the one that is not a word simply never
  * matches a token. Over-generating here is safe in a way that under-generating
  * is not: every form produced is still verb-shaped.
+ *
+ * The two -Ve branches are not over-generation, though. They are spelling
+ * rules the bare `-e` branch gets WRONG, and a misspelled form gates nothing:
+ *
+ *   -ie  the i becomes y before -ing — "die" → "dying", "vie" → "vying", not
+ *        "diing"/"viing".
+ *   -ee  the e is KEPT before -ing, and the past adds only a d — "agree" →
+ *        "agreeing"/"agreed", not "agreeing"/"agreeed".
+ *
+ * The -ee case is the one issue #100 named ("PAST_FORMS holds `agreeed`, not
+ * `agreed`"). It cost three lemmas their past route entirely: `agree` and
+ * `disagree`, and `guarantee`, which is PAST_ONLY and so had no other.
  */
 function participles(lemma: string): { ing: string[]; ed: string[] } {
+  if (lemma.endsWith("ie")) {
+    return { ing: [`${lemma.slice(0, -2)}ying`], ed: [`${lemma}d`] };
+  }
+  if (lemma.endsWith("ee")) {
+    return { ing: [`${lemma}ing`], ed: [`${lemma}d`] };
+  }
   if (lemma.endsWith("e") && !/[eoy]e$/.test(lemma)) {
     return { ing: [`${lemma.slice(0, -1)}ing`], ed: [`${lemma}d`] };
   }
