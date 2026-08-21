@@ -50,6 +50,13 @@ import { readJudgedStorylines } from "./storyline-judged.js";
  *   pnpm measure:storyline-coherence --size=2 --per-set=88
  *   pnpm measure:storyline-coherence --report        # matrix only, no calls
  *
+ * The transcript records the raw reply beside the verdict (`Row.raw`), so a
+ * change to `readCoherenceReply` can be re-scored over a past run by replaying
+ * the stored text — no model calls, no quota. That is not a substitute for a
+ * rerun after the PROMPT changes, since different text is a different question;
+ * a reader change is not, and before `raw` existed the two were
+ * indistinguishable and both cost a full day of free-tier ceiling.
+ *
  * `--size=N` restricts to storylines of exactly N groups; 2 is where formation
  * is unambiguous and where the failure was reported. `--model=` overrides the
  * configured model, which is how a run continues on a sibling model's quota
@@ -85,6 +92,17 @@ interface Row {
   oldLabel: string | null;
   verdict: "incoherent" | "named" | "unusable";
   detail: string;
+  /**
+   * The reply the verdict was read FROM, so a later `readCoherenceReply` can be
+   * re-scored against this run without asking the model again.
+   *
+   * Recording only the verdict cost a real rerun: the reader changed twice on
+   * 2026-08-21, and the 2026-08-18 matrix could not be corrected offline because
+   * every `named` and `incoherent` row had already discarded its text.
+   * `--report` reads this when present, and rows written before it existed have
+   * it absent.
+   */
+  raw?: string | null;
 }
 
 /** What has already been asked. Only usable answers count as done. */
@@ -187,6 +205,7 @@ try {
         set: storyline.set,
         groups: storyline.groups,
         oldLabel: storyline.label,
+        raw: result.ok ? result.text : null,
         verdict: reply.kind,
         detail:
           reply.kind === "named"

@@ -55,12 +55,41 @@ import { validateLabel, type LabelMember } from "./storyline-label.js";
  */
 
 /**
- * The sentinel. Upper case and unpunctuated so it cannot collide with a label:
- * `validateLabel` caps a label at five words and this is four, but it also
- * requires a word GROUNDED in the coverage, and no storyline's vocabulary
- * contains "NOT ONE STORY".
+ * The sentinel. Upper case and unpunctuated so a model can echo it exactly.
+ *
+ * It does NOT thereby fail to collide with a label, and an earlier version of
+ * this comment claimed it did. `validateLabel` caps a label at five words and
+ * this is three, but its proper-noun clause is enforced as GROUNDING — one
+ * capitalized word of the label appearing in the coverage — and `story` is not
+ * a stopword. Any storyline whose titles or descriptions say "story" or
+ * "stories" therefore grounds this phrase, and a reader that validated before
+ * testing for a decline would hand the caller a storyline named
+ * "NOT ONE STORY", from the model that had just refused it. That is why
+ * `readCoherenceReply` tests the declines FIRST.
  */
 export const INCOHERENT_SENTINEL = "NOT ONE STORY";
+
+/**
+ * How a model refuses: the sentinel it was asked for, and the paraphrases it
+ * uses instead. Tested before `validateLabel`, anchored at the START of the
+ * reply.
+ *
+ * Every entry is clause-shaped — an opening no 2-to-5-word proper-noun label
+ * can have. That property is what makes it safe to test these before the
+ * contract, so the list may only grow on a phrase SEEN refusing an actual pile,
+ * never on a guess at what a refusal "might" sound like: a false `incoherent`
+ * is durable, because `storyline_formation_refusals` never re-offers the pair.
+ *
+ * Issue #98 suggested `NO SINGLE STORY` and `UNRELATED` too. Both are withheld:
+ * neither has been seen in a reply, and `UNRELATED` is a bare word a real label
+ * can open with — `Unrelated Films Festival` is a grounded, contract-passing
+ * label — which is exactly the collision this list must not carry.
+ */
+const DECLINE_PREFIXES = [
+  INCOHERENT_SENTINEL,
+  "NONE OF THESE",
+  "THESE ARE NOT",
+] as const;
 
 export type CoherenceReply =
   | { kind: "named"; label: string }
@@ -96,6 +125,11 @@ export type CoherenceReply =
  * word for searches: it is model-facing prose, not repo vocabulary, and editing
  * it — even a synonym — makes every recorded number describe a different
  * prompt. Change it only alongside a rerun of `measure:storyline-coherence`.
+ *
+ * `readCoherenceReply` is under the same rule, for the same reason: the matrix
+ * is what the READER made of the replies, so reclassifying one restates both
+ * cells. Both changes on 2026-08-21 did, and docs/STORYLINE-LINKING.md records
+ * the rerun they are owed rather than pretending the old numbers survived.
  */
 export function buildCoherencePrompt(members: readonly LabelMember[]): string {
   const coverage = members
@@ -136,12 +170,28 @@ export function buildCoherencePrompt(members: readonly LabelMember[]): string {
 /**
  * Read one reply. `raw` is null when the model was not reached at all.
  *
- * The sentinel is matched on a PREFIX of the normalized text, not on equality:
- * a model that answers "NOT ONE STORY — these are two different shootings" has
- * decided, and holding it to punctuation would score its decision as a
- * formatting failure and keep the pile. The reverse mistake is the one to fear,
- * so the match is anchored at the start: a label may not contain the sentence
- * anywhere and be read as a refusal.
+ * A DECLINE is tested FIRST, and both halves of `DECLINE_PREFIXES` are there
+ * for a different reason:
+ *
+ *  - The **sentinel**, because it is groundable. A model that obeys the prompt
+ *    exactly writes `NOT ONE STORY`, which is three words and clears
+ *    `validateLabel` whenever the coverage says "story" anywhere — so
+ *    validating first names the storyline after the refusal. See
+ *    `INCOHERENT_SENTINEL`.
+ *  - The **paraphrases**, because a model that declines in its own words
+ *    ("None of these headlines cover the same news story") fails
+ *    `validateLabel` — it is a sentence — and reading that failure as a
+ *    formatting problem is exactly backwards: it hands the pile to the caller
+ *    that a KEEP-by-default fallback exists to protect, right after the model
+ *    refused it. That was issue #98.
+ *
+ * Testing declines before the contract is only safe because every entry is
+ * clause-shaped; `DECLINE_PREFIXES` carries that constraint and the two
+ * suggested phrases withheld to keep it.
+ *
+ * The match is anchored at the START of the (unwrapped, upper-cased) reply,
+ * never a substring search: a label may not contain one of these phrases
+ * somewhere inside it and be read as a refusal.
  */
 export function readCoherenceReply(
   raw: string | null,
@@ -150,14 +200,16 @@ export function readCoherenceReply(
   if (raw === null) return { kind: "unusable", reason: "no reply" };
 
   const normalized = raw.replaceAll(/\s+/g, " ").trim();
-  // Strip the wrapping a model puts AROUND an answer before testing the
-  // sentinel — the same packaging `validateLabel` strips — or a quoted refusal
+  // Strip the wrapping a model puts AROUND an answer before testing for a
+  // decline — the same packaging `validateLabel` strips — or a quoted refusal
   // reads as a contract failure and the pile stands.
   const unwrapped = normalized.replace(/^[\s"'`*_]+/u, "");
-  if (unwrapped.toUpperCase().startsWith(INCOHERENT_SENTINEL)) return { kind: "incoherent" };
+  const upper = unwrapped.toUpperCase();
+  if (DECLINE_PREFIXES.some((prefix) => upper.startsWith(prefix))) return { kind: "incoherent" };
 
   const label = validateLabel(raw, members);
   if (label !== null) return { kind: "named", label };
+
   return { kind: "unusable", reason: `contract: ${normalized.slice(0, 80)}` };
 }
 
