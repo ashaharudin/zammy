@@ -1,7 +1,46 @@
 # Deployment plan — Oracle Cloud Infrastructure (OCI)
 
-**Status: pre-flight complete (2026-08-18); nothing provisioned yet beyond the two OCIR
-repositories.** The tenancy was not empty — an unrelated `oci-dev-tools` quickstart stack collided
+> # ⛔ ARCHIVAL — NOT IN USE
+>
+> **Decided 2026-08-21: zammy will not be deployed on OCI. The blocker is free Ampere capacity,
+> and it is not a waiting game we can win.** Every `VM.Standard.A1.Flex` create failed, and the
+> read-only capacity report confirmed why: no capacity at 1/12, 2/12, 1/6 or 4/24, none in any of
+> the three fault domains checked individually, and none for the free x86 fallback
+> `VM.Standard.E2.1.Micro`. There is exactly one availability domain in `ca-toronto-1` and exactly
+> one subscribed region, which is the home region — and Always Free exists only in the home region.
+> So size, fault domain, AD and region were all exhausted at once: no configuration change left to
+> try, and no second place to try it (§9.1).
+>
+> **What actually rules it out is not the outage but the shape of it.** A day of automated polling
+> (every 30 minutes, then re-checked by hand on consecutive days) never once saw `AVAILABLE`. Free
+> Ampere windows are typically minutes wide, so winning one needs a continuous poller racing every
+> other free-tier account in the region — a permanent piece of infrastructure whose whole purpose
+> is to acquire the host we then depend on. That is a bad foundation for an environment meant to
+> be boring, and it was the deciding argument rather than the capacity reading itself.
+>
+> **The plan below is preserved deliberately, and is still worth reading.** It is accurate as
+> research and most of it is not OCI-specific: the phase structure, the pre-flight discipline, the
+> secrets/vault model, migrations as a discrete deploy step, `/healthz` vs `/readyz`, deploy by
+> digest. §8's rule — nothing OCI-specific may leak into application code — is what makes this
+> abandonment cheap, and it held: **no application code is being reverted.** The provider layer
+> was always the target-specific part.
+>
+> **Do not action anything below as a live instruction**, in particular §7's phases, §9's open
+> questions, and the Customer Secret Key / state-migration task (moot — nothing further will be
+> applied). What was already provisioned is being **left in place, not torn down**, because it sits
+> inside Always Free and costs nothing; see "Left standing" at the end of this banner.
+>
+> **Left standing in the tenancy** (2026-08-21, deliberate): the VCN, three subnets, three route
+> tables, three gateways, four NSGs, the state bucket, the vault and its key, the budget + spend
+> alert, and the Flexible load balancer with both listeners and the real `zammy.info` certificate
+> installed — 45 resources in `deploy/terraform`'s local state. All within Always Free. The budget
+> alert at >0 is worth keeping precisely because these are now unwatched.
+>
+> **Superseded by:** no replacement target chosen yet. AWS (ARCHITECTURE 4.1) remains the standing
+> alternative and is a Terraform rewrite, not an application rewrite.
+
+**Historic status (superseded — see the banner above): pre-flight complete (2026-08-18); nothing
+provisioned yet beyond the two OCIR repositories.** The tenancy was not empty — an unrelated `oci-dev-tools` quickstart stack collided
 with §3 (resolved, §9.5). The first environment is **staging on the Always Free tier** (§7);
 production follows. OCI is the deployment target; AWS (ARCHITECTURE 4.1) remains an option, not an
 immediate goal. Nothing here may leak OCI-specific behaviour into application code, so the AWS

@@ -1,6 +1,6 @@
 # Zammy — Architectural Proposal
 
-**Status:** Phases 0–5f and 7a built (§13); OCI deploy in progress · **Scope:** the design; decisions live in ADRs
+**Status:** Phases 0–5f and 7a built (§13); **no deploy target — OCI abandoned 2026-08-21** (DEPLOYMENT-OCI is archival) · **Scope:** the design; decisions live in ADRs
 
 A news aggregator that takes keywords from a user and returns a time-ordered timeline of headlines
 and topic summaries, backed by [Currents API](https://currentsapi.services/en/docs/).
@@ -907,7 +907,10 @@ The worker also handles coverage-span merging and a daily `/available/*` refresh
 **The nightly chores are not in this process.** Retention (§7.5) and the storyline lifecycle pass
 (ADR-0011) are one-shot runs of `apps/api/src/chores-cli.ts` — `pnpm chores retention`, `pnpm chores
 storylines` — on the platform's scheduler: systemd timers at 03:00/04:00 UTC on the staging VM
-(`deploy/staging/cloud-init.yaml`), OCI Resource Scheduler in production (DEPLOYMENT-OCI §1). They
+(`deploy/staging/cloud-init.yaml`), OCI Resource Scheduler in production (DEPLOYMENT-OCI §1) —
+both **archival**, as no OCI staging VM was ever created and OCI was abandoned 2026-08-21; whatever
+target replaces it needs its own scheduler for these, and the requirement is the pass, not the
+mechanism. They
 were a BullMQ job scheduler registered at boot, which bought exactly-once across N instances from
 Redis-shared state; the runner buys it from a Postgres advisory lock, one key per pass.
 
@@ -1342,7 +1345,7 @@ apart see the same cloud.
 | 5c | **Article grouping (§14.3):** `group_id` / `group_published` / `title_tokens` on `articles`, write-time grouping after the collapse, the keyset moved onto the group axis, per-topic representative from the source-authority list, the "related" disclosure. | ✅ |
 | 5e | **Storylines:** day-clustered slots (ADR-0009), then the persistent arc that superseded them (ADR-0011) — `storylines` / `storyline_days`, the linker, bridges and auto-merge, the timeline paged over storyline-days. Migration 0012 dropped the day-bounded model and its flag. | ✅ |
 | 5f | **Storyline labels (ADR-0011, "Labels"):** Gemini-generated names at promotion, merge and drift, bigram fallback when no key is set, plus `label_source` so a relabel campaign can resume. | ✅ |
-| 6 | ~~**AWS deploy**~~ — superseded. Target moved to **OCI** on 2026-08-14; plan and phase table in [DEPLOYMENT-OCI.md](DEPLOYMENT-OCI.md). CI publishes arm64 to OCIR; staging has a cloud-init bootstrap. | 🔄 in progress |
+| 6 | **Deploy** — no target. AWS superseded by **OCI** on 2026-08-14; OCI then **abandoned 2026-08-21** for lack of free Ampere capacity, [DEPLOYMENT-OCI.md](DEPLOYMENT-OCI.md) now archival. Phase 1 network/vault/LB was applied and is left standing inside Always Free; the staging VM never landed. No application code was reverted. | ⛔ blocked — needs a new target |
 | 7a | **Second provider behind the client interface:** `@zammy/news-client` core + per-provider adapters + the composite, GNews added, `provider` column on `articles`/`sightings` (§5.6, ADR-0012). | ✅ |
 | 7b | Topic summaries into `topics.summary`. The schema reserves the columns (§7.2); nothing generates them. | ⬜ not started |
 
