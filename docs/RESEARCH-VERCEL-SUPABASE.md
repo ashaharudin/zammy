@@ -106,7 +106,8 @@ Four ways out, in increasing order of how much they change:
    quota guards; costs a scheduler tick of latency. **Needs Pro** — Hobby cron is once per day
    (§6), which is not a queue drain, it is a nightly batch. Supabase Cron can hit it every minute on
    the free plan instead (§6).
-3. **Replace the transport with an HTTP push queue** (Upstash QStash, or Vercel Workflows). The
+3. **Replace the transport with a push queue** — **Vercel Queues** (public beta: first-party,
+   at-least-once, idempotency keys, and consumers with no public URL) or Upstash QStash. The
    queue calls a route per job; retries, backoff and dedup move to the vendor. This is the idiomatic
    serverless answer and it is where `IngestQueue`'s seam already points — the interface is narrow
    (`enqueueSegment`, `enqueueSample`, the pending set) and §9.1 already says "moving it out is a
@@ -324,6 +325,12 @@ now has:
   session-scoped lock may ask for it.
 - [`migrate-cli`](../packages/storage/src/migrate-cli.ts) prefers `DATABASE_SESSION_URL` and prints
   which URL and which TLS mode it used; the chore runner logs the same before it takes its lock.
+
+**Plan A is now scoped in full** in [VERCEL-ALL-IN-SCOPE.md](VERCEL-ALL-IN-SCOPE.md): 7–12 days,
+with Vercel Queues' push mode turning §3's option 3 from a redesign into an implementation of the
+existing interface — and one item this document missed, namely that §5.4's shared quota snapshot is
+*designed and not built* ([quota.ts:104](../packages/news-client/src/quota.ts)), which elastic
+instances make non-optional.
 
 **For the api, Plan B is the recommendation** — a persistent host for `api` + consumer + Redis,
 because that is the shape §4.1 designed for and it keeps at-least-once delivery, the bounded
