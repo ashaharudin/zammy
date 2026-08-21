@@ -125,8 +125,9 @@ region, and winning a minutes-wide window would have meant running a permanent p
 the host we then depend on. [docs/DEPLOYMENT-OCI.md](docs/DEPLOYMENT-OCI.md) is preserved as
 **archival** — accurate as research, not to be actioned.
 
-AWS (ECS Fargate + RDS + ElastiCache, [ARCHITECTURE 4.1](docs/ARCHITECTURE.md)) is the standing
-alternative, still not an immediate goal. **The abandonment cost no application code**, which was
+AWS (ECS Fargate + RDS + ElastiCache,
+[ARCHITECTURE 4.1](docs/ARCHITECTURE.md#41-deployment-target--none-chosen-aws-is-the-standing-plan-local-development-on-docker-compose))
+is the standing plan, still not an immediate goal. **The abandonment cost no application code**, which was
 the point of the discipline: one image, environment variables as the only difference between
 environments, migrations as a discrete deploy step, `/healthz` for liveness, `/readyz` for routing.
 A new target is a Terraform rewrite, not an application rewrite.
@@ -134,6 +135,10 @@ A new target is a Terraform rewrite, not an application rewrite.
 Docker Compose here is the local development environment and was never a deploy target; the same
 image runs everywhere, differing only by environment variables. Infrastructure-as-code exists only
 as the frozen OCI Phase 1 in `deploy/terraform` (see its README before touching it).
+
+**Do not run `terraform destroy` there.** 37 resources are still standing in the OCI tenancy on
+purpose — they sit inside Always Free, cost nothing, and tearing them down is not what walking away
+from the target requires.
 
 ## Conventions worth knowing
 

@@ -1,6 +1,11 @@
 #cloud-config
-# Staging VM bootstrap — OCI Always Free Ampere A1 (arm64), Ubuntu 24.04.
-# See docs/DEPLOYMENT-OCI.md §7 "Staging first, on Always Free".
+# ⛔ ARCHIVAL — NOT IN USE. This bootstrapped a staging VM on OCI Always Free
+# Ampere A1 (arm64), Ubuntu 24.04, for a target abandoned 2026-08-21: no such VM
+# was ever created, because the capacity never appeared. Do not run it against a
+# new target without rereading it — the package set and the arm64 assumption are
+# both OCI-shaped. Kept because the bootstrap DISCIPLINE below is not: no
+# secrets in user_data, deploy by digest, a 0600 env template an operator fills
+# in once. See docs/DEPLOYMENT-OCI.md §7 (archival).
 #
 # Pass this as the Instance's user_data at creation. It runs ONCE, on first boot,
 # and leaves a box that can run the stack but is not yet running it: no image has

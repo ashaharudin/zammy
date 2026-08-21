@@ -91,8 +91,9 @@ try {
 
 /**
  * JSON lines, because the chores log through `log.info`/`log.warn` with a
- * structured object and this output is read by a log pipeline (OCI Logging,
- * `docker compose logs`) rather than by a person at a prompt — which is the
+ * structured object and this output is read by a log pipeline (`docker compose
+ * logs`, or whatever the deploy target collects stdout with) rather than by a
+ * person at a prompt — which is the
  * difference between this and the operator CLIs' human-readable printing.
  */
 const emit = (level: string, obj: object, msg: string): void => {

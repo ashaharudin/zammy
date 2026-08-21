@@ -32,9 +32,13 @@ import {
  *
  * ── Where the schedule lives ─────────────────────────────────────────────────
  * Outside this process. These passes run as one-shot invocations of
- * `chores-cli.ts` under whatever the platform's scheduler is — a systemd timer
- * on the staging VM, Railway's cron, OCI Resource Scheduler in production
- * (DEPLOYMENT-OCI §1). They used to be a BullMQ job scheduler inside the api,
+ * `chores-cli.ts` under whatever the platform's scheduler is — a systemd timer,
+ * a platform cron, a managed scheduler. There is no deployment target as of
+ * 2026-08-21, so no scheduler is wired anywhere: whatever target comes next owes
+ * these two passes one, and the requirement is that the pass runs, never the
+ * mechanism. (DEPLOYMENT-OCI §1 described one; it is archival.)
+ *
+ * They used to be a BullMQ job scheduler inside the api,
  * which bought exactly-once across N instances from Redis-shared state; the
  * runner now buys the same property from a Postgres advisory lock, and the
  * platform owns the clock.
