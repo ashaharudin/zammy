@@ -1,5 +1,5 @@
 import { singular } from "./grouping.js";
-import { contentTokens, isVerb, properNounEvidence } from "./headline-tokens.js";
+import { contentTokenPairs, isVerb, properNounEvidence } from "./headline-tokens.js";
 
 /**
  * The BIGRAM LABEL: two adjacent words lifted from a storyline's headlines,
@@ -11,9 +11,16 @@ import { contentTokens, isVerb, properNounEvidence } from "./headline-tokens.js"
  * adequately and names an EVENT not at all, which is the whole reason the
  * model exists. This is the floor, not the target.
  *
- * The one gate it keeps is ADR-0006's verb lexicon. A phrase that STATES
- * something rather than NAMES something — "chiefs urge", "trump slipped" — is
- * a headline with its middle removed, and a label has to be a name.
+ * Two gates survive from the contract the model itself has to pass. ADR-0006's
+ * verb lexicon: a phrase that STATES something rather than NAMES something —
+ * "chiefs urge", "trump slipped" — is a headline with its middle removed, and
+ * a label has to be a name. And proper-noun evidence (issue #100): a bigram is
+ * grounded in the coverage by construction — every word in it came FROM the
+ * coverage — so the shape-and-vocabulary contract cannot tell "fort hood" from
+ * "second quarter" or "eps estimate", both of which pass it just as cleanly.
+ * Requiring a word with `properNounEvidence`, not mere Title Case, is the one
+ * clause of the real contract a two-word phrase can actually be held to.
+ * Refusing is cheap here: a null label still renders (ADR-0011, "Labels").
  *
  * It began as ADR-0010's read-time storyline PHRASE, which was a search: two
  * words the whole slot shared, clicked to open a topic on them. The
@@ -44,11 +51,12 @@ export interface PhraseArticle {
  *
  * What is kept is everything that was about QUALITY rather than about the
  * promise: the verb gate (ADR-0006 — a label that states something is a
- * headline with its middle removed), the singular fold, and support-weighted
- * ranking. Candidates now come from every member's title, not one headline's,
- * because there is no card for this phrase to sit beside; it names the whole
- * storyline. Title Case on the way out, because this one is display, not a
- * query.
+ * headline with its middle removed), the proper-noun requirement (issue #100
+ * — a bigram grounded in the coverage is not thereby a name), the singular
+ * fold, and support-weighted ranking. Candidates now come from every member's
+ * title, not one headline's, because there is no card for this phrase to sit
+ * beside; it names the whole storyline. Title Case on the way out, because
+ * this one is display, not a query.
  *
  * It cannot meet the label bar and is not meant to. ADR-0011 measured that:
  * "police chiefs" names a story adequately and names an EVENT not at all, which
@@ -73,26 +81,35 @@ function bestBigram(
   // Adjacency per article, so a phrase can be ranked by how much of the
   // coverage actually says it — the description gets its say, as it does in
   // the storyline layer itself, but its tokens never run on from the title's.
+  // Pairs, not tokens: a bigram must have stood next to its two words in the
+  // SOURCE text, not merely have survived the stopword filter beside them
+  // (issue #100 — "royals reportedly agree to a deal" is not "agree deal").
   const sequences = corpus.map((article) => [
-    contentTokens(article.title),
-    contentTokens(article.description ?? ""),
+    contentTokenPairs(article.title),
+    contentTokenPairs(article.description ?? ""),
   ]);
 
   let best: { phrase: string; support: number; position: number } | null = null;
   for (const index of candidateTitles) {
-    const title = sequences[index]?.[0];
-    if (!title) continue;
-    for (let i = 0; i + 1 < title.length; i += 1) {
-      const first = title[i]!;
-      const second = title[i + 1]!;
+    const titlePairs = sequences[index]?.[0];
+    if (!titlePairs) continue;
+    for (let position = 0; position < titlePairs.length; position += 1) {
+      const [first, second] = titlePairs[position]!;
       // `sanction sanctions` folds to one word repeated: a phrase, but not two.
       if (singular(first) === singular(second)) continue;
       if (isVerb(first, 0, isProperNoun) || isVerb(second, 1, isProperNoun)) continue;
+      // A bigram lifted from the coverage is grounded in it by construction —
+      // that proves nothing. Require the corpus's own case evidence that one
+      // of its words is a NAME, or the phrase is a vocabulary pair ("second
+      // quarter", "eps estimate") wearing the same shape as one (issue #100).
+      if (!isProperNoun(first) && !isProperNoun(second)) continue;
 
       const candidate = {
         phrase: `${first} ${second}`,
-        support: sequences.filter((texts) => texts.some((text) => hasAdjacent(text, first, second))).length,
-        position: i,
+        support: sequences.filter((texts) =>
+          texts.some((pairs) => hasAdjacentPair(pairs, first, second)),
+        ).length,
+        position,
       };
       if (best === null || beats(candidate, best)) best = candidate;
     }
@@ -121,12 +138,13 @@ function beats(
   if (candidate.position !== incumbent.position) return candidate.position < incumbent.position;
   return candidate.phrase < incumbent.phrase;
 }
-/** Does this token sequence run `first` straight into `second`, under the fold? */
-function hasAdjacent(tokens: readonly string[], first: string, second: string): boolean {
+/** Does one of these true-adjacency pairs run `first` straight into `second`, under the fold? */
+function hasAdjacentPair(
+  pairs: readonly (readonly [string, string])[],
+  first: string,
+  second: string,
+): boolean {
   const a = singular(first);
   const b = singular(second);
-  for (let i = 0; i + 1 < tokens.length; i += 1) {
-    if (singular(tokens[i]!) === a && singular(tokens[i + 1]!) === b) return true;
-  }
-  return false;
+  return pairs.some(([x, y]) => singular(x) === a && singular(y) === b);
 }

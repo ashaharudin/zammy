@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { RawSighting, normalizeSightings } from "@zammy/currents-client";
-import { contentTokens, isVerb, properNounEvidence } from "./headline-tokens.js";
+import { contentTokenPairs, contentTokens, isVerb, properNounEvidence } from "./headline-tokens.js";
 import { singular } from "./grouping.js";
 
 /**
@@ -221,6 +221,23 @@ describe("the propriety gate (ADR-0006)", () => {
     expect(emitted.has("new york")).toBe(false);
     expect(emitted.has("new")).toBe(false);
     expect(emitted.has("york")).toBe(true);
+  });
+});
+
+describe("contentTokenPairs does not fabricate adjacency (issue #100)", () => {
+  it("drops a pair a stopword actually separated", () => {
+    // `contentTokens` filters "reportedly", "to" and "a" out, so a caller
+    // walking THAT array for adjacent pairs would read "agree deal" as a
+    // bigram — but "agree" and "deal" never stood next to each other; "to a"
+    // sat between them.
+    const pairs = contentTokenPairs("Royals reportedly agree to a deal");
+    expect(pairs).not.toContainEqual(["agree", "deal"]);
+  });
+
+  it("keeps a pair that really is adjacent", () => {
+    const pairs = contentTokenPairs("Royals agree deal, Padres celebrate");
+    expect(pairs).toContainEqual(["deal", "padres"]);
+    expect(pairs).toContainEqual(["padres", "celebrate"]);
   });
 });
 
