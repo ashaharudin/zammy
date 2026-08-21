@@ -15,7 +15,8 @@
 > re-apply rather than a decision to re-litigate.
 >
 > Treat every OCI-specific tier limit, shape and service claim below as **frozen at 2026-08-18**
-> and unverified since.
+> and unverified since. In particular, do not action §7's could-not-verify list: those checks
+> needed a live tenancy, and there is no longer one to run them against.
 
 **Question:** could zammy use the Oracle Cloud Always Free database offerings — Oracle Autonomous
 Database, MySQL HeatWave, and/or Oracle NoSQL Database Cloud Service — instead of self-hosted

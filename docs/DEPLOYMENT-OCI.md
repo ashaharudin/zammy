@@ -1,6 +1,6 @@
 # Deployment plan — Oracle Cloud Infrastructure (OCI)
 
-> # ⛔ ARCHIVAL — NOT IN USE
+> ## ⛔ ARCHIVAL — NOT IN USE
 >
 > **Decided 2026-08-21: zammy will not be deployed on OCI. The blocker is free Ampere capacity,
 > and it is not a waiting game we can win.** Every `VM.Standard.A1.Flex` create failed, and the
@@ -33,8 +33,9 @@
 > **Left standing in the tenancy** (2026-08-21, deliberate): the VCN, three subnets, three route
 > tables, three gateways, four NSGs, the state bucket, the vault and its key, the budget + spend
 > alert, and the Flexible load balancer with both listeners and the real `zammy.info` certificate
-> installed — 45 resources in `deploy/terraform`'s local state. All within Always Free. The budget
-> alert at >0 is worth keeping precisely because these are now unwatched.
+> installed — **37 managed resources** in `deploy/terraform`'s local state (45 state entries; the
+> other 8 are data sources, which own nothing). All within Always Free. The budget alert at >0 is
+> worth keeping precisely because these are now unwatched.
 >
 > **Superseded by:** no replacement target chosen yet. AWS (ARCHITECTURE 4.1) remains the standing
 > alternative and is a Terraform rewrite, not an application rewrite.

@@ -12,6 +12,10 @@
 > Kept because the scope itself is the useful artefact: it is a worked inventory of what this
 > schema and query surface would cost to move off Postgres onto a MySQL-family engine. That price
 > tag applies to any such move, whoever hosts it.
+>
+> **Do not action anything below**, in particular §2's six redesigns, §3's replacement of all 15
+> migrations, and §5's driver and config swap. Nothing here is scheduled work; it is a price
+> quotation for a move nobody has decided to make.
 
 Companion to [RESEARCH-OCI-ALWAYS-FREE-DATABASES.md](RESEARCH-OCI-ALWAYS-FREE-DATABASES.md), which
 concluded HeatWave is *viable as a database but not recommended for this project*. This document

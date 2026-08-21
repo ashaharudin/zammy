@@ -7,10 +7,10 @@
 > [DEPLOYMENT-OCI](../../docs/DEPLOYMENT-OCI.md) for the capacity evidence).** Nothing further will
 > be applied, planned or migrated here.
 >
-> **The 45 resources it already created are being left in place, not destroyed** — they sit inside
-> Always Free and cost nothing. Do **not** run `terraform destroy` on the assumption that walking
-> away requires it; and do not run `apply`, since the only thing left to add is the staging VM that
-> has no capacity to land on.
+> **The 37 managed resources in its state are being left in place, not destroyed** — they sit
+> inside Always Free and cost nothing (45 state entries; the other 8 are data sources). Do **not**
+> run `terraform destroy` on the assumption that walking away requires it; and do not run `apply`,
+> since the only thing left to add is the staging VM that has no capacity to land on.
 >
 > Two tasks referenced below are **moot** and should not be started: generating the Customer Secret
 > Key, and migrating state to the bucket. State stays local. `retry-capacity.sh` is likewise dead —
@@ -20,11 +20,15 @@ The VCN, subnets, gateways, route tables, NSGs and state bucket of
 [DEPLOYMENT-OCI](../../docs/DEPLOYMENT-OCI.md) §3 and §7, plus adoption of the vault, its key and
 the budget that already exist.
 
-Nothing applied yet. `tofu plan` against the real tenancy reports **3 to import, 25 to add, 2 to
-change, 0 to destroy** — the two changes are freeform tags moving from
-`managed-by: manual-pending-terraform` to `terraform`.
+**Applied, and then extended.** The paragraph that used to stand here said "nothing applied yet"
+and quoted a plan of *3 to import, 25 to add* — true when it was written, stale from the first
+apply onward. Local state (serial 69) now holds **37 managed resources**: the network of §3, the
+state bucket, the adopted vault, key and budget, and the load balancer added 2026-08-20.
 
-## Running it
+## Running it — don't
+
+Kept for the record, not as instructions: the target is abandoned, so neither `plan` nor `apply`
+has anything to accomplish here. What a run would have been:
 
 ```
 cp terraform.tfvars.example terraform.tfvars   # fill in compartment_ocid
@@ -32,7 +36,7 @@ terraform init
 terraform plan
 ```
 
-Credentials come from `~/.oci/config`, the same profile the `oci` CLI uses.
+Credentials came from `~/.oci/config`, the same profile the `oci` CLI uses.
 
 ## Bootstrap order, and why state is local at first
 
@@ -70,9 +74,12 @@ version-agnostic storage and has no such limit.
 
 ## Not in this slice
 
-The staging VM, the load balancer, its listener and the certificate. Phase 1 as §7 defines it is
-the network and the state bucket; the compute on top is the next slice, where the Ampere capacity
-question (§9.1) and `TRUSTED_PROXY_HOPS=1` (§9.2) first bite.
+**The staging VM, and only that.** Phase 1 as §7 defines it is the network and the state bucket,
+and this section also named the load balancer, its listener and the certificate — all three landed
+on 2026-08-20 (`loadbalancer.tf`: the LB, two listeners, a backend set, a rule set and the real
+`zammy.info` certificate) and are in state. The VM is what never arrived, on the Ampere capacity
+question (§9.1) that ended the target; `TRUSTED_PROXY_HOPS=1` (§9.2) was configured for the LB that
+now stands in front of nothing.
 
 ## The lock file
 
@@ -80,7 +87,7 @@ question (§9.1) and `TRUSTED_PROXY_HOPS=1` (§9.2) first bite.
 delete it to "fix" a provider problem: unpinned, the next `init` can bring a different version and
 a plan that differs from the one reviewed.
 
-Verified with Terraform v1.15.8: `fmt` clean, `validate` passes, `plan` against the live tenancy
-reports the numbers above with **0 to destroy** and no attribute removals. An earlier revision was
+Verified with Terraform v1.15.8 at the time of the last apply: `fmt` clean, `validate` passes,
+`plan` against the live tenancy reported **0 to destroy** and no attribute removals. An earlier revision was
 checked with OpenTofu as a stand-in; both agree — reassuring, but the committed lock is the reason
 to trust it.

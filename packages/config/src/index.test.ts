@@ -23,7 +23,7 @@ describe("loadConfig", () => {
   // Redis being unreachable is survivable and stays that way (health.ts reports
   // `degraded` and keeps serving). A URL that can never resolve to a Redis at
   // all is not survivable — it is a deploy defect that otherwise hides behind an
-  // HTTP 200 forever (DEPLOYMENT-OCI §2.4).
+  // HTTP 200 forever (DEPLOYMENT-OCI §2.4, archival).
   it("accepts both redis:// and rediss:// URLs", () => {
     for (const url of [
       "redis://localhost:6379",

@@ -151,9 +151,15 @@ request *and* generates the TS type), **Kysely** for typed SQL — deliberately 
 ([ADR-0003](adr/0003-kysely-and-hand-written-sql-instead-of-an-orm.md)). Migrations use Kysely's
 `Migrator` and run as a discrete deploy step, never on boot.
 
-### 4.1 Deployment target — AWS; local development on Docker Compose
+### 4.1 Deployment target — none chosen; AWS is the standing plan; local development on Docker Compose
 
-**Decided.** The deployment target is **AWS**. Docker Compose is the **local development
+**Open, as of 2026-08-21.** There is no deployment target: OCI was abandoned on free-Ampere
+capacity (DEPLOYMENT-OCI, archival) and nothing has replaced it. **AWS as described below is the
+standing plan, not a decision** — it was chosen once, superseded by OCI, and is now simply the
+best-documented candidate. It remains a Terraform rewrite rather than an application rewrite, which
+is the property that survived both changes of target.
+
+Docker Compose is the **local development
 environment**, not a deployment target — built as a faithful rehearsal of production. The **same
 images** run in both, differing only by environment variables. No code path may branch on
 environment; the moment one does, local development stops predicting production.
@@ -910,9 +916,11 @@ storylines` — on the platform's scheduler: systemd timers at 03:00/04:00 UTC o
 (`deploy/staging/cloud-init.yaml`), OCI Resource Scheduler in production (DEPLOYMENT-OCI §1) —
 both **archival**, as no OCI staging VM was ever created and OCI was abandoned 2026-08-21; whatever
 target replaces it needs its own scheduler for these, and the requirement is the pass, not the
-mechanism. They
-were a BullMQ job scheduler registered at boot, which bought exactly-once across N instances from
-Redis-shared state; the runner buys it from a Postgres advisory lock, one key per pass.
+mechanism.
+
+The chores were once a BullMQ job scheduler registered at boot, which bought exactly-once across N
+instances from Redis-shared state; the runner buys it from a Postgres advisory lock, one key per
+pass.
 
 Two consequences, neither of them visible in the api's logs. A schedule the app registers cannot be
 forgotten, while an external one is absent until someone configures it — so if nothing schedules the
@@ -1328,8 +1336,12 @@ apart see the same cloud.
 ## 13. Delivery phases
 
 > **Two numbering schemes exist in this repo, and they are unrelated.** These are the *product*
-> phases; the OCI rollout has its own 0–5 in [DEPLOYMENT-OCI §7](DEPLOYMENT-OCI.md). "Phase 3" means
-> the Query Service here and "first end-to-end deploy" there. Say which you mean.
+> phases; the OCI rollout had its own 0–5 in [DEPLOYMENT-OCI §7](DEPLOYMENT-OCI.md) (archival since
+> 2026-08-21). "Phase 3" means the Query Service here and "first end-to-end deploy" there. Say
+> which you mean.
+>
+> Status column: ✅ built · 🔄 in progress · ⬜ not started · ⛔ blocked on something outside the
+> phase.
 
 | Phase | Deliverable | Status |
 | --- | --- | --- |
@@ -1402,7 +1414,8 @@ pure-recency ordering — along with the click that ran a label verbatim and ret
 ([0014](adr/0014-the-cloud-ranks-by-volume-and-searches-what-the-coverage-says.md)), which brings
 0008's decay and its half-life back with it.
 
-Resolved by decision: **deployment target is AWS** (§4.1) — correcting the earlier claim that the
+Resolved by decision, then reopened: the target was AWS, then OCI, and since 2026-08-21 there is
+**no target** (§4.1). What the original decision corrected still stands — the earlier claim that the
 deployment choice would not affect the architecture. It does, in two places: the job queue needs
 at-least-once delivery rather than a naive `LPOP`, and the breadth-sample trigger needs a lock a
 single host would not need. Fargate keeping CPU allocated settles scale-to-zero, so the consumer
