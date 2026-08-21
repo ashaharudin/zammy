@@ -147,6 +147,35 @@ describe("readCoherenceReply", () => {
     expect(reply).toMatchObject({ kind: "unusable" });
     if (reply.kind === "unusable") expect(reply.reason).toContain("I cannot determine this");
   });
+
+  it("reads a paraphrased refusal as a refusal, not a contract failure", () => {
+    // The live bug: a model that declines in its own words still fails
+    // validateLabel (it's a sentence), and reading that failure as `unusable`
+    // forms the very pile the model just refused.
+    expect(
+      readCoherenceReply("None of these headlines cover the same news story.", members),
+    ).toEqual({ kind: "incoherent" });
+    expect(readCoherenceReply("These are not one story.", members)).toEqual({
+      kind: "incoherent",
+    });
+  });
+
+  it("prefers a valid, grounded label over a decline word it happens to start with", () => {
+    // validateLabel runs FIRST: a usable, grounded label wins even when its
+    // first word also appears in DECLINE_PREFIXES.
+    const unrelatedMembers: LabelMember[] = [
+      {
+        title: "Unrelated Films Festival opens in Cannes",
+        description: "The Unrelated Films Festival kicked off its tenth edition.",
+        published: new Date("2026-08-04T10:00:00Z"),
+      },
+    ];
+
+    expect(readCoherenceReply("Unrelated Films Festival", unrelatedMembers)).toEqual({
+      kind: "named",
+      label: "Unrelated Films Festival",
+    });
+  });
 });
 
 describe("mayRefuseFormation", () => {

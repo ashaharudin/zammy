@@ -62,6 +62,21 @@ import { validateLabel, type LabelMember } from "./storyline-label.js";
  */
 export const INCOHERENT_SENTINEL = "NOT ONE STORY";
 
+/**
+ * The paraphrases a model actually uses instead of the sentinel. Narrow and
+ * start-anchored on purpose: a false `incoherent` is durable —
+ * `storyline_formation_refusals` never re-offers the pair — so this list may
+ * only grow on a phrase seen refusing an actual pile, never on a guess at what
+ * a refusal "might" sound like.
+ */
+const DECLINE_PREFIXES = [
+  INCOHERENT_SENTINEL,
+  "NONE OF THESE",
+  "THESE ARE NOT",
+  "NO SINGLE STORY",
+  "UNRELATED",
+];
+
 export type CoherenceReply =
   | { kind: "named"; label: string }
   | { kind: "incoherent" }
@@ -136,12 +151,19 @@ export function buildCoherencePrompt(members: readonly LabelMember[]): string {
 /**
  * Read one reply. `raw` is null when the model was not reached at all.
  *
- * The sentinel is matched on a PREFIX of the normalized text, not on equality:
- * a model that answers "NOT ONE STORY — these are two different shootings" has
- * decided, and holding it to punctuation would score its decision as a
- * formatting failure and keep the pile. The reverse mistake is the one to fear,
- * so the match is anchored at the start: a label may not contain the sentence
- * anywhere and be read as a refusal.
+ * `validateLabel` runs FIRST: if the reply is a usable label, that is what it
+ * is, full stop, regardless of what words it happens to contain. Only once the
+ * contract has failed does this test the reply against `DECLINE_PREFIXES` — a
+ * model that paraphrases the sentinel ("None of these headlines cover the same
+ * news story") still fails `validateLabel` (it is a sentence, or its words
+ * aren't grounded in the coverage), and without this second check that failure
+ * reads as a formatting problem rather than the refusal it is, which is exactly
+ * backwards: it hands the pile to the caller that a KEEP-by-default fallback is
+ * supposed to protect against, right after the model refused it.
+ *
+ * The match, sentinel included, is anchored at the START of the (unwrapped,
+ * upper-cased) reply, never a substring search: a label may not contain one of
+ * these phrases anywhere and be read as a refusal.
  */
 export function readCoherenceReply(
   raw: string | null,
@@ -149,15 +171,17 @@ export function readCoherenceReply(
 ): CoherenceReply {
   if (raw === null) return { kind: "unusable", reason: "no reply" };
 
-  const normalized = raw.replaceAll(/\s+/g, " ").trim();
-  // Strip the wrapping a model puts AROUND an answer before testing the
-  // sentinel — the same packaging `validateLabel` strips — or a quoted refusal
-  // reads as a contract failure and the pile stands.
-  const unwrapped = normalized.replace(/^[\s"'`*_]+/u, "");
-  if (unwrapped.toUpperCase().startsWith(INCOHERENT_SENTINEL)) return { kind: "incoherent" };
-
   const label = validateLabel(raw, members);
   if (label !== null) return { kind: "named", label };
+
+  const normalized = raw.replaceAll(/\s+/g, " ").trim();
+  // Strip the wrapping a model puts AROUND an answer before testing for a
+  // decline — the same packaging `validateLabel` strips — or a quoted refusal
+  // reads as a contract failure and the pile stands.
+  const unwrapped = normalized.replace(/^[\s"'`*_]+/u, "");
+  const upper = unwrapped.toUpperCase();
+  if (DECLINE_PREFIXES.some((prefix) => upper.startsWith(prefix))) return { kind: "incoherent" };
+
   return { kind: "unusable", reason: `contract: ${normalized.slice(0, 80)}` };
 }
 
