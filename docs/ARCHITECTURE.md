@@ -1020,7 +1020,7 @@ linker turns "forty articles arrived" into "this arc gained two groups". The sam
 and nothing else — it computes nothing the cloud reads — and an article ingested without tokens can
 never join a group, so it can never reach a storyline the cloud can name.
 
-**Nor can a storyline with no name.** The cloud query requires a label (§10.4), and the labeller
+**Nor can a storyline with no name.** The cloud query requires a label (§10.3), and the labeller
 runs on a tail the linker starts and drops, because on the timeline's sync-fill path a ~8s model
 call cannot sit inside the §6.3 deadline. The sample job is the exception that must hold that tail:
 nothing is waiting on it, and returning before the names exist publishes a cloud missing everything

@@ -571,7 +571,7 @@ describe("one word per label (§10.2)", () => {
   }, 30_000);
 });
 
-describe("the sample waits for the names it started (§10.4)", () => {
+describe("the sample waits for the names it started (§10.1)", () => {
   /**
    * Loosened exactly as `grouping-service.test.ts` loosens it, and for the same
    * reason: a test database holds a dozen articles, where every shared token is

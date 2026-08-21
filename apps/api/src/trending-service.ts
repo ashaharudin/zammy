@@ -271,7 +271,15 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
     // un-groupable itself and invisible as a candidate to every article
     // ingested after it.
     await groupCreatedArticles(
-      { ...groupingDepsFor(deps), labelTail: (task) => labelTails.push(task) },
+      // The tail is caught HERE rather than at the await below; see that
+      // comment for why the two windows are different.
+      groupingDepsFor(deps, (task) =>
+        labelTails.push(
+          task.catch((error: unknown) => {
+            deps.log?.warn({ err: error }, "label tail rejected during breadth sample");
+          }),
+        ),
+      ),
       ingested.createdArticles,
     );
     if (result.isLastPage) break;
@@ -297,17 +305,38 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
   // triggers the sample is the one guaranteed to see it.
   //
   // `allSettled`, not `all`: the tail's contract is that it never throws for a
-  // model reason (it falls back), and if it ever broke that we still want the
-  // invalidation below — an unexpected rejection here would otherwise skip it
-  // AND fail a job whose ingest already succeeded, re-fetching a page on retry.
+  // model reason, and today it keeps it — `labelLinkedStorylines` wraps each
+  // storyline, and `resolvePendingFormations` wraps each outcome, so no known
+  // path rejects. This does not lean on that. If one ever does we still want
+  // the invalidation below: skipping it would leave a stale cloud cached AND
+  // fail a job whose ingest already succeeded, re-fetching a page on retry.
+  //
+  // Which is also why the `.catch` above is attached where the tail is PUSHED
+  // rather than here. This await is after the page loop, so a page-1 rejection
+  // arriving while page 2 ingests would be unhandled — process-ending by
+  // default — before `allSettled` is ever reached. `allSettled` covers the
+  // window from here on; the push-time catch covers the window before it.
   await Promise.allSettled(labelTails);
 
-  // Next poll must see the storylines this sample grew AND named, not a
-  // pre-sample entry. Awaiting above is what makes this line true rather than
-  // merely early; it also keeps the job in the pending set while the labeller
-  // runs, so a read landing mid-sample sees `in_progress` and declines to cache
-  // a half-named cloud — a backstop, not the fix, since `pendingCount` prunes
-  // entries after STALE_PENDING_MS and a long label pass outlives that.
+  // Next poll must see the storylines this sample grew and the labeller reached,
+  // not a pre-sample entry. Awaiting above is what makes this line true rather
+  // than merely early; it also keeps the job in the pending set while the
+  // labeller runs, so a read landing mid-sample sees `in_progress` and declines
+  // to cache a half-named cloud — a backstop, not the fix, since `pendingCount`
+  // prunes entries after STALE_PENDING_MS and a long label pass outlives that.
+  //
+  // "Reached", not "named": waiting closes the gap between a promotion and its
+  // name, and nothing more. §10.3 also excludes a `label_source` of `bigram`,
+  // so a storyline the model declined and the extractor named stays out of the
+  // cloud however long this job waits, and with no `labeler` wired there is no
+  // tail to wait for and this clears exactly as it did before.
+  //
+  // The cost is a worker: `startConsumer` runs at concurrency 1, so the sample
+  // now holds the only consumer for the whole label pass (~3 minutes measured)
+  // and the segment jobs a reader polls on §6.5 queue behind it. That is the
+  // right trade while the cloud is the thing being fixed — a segment job is
+  // late, whereas the cloud was wrong for an hour — but it is the first thing
+  // to revisit if §6.5 latency regresses.
   try {
     await deps.redis.del(cacheKeyFor(deps, job.language));
   } catch {
