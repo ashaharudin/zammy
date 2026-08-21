@@ -308,6 +308,123 @@ pairs that DO clear that bar — `Rangers Beat` — are the clauses.
 Not re-measured against the live archive; same reasoning as above, this is a
 vocabulary change, not a new sweep.
 
+### The two holes still open behind it (2026-08-21)
+
+A `--labels-only` campaign after a full storyline rebuild left six live
+storylines on `label_source = 'bigram'`, and four of them still stated
+something: `Neto Homers`, `Gigabyte Brings`, `Brewers Place`, `Lufthansa
+Discover`. All four reproduce offline from the members' own titles and
+descriptions, and they split evenly across two different holes.
+
+**The lexicon, again — including its bare-form rule.** `homer` was absent
+outright. `place` was present and classified PAST_ONLY, on the sound reading
+that "places" is a plural noun and "a place" is a noun too. What both have in
+common is the shape that reading prices as unreachable: headline style puts a
+plural subject in front of the BARE verb, and in a headline a plural subject is
+a team. "Brewers place RHP Abner Uribe (forearm) on 15-day IL". "Albies and
+Riley homer, Braves beat Marlins 4-2". Neither predicate is inflected at all,
+so no -s, -ing or -ed route reaches it.
+
+Both are gated now, bare form included, on the same asymmetry `beat` and `die`
+were decided on: the nominal reading takes a numeral or an adjective in front
+of it, never a name, and a bigram needs proper-noun evidence to be a candidate
+at all — so the only pairs that clear that bar are the clauses. `place` MOVED
+to VERB_LEMMAS rather than being copied there; a lemma in two lists is two
+contradictory answers with the more permissive one silently winning.
+
+Sweeping the same archive for the same shape found 24 more lemmas missing and
+2 classified where their -s could not gate. Twenty-two are ordinary verbs the
+file simply lacked (`acquit`, `activate`, `add`, `chastise`, `confer`,
+`convey`, `deepen`, `demolish`, `disarm`, `fade`, `induct`, `intensify`,
+`laud`, `liken`, `misrepresent`, `neutralize`, `resurrect`, `revert`, `shrug`,
+`withdraw`, plus `near` and `overhaul` keeping their bare forms via
+`BARE_NOUN_LEMMAS` — "Near Bordeaux" heads 17 live labels and "an overhaul" is
+a plain noun). Three went to FINITE_ONLY_LEMMAS because the -ing is where they
+nominalize: `ask` ("an asking price"), `bake` ("baking soda"), `clear` ("a
+clearing"). And `ok` is there for its -s alone: "Senate OKs" and "ERC OKs" are
+a live headline idiom, `oks` is no kind of noun, and the bare form is an
+interjection before it is anything else.
+
+**The case override was nearly free.** `brings` and `discover` were both
+already in the lexicon. What admitted them is the guard that keeps "Ken Burns"
+and "Patriot Games": a word with `properNounEvidence` is never read as a verb,
+because corpus case outranks the lexicon. On a storyline of two or three
+members that evidence costs almost nothing, and it costs nothing at all in one
+shape — a press release quoting its own Title Case headline inside its body.
+"GIGABYTE Brings AORUS INFINITY to Gamescom 2026" reappears mid-description,
+the sentence split glues that Title Case run onto the prose sentence after it,
+and one article supplies both the mid-segment capital and the lowercase word
+that makes the segment count as prose.
+
+So `properNounEvidence` now counts MEMBERS rather than occurrences, and the
+bigram label reads it at two bars. The grounding gate keeps the old one: it
+asks "is either word a name?", where a wrong refusal costs a real label
+outright. The verb gate asks for two members, because there a wrong `true`
+admits a clause the lexicon had already caught. An article echoing itself is
+one source.
+
+Measured over 3,471 live multi-group storylines relabelled offline from their
+own coverage — no campaign was run; the four bad labels reproduce without
+spending model quota. Together the two changes move 43 labels and take yield
+from 89.2% to 88.9% (3,097 → 3,085 of 3,471):
+
+- **The lexicon: 30 labels, and all 30 of the old ones were clause-shaped.**
+  No name was lost. Ten are withdrawn outright and 20 are replaced, mostly by
+  a name from the same headline (`Hamas Disarms` → `Gaza Plan`, `Senate
+  Clears` → `Russia Sanctions`, `Gigabyte Brings` → `Aorus Infinity`).
+- **The override bar, 1 → 2 members: 13 labels.** Nine clauses refused
+  (`Gigabyte Brings`, `Jpmorgan Warns`, `Apple Wants`, `Market Wakes`,
+  `Paramount Mulling`, `Showrooms Coming`, `Bounce Fades`, `Erc Oks`, `Senate
+  Oks`), one improved (`Keeping Score` → `Aoc Woke`), two swapped on
+  storylines that are piles under either name (`Grand Slams` → null,
+  `Lufthansa Discover` → `Alaska Airlines`), and **one real name lost**:
+  `Flying Eagles` → `Eagles Cruise`. The team name was carried by a single
+  member, and `cruise` is a noun as often as a verb, so the lexicon cannot
+  catch what replaced it.
+
+Not three members. That bar costs `Justin Rose` — a golfer who survives today
+only because the override outranks `rose` in `IRREGULAR_PAST` — and buys
+nothing else: it is the only label that moves, and it moves to `Memphis
+Bucking`.
+
+`Lufthansa Discover` is the honest loss on the naming side rather than the
+mechanism's: "Discover Airline" really is the carrier's name and `discover`
+really is a VERB_LEMMAS entry, so the override was doing its job on one
+member's word. That storyline is a pile of two unrelated airline stories under
+either name.
+
+Still open, and deliberately: `Rangers Jacob`, from "Rangers' Jacob deGrom
+surpasses 2,000 K's …", which is not a verb-gate failure at all —
+`trimWordPunctuation` strips the possessive and leaves `rangers` sitting beside
+`jacob` in one token run, so the extractor cuts a person's name in half across
+a punctuation boundary the source text did write. Same shape as issue #100's
+comma finding, and a `tokenRuns` question rather than a lexicon one.
+
+It is left separate because it is not the same bug wearing a different hat, and
+the obvious fix may be wrong. A comma fabricates adjacency; a possessive
+asserts a relation, and severing the run would also stop "Trump's tariffs" from
+proposing `Trump Tariffs`. 2,224 texts in the archive write a possessive
+directly before a capitalized word, and 31 write "Trump's tariff" specifically
+against 54 for the bare "Trump tariff" — so the blast radius is wide and the
+good cases are real. What is actually wrong with `Rangers Jacob` is narrower
+than the punctuation: `jacob` is a FIRST name, and its bigram partner should
+have been `degrom`. That wants its own measurement, and possibly its own rule.
+
+`Francisco Lindor`, the sixth, is a well-shaped label on a storyline that is a
+pile of unrelated baseball games. That is formation, not naming.
+
+One thing this change found the hard way: a verb-lexicon edit is **not**
+label-only any more. `stripSourceAttribution` decides whether a title's
+trailing segment is the outlet's name partly by asking the same lexicon
+whether the segment states something, and `headlineTokens` peels before it
+tokenizes — so a new lemma can move the stored vocabulary. Diffed across all
+28,294 distinct titles in the archive, exactly one moves: `homer` stops "Andrea
+Cline Obituary - Homer Glen, IL" being peeled, and the town survives into the
+tokens (which is the better reading of that title anyway). `TOKENIZER_VERSION`
+goes to 7 for it, with the repair scoped in `grouping.ts` — one row's backlog
+does not buy a storyline restart. Anything touching verb-lexicon.ts from here
+needs that diff before it can call itself label-only.
+
 ## What is validated, and what is not
 
 `validateLabel` enforces three of the contract's four clauses:

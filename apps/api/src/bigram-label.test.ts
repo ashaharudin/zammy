@@ -414,4 +414,130 @@ describe("bigramLabel", () => {
       expect(bigramLabel(corpus as PhraseArticle[])).toBe(label);
     });
   });
+
+  describe("the verb gate's case override needs more than one member", () => {
+    /**
+     * `isVerb` refuses to read a word as a verb when the corpus's own case says
+     * it is a name — that is what keeps "Ken Burns" and "Patriot Games". On a
+     * storyline of two or three members the evidence it wants is nearly free,
+     * and free in one shape especially — see `minMembers` in
+     * headline-tokens.ts. So the OVERRIDE (not the grounding test) counts
+     * members, and this pins the bar at two.
+     */
+
+    it("refuses a verb a press release capitalized in its own body", () => {
+      // The real thing, trimmed. `brings` has been in the lexicon since the
+      // first gap fill, and `Gigabyte Brings` was live anyway: the release
+      // repeats its headline mid-description, the sentence split glues that
+      // Title Case run onto the prose sentence after it, and one article
+      // supplies both the mid-segment capital and the lowercase word that
+      // makes the segment count as prose.
+      const label = bigramLabel([
+        article(
+          "GIGABYTE Brings AORUS INFINITY to Gamescom 2026 with an Immersive Gaming Playground",
+          "TAIPEI, Aug. 2026 /PRNewswire/ -- GIGABYTE AORUS is heading to Gamescom under the AORUS INFINITY theme. GIGABYTE Brings AORUS INFINITY to Gamescom 2026 with an Immersive Gaming Playground The AORUS INFINITY Series delivers a high-performance build with a distinctive visual identity.",
+        ),
+        article(
+          "Can ANYBODY stop Arsenal from winning the Premier League again?",
+          "Adam Clery explores Arsenal's chances of retaining their title.",
+        ),
+        article(
+          "Pressure-free Weir targets Rogers Charity Classic breakthrough",
+          "Canadian golf icon says his game feels sharper heading into the Calgary tournament.",
+        ),
+      ]);
+      expect(label).not.toBe("Gigabyte Brings");
+      expect(label).toBe("Aorus Infinity");
+    });
+
+    it("still lets two members' case overrule the lexicon", () => {
+      // The other half of the trade, and what pins the bar at two rather than
+      // three: `rose` is in IRREGULAR_PAST, so a golfer's surname survives
+      // only by the override — and both members carry "Rose" mid-prose.
+      expect(
+        bigramLabel([
+          article(
+            "Justin Rose arrives in Memphis 'bucking the trend'",
+            "At 46 years old, the defending FedEx St. Jude Championship winner Justin Rose's game still looks as sharp as ever.",
+          ),
+          article(
+            "Defending St Jude champ Justin Rose, 46, still pushing to stay 'elite'",
+            "The Englishman arrives at the FedEx St Jude Championship as the defending champion.",
+          ),
+        ]),
+      ).toBe("Justin Rose");
+    });
+
+    it("leaves the GROUNDING gate on one member's evidence", () => {
+      // The two bars are deliberately different. Grounding asks "is either
+      // word a name?", where a wrong refusal costs the label outright, so it
+      // keeps the cheap answer: "Kelowna" is capitalized mid-prose in ONE
+      // member's description and that is still enough to ground the phrase.
+      expect(
+        bigramLabel([
+          article("Kelowna beekeepers count losses", "Beekeepers in Kelowna counted the cost."),
+          article("Beekeepers count losses", null),
+        ]),
+      ).toBe("Kelowna Beekeepers");
+    });
+  });
+
+  describe("the clause-shaped labels of 2026-08-21", () => {
+    // Four live storylines whose bigram label stated something instead of
+    // naming it. Two were lexicon gaps, two were the case override above.
+
+    it("does not name a storyline after a bare verb with a plural subject", () => {
+      // `Brewers Place`: "place" is the finite verb of "Brewers", and its own
+      // description says "placed" lowercase, so no case evidence was involved
+      // — the lexicon simply classified `place` as past-tense-only.
+      const label = bigramLabel([
+        article(
+          "Brewers place RHP Abner Uribe (forearm) on 15-day IL",
+          "LOS ANGLEES (AP) — The Milwaukee Brewers placed right-hander Abner Uribe on the 15-day injured list Friday due to a forearm flexor strain.",
+        ),
+        article(
+          "Royals' Maikel Garcia likely headed back to the IL with hamstring strain",
+          "KANSAS CITY, Mo. (AP) — Kansas City Royals third baseman Maikel Garcia is likely headed back to the injured list.",
+        ),
+      ]);
+      expect(label).not.toBe("Brewers Place");
+    });
+
+    it("does not name a storyline after a lowercase verb in its own headline", () => {
+      // `Neto Homers`: "homers" is lowercase in the title it came from, which
+      // is what rules the case override out and the lexicon in — `homer` was
+      // absent from every list.
+      const label = bigramLabel([
+        article(
+          "Neto homers in 5-hit, 7-RBI night to help the Angels rout the Astros 18-3",
+          "HOUSTON (AP) — Zach Neto was 5-for-6 with his 21st homer and a career-high seven RBIs and the Los Angeles Angels scored their most runs in three years to rout the Houston Astros 18-3 on Thursday night.",
+        ),
+        article(
+          "Angel Reese has stunning perfect shooting night in the Dream's 124-88 romp over the Sparks",
+          "LOS ANGELES (AP) — Angel Reese had a stunning perfect shooting night and the Atlanta Dream set a franchise record for points in a game.",
+        ),
+      ]);
+      expect(label).not.toBe("Neto Homers");
+    });
+
+    it("does not keep a verb one member capitalized inside a name", () => {
+      // `Lufthansa Discover` is the honest loss in this change: "Discover
+      // Airline" really is the carrier's name, and `discover` really is in
+      // VERB_LEMMAS, so the override was doing its job — on one member's word.
+      // The storyline is a pile of two unrelated airline stories either way,
+      // and a label naming one member is what it gets.
+      expect(
+        bigramLabel([
+          article(
+            "Lufthansa's Discover Airline says jet fuel shortage affects flights from Namibia to Europe",
+            "Lufthansa's Discover Airline said on Thursday that a temporary jet fuel shortage at Namibia's Windhoek airport was disrupting its flights to Europe.",
+          ),
+          article(
+            "Alaska Airlines launches 2 more nonstop intercontinental routes from Seattle",
+            "Alaska Airlines will offer new nonstop flights from Seattle to Europe, adding to its growing list of intercontinental destinations.",
+          ),
+        ]),
+      ).toBe("Alaska Airlines");
+    });
+  });
 });

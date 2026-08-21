@@ -290,6 +290,21 @@ export function trimWordPunctuation(token: string): string {
  * storyline phrase (`storyline-phrase.ts`) runs the verb gate below over a
  * corpus of one slot's members — the same evidence, a much smaller corpus.
  *
+ * `minMembers` is how a caller asks for MORE than one member's word. "At least
+ * one mid-sentence capital, never lowercase" is nearly free on a corpus of two
+ * or three articles, and it is free in exactly one shape: a press release that
+ * repeats its own Title Case headline inside its body. "GIGABYTE Brings AORUS
+ * INFINITY to Gamescom 2026" reappears mid-description, the sentence split
+ * glues it to the prose that follows, and one article has both capitalized
+ * `brings` and a lowercase word to prove the segment is prose — so a verb the
+ * lexicon holds is promoted to a name on one article's self-quotation.
+ * Counting MEMBERS rather than occurrences is what separates that from
+ * corroboration; an article echoing itself is one source. Defaults to 1, which
+ * is every existing caller: the grounding test the bigram label and the
+ * label-agreement merge run wants the cheap answer, because there refusing
+ * costs a real label outright. The bigram label's VERB gate is the one caller
+ * that asks for two, and `bigram-label.ts` records what that measured.
+ *
  * `fold` is for callers whose terms are not surface forms. Corpus tokens are
  * folded on the way into the sets and the term is folded when it is asked, so
  * both sides meet on one spelling. Without it a caller asking with singularized
@@ -303,11 +318,11 @@ export function trimWordPunctuation(token: string): string {
 export function properNounEvidence(
   corpus: readonly { title: string; description: string | null }[],
   fold: (token: string) => string = (token) => token,
-): (term: string) => boolean {
-  const capitalizedMidSentence = new Set<string>();
+): (term: string, minMembers?: number) => boolean {
+  const capitalizedMidSentence = new Map<string, Set<number>>();
   const seenLowercase = new Set<string>();
 
-  for (const article of corpus) {
+  for (const [member, article] of corpus.entries()) {
     for (const text of [stripSourceAttribution(article.title), article.description ?? ""]) {
       // Capitalization at a sentence start proves nothing, so split on
       // sentence-ish punctuation and ignore each segment's first token.
@@ -335,16 +350,19 @@ export function properNounEvidence(
           if (/^\p{Ll}/u.test(token)) {
             seenLowercase.add(folded);
           } else if (isProse && index > 0 && /^\p{Lu}/u.test(token)) {
-            capitalizedMidSentence.add(folded);
+            const members = capitalizedMidSentence.get(folded);
+            if (members) members.add(member);
+            else capitalizedMidSentence.set(folded, new Set([member]));
           }
         });
       }
     }
   }
 
-  return (term) => {
+  return (term, minMembers = 1) => {
     const folded = fold(term);
-    return capitalizedMidSentence.has(folded) && !seenLowercase.has(folded);
+    if (seenLowercase.has(folded)) return false;
+    return (capitalizedMidSentence.get(folded)?.size ?? 0) >= minMembers;
   };
 }
 
@@ -363,7 +381,10 @@ export function properNounEvidence(
  *
  *  - A word with proper-noun evidence is never read as a verb. Corpus case
  *    outranks the lexicon, so "Ken Burns" and "Patriot Games" survive on the
- *    same evidence that admitted them.
+ *    same evidence that admitted them. How MUCH evidence is the caller's to
+ *    decide — `isProperNoun` is injected, and the bigram label hands in a
+ *    stricter predicate here than it uses for grounding, because overruling
+ *    the lexicon is the expensive direction (see `properNounEvidence`).
  *  - A past participle counts only AFTER the first word. In front it is a
  *    modifier — "armed forces", "planned parenthood", "displaced families" —
  *    whereas nothing follows a name as a participle except a predicate.

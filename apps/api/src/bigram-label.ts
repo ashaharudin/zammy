@@ -117,6 +117,14 @@ function bestBigram(
   // `MAX_ATTRIBUTION_SEGMENTS` delimiters — the evidence gate would then judge
   // a shorter string than the pair extractor had read.
   const isProperNoun = properNounEvidence(corpus);
+  // The same evidence read at two bars, because the two gates below fail in
+  // opposite directions. GROUNDING asks "is either word a name?" and a wrong
+  // `false` there refuses a good label outright, so it takes the cheap answer.
+  // The VERB gate uses it to OVERRULE the lexicon, and a wrong `true` there
+  // admits the clause the lexicon had already caught — so it asks for more
+  // than one member's word (`VERB_OVERRIDE_MEMBERS`).
+  const isEstablishedName = (term: string): boolean =>
+    isProperNoun(term, VERB_OVERRIDE_MEMBERS);
   // Adjacency per article, so a phrase can be ranked by how much of the
   // coverage actually says it — the description gets its say, as it does in
   // the storyline layer itself, but its tokens never run on from the title's.
@@ -138,7 +146,8 @@ function bestBigram(
       const [first, second] = titlePairs[position]!;
       // `sanction sanctions` folds to one word repeated: a phrase, but not two.
       if (singular(first) === singular(second)) continue;
-      if (isVerb(first, 0, isProperNoun) || isVerb(second, 1, isProperNoun)) continue;
+      if (isVerb(first, 0, isEstablishedName)) continue;
+      if (isVerb(second, 1, isEstablishedName)) continue;
       // A bigram lifted from the coverage is grounded in it by construction —
       // that proves nothing. Require the corpus's own case evidence that one
       // of its words is a NAME, or the phrase is a vocabulary pair ("second
@@ -162,6 +171,33 @@ function bestBigram(
 
   return best?.phrase ?? null;
 }
+
+/**
+ * How many MEMBERS must show a word capitalized mid-prose before its case may
+ * overrule the verb lexicon.
+ *
+ * The override exists for "Ken Burns" and "Patriot Games" — real names the
+ * lexicon holds as verbs — and on a small storyline the evidence it wants is
+ * nearly free. `properNounEvidence`'s `minMembers` carries the shape that makes
+ * it free and why members are the unit; `Gigabyte Brings` is what it cost here.
+ * This constant only decides the bar.
+ *
+ * Two, measured over 3,471 live multi-group storylines (2026-08-21) relabelled
+ * offline from their own coverage. Raising the bar from one to two moves 13
+ * labels: it refuses nine clauses (`Gigabyte Brings`, `Jpmorgan Warns`, `Apple
+ * Wants`, `Market Wakes`, `Paramount Mulling`, `Showrooms Coming`, `Bounce
+ * Fades`, `Erc Oks`, `Senate Oks`), improves one (`Keeping Score` → `Aoc
+ * Woke`), swaps two on storylines that are piles either way, and costs one
+ * real name — `Flying Eagles` → `Eagles Cruise`, where the team name was
+ * carried by a single member and the phrase that replaced it is a clause the
+ * lexicon does not hold (`cruise` is a noun as often as a verb; see
+ * verb-lexicon.ts on the asymmetric cost).
+ *
+ * Not three. A third member costs `Justin Rose` — a golfer, saved today by the
+ * override against `rose` in IRREGULAR_PAST — and buys nothing: it is the only
+ * label that moves, and it moves to `Memphis Bucking`.
+ */
+const VERB_OVERRIDE_MEMBERS = 2;
 
 /** "fort hood" → "Fort Hood". A label is read, not typed into a search box. */
 function titleCase(phrase: string): string {
