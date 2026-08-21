@@ -225,10 +225,37 @@ carries `properNounEvidence` over the storyline's own coverage — the stricter
 corpus-case test the label-agreement merge already uses above, not the Title
 Case that every word in a headline wears for free. Two mechanical gaps went
 with it: the verb gate now also catches a bare lemma ("agree", not only
-"agrees"/"agreeing") for the class of verb that never nominalizes in any
-inflection, and adjacency is computed over the true token stream rather than
-the stopword-filtered one, so a stopword between two words no longer reads as
-though they stood together ("agree deal" out of "royals … agree to a deal").
+"agrees"/"agreeing"), and adjacency is computed over the true token stream
+rather than the stopword-filtered one, so a stopword between two words no
+longer reads as though they stood together ("agree deal" out of "royals …
+agree to a deal").
+
+Punctuation fabricates adjacency the same way and needed the same treatment.
+The tokenizer DISCARDS its delimiters, so "Ukraine, Russia talks resume"
+leaves `ukraine` sitting next to `russia` with nothing left to show that a
+comma stood between them — and the proper-noun gate cannot catch that one,
+because both halves really are names. Pairs are now drawn from RUNS of words
+that nothing but whitespace separated, which also handles the spaced hyphen
+feed titles use as a source separator ("Bitcoin rise continues - Reuters").
+
+`properNounEvidence` needed one more clause to do the job asked of it here.
+Ignoring the segment's first capital is not enough to neutralize Title Case:
+every LATER word of a Title Case headline is a mid-segment capital too, so on
+a storyline whose members are Title Case with no descriptions the test
+promoted every word and admitted exactly the vocabulary pairs it was added to
+refuse — "Second Quarter Eps Estimate Revised Again" still yielded `Eps
+Estimate`. What makes a capital mean something is a segment that would have
+shown a common word lowercase, so evidence is now taken only from segments
+that show at least one. A corpus that is Title Case throughout yields no
+evidence rather than promoting all of it.
+
+The bare lemma needed a list of its own. Membership of `VERB_LEMMAS` is
+decided on the -s and -ing forms, and the bare form is a fourth inflection
+that nominalizes on its own schedule — "rises"/"rising" name nothing but "a
+pay rise" is a noun, as are "paid leave", "a hail storm", "a work permit", "a
+product recall". Gating those does not rank a phrase lower, it removes the
+label entirely, so `BARE_NOUN_LEMMAS` takes them back out and only an
+unambiguous predicate keeps the bare route.
 
 Not re-measured against the live archive — this is a mechanism change, not a
 new sweep. The expected effect is the one the issue already named: fallback
