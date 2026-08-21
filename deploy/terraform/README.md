@@ -1,5 +1,21 @@
 # Phase 1 — Ground
 
+
+> ## ⛔ ARCHIVAL — NOT IN USE
+>
+> **This configuration is frozen. zammy is not deploying on OCI (decided 2026-08-21 — see
+> [DEPLOYMENT-OCI](../../docs/DEPLOYMENT-OCI.md) for the capacity evidence).** Nothing further will
+> be applied, planned or migrated here.
+>
+> **The 45 resources it already created are being left in place, not destroyed** — they sit inside
+> Always Free and cost nothing. Do **not** run `terraform destroy` on the assumption that walking
+> away requires it; and do not run `apply`, since the only thing left to add is the staging VM that
+> has no capacity to land on.
+>
+> Two tasks referenced below are **moot** and should not be started: generating the Customer Secret
+> Key, and migrating state to the bucket. State stays local. `retry-capacity.sh` is likewise dead —
+> its crontab entry was removed 2026-08-20.
+
 The VCN, subnets, gateways, route tables, NSGs and state bucket of
 [DEPLOYMENT-OCI](../../docs/DEPLOYMENT-OCI.md) §3 and §7, plus adoption of the vault, its key and
 the budget that already exist.
