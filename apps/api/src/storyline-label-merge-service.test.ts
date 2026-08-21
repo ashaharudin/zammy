@@ -230,7 +230,7 @@ describe("mergeAgreeingLabels", () => {
 
     expect(report.merged).toBe(0);
     expect(report.refusals).toEqual([
-      { label: "q2 2026 financial result", storylines: 2, reason: "no grounded name" },
+      { label: "2026 financial q2 result", storylines: 2, reason: "no grounded name" },
     ]);
     expect(await resolveStoryline(db, one)).toBe(one);
     expect(await resolveStoryline(db, two)).toBe(two);

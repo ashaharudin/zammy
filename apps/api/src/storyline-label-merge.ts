@@ -151,6 +151,22 @@ export function labelWords(label: string): string[] {
 }
 
 /**
+ * The comparison key two labels must share to count as agreement: the folded
+ * words as a sorted bag, so word order stops mattering. "Canada US Trade Deal"
+ * and "US Canada Trade Deal" are one name ordered two ways — the model orders
+ * the two countries arbitrarily between runs — and exact-string comparison read
+ * that as disagreement (measured on the dev archive, 2026-08-20: six live
+ * trade-deal arcs in two order-only buckets).
+ *
+ * A bag, not a set: a repeated word stays repeated, so two labels agree only on
+ * the same multiset. Used ONLY for bucketing — `labelWords`, the display label
+ * and `label_words` all keep the model's own order.
+ */
+export function labelKey(label: string): string {
+  return labelWords(label).sort().join(" ");
+}
+
+/**
  * Do two spans overlap, or come within `graceDays` of each other?
  *
  * Inclusive at both ends: a storyline whose only coverage is one day has
@@ -166,8 +182,11 @@ export function spansTouch(
 }
 
 /**
- * Candidates grouped by normalized label, keeping only labels held by more than
- * one storyline — the only ones that can produce a merge.
+ * Candidates grouped by `labelKey` — the folded words as a sorted bag — keeping
+ * only keys held by more than one storyline, the only ones that can produce a
+ * merge. The map key is therefore word-order-blind; everything downstream that
+ * reads it (grounding, refusal logs) works on the word set, which the sort
+ * preserves.
  *
  * Exported because the service reads coverage per shared label to build the
  * grounding evidence, and doing that for all 258 labelled storylines when two
@@ -178,7 +197,7 @@ export function sharedLabels(
 ): Map<string, LabelMergeCandidate[]> {
   const byLabel = new Map<string, LabelMergeCandidate[]>();
   for (const candidate of candidates) {
-    const key = normalizeLabel(candidate.label);
+    const key = labelKey(candidate.label);
     if (key.length === 0) continue;
     const bucket = byLabel.get(key);
     if (bucket) bucket.push(candidate);
