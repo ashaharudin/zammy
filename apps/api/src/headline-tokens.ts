@@ -55,6 +55,11 @@ function tokenize(text: string): string[] {
 function splitTokens(text: string): string[] {
   return text
     .normalize("NFKC")
+    // NFKC does not fold a typographic apostrophe (U+2019, and the modifier
+    // letter U+02BC some sources use instead) to ASCII "'" — left alone, the
+    // split below treats it as a word boundary and shreds "doesn't" into
+    // "doesn" + "t".
+    .replaceAll(/[’ʼ]/g, "'")
     .split(/[^\p{L}\p{N}'-]+/u)
     .map(trimWordPunctuation)
     .filter((token) => token.length > 0);
