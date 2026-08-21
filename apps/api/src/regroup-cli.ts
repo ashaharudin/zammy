@@ -1,6 +1,6 @@
 import { loadConfig } from "@zammy/config";
-import { createDb } from "@zammy/storage";
 import { regroup } from "./regroup.js";
+import { createConfiguredDb } from "./wiring.js";
 
 /**
  * `pnpm regroup [--days=N] [--tokens-only]` — re-derive stored grouping state
@@ -22,7 +22,7 @@ if (!Number.isInteger(days) || days < 1) {
 }
 
 const config = loadConfig();
-const db = createDb(config.DATABASE_URL);
+const db = createConfiguredDb(config);
 
 try {
   const result = await regroup(

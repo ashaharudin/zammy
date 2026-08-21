@@ -1,6 +1,6 @@
 import { loadConfig } from "@zammy/config";
-import { createDb } from "@zammy/storage";
 import { backfillLabelWords } from "./label-words-backfill.js";
+import { createConfiguredDb } from "./wiring.js";
 
 /**
  * `pnpm backfill:label-words [--batch=N]` — write `label_words` for every
@@ -26,7 +26,7 @@ if (!Number.isInteger(batch) || batch < 1) {
 }
 
 const config = loadConfig();
-const db = createDb(config.DATABASE_URL);
+const db = createConfiguredDb(config);
 
 try {
   const result = await backfillLabelWords(

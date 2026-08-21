@@ -11,6 +11,43 @@ import { z } from "zod";
 const NonEmpty = z.string().trim().min(1);
 
 /**
+ * A Postgres connection URL that does NOT decide TLS for itself.
+ *
+ * node-postgres silently ignores the `ssl` options object whenever the
+ * connection string carries `sslmode` (brianc/node-postgres#3355), and the same
+ * goes for `sslnegotiation`. So a URL ending `?sslmode=require` cannot be
+ * hardened later by adding a CA and `rejectUnauthorized: true` — the object is
+ * dropped, nothing logs that it was, and the connection is encrypted-but-
+ * unverified while the code says otherwise.
+ *
+ * Rather than let the URL and `DATABASE_SSL` disagree in favour of whichever the
+ * driver happens to read, the URL is refused and TLS has exactly one home
+ * (RESEARCH-VERCEL-SUPABASE §4.2).
+ */
+const PostgresUrl = NonEmpty.refine(
+  (value) => !/ssl(mode|negotiation)=/i.test(value),
+  "must not set sslmode/sslnegotiation — node-postgres silently ignores the ssl " +
+    "options object when the URL carries either, so TLS would be libpq's default " +
+    "rather than what DATABASE_SSL asks for. Drop it and set DATABASE_SSL.",
+);
+
+/**
+ * A PEM certificate chain, pasted whole. Empty means unset — the same shape
+ * every optional secret here has, so `DATABASE_CA_CERT=` in a template is not a
+ * boot failure.
+ */
+const CaCert = z
+  .string()
+  .trim()
+  .transform((value) => (value === "" ? undefined : value))
+  .refine(
+    (value) => value === undefined || value.includes("-----BEGIN CERTIFICATE-----"),
+    "must be a PEM chain containing -----BEGIN CERTIFICATE-----; escaped \\n " +
+      "newlines are accepted, so a one-line dashboard value is fine",
+  )
+  .optional();
+
+/**
  * A `redis://` or `rediss://` URL — not merely a non-empty string.
  *
  * Redis being *unreachable* is survivable on purpose: `/readyz` reports
@@ -53,7 +90,49 @@ const EnvSchema = z
     PORT: z.coerce.number().int().min(1).max(65535).default(3000),
     LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
 
-    DATABASE_URL: NonEmpty,
+    DATABASE_URL: PostgresUrl,
+
+    /**
+     * The SESSION-scoped connection, for the two processes that hold
+     * session-scoped advisory locks: the migrator
+     * (`pg_advisory_lock`, migrator.ts) and the chore runner
+     * (`pg_try_advisory_lock`, chores-cli.ts). Unset means "same as
+     * DATABASE_URL", which is correct wherever one server answers both.
+     *
+     * It exists for pooled Postgres. A transaction-mode pooler hands each
+     * statement whatever backend is free, so a session lock is taken on one
+     * backend and looked for on another: `pg_try_advisory_lock` returns true
+     * every time and the exactly-once it is there to buy is gone — silently,
+     * because a chore pass that ran twice logs two ordinary successes. The
+     * coverage lock is safe by contrast (`pg_advisory_xact_lock` is
+     * transaction-scoped, and a transaction is pinned to one backend), which is
+     * why this is a second URL rather than a different pooling mode for
+     * everything.
+     */
+    DATABASE_SESSION_URL: PostgresUrl.optional(),
+
+    /**
+     * Request-path pool size, per process. 10 suits a long-lived server with a
+     * known replica count. Serverless instances are elastic and each holds its
+     * own pool, so a deployment there wants 1–2 — hence config rather than the
+     * literal this used to be (server.ts).
+     */
+    DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
+
+    /**
+     * TLS to Postgres, in libpq's vocabulary because it is the vocabulary the
+     * operator already has:
+     *
+     *   disable      no TLS. Correct for the Compose Postgres, which offers none.
+     *   require      encrypt, do not verify. Honest about being unverified.
+     *   verify-full  encrypt and verify against DATABASE_CA_CERT.
+     *
+     * Never expressed in the URL — see `PostgresUrl` for why that silently
+     * loses.
+     */
+    DATABASE_SSL: z.enum(["disable", "require", "verify-full"]).default("disable"),
+    DATABASE_CA_CERT: CaCert,
+
     REDIS_URL: RedisUrl,
 
     // --- upstream ---
@@ -516,6 +595,33 @@ const EnvSchema = z
     FIXTURES_DIR: z.string().trim().default("./fixtures"),
   })
   .superRefine((env, ctx) => {
+    // verify-full with nothing to verify against would fall back to the system
+    // trust store, which is not what the setting says and not what a managed
+    // Postgres usually presents.
+    if (env.DATABASE_SSL === "verify-full" && !env.DATABASE_CA_CERT) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["DATABASE_CA_CERT"],
+        message:
+          "DATABASE_CA_CERT is required when DATABASE_SSL=verify-full. " +
+          "Use DATABASE_SSL=require to encrypt without verifying, or disable for " +
+          "a server that offers no TLS (the Compose Postgres).",
+      });
+    }
+
+    // The reverse is the more dangerous half: a CA sitting in the environment
+    // reads as "we verify TLS" to everyone who greps for it, while the
+    // connection is in fact plaintext.
+    if (env.DATABASE_SSL === "disable" && env.DATABASE_CA_CERT) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["DATABASE_SSL"],
+        message:
+          "DATABASE_CA_CERT is set but DATABASE_SSL=disable, so the certificate " +
+          "verifies nothing. Set DATABASE_SSL=verify-full, or clear the certificate.",
+      });
+    }
+
     // Live mode without a key is the single most likely misconfiguration, and it
     // would otherwise surface as a runtime 401 on the first user search.
     if (env.CURRENTS_MODE === "live" && !env.CURRENTS_API_KEY) {
@@ -641,6 +747,8 @@ export function redactConfig(config: Config): Record<string, unknown> {
     GNEWS_API_KEY,
     GEMINI_API_KEY,
     DATABASE_URL,
+    DATABASE_SESSION_URL,
+    DATABASE_CA_CERT,
     REDIS_URL,
     ...rest
   } = config;
@@ -650,6 +758,14 @@ export function redactConfig(config: Config): Record<string, unknown> {
     GNEWS_API_KEY: GNEWS_API_KEY ? "[redacted]" : null,
     GEMINI_API_KEY: GEMINI_API_KEY ? "[redacted]" : null,
     DATABASE_URL: redactUrlCredentials(DATABASE_URL),
+    // A second URL is a second password (§4.1's session-mode connection).
+    DATABASE_SESSION_URL: DATABASE_SESSION_URL
+      ? redactUrlCredentials(DATABASE_SESSION_URL)
+      : null,
+    // Not a secret — a CA certificate is public by construction — but a kilobyte
+    // of PEM in the boot line is noise, and noise is what stops the boot line
+    // being read.
+    DATABASE_CA_CERT: DATABASE_CA_CERT ? "[present]" : null,
     REDIS_URL: redactUrlCredentials(REDIS_URL),
   };
 }

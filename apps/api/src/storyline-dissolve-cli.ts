@@ -1,7 +1,6 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { loadConfig } from "@zammy/config";
 import {
-  createDb,
   dissolveFormation,
   readStorylineLabelInput,
   recordFormationRefusal,
@@ -11,6 +10,7 @@ import type { Kysely } from "kysely";
 import { createGeminiClient } from "./gemini.js";
 import { buildCoherencePrompt, readCoherenceReply } from "./storyline-coherence.js";
 import { selectLabelMembers } from "./storyline-label.js";
+import { createConfiguredDb } from "./wiring.js";
 
 /**
  * `pnpm dissolve:storyline-piles [--apply] [--limit=N] [--rate=N] [--out=FILE]`
@@ -73,7 +73,7 @@ const limit = Number(flag("limit") ?? 0);
 const transcript = flag("out") ?? "storyline-dissolve.jsonl";
 
 const config = loadConfig();
-const db = createDb(config.DATABASE_URL);
+const db = createConfiguredDb(config);
 
 interface Row {
   id: string;

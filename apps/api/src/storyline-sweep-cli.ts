@@ -1,10 +1,10 @@
 import { loadConfig } from "@zammy/config";
-import { createDb } from "@zammy/storage";
 import { zonedDayKey } from "./app-day.js";
 import { storyTokens } from "./storyline.js";
 import { replayLinker, type ReplayGroup } from "./storyline-replay.js";
 import type { Corpus, LinkRules } from "./storyline-link.js";
 import { readJudgedStorylines, scoreJudged, type JudgedStoryline } from "./storyline-judged.js";
+import { createConfiguredDb } from "./wiring.js";
 
 /**
  * `pnpm measure:storylines-v2 [--days=N]` — the ADR-0011 threshold sweep.
@@ -33,7 +33,7 @@ if (!Number.isInteger(days) || days < 1) {
 }
 
 const config = loadConfig();
-const db = createDb(config.DATABASE_URL);
+const db = createConfiguredDb(config);
 const TZ = config.APP_TIMEZONE;
 const WINDOW = config.STORYLINE_DF_WINDOW_DAYS;
 

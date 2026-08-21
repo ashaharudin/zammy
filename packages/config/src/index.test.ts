@@ -7,6 +7,9 @@ const base = {
   CURRENTS_USER_AGENT: "zammy/0.1 (+test)",
 };
 
+/** Not a real certificate — the schema checks the PEM envelope, not the bytes. */
+const CA_CERT = "-----BEGIN CERTIFICATE-----\nZm9v\n-----END CERTIFICATE-----";
+
 describe("loadConfig", () => {
   it("accepts a minimal fixture-mode configuration", () => {
     const config = loadConfig({ ...base } as NodeJS.ProcessEnv);
@@ -118,6 +121,95 @@ describe("loadConfig", () => {
     ).toThrow(/discards history/);
   });
 
+  // TLS has one home. node-postgres silently ignores the `ssl` options object
+  // when the connection string carries sslmode, so a URL that sets it cannot be
+  // hardened later and nothing says why — the refusal is the only signal
+  // available (RESEARCH-VERCEL-SUPABASE 4.2).
+  it("refuses a DATABASE_URL that decides TLS for itself", () => {
+    for (const url of [
+      "postgres://u:p@host:5432/db?sslmode=require",
+      "postgres://u:p@host:5432/db?sslmode=disable",
+      "postgres://u:p@host:5432/db?application_name=zammy&sslmode=verify-full",
+      "postgres://u:p@host:5432/db?sslnegotiation=direct",
+    ]) {
+      expect(() =>
+        loadConfig({ ...base, DATABASE_URL: url } as NodeJS.ProcessEnv),
+      ).toThrow(/sslmode/);
+    }
+  });
+
+  it("applies the same refusal to the session-mode URL", () => {
+    expect(() =>
+      loadConfig({
+        ...base,
+        DATABASE_SESSION_URL: "postgres://u:p@host:5432/db?sslmode=require",
+      } as NodeJS.ProcessEnv),
+    ).toThrow(/sslmode/);
+  });
+
+  // Unset means "the same server", which is the whole local and single-server
+  // case; it is only a pooled Postgres that needs the two to differ.
+  it("leaves DATABASE_SESSION_URL unset by default and accepts a clean one", () => {
+    expect(loadConfig({ ...base } as NodeJS.ProcessEnv).DATABASE_SESSION_URL).toBeUndefined();
+    expect(
+      loadConfig({
+        ...base,
+        DATABASE_SESSION_URL: "postgres://u:p@pooler:5432/db",
+      } as NodeJS.ProcessEnv).DATABASE_SESSION_URL,
+    ).toBe("postgres://u:p@pooler:5432/db");
+  });
+
+  it("defaults the pool to 10 and coerces a configured size", () => {
+    expect(loadConfig({ ...base } as NodeJS.ProcessEnv).DATABASE_POOL_MAX).toBe(10);
+    expect(
+      loadConfig({ ...base, DATABASE_POOL_MAX: "2" } as NodeJS.ProcessEnv).DATABASE_POOL_MAX,
+    ).toBe(2);
+    expect(() =>
+      loadConfig({ ...base, DATABASE_POOL_MAX: "0" } as NodeJS.ProcessEnv),
+    ).toThrow(ConfigError);
+  });
+
+  it("defaults TLS to disable, since the Compose Postgres offers none", () => {
+    expect(loadConfig({ ...base } as NodeJS.ProcessEnv).DATABASE_SSL).toBe("disable");
+  });
+
+  it("requires a CA certificate for verify-full, and refuses one that verifies nothing", () => {
+    expect(() =>
+      loadConfig({ ...base, DATABASE_SSL: "verify-full" } as NodeJS.ProcessEnv),
+    ).toThrow(/DATABASE_CA_CERT is required/);
+
+    // The dangerous half: a certificate in the environment reads as "we verify
+    // TLS" while the connection is plaintext.
+    expect(() =>
+      loadConfig({
+        ...base,
+        DATABASE_SSL: "disable",
+        DATABASE_CA_CERT: CA_CERT,
+      } as NodeJS.ProcessEnv),
+    ).toThrow(/verifies nothing/);
+
+    expect(() =>
+      loadConfig({
+        ...base,
+        DATABASE_SSL: "verify-full",
+        DATABASE_CA_CERT: CA_CERT,
+      } as NodeJS.ProcessEnv),
+    ).not.toThrow();
+  });
+
+  it("treats an empty certificate as unset, and a non-PEM one as an error", () => {
+    expect(
+      loadConfig({ ...base, DATABASE_CA_CERT: "" } as NodeJS.ProcessEnv).DATABASE_CA_CERT,
+    ).toBeUndefined();
+    expect(() =>
+      loadConfig({
+        ...base,
+        DATABASE_SSL: "verify-full",
+        DATABASE_CA_CERT: "/etc/ssl/certs/supabase.crt",
+      } as NodeJS.ProcessEnv),
+    ).toThrow(/BEGIN CERTIFICATE/);
+  });
+
   it("reports every problem at once rather than only the first", () => {
     try {
       loadConfig({
@@ -147,5 +239,30 @@ describe("redactConfig", () => {
     expect(serialised).not.toContain("super-secret-key");
     expect(serialised).not.toContain("secret@");
     expect(serialised).toContain("[redacted]");
+  });
+
+  // A second URL is a second password, and the boot line prints all of them.
+  it("removes the session-mode connection's credentials too", () => {
+    const config = loadConfig({
+      ...base,
+      DATABASE_SESSION_URL: "postgres://zammy:pooler-secret@pooler:5432/zammy",
+    } as NodeJS.ProcessEnv);
+
+    const serialised = JSON.stringify(redactConfig(config));
+    expect(serialised).not.toContain("pooler-secret");
+    expect(serialised).toContain("pooler");
+  });
+
+  // Public, but a kilobyte of PEM in the line nobody then reads.
+  it("collapses the CA certificate to a presence flag", () => {
+    const config = loadConfig({
+      ...base,
+      DATABASE_SSL: "verify-full",
+      DATABASE_CA_CERT: CA_CERT,
+    } as NodeJS.ProcessEnv);
+
+    const redacted = redactConfig(config);
+    expect(redacted.DATABASE_CA_CERT).toBe("[present]");
+    expect(redactConfig(loadConfig({ ...base } as NodeJS.ProcessEnv)).DATABASE_CA_CERT).toBeNull();
   });
 });

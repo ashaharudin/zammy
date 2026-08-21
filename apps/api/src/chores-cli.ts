@@ -1,5 +1,4 @@
 import { ConfigError, loadConfig } from "@zammy/config";
-import { createDb } from "@zammy/storage";
 import { sql } from "kysely";
 import {
   runRetentionChore,
@@ -7,7 +6,7 @@ import {
   type ChoreDeps,
   type StorylinePassDeps,
 } from "./chores.js";
-import { createLabeler, createLinkerConfig } from "./wiring.js";
+import { createConfiguredDb, createLabeler, createLinkerConfig } from "./wiring.js";
 
 /**
  * `pnpm chores <retention|storylines> [--label-rate=N] [--max-labels=N]` — the
@@ -106,7 +105,14 @@ const log = {
 // max: 4 — one connection is pinned for the advisory lock below and the passes
 // borrow the rest. Sequential work, so this is slack rather than parallelism;
 // what it must not be is 1, which would deadlock against the pinned connection.
-const db = createDb(config.DATABASE_URL, { max: 4 });
+//
+// DATABASE_SESSION_URL when there is one. The lock below is session-scoped, and
+// through a transaction-mode pooler a session lock is taken on one backend and
+// looked for on another: `pg_try_advisory_lock` then returns true every time,
+// two schedulers both run the night's pass, and both log an ordinary success
+// (@zammy/config on DATABASE_SESSION_URL; RESEARCH-VERCEL-SUPABASE §4.1).
+const connectionName = config.DATABASE_SESSION_URL ? "DATABASE_SESSION_URL" : "DATABASE_URL";
+const db = createConfiguredDb(config, { max: 4, session: true });
 
 const choreDeps: ChoreDeps = {
   db,
@@ -122,6 +128,11 @@ const choreDeps: ChoreDeps = {
 
 const startedAt = Date.now();
 let failure: unknown;
+
+// Which connection and which TLS, before any work: the lock below cannot tell
+// an operator that it was session-scoped, and a pass that silently ran twice
+// looks exactly like a pass that ran once.
+log.info({ connection: connectionName, tls: config.DATABASE_SSL }, "chore pass starting");
 
 try {
   // pg_TRY_advisory_lock, not pg_advisory_lock: a second run must skip, not

@@ -1,4 +1,6 @@
 import type { Config } from "@zammy/config";
+import { createDb, databaseSsl, type Database } from "@zammy/storage";
+import type { Kysely } from "kysely";
 import { createGeminiClient } from "./gemini.js";
 import type { LabelerDeps } from "./storyline-label-service.js";
 import type { LinkerConfig } from "./storyline-linker.js";
@@ -26,6 +28,38 @@ import type { LinkerConfig } from "./storyline-linker.js";
 
 /** Everything a labelling call needs except the database handle. */
 export type Labeler = Omit<LabelerDeps, "db">;
+
+/**
+ * The database handle for every entrypoint that builds one from `Config` — the
+ * chore runner and the nine operator CLIs. It belongs here for the same reason
+ * the two above do: the connection is a decision, and there are now two of them
+ * to get wrong.
+ *
+ *   - TLS is set here, never in the URL. node-postgres silently ignores the
+ *     `ssl` object when the connection string carries `sslmode`, so a CLI that
+ *     built its own handle would be encrypted-or-not according to whichever the
+ *     driver read last (@zammy/storage's `databaseSsl`).
+ *   - `session: true` asks for `DATABASE_SESSION_URL`, and only the two callers
+ *     holding a SESSION-scoped advisory lock may: the migrator and the chore
+ *     runner. Everything else is transaction-scoped or lockless and should go
+ *     through the request-path URL.
+ *
+ * `server.ts` is the exception and stays one: it builds its own `pg.Pool`
+ * because `/readyz` probes the same pool the queries use, and a handle built
+ * here would give it a second one.
+ */
+export function createConfiguredDb(
+  config: Config,
+  options: { max?: number; session?: boolean } = {},
+): Kysely<Database> {
+  const url = options.session
+    ? (config.DATABASE_SESSION_URL ?? config.DATABASE_URL)
+    : config.DATABASE_URL;
+  return createDb(url, {
+    ...(options.max !== undefined ? { max: options.max } : {}),
+    ssl: databaseSsl({ mode: config.DATABASE_SSL, caCert: config.DATABASE_CA_CERT }),
+  });
+}
 
 /**
  * The linker config the LIVE write path uses, and therefore the one the nightly

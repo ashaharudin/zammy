@@ -1,10 +1,10 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { loadConfig } from "@zammy/config";
-import { createDb } from "@zammy/storage";
 import { createGeminiClient } from "./gemini.js";
 import { selectLabelMembers } from "./storyline-label.js";
 import { buildCoherencePrompt, readCoherenceReply } from "./storyline-coherence.js";
 import { readJudgedStorylines } from "./storyline-judged.js";
+import { createConfiguredDb } from "./wiring.js";
 
 /**
  * `pnpm measure:storyline-coherence` — does a model verdict separate the archive's
@@ -68,7 +68,7 @@ const transcript = flag("out") ?? "storyline-coherence.jsonl";
 
 const config = loadConfig();
 const model = flag("model") ?? config.GEMINI_MODEL;
-const db = createDb(config.DATABASE_URL);
+const db = createConfiguredDb(config);
 
 /** One hand-judged storyline, as the sample holds it. */
 interface Judged {
