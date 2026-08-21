@@ -58,8 +58,15 @@ export interface GroupingDeps {
   /**
    * Where the label tail goes. Labelling runs AFTER the batch, off the §6.3
    * sync-fill deadline a reader is waiting on, so the default is to start it and
-   * walk away. A caller that needs to know when it finished — a test, or a
-   * script that exits — hands in something that keeps the promise.
+   * walk away. A caller that needs to know when it finished hands in something
+   * that keeps the promise.
+   *
+   * Three do. A test and a CLI that exits need it for the obvious reason. The
+   * §10.1 breadth sample needs it for a subtler one: no reader is waiting on
+   * that job, and the cloud it feeds cannot see an unlabelled storyline at all,
+   * so returning before the names exist publishes an emptied cloud and caches
+   * it (`processSampleJob`). Dropping this promise is a latency decision, and
+   * it is only correct where there is latency to protect.
    */
   labelTail?: (task: Promise<void>) => void;
   metrics?: Metrics;

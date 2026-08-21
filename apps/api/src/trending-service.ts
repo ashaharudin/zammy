@@ -196,18 +196,21 @@ function dedupeByLabel<T extends { label: string }>(rows: readonly T[]): T[] {
 
 /**
  * Queue-consumer handler for the §10.1 breadth sample: ingest a page of
- * `/v2/latest-news`, group what it creates, and let the linker do the rest.
+ * `/v2/latest-news`, group what it creates, let the linker do the rest, and
+ * wait for the labeller to name what the linker promoted.
  *
  * Idempotent end to end — category fetches upsert into ordinary topics,
  * re-ingested articles collapse into their existing rows (§7.4), and grouping
  * re-derives rather than re-homing — so BullMQ's at-least-once redelivery after
  * a deploy is safe.
  *
- * It no longer computes anything for the cloud. Under the term design this
- * handler scored the window and replaced `trending_terms`; the cloud is a
- * query over storylines now (ADR-0013), and what makes a storyline appear in it
- * is the linker running on the write path, which `groupCreatedArticles` already
- * calls. So this job's only product is corpus.
+ * It computes nothing for the cloud. Under the term design this handler scored
+ * the window and replaced `trending_terms`; the cloud is a query over
+ * storylines now (ADR-0013), and what makes a storyline appear in it is the
+ * linker running on the write path, which `groupCreatedArticles` already calls.
+ * So this job's product is corpus — but corpus is not enough for the cloud to
+ * READ it, because the query wants a label, and the label arrives on a tail
+ * every other caller drops. This job holds that tail; see the await below.
  */
 export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Promise<void> {
   // Corpus source 2: ONE /v2/latest-news call carrying the whole curated
@@ -224,6 +227,10 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
   };
   const fingerprint = fingerprintOf(identity);
   await upsertTopic(deps.db, { fingerprint, ...identity });
+
+  // The label tails this sample starts, kept rather than dropped — see the
+  // await below for why this job is the one caller that must not walk away.
+  const labelTails: Promise<void>[] = [];
 
   for (let pageNumber = 1; pageNumber <= deps.trending.samplePages; pageNumber += 1) {
     let result;
@@ -263,11 +270,44 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
     // category and outlet, and an article ingested here without tokens is both
     // un-groupable itself and invisible as a candidate to every article
     // ingested after it.
-    await groupCreatedArticles(groupingDepsFor(deps), ingested.createdArticles);
+    await groupCreatedArticles(
+      { ...groupingDepsFor(deps), labelTail: (task) => labelTails.push(task) },
+      ingested.createdArticles,
+    );
     if (result.isLastPage) break;
   }
 
-  // Next poll must see the storylines this sample grew, not a pre-sample entry.
+  // Labelling is not a garnish on this job, it is the last step of it: the
+  // cloud reads `s.label is not null`, so a storyline the linker just promoted
+  // is INVISIBLE to it until the tail names the thing. The linker starts that
+  // tail and drops it (`void tail`, grouping-service), which is right on the
+  // timeline's sync-fill path — a label averages ~8s against the §6.3 deadline
+  // a reader is waiting on — and wrong here, where the only thing waiting is a
+  // queue worker.
+  //
+  // Dropping it here cost a measured outage of the landing page. On the dev
+  // archive a sample ingested at 15:05:27, the job returned and cleared the
+  // cache at ~15:05:35, and 61 labels landed between 15:05:36 and 15:08:15. The
+  // visitor who arrived in that gap read a cloud of 3 — the leftovers from the
+  // previous day, the only rows already named — and because the sample job was
+  // finished, `state` was "complete" and the read cached those 3 for the full
+  // §10.4 fifteen minutes. Sixteen storylines that qualified on every other
+  // count were named seconds too late to be in it, and nothing re-invalidated.
+  // At a 60-minute refresh that is the whole hour's cloud, and the visitor who
+  // triggers the sample is the one guaranteed to see it.
+  //
+  // `allSettled`, not `all`: the tail's contract is that it never throws for a
+  // model reason (it falls back), and if it ever broke that we still want the
+  // invalidation below — an unexpected rejection here would otherwise skip it
+  // AND fail a job whose ingest already succeeded, re-fetching a page on retry.
+  await Promise.allSettled(labelTails);
+
+  // Next poll must see the storylines this sample grew AND named, not a
+  // pre-sample entry. Awaiting above is what makes this line true rather than
+  // merely early; it also keeps the job in the pending set while the labeller
+  // runs, so a read landing mid-sample sees `in_progress` and declines to cache
+  // a half-named cloud — a backstop, not the fix, since `pendingCount` prunes
+  // entries after STALE_PENDING_MS and a long label pass outlives that.
   try {
     await deps.redis.del(cacheKeyFor(deps, job.language));
   } catch {

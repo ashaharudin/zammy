@@ -7,6 +7,7 @@ import {
   type TrendingDeps,
 } from "./trending-service.js";
 import { deriveDedupKey } from "@zammy/currents-client";
+import { emptyStats, type SearchResult } from "@zammy/news-client";
 import {
   attachGroup,
   createProvisionalStoryline,
@@ -568,4 +569,172 @@ describe("one word per label (§10.2)", () => {
     expect(cloud.storylines[0]!.id).toBe(covered);
     expect(cloud.storylines[0]!.windowArticles).toBe(6);
   }, 30_000);
+});
+
+describe("the sample waits for the names it started (§10.4)", () => {
+  /**
+   * Loosened exactly as `grouping-service.test.ts` loosens it, and for the same
+   * reason: a test database holds a dozen articles, where every shared token is
+   * rare and no mass reaches 20. What is under test is the WIRING — that the
+   * sample job holds the label tail — not the production thresholds.
+   */
+  const LINKER = {
+    enabled: true,
+    rules: {
+      anchorMaxShare: 0.5,
+      anchorDfFloor: 4,
+      massThreshold: 2,
+      dormancyDays: 90,
+      dormantStrictness: 1.5,
+    },
+    mergeBridges: 2,
+    coherenceGate: false,
+    storyDf: { windowDays: 14, timeZone: "UTC" },
+    timeZone: "UTC",
+  };
+
+  /**
+   * A corpus for rarity to mean anything, then one story in two groups — the
+   * syndicated core and an angle piece that names it only in its description.
+   * The second group is what promotes the storyline, which is what fires the
+   * labeller. Lifted from `grouping-service.test.ts`, re-dated to sit inside
+   * this file's window: every one is published before NOW, or the cloud's
+   * `published < to` bound would exclude the story this test is about.
+   */
+  const PAGES: Array<{ domain: string; title: string; published: string; description?: string }> = [
+    { domain: "filler0.example", title: "Volcano erupts near coastal village", published: "2026-08-10T20:10:00.000Z" },
+    { domain: "filler1.example", title: "Chess prodigy wins continental crown", published: "2026-08-10T20:11:00.000Z" },
+    { domain: "filler2.example", title: "Rare orchid blooms in botanical garden", published: "2026-08-10T20:12:00.000Z" },
+    { domain: "filler3.example", title: "Ferry operators trim winter schedule", published: "2026-08-10T20:13:00.000Z" },
+    { domain: "filler4.example", title: "Museum unveils dinosaur exhibit", published: "2026-08-10T20:14:00.000Z" },
+    {
+      domain: "wireone.example",
+      title: "Champlain bridge closure strands commuters",
+      published: "2026-08-11T02:00:00.000Z",
+      description: "Traffic chaos as the Champlain bridge shuts for emergency repairs",
+    },
+    {
+      domain: "angle.example",
+      title: "Commuters furious over sudden shutdown",
+      published: "2026-08-11T03:00:00.000Z",
+      description: "The Champlain bridge closure has stranded thousands of commuters",
+    },
+  ];
+
+  /**
+   * One sighting per page, so the sample's page loop reproduces the arrival
+   * order a real feed has. Ingesting all seven at once would make the corpus
+   * arrive in the same batch as the story measured against it.
+   */
+  function serveOnePerPage(h: TestHarness): void {
+    let served = 0;
+    h.counting.latestNews = async (): Promise<SearchResult> => {
+      const page = PAGES[served];
+      served += 1;
+      const url = `https://${page!.domain}/page-${served}`;
+      return {
+        sightings: [
+          {
+            id: `10000000-0000-4000-8000-${String(served).padStart(12, "0")}`,
+            url,
+            provider: "currents",
+            providerSightingId: url,
+            dedupKey: deriveDedupKey(url),
+            title: page!.title,
+            description: page!.description ?? null,
+            author: null,
+            imageUrl: null,
+            language: "en",
+            categories: [],
+            sourceCategories: [],
+            sourceDomain: page!.domain,
+            published: page!.published,
+            raw: {},
+          },
+        ],
+        requestedAt: NOW,
+        rawCount: 1,
+        isLastPage: served >= PAGES.length,
+        pageSize: 20,
+        normalization: { ...emptyStats(), received: 1, kept: 1 },
+        quota: null,
+        adjustments: [],
+      };
+    };
+  }
+
+  it("holds the cache until the labeller has named what the linker promoted", async () => {
+    harness = await createTestHarness(
+      { grouping: { enabled: true, threshold: 0.5, timeZone: "UTC", linker: LINKER } },
+      NOW,
+    );
+    serveOnePerPage(harness);
+    await holdSampleLock(harness);
+
+    // The model call, held open: this is the window the bug lived in — the
+    // seconds between "the linker promoted a storyline" and "the storyline has
+    // a name the cloud query can see".
+    let releaseModel = (): void => {};
+    const modelGate = new Promise<void>((resolve) => {
+      releaseModel = resolve;
+    });
+    let generateCalls = 0;
+
+    const deps: TrendingDeps = {
+      ...trendingDeps(harness, { samplePages: PAGES.length }),
+      labeler: {
+        generator: {
+          generate: async () => {
+            generateCalls += 1;
+            await modelGate;
+            return { ok: true as const, text: "Champlain Bridge Closure" };
+          },
+        },
+        sampleSize: 10,
+        driftFactor: 2,
+        now: () => harness.clock.now(),
+      },
+    };
+
+    // A settled, non-empty cloud from yesterday's leftovers, cached for the
+    // §10.4 fifteen minutes — the entry the sample must not clear too early.
+    await seedStoryline(harness, "Kelowna Evacuations", [
+      { title: "Evacuations Near Kelowna Ordered", domain: "a.com", ageHours: 8 },
+      { title: "Smoke Covers Kelowna By Dawn", domain: "b.com", ageHours: 9 },
+    ]);
+    await readTrending(deps, { language: "en", limit: 50 });
+    const cacheKey = `${harness.queue.name}:trending:en`;
+    expect(await harness.redis.exists(cacheKey)).toBe(1);
+
+    const job = processSampleJob(deps, { kind: "sample", language: "en" });
+    let settled = false;
+    void job.then(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => expect(generateCalls).toBeGreaterThan(0), {
+      timeout: 20_000,
+      interval: 25,
+    });
+
+    // THE REGRESSION. The linker fired the labeller and dropped the promise, so
+    // the job used to return here — clearing the cache and reopening it while
+    // the promoted storyline was still nameless. The next reader saw a cloud
+    // without it, found `state` "complete" because the job was done, and cached
+    // that for fifteen minutes. On the dev archive that cost sixteen of
+    // nineteen storylines and left a three-word landing page for the hour.
+    expect(settled).toBe(false);
+    expect(await harness.redis.exists(cacheKey)).toBe(1);
+
+    releaseModel();
+    await job;
+
+    // Only now, with the name written, is the stale entry dropped…
+    expect(await harness.redis.exists(cacheKey)).toBe(0);
+
+    // …and the cloud the next reader builds carries what the sample grew.
+    const after = await readTrending(deps, { language: "en", limit: 50 });
+    expect(after.meta.servedFrom).toBe("store");
+    expect(after.storylines.map((s) => s.label)).toContain("Champlain Bridge Closure");
+  }, 60_000);
 });

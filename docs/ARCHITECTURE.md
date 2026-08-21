@@ -1020,6 +1020,15 @@ linker turns "forty articles arrived" into "this arc gained two groups". The sam
 and nothing else — it computes nothing the cloud reads — and an article ingested without tokens can
 never join a group, so it can never reach a storyline the cloud can name.
 
+**Nor can a storyline with no name.** The cloud query requires a label (§10.4), and the labeller
+runs on a tail the linker starts and drops, because on the timeline's sync-fill path a ~8s model
+call cannot sit inside the §6.3 deadline. The sample job is the exception that must hold that tail:
+nothing is waiting on it, and returning before the names exist publishes a cloud missing everything
+the sample just grew — then caches it, because a finished sample job reads as `state: "complete"`.
+Measured on the dev archive at a 60-minute cadence, that was the whole hour's landing page: sixteen
+of nineteen qualifying storylines were named in the ~3 minutes after the job cleared the cache, and
+the visitor whose arrival triggered the sample was the one guaranteed to miss them.
+
 A single snapshot buys ~40 articles where the old category-sliced `/search` sample bought a few
 hundred for 12–24 calls, so the freed budget goes into **cadence** rather than depth: a sample is
 fresh for `SAMPLE_REFRESH_MINUTES` (default 60), and the first visitor after it staled triggers the
