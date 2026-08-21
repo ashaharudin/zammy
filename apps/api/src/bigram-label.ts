@@ -1,5 +1,10 @@
 import { singular } from "./grouping.js";
-import { contentTokenPairs, isVerb, properNounEvidence } from "./headline-tokens.js";
+import {
+  contentTokenPairs,
+  isVerb,
+  properNounEvidence,
+  stripSourceAttribution,
+} from "./headline-tokens.js";
 
 /**
  * The BIGRAM LABEL: two adjacent words lifted from a storyline's headlines,
@@ -11,7 +16,8 @@ import { contentTokenPairs, isVerb, properNounEvidence } from "./headline-tokens
  * adequately and names an EVENT not at all, which is the whole reason the
  * model exists. This is the floor, not the target.
  *
- * Two gates survive from the contract the model itself has to pass. ADR-0006's
+ * Three gates stand between a phrase and the label — two from the contract the
+ * model itself has to pass, one this extractor's own. ADR-0006's
  * verb lexicon: a phrase that STATES something rather than NAMES something —
  * "chiefs urge", "trump slipped" — is a headline with its middle removed, and
  * a label has to be a name. And proper-noun evidence (issue #100): a bigram is
@@ -20,6 +26,13 @@ import { contentTokenPairs, isVerb, properNounEvidence } from "./headline-tokens
  * "second quarter" or "eps estimate", both of which pass it just as cleanly.
  * Requiring a word with `properNounEvidence`, not mere Title Case, is the one
  * clause of the real contract a two-word phrase can actually be held to.
+ *
+ * The third gate is `minSupport`, and it is about the STORYLINE rather than the
+ * phrase: past a handful of members, a phrase only one headline says means the
+ * coverage has no shared vocabulary — a formation problem wearing a naming
+ * problem's clothes — and the extractor declines rather than pick a spokesman
+ * for a pile.
+ *
  * Refusing is cheap here: a null label still renders (ADR-0011, "Labels").
  *
  * It began as ADR-0010's read-time storyline PHRASE, which was a search: two
@@ -53,7 +66,8 @@ export interface PhraseArticle {
  * promise: the verb gate (ADR-0006 — a label that states something is a
  * headline with its middle removed), the proper-noun requirement (issue #100
  * — a bigram grounded in the coverage is not thereby a name), the singular
- * fold, and support-weighted ranking. Candidates now come from every member's
+ * fold, and support-weighted ranking — now with a floor under the support as
+ * well as a ranking by it. Candidates now come from every member's
  * title, not one headline's, because there is no card for this phrase to sit
  * beside; it names the whole storyline. Title Case on the way out, because
  * this one is display, not a query.
@@ -77,19 +91,27 @@ function bestBigram(
   corpus: readonly PhraseArticle[],
   candidateTitles: readonly number[],
 ): string | null {
-  const isProperNoun = properNounEvidence(corpus);
+  // Headlines without the outlet's name on the end. Without this the extractor
+  // proposes the dateline: "Globalnews Ca" is a real label in the dev archive,
+  // on a real six-group storyline.
+  const headlines = corpus.map((article) => stripSourceAttribution(article.title));
+  const isProperNoun = properNounEvidence(
+    corpus.map((article, index) => ({ ...article, title: headlines[index]! })),
+  );
   // Adjacency per article, so a phrase can be ranked by how much of the
   // coverage actually says it — the description gets its say, as it does in
   // the storyline layer itself, but its tokens never run on from the title's.
   // Pairs, not tokens: a bigram must have stood next to its two words in the
   // SOURCE text, not merely have survived the stopword filter beside them
   // (issue #100 — "royals reportedly agree to a deal" is not "agree deal").
-  const sequences = corpus.map((article) => [
-    contentTokenPairs(article.title),
+  const sequences = corpus.map((article, index) => [
+    contentTokenPairs(headlines[index]!),
     contentTokenPairs(article.description ?? ""),
   ]);
 
-  let best: { phrase: string; support: number; position: number } | null = null;
+  const needed = minSupport(corpus.length);
+
+  let best: Candidate | null = null;
   for (const index of candidateTitles) {
     const titlePairs = sequences[index]?.[0];
     if (!titlePairs) continue;
@@ -110,7 +132,11 @@ function bestBigram(
           texts.some((pairs) => hasAdjacentPair(pairs, first, second)),
         ).length,
         position,
+        member: index,
       };
+      // A phrase ONE headline of many says is that headline's subject, not the
+      // storyline's name (see `minSupport`).
+      if (candidate.support < needed) continue;
       if (best === null || beats(candidate, best)) best = candidate;
     }
   }
@@ -125,16 +151,60 @@ function titleCase(phrase: string): string {
   );
 }
 
+interface Candidate {
+  phrase: string;
+  support: number;
+  position: number;
+  /** Index in the corpus, which `selectLabelMembers` hands over oldest first. */
+  member: number;
+}
+
 /**
- * More of the coverage saying it wins; then the phrase nearer the front of the
- * headline, which is where a headline puts its subject; then the phrase
- * itself, so a replayed read reaches the same label (§7.4's replay discipline).
+ * The support floor: how much of the coverage must say a phrase before it may
+ * name the whole storyline.
+ *
+ * One headline out of two saying something is ordinary — two outlets word one
+ * story differently, and 46% of two-member samples in the dev archive have no
+ * phrase in common at all. One headline out of TEN is a different claim: it
+ * says the coverage has no shared vocabulary, which is not a naming problem
+ * but a FORMATION problem, and the extractor should decline rather than pick a
+ * spokesman for a pile. This is how "Manitoba Beekeepers" came to name an
+ * abduction, a drug bust, a training grenade and two drowned toddlers: ten
+ * members, ten candidate phrases, every one of them said once, the winner
+ * decided by alphabetical order.
+ *
+ * Measured over 3,792 live multi-group storylines (2026-08-21), which is what
+ * pinned the threshold at five rather than three: a support-1 winner occurs in
+ * 49% of three-member samples and 7% of ten-member ones, so requiring two
+ * below five members refuses the ordinary case, while requiring it at five
+ * costs 4.6 points of yield (92.9% → 88.3%) and withdraws 56 of the 360 bigram
+ * labels live today. Refusing is cheap: a null label still renders (ADR-0011).
  */
-function beats(
-  candidate: { phrase: string; support: number; position: number },
-  incumbent: { phrase: string; support: number; position: number },
-): boolean {
+function minSupport(members: number): number {
+  return members >= SUPPORT_FLOOR_AT_MEMBERS ? 2 : 1;
+}
+
+const SUPPORT_FLOOR_AT_MEMBERS = 5;
+
+/**
+ * More of the coverage saying it wins; then the EARLIEST member's headline,
+ * because an arc is named by what it started as; then the phrase nearer the
+ * front of that headline, which is where a headline puts its subject; then the
+ * phrase itself, so a replayed read reaches the same label (§7.4's replay
+ * discipline).
+ *
+ * The order of the middle two is the fix, not decoration. Alphabetical order
+ * used to break every tie position could not, which made the label a lottery
+ * among equally-supported phrases AND an unstable one: measured over the
+ * archive's 2,795 labelled storylines, removing one arrival changes the name
+ * 21.4% of the time under alphabetical order and 14.2% under earliest-member.
+ * The origin is the one member `selectLabelMembers` pins into every sample, so
+ * a tie resolved on it survives the next arrival; a tie resolved on the
+ * alphabet is re-run against whatever vocabulary shows up next.
+ */
+function beats(candidate: Candidate, incumbent: Candidate): boolean {
   if (candidate.support !== incumbent.support) return candidate.support > incumbent.support;
+  if (candidate.member !== incumbent.member) return candidate.member < incumbent.member;
   if (candidate.position !== incumbent.position) return candidate.position < incumbent.position;
   return candidate.phrase < incumbent.phrase;
 }

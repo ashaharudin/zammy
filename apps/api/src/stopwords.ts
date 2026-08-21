@@ -136,3 +136,14 @@ export const STOPWORDS: ReadonlySet<string> = new Set([
   ...SNOWBALL_ENGLISH,
   ...NEWS_EXTENSION,
 ]);
+
+/**
+ * The function-word half of the list, alone.
+ *
+ * `STOPWORDS` mixes two things a caller sometimes needs apart: grammar ("of",
+ * "than", "the") and desk furniture ("times", "video", "man"). Attribution
+ * stripping needs the first and must not read the second — "The Korea Times"
+ * is an outlet naming itself, and `times` being furniture in a HEADLINE says
+ * nothing about that. Everything that tokenizes still reads `STOPWORDS`.
+ */
+export const FUNCTION_WORDS: ReadonlySet<string> = new Set(SNOWBALL_ENGLISH);

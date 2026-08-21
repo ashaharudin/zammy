@@ -1,4 +1,4 @@
-import { STOPWORDS } from "./stopwords.js";
+import { FUNCTION_WORDS, STOPWORDS } from "./stopwords.js";
 import { PAST_FORMS, VERB_FORMS } from "./verb-lexicon.js";
 
 /**
@@ -71,6 +71,104 @@ export function contentTokenPairs(text: string): Array<[string, string]> {
     }
   }
   return pairs;
+}
+
+/**
+ * The OUTLET's name, peeled off the end of a headline.
+ *
+ * Currents ships a title as the outlet wrote its own `<title>` tag, attribution
+ * and all: "Manitoba beekeepers feeling sting of potential 50 per cent tariff -
+ * Winnipeg | Globalnews.ca". Left in, those trailing words are tokens like any
+ * other, and they are the WORST tokens the corpus holds — every Global News
+ * Winnipeg article carries `winnipeg`, `globalnew` and `ca` whatever it is
+ * about, so any two of them arrive at the storyline linker already sharing
+ * three tokens. Measured against the dev archive's trailing fortnight to
+ * 2026-08-21 (N=14,416): those three plus `manitoba` are worth mass 19.88
+ * against a floor of 20, which is to say a Global News dateline is one
+ * coincidence short of a storyline. That is how
+ * ten unrelated Manitoba stories — an abduction, a drug bust, a training
+ * grenade, two drowned toddlers, beekeepers and a tariff — became one arc
+ * labelled "Manitoba Beekeepers". 459 titles in that archive carry the
+ * Globalnews.ca suffix; 272 live storyline profiles were built on `globalnew`.
+ *
+ * This is not the linker's threshold being wrong. It is boilerplate entering
+ * the vocabulary, so it is fixed where the vocabulary is made.
+ *
+ * The rule peels a trailing segment only while it is ATTRIBUTION-SHAPED, which
+ * is deliberately narrower than "sits after a dash": at most
+ * `MAX_ATTRIBUTION_WORDS` words, no verb form (the ADR-0006 lexicon again — a
+ * segment that STATES something is the headline's own tail, not the outlet's
+ * name), and no function word except a leading article, because attribution
+ * reads "The Korea Times" and a headline's tail reads "and faster than
+ * expected".
+ * Peeling repeats, because the edition sits between the headline and the site
+ * ("- National | Globalnews.ca"), and stops before it could eat the headline.
+ *
+ * What it deliberately does NOT do is consult `source_domain`. Matching the
+ * segment against the outlet's own domain would be the precise rule — and it
+ * would have to be threaded through `headlineTokens`, `storyTokens`,
+ * `PhraseArticle` and two storage reads to get here. The shape rule needs
+ * nothing, and it is measurable: what it drops is countable against the live
+ * archive, and what it wrongly drops costs two tokens on one article.
+ */
+export function stripSourceAttribution(title: string): string {
+  let headline = title.trim();
+  for (let peeled = 0; peeled < MAX_ATTRIBUTION_SEGMENTS; peeled += 1) {
+    // Greedy head, so this splits on the LAST delimiter: attribution is peeled
+    // from the right, one segment at a time.
+    const split = /^(.*\S)\s+[|\-\u2013\u2014]\s+(\S.*)$/u.exec(headline);
+    if (split === null) break;
+    const head = split[1]!;
+    if (!isAttribution(split[2]!)) break;
+    // A headline is never entirely attribution. Two words is the floor rather
+    // than three because "Bitcoin Rise - Reuters" is a real shape and Reuters
+    // is not part of the story.
+    if (countWords(head) < MIN_HEADLINE_WORDS) break;
+    headline = head.trim();
+  }
+  return headline;
+}
+
+/** Editions nest one deep in practice ("- Toronto | Globalnews.ca"); three is slack. */
+const MAX_ATTRIBUTION_SEGMENTS = 3;
+/** "Arkansas Democrat Gazette" is three; "Honolulu Star-Advertiser" is two. */
+const MAX_ATTRIBUTION_WORDS = 4;
+/** What must survive the peel. */
+const MIN_HEADLINE_WORDS = 2;
+
+function countWords(text: string): number {
+  return text.split(/\s+/u).filter((word) => word.length > 0).length;
+}
+
+/**
+ * Is this trailing segment the outlet naming itself, rather than the end of the
+ * headline?
+ *
+ * Sampled against the live archive's one-off dash tails, which is where the
+ * false positives would come from: "he has a bad record with them", "Uganda
+ * remain top of the table", "just a year after suffering a stroke" and "and
+ * faster than expected" are all refused — by length, by the verb lexicon, by
+ * the function-word rule — while "The Telegraph", "Motley Fool", "EE Times",
+ * "Globalnews.ca" and "Winnipeg" are all taken.
+ */
+function isAttribution(segment: string): boolean {
+  const words = countWords(segment);
+  if (words === 0 || words > MAX_ATTRIBUTION_WORDS) return false;
+
+  const tokens = splitTokens(segment.toLowerCase());
+  // Nothing but digits and punctuation — a timestamp tail. It donates no
+  // tokens either way, so leave it alone rather than guess.
+  if (tokens.length === 0) return false;
+
+  return tokens.every((token, index) => {
+    if (VERB_FORMS.has(token) || PAST_FORMS.has(token)) return false;
+    // A leading article is how outlets write their own names ("The Korea
+    // Times"); a function word anywhere else is prose ("and faster than
+    // expected", "top of the table"). This reads grammar rather than the whole
+    // stopword list, because half that list is desk furniture — `times` and
+    // `news` are furniture in a headline and an outlet's NAME here.
+    return index === 0 || !FUNCTION_WORDS.has(token);
+  });
 }
 
 /**
@@ -185,7 +283,7 @@ export function properNounEvidence(
   const seenLowercase = new Set<string>();
 
   for (const article of corpus) {
-    for (const text of [article.title, article.description ?? ""]) {
+    for (const text of [stripSourceAttribution(article.title), article.description ?? ""]) {
       // Capitalization at a sentence start proves nothing, so split on
       // sentence-ish punctuation and ignore each segment's first token.
       for (const segment of text.split(/[.!?;:…]+\s+/)) {

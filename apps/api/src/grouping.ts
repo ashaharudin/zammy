@@ -1,5 +1,5 @@
 import type { GroupCandidate } from "@zammy/storage";
-import { contentTokens } from "./headline-tokens.js";
+import { contentTokens, stripSourceAttribution } from "./headline-tokens.js";
 
 /**
  * Article grouping (ARCHITECTURE 14.3) — the write-time decision: does this
@@ -69,8 +69,12 @@ const MIN_SHARED_TOKENS = 2;
  *   5 — typographic apostrophe (U+2019) folded to ASCII before splitting
  *       (issue #101), so "doesn't" survives whole instead of splitting into
  *       "doesn" + "t" at the curly quote.
+ *   6 — the outlet's own name peeled off the end of a title
+ *       (`stripSourceAttribution`). Rows below 6 carry `winnipeg`,
+ *       `globalnew`, `ca` and the like as if they were subject matter, which
+ *       is what the storyline linker then matched them on.
  */
-export const TOKENIZER_VERSION = 5;
+export const TOKENIZER_VERSION = 6;
 
 /**
  * The distinct content-bearing tokens of a headline (§10.2's tokenizer),
@@ -84,7 +88,7 @@ export const TOKENIZER_VERSION = 5;
  * returning surface forms to §10.3.
  */
 export function headlineTokens(title: string): string[] {
-  return [...new Set(contentTokens(title).map(singular))];
+  return [...new Set(contentTokens(stripSourceAttribution(title)).map(singular))];
 }
 
 /**

@@ -31,6 +31,105 @@ describe("bigramLabel", () => {
     expect(bigramLabel([])).toBeNull();
   });
 
+  describe("the outlet's name is not the story's name", () => {
+    it("ignores the attribution the outlet left on its own headline", () => {
+      // The shape that produced "Manitoba Beekeepers": every Global News
+      // Winnipeg headline ends "- Winnipeg | Globalnews.ca", so the dateline
+      // is the only phrase the whole storyline shares.
+      expect(
+        bigramLabel([
+          article(
+            "Kelowna beekeepers feel sting of tariff - Winnipeg | Globalnews.ca",
+            "Beekeepers in Kelowna face the tariff deadline.",
+          ),
+          article(
+            "Kelowna beekeepers count losses - Winnipeg | Globalnews.ca",
+            "The beekeepers in Kelowna counted their losses.",
+          ),
+        ]),
+      ).toBe("Kelowna Beekeepers");
+    });
+
+    it("keeps a tail that is the headline's own, not the outlet's", () => {
+      // Four words is the ceiling and a verb is disqualifying, so a headline
+      // whose dash carries content keeps it.
+      expect(
+        bigramLabel([
+          article(
+            "Kelowna chiefs sign accord - and faster than expected",
+            "The chiefs in Kelowna signed sooner than the province expected.",
+          ),
+          article(
+            "Kelowna chiefs accord holds",
+            "Officials in Kelowna said the chiefs accord holds.",
+          ),
+        ]),
+      ).toBe("Kelowna Chiefs");
+    });
+  });
+
+  describe("the support floor (a pile has no name)", () => {
+    // Five members, five subjects, and the only thing any two of them share is
+    // the province. Every candidate is said once, so there is nothing to name.
+    const pile = [
+      article("Kelowna abduction arrest made", "Police in Kelowna arrested a man."),
+      article("Kelowna cocaine seizure announced", "Officers in Kelowna seized cocaine."),
+      article("Kelowna grenade found in river", "An angler near Kelowna found a grenade."),
+      article("Kelowna toddlers drown in lake", "Two toddlers drowned near Kelowna."),
+      article("Kelowna beekeepers face tariff", "Beekeepers near Kelowna face a tariff."),
+    ];
+
+    it("declines rather than crowning a phrase one headline in five says", () => {
+      expect(bigramLabel(pile)).toBeNull();
+    });
+
+    it("still names a storyline whose coverage genuinely shares a phrase", () => {
+      expect(
+        bigramLabel([
+          ...pile.slice(0, 4),
+          article(
+            "Kelowna abduction charges laid",
+            "The Kelowna abduction case went to court.",
+          ),
+        ]),
+      ).toBe("Kelowna Abduction");
+    });
+
+    it("does not apply the floor to coverage too small to have a majority", () => {
+      // Two outlets wording one story differently is ordinary, not a pile.
+      expect(
+        bigramLabel([
+          article("Kelowna abduction arrest made", "Police in Kelowna arrested a man."),
+          article("Man held after Kelowna incident", "The man was held in Kelowna."),
+        ]),
+      ).toBe("Kelowna Abduction");
+    });
+  });
+
+  describe("ties are broken on the arc's origin, not the alphabet", () => {
+    it("names the storyline after its earliest headline", () => {
+      // Both phrases are said once and both open their headline. The corpus
+      // arrives oldest first, so the older headline names the arc — and keeps
+      // naming it when tomorrow's coverage adds another one-off phrase.
+      const origin = article(
+        "Kelowna wildfire evacuates valley",
+        "The wildfire near Kelowna forced an evacuation.",
+      );
+      const later = article(
+        "Kelowna airport reopens",
+        "The airport in Kelowna reopened on Tuesday.",
+      );
+      expect(bigramLabel([origin, later])).toBe("Kelowna Wildfire");
+      expect(
+        bigramLabel([
+          origin,
+          later,
+          article("Kelowna bakery donates bread", "A bakery in Kelowna donated bread."),
+        ]),
+      ).toBe("Kelowna Wildfire");
+    });
+  });
+
   it("names the story with two adjacent words from a headline", () => {
     expect(
       bigramLabel([
@@ -252,9 +351,14 @@ describe("bigramLabel", () => {
     it("does not gate a bare lemma that is also an ordinary noun", () => {
       // "deal" is PAST_ONLY: its own bare form is a common noun ("a trade
       // deal"), not only its -ed form, so it must survive beside a name.
+      //
+      // Both headlines say it, so the winner is decided by SUPPORT. It used to
+      // be decided by the alphabet — "kelowna deal" beating "kelowna trade" on
+      // its second letter, with one headline behind each — which meant this
+      // test passed for a reason that had nothing to do with the verb gate.
       expect(
         bigramLabel([
-          article("Kelowna trade deal signed", "The Kelowna trade deal was signed today."),
+          article("Kelowna deal signed", "The Kelowna deal was signed today."),
           article("Details of the Kelowna deal emerge", "Kelowna officials confirmed the deal."),
         ]),
       ).toBe("Kelowna Deal");

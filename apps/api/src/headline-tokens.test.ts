@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { RawSighting, normalizeSightings } from "@zammy/currents-client";
-import { contentTokenPairs, contentTokens, isVerb, properNounEvidence } from "./headline-tokens.js";
+import {
+  contentTokenPairs,
+  contentTokens,
+  isVerb,
+  properNounEvidence,
+  stripSourceAttribution,
+} from "./headline-tokens.js";
 import { singular } from "./grouping.js";
 
 /**
@@ -108,6 +114,71 @@ describe("a typographic apostrophe does not split a contraction (issue #101)", (
 
   it("keeps a curly-quoted name whole (Xi'an)", () => {
     expect(contentTokens("Xi’an protest grows")).toEqual(["xi'an", "protest", "grows"]);
+  });
+});
+
+describe("the outlet's own name is not vocabulary", () => {
+  // Currents ships the title as the outlet wrote its <title> tag. Left in, the
+  // attribution is a token like any other and the WORST kind: it is carried by
+  // every article from that outlet whatever the article is about. Measured on
+  // the dev archive (2026-08-21): `winnipeg`, `globalnew`, `ca` and `manitoba`
+  // together are worth mass 19.56 against a linker floor of 20, which is how
+  // ten unrelated Manitoba stories became one arc called "Manitoba Beekeepers".
+
+  it("peels the site, then the edition behind it", () => {
+    expect(
+      stripSourceAttribution(
+        "Manitoba beekeepers feeling sting of potential 50 per cent tariff - Winnipeg | Globalnews.ca",
+      ),
+    ).toBe("Manitoba beekeepers feeling sting of potential 50 per cent tariff");
+  });
+
+  it("keeps the outlet's words out of the tokens the layers match on", () => {
+    // The composition every TITLE reader now uses: `headlineTokens`,
+    // `storyTokens` and the bigram extractor all strip before they tokenize.
+    // `contentTokens` itself does not, because it is also handed descriptions
+    // and `${title} ${description}`, where there is no end to peel from.
+    const tokens = contentTokens(
+      stripSourceAttribution(
+        "Angler reels in training grenade from Red River in Selkirk: RCMP - Winnipeg | Globalnews.ca",
+      ),
+    );
+    for (const attribution of ["winnipeg", "globalnews", "ca"]) {
+      expect(tokens, `attribution "${attribution}" survived`).not.toContain(attribution);
+    }
+    expect(tokens).toContain("grenade");
+    expect(tokens).toContain("selkirk");
+  });
+
+  it.each([
+    ["Bitcoin rise stalls again - Reuters", "Bitcoin rise stalls again"],
+    ["Seoul talks resume - The Korea Times", "Seoul talks resume"],
+    ["Oil holds above eighty - OilPrice.com", "Oil holds above eighty"],
+    ["Lagos port backlog clears - Businessday NG", "Lagos port backlog clears"],
+    ["Quarterly results land - Arkansas Democrat Gazette", "Quarterly results land"],
+  ])("peels attribution from %s", (title, expected) => {
+    expect(stripSourceAttribution(title)).toBe(expected);
+  });
+
+  it.each([
+    // A verb makes it the headline's own tail, however short.
+    "Kabul blast kills twelve - dozens remain missing",
+    // So does length.
+    "Ferry service resumes - he has a bad record with them",
+    // And a stopword anywhere but the front.
+    "Harvest ends early - and faster than expected",
+  ])("leaves a headline's own tail alone: %s", (title) => {
+    expect(stripSourceAttribution(title)).toBe(title);
+  });
+
+  it("never peels a headline down to nothing", () => {
+    // Two words is the floor, which is what lets "Bitcoin Rise - Reuters" work
+    // at all. Below it there is no headline left to name.
+    expect(stripSourceAttribution("Reuters - Fortune")).toBe("Reuters - Fortune");
+  });
+
+  it("leaves a title that is nothing but attribution to the stopword list", () => {
+    expect(stripSourceAttribution("Globalnews.ca")).toBe("Globalnews.ca");
   });
 });
 
