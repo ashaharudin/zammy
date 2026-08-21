@@ -208,10 +208,23 @@ function inflect(
 }
 
 /**
- * Forms that are verbal WHEREVER they stand in a phrase: the third person
- * singular, and the present participle of a verb that has not nominalized.
+ * Forms that are verbal WHEREVER they stand in a phrase: the bare lemma and
+ * third person singular of a verb whose every inflection stays verbal, and
+ * the present participle of a verb that has not nominalized.
+ *
+ * The bare lemma is only safe to include for VERB_LEMMAS. That list exists
+ * because both its -s AND its -ing form stay verbal ("advances", "advancing"
+ * name nothing) — the same test, applied to a third inflection, says the bare
+ * form does not nominalize either. FINITE_ONLY_LEMMAS and PAST_ONLY_LEMMAS are
+ * separate lists precisely because some inflection of them IS a common noun
+ * ("funding", "plans", "talks", "cuts"), and the bare form sits on that side
+ * of the ambiguity, not the other — "plan", "talk", "cut" are nouns as often
+ * as verbs, so gating them here would cost "Trade Plan" and "Border Deal" to
+ * fix a headline like "Royals Agree Deal" that the bare VERB_LEMMAS form
+ * alone already reaches.
  */
 export const VERB_FORMS: ReadonlySet<string> = new Set([
+  ...VERB_LEMMAS,
   ...inflect(VERB_LEMMAS, ["s", "ing"]),
   ...inflect(FINITE_ONLY_LEMMAS, ["s"]),
 ]);

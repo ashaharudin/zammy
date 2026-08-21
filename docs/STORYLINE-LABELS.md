@@ -210,6 +210,32 @@ justification for the model. It is the floor, not the target.
 because the v2 linker did not exist yet. Some are visibly swallowed — 76 groups
 under "Executive Order" — ADR-0009's measured failure, not the labeler's.)
 
+### Gated on proper-noun evidence (2026-08-20, issue #100)
+
+A live sample found **323 of 323** stored bigram labels passing the extractor's
+own shape-and-vocabulary rules while a 60-row read showed zero as "a proper
+noun plus what happened": bare entities (`Red Sox`), categories (`Earnings
+Call`), and fragments (`Golen Scores`). The rules being passed cannot measure
+what ADR-0011 actually cares about — a bigram is grounded in the coverage it
+was lifted from BY CONSTRUCTION, so grounding tells the extractor nothing a
+model answer's contract needs told.
+
+`bestBigram` now refuses to choose a phrase unless one of its two words
+carries `properNounEvidence` over the storyline's own coverage — the stricter
+corpus-case test the label-agreement merge already uses above, not the Title
+Case that every word in a headline wears for free. Two mechanical gaps went
+with it: the verb gate now also catches a bare lemma ("agree", not only
+"agrees"/"agreeing") for the class of verb that never nominalizes in any
+inflection, and adjacency is computed over the true token stream rather than
+the stopword-filtered one, so a stopword between two words no longer reads as
+though they stood together ("agree deal" out of "royals … agree to a deal").
+
+Not re-measured against the live archive — this is a mechanism change, not a
+new sweep. The expected effect is the one the issue already named: fallback
+yield drops, real storylines go unlabelled more often, and the cloud shrinks —
+traded for a floor that stops manufacturing names. A null label still renders
+(ADR-0011, "Labels"), which is what makes the trade affordable.
+
 ## What is validated, and what is not
 
 `validateLabel` enforces three of the contract's four clauses:

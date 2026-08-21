@@ -43,6 +43,27 @@ export function contentTokens(text: string): string[] {
 }
 
 /**
+ * Content-bearing bigrams that stood NEXT TO EACH OTHER in the source text —
+ * as opposed to `contentTokens(text)`, whose stopword filtering fabricates
+ * adjacency: "Royals reportedly agree to a deal" filters to `royals, agree,
+ * deal`, so a caller walking that array for adjacent pairs reads "agree deal"
+ * as a bigram the headline never wrote — "to a" sat between them (issue
+ * #100). The bigram label (`bigram-label.ts`) is exactly that caller, so it
+ * needs pairs computed over the full token stream, before filtering, kept
+ * only when both sides survive it.
+ */
+export function contentTokenPairs(text: string): Array<[string, string]> {
+  const tokens = tokenize(text);
+  const pairs: Array<[string, string]> = [];
+  for (let i = 0; i + 1 < tokens.length; i += 1) {
+    const first = tokens[i]!;
+    const second = tokens[i + 1]!;
+    if (keepable(first) && keepable(second)) pairs.push([first, second]);
+  }
+  return pairs;
+}
+
+/**
  * Tokens keep internal hyphens/apostrophes so identifiers stay WHOLE and can
  * be dropped whole: the probe's regex shredded CVE-2026-1234 into a `cve-`
  * fragment that ranked #1 (§10.2). Anything containing a digit is filtered —
