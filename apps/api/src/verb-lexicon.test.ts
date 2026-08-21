@@ -103,7 +103,130 @@ describe("the gaps that let clause-shaped labels through", () => {
     ["AGL Jumps", "jumps"],
     ["Fire Rips", "rips"],
     ["Boxer Dies", "dies"],
+    // The 2026-08-21 sweep of the live archive. `homers` and `place` are the
+    // reported pair; the rest are what the same scan turned up beside them.
+    ["Neto Homers", "homers"],
+    ["Brewers Place", "place"],
+    ["Australia Adds", "adds"],
+    ["Estrada Asks", "asks"],
+    ["Europe Bakes", "bakes"],
+    ["Trump Chastises", "chastises"],
+    ["Senate Clears", "clears"],
+    ["President Confers", "confers"],
+    ["Dpm Conveys", "conveys"],
+    ["Japan Deepening", "deepening"],
+    ["Bacaro Demolishes", "demolishes"],
+    ["Hamas Disarms", "disarms"],
+    ["Bounce Fades", "fades"],
+    ["Sec Intensifies", "intensifies"],
+    ["Lesotho Lauds", "lauds"],
+    ["France Likens", "likens"],
+    ["Canada Nearing", "nearing"],
+    ["Unifil Neutralizes", "neutralizes"],
+    ["Senate Oks", "oks"],
+    ["Seoul Overhauls", "overhauls"],
+    ["Trump Resurrects", "resurrects"],
+    ["Trump Reverts", "reverts"],
+    ["Mamdani Shrugs", "shrugs"],
+    ["Bencic Withdraws", "withdraws"],
+    ["Lhc Acquits", "acquits"],
+    ["Penguins Activates", "activates"],
   ])("gates the predicate of %s", (_label, form) => {
     expect(VERB_FORMS.has(form)).toBe(true);
+  });
+
+  it.each([
+    ["Glover Inducted", "inducted"],
+    ["Turkey Misrepresented", "misrepresented"],
+  ])("gates the participle of %s", (_label, form) => {
+    expect(PAST_FORMS.has(form)).toBe(true);
+  });
+});
+
+describe("the bare form of a plural subject's verb", () => {
+  // Headline style puts a plural subject in front of the BARE verb, and in a
+  // headline a plural subject is a team: "Brewers place RHP Abner Uribe
+  // (forearm) on 15-day IL", "Albies and Riley homer, Braves beat Marlins
+  // 4-2". Neither word is inflected, so neither -s nor -ing nor -ed reaches
+  // it, and both were live labels (`Brewers Place`, `Riley Homer`).
+  //
+  // Both bare forms ARE ordinary nouns — "a place", "a homer" — which by the
+  // file's usual test would put them in BARE_NOUN_LEMMAS. They are gated
+  // anyway, on the same asymmetry `beat` and `die` are: the nominal reading
+  // takes a numeral or an adjective in front of it, never a name, so the only
+  // pairs that clear the bigram's proper-noun bar are the clauses.
+
+  it("gates bare place and homer", () => {
+    expect(VERB_FORMS.has("place")).toBe(true);
+    expect(VERB_FORMS.has("homer")).toBe(true);
+  });
+
+  it("gates their other inflections too", () => {
+    // `place` moved out of PAST_ONLY_LEMMAS to get here, so the -s and -ing
+    // routes it used to be denied must have come with it.
+    for (const form of ["places", "placing", "homers", "homering"]) {
+      expect(VERB_FORMS.has(form), `"${form}" was not gated`).toBe(true);
+    }
+    expect(PAST_FORMS.has("placed")).toBe(true);
+    expect(PAST_FORMS.has("homered")).toBe(true);
+  });
+
+  it("does not gate the bare forms that really are only nouns", () => {
+    // The counterweight: `near` and `overhaul` are the new lemmas whose bare
+    // form is NOT a predicate a headline reaches this way. Bare `near` is a
+    // preposition ("Near Bordeaux" heads 17 live labels) and "an overhaul" is
+    // a plain noun, so both are in BARE_NOUN_LEMMAS.
+    for (const bare of ["near", "overhaul", "shrug"]) {
+      expect(VERB_FORMS.has(bare), `bare "${bare}" was gated`).toBe(false);
+    }
+    // And the FINITE_ONLY entries keep their bare forms by the wholesale
+    // exclusion: "clear" is an adjective, "ask" and "bake" are not names of
+    // anything but are not worth the -ing either ("an asking price").
+    for (const bare of ["clear", "ask", "bake", "ok"]) {
+      expect(VERB_FORMS.has(bare), `bare "${bare}" was gated`).toBe(false);
+    }
+    expect(VERB_FORMS.has("clearing")).toBe(false);
+    expect(VERB_FORMS.has("asking")).toBe(false);
+    expect(VERB_FORMS.has("baking")).toBe(false);
+  });
+});
+
+describe("the derivers spell the new stems correctly", () => {
+  // Same reasoning as the block at the top of this file: a misspelled form
+  // gates nothing and looks present. These are the new lemmas whose stem the
+  // spelling rules could plausibly get wrong.
+
+  it("doubles the consonant of acquit and confer", () => {
+    expect(PAST_FORMS.has("acquitted")).toBe(true);
+    expect(VERB_FORMS.has("acquitting")).toBe(true);
+    expect(PAST_FORMS.has("conferred")).toBe(true);
+    expect(VERB_FORMS.has("conferring")).toBe(true);
+  });
+
+  it("turns the -y of intensify into -ies and -ied", () => {
+    expect(VERB_FORMS.has("intensifies")).toBe(true);
+    expect(VERB_FORMS.has("intensifys")).toBe(false);
+    expect(PAST_FORMS.has("intensified")).toBe(true);
+  });
+
+  it("keeps the -ey of convey whole", () => {
+    // The -y rule fires only after a consonant, so "conveys" must not have
+    // become "convies".
+    expect(VERB_FORMS.has("conveys")).toBe(true);
+    expect(VERB_FORMS.has("convies")).toBe(false);
+    expect(PAST_FORMS.has("conveyed")).toBe(true);
+  });
+
+  it("adds -es after the sibilant of demolish and chastise", () => {
+    expect(VERB_FORMS.has("demolishes")).toBe(true);
+    expect(VERB_FORMS.has("demolishs")).toBe(false);
+    expect(VERB_FORMS.has("chastises")).toBe(true);
+  });
+
+  it("drops the -e of fade and place before -ing", () => {
+    expect(VERB_FORMS.has("fading")).toBe(true);
+    expect(VERB_FORMS.has("fadeing")).toBe(false);
+    expect(VERB_FORMS.has("placing")).toBe(true);
+    expect(VERB_FORMS.has("placeing")).toBe(false);
   });
 });

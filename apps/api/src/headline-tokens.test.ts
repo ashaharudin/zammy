@@ -415,6 +415,60 @@ describe("properNounEvidence needs prose, not Title Case (issue #100)", () => {
   });
 });
 
+describe("properNounEvidence counts members, not sightings", () => {
+  // `minMembers` is what the bigram label's verb gate raises to overrule the
+  // lexicon. It has to count MEMBERS: an article that repeats its own Title
+  // Case headline inside its description supplies two sightings of the same
+  // word from one source, which is exactly how `Gigabyte Brings` outranked a
+  // `brings` the lexicon already held.
+  const selfQuoting = [
+    {
+      title: "Gigabyte Brings Aorus Infinity to Gamescom",
+      description:
+        "Gigabyte is heading to Gamescom under the Aorus theme. " +
+        "Gigabyte Brings Aorus Infinity to Gamescom The series delivers a build.",
+    },
+    { title: "Arsenal chase another title", description: "Adam explores the chances." },
+  ];
+
+  it("promotes a twice-sighted word on one member's word by default", () => {
+    const evidence = properNounEvidence(selfQuoting);
+    expect(evidence("brings")).toBe(true);
+  });
+
+  it("refuses it once a second member is required", () => {
+    const evidence = properNounEvidence(selfQuoting);
+    expect(evidence("brings", 2)).toBe(false);
+    // Not a blanket refusal of the corpus: `gigabyte` is sighted in the same
+    // one member and answers the same way, which is the point — the bar is
+    // about how many SOURCES agree, not about which word is asked for.
+    expect(evidence("gigabyte", 2)).toBe(false);
+  });
+
+  it("promotes a word two members write mid-prose", () => {
+    const evidence = properNounEvidence([
+      { title: "Rose arrives in Memphis", description: "The winner Justin Rose looks sharp." },
+      { title: "Champ still pushing", description: "The Englishman Justin Rose defends here." },
+    ]);
+    expect(evidence("rose", 2)).toBe(true);
+    // A third member's word is a real step further, and the one that would
+    // cost this golfer his surname.
+    expect(evidence("rose", 3)).toBe(false);
+  });
+
+  it("still lets one lowercase sighting disqualify at any bar", () => {
+    // The lowercase test is corpus-wide and unchanged: a word seen lowercase
+    // ANYWHERE is not a name, however many members capitalize it.
+    const evidence = properNounEvidence([
+      { title: "Kelowna chiefs urge inquiry", description: "The Chiefs met in Kelowna." },
+      { title: "Critics answered", description: "The Chiefs replied from Kelowna." },
+    ]);
+    expect(evidence("chiefs", 1)).toBe(false);
+    expect(evidence("chiefs", 2)).toBe(false);
+    expect(evidence("kelowna", 2)).toBe(true);
+  });
+});
+
 describe("properNounEvidence's fold", () => {
   const corpus = [
     {

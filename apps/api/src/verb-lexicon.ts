@@ -27,6 +27,23 @@
  * PAST_ONLY_LEMMAS when its -s has too. Ambiguity is a property of the form,
  * so it is resolved per form.
  *
+ * Sometimes BOTH readings of a form are live, and then the question has a
+ * second half: which reading can a bigram label actually REACH? "homers" is a
+ * plural noun ("two homers in the ninth") and a verb ("Neto homers"); "places"
+ * is both the same way. But the nominal reading takes a numeral or an
+ * adjective in front of it and the verbal reading takes a SUBJECT, and a
+ * bigram must carry proper-noun evidence to be a candidate at all — so the
+ * pairs that reach a label are the ones whose first word is a name, which is
+ * to say the clauses. That is why `homer` and `place` sit in VERB_LEMMAS and
+ * not in PAST_ONLY_LEMMAS, and it is the same asymmetry `beat` and `die` were
+ * decided on (docs/STORYLINE-LABELS.md).
+ *
+ * It bites hardest on the BARE form, because headline style uses that as the
+ * finite verb of a PLURAL subject — and a plural subject in a headline is a
+ * team. "Brewers place RHP Abner Uribe (forearm) on 15-day IL" and "Albies and
+ * Riley homer, Braves beat Marlins 4-2" were both live bigram labels
+ * (`Brewers Place`, `Riley Homer`), and neither word is inflected at all.
+ *
  * Why this generalises past one day of news: the entries are chosen by
  * frequency in headline writing and filtered by the noun test above — not by
  * which phrases happened to be wrong on the day the file was written. The
@@ -39,52 +56,55 @@
 const VERB_LEMMAS = [
   // saying, claiming, arguing — the largest class in headlines
   "accept", "accuse", "acknowledge", "admit", "allege", "argue", "assert",
-  "assure", "blame", "clarify", "complain", "concede", "condemn", "confess",
-  "confirm", "criticize", "decry", "declare", "denounce", "deny", "describe",
-  "disclose", "discuss", "dismiss", "explain", "express", "hail", "highlight",
-  "insist", "mention", "mock", "mull", "predict", "pretend", "propose",
-  "recommend", "reflect", "refuse", "reiterate", "reject", "represent",
-  "respond", "reveal", "slam", "suggest", "suppose", "testify", "threaten",
-  "tout", "urge", "vow",
+  "assure", "blame", "chastise", "clarify", "complain", "concede", "condemn",
+  "confess", "confirm", "criticize", "decry", "declare", "denounce", "deny",
+  "describe", "disclose", "discuss", "dismiss", "explain", "express", "hail",
+  "highlight", "insist", "laud", "liken", "mention", "misrepresent", "mock",
+  "mull", "predict", "pretend", "propose", "recommend", "reflect", "refuse",
+  "reiterate", "reject", "represent", "respond", "reveal", "slam", "suggest",
+  "suppose", "testify", "threaten", "tout", "urge", "vow",
   // deciding, allowing, requiring
-  "achieve", "adopt", "advise", "agree", "allow", "appoint", "approve",
-  "authorize", "choose", "decide", "deserve", "determine", "elect", "enable",
-  "encourage", "endorse", "enforce", "ensure", "expect", "forbid", "hesitate",
-  "implement", "indicate", "instruct", "intend", "justify", "nominate",
-  "oppose", "oust", "permit", "persuade", "prefer", "prevent", "prohibit",
-  "promote", "quit", "require", "resolve", "select", "settle", "submit",
+  "achieve", "acquit", "adopt", "advise", "agree", "allow", "appoint",
+  "approve", "authorize", "choose", "decide", "deserve", "determine", "elect",
+  "enable", "encourage", "endorse", "enforce", "ensure", "expect", "forbid",
+  "hesitate", "implement", "indicate", "instruct", "intend", "justify",
+  "nominate", "oppose", "oust", "permit", "persuade", "prefer", "prevent",
+  "prohibit", "promote", "quit", "require", "resolve", "select", "settle",
+  "submit",
   // motion and change of state
-  "advance", "arrive", "ascend", "become", "begin", "climb", "come", "depart",
-  "descend", "die", "disappear", "emerge", "escalate", "escape", "expand",
-  "explode", "flee", "float", "fly", "follow", "go", "grow", "halt", "happen",
-  "leave", "lean", "leap", "melt", "migrate", "occur", "proceed",
-  "remain", "resume", "revive", "rise", "shrink", "sink", "slide", "slip",
-  "stay", "strengthen", "swim", "tighten", "topple", "undergo", "vanish",
-  "weaken", "worsen",
+  "advance", "arrive", "ascend", "become", "begin", "climb", "come", "deepen",
+  "depart", "descend", "die", "disappear", "emerge", "escalate", "escape",
+  "expand", "explode", "fade", "flee", "float", "fly", "follow", "go", "grow",
+  "halt", "happen", "intensify", "leave", "lean", "leap", "melt", "migrate",
+  "near", "occur", "proceed", "remain", "resume", "revert", "revive", "rise",
+  "shrink", "sink", "slide", "slip", "stay", "strengthen", "swim", "tighten",
+  "topple", "undergo", "vanish", "weaken", "worsen",
   // acting on someone or something
-  "abandon", "attend", "attract", "avoid", "await", "beat", "betray", "bring",
-  "capture", "carry", "celebrate", "collect", "combine", "compel", "confront",
-  "connect", "consider", "consult", "contain", "continue", "contribute",
-  "convict", "convince", "create", "crush", "defend", "defy", "deliver",
-  "deploy", "deport", "destroy", "detain", "develop", "devote", "disrupt",
-  "dissolve", "distribute", "divide", "dominate", "donate", "downplay", "earn",
-  "educate", "eliminate", "embrace", "employ", "enhance", "enter", "erase",
-  "establish", "evacuate", "examine", "exceed", "exclude", "execute",
-  "exploit", "explore", "expose", "extend", "gather", "generate", "give",
-  "govern", "grab", "greet", "hurt", "identify", "ignore", "illustrate",
-  "impose", "impress", "improve", "include", "inherit", "initiate", "injure",
-  "insert", "inspect", "inspire", "install", "interrupt", "intervene",
-  "introduce", "invade", "invent", "investigate", "invite", "involve",
-  "isolate", "join", "knock", "lend", "locate", "lose", "maintain", "marry",
-  "modify", "navigate", "neglect", "negotiate", "obtain", "occupy", "offend",
-  "organize", "overcome", "overturn", "prepare", "preserve", "produce",
-  "prosecute", "protect", "provide", "publish", "punish", "pursue", "reach",
-  "rebuild", "receive", "recognize", "recover", "reduce", "remove", "renew",
-  "repeat", "replace", "rescue", "restore", "restrict", "retain", "reverse",
-  "revise", "rip", "satisfy", "save", "scare", "scramble", "secure", "seek",
-  "seize", "sell", "send", "separate", "serve", "solve", "steal", "sue",
-  "suffer", "surround", "survive", "suspend", "sustain", "terminate",
-  "transform", "translate", "undermine", "unveil", "vie", "violate", "welcome",
+  "abandon", "activate", "add", "attend", "attract", "avoid", "await", "beat",
+  "betray", "bring", "capture", "carry", "celebrate", "collect", "combine",
+  "compel", "confer", "confront", "connect", "consider", "consult", "contain",
+  "continue", "contribute", "convey", "convict", "convince", "create", "crush",
+  "defend", "defy", "deliver", "demolish", "deploy", "deport", "destroy",
+  "detain", "develop", "devote", "disarm", "disrupt", "dissolve", "distribute",
+  "divide", "dominate", "donate", "downplay", "earn", "educate", "eliminate",
+  "embrace", "employ", "enhance", "enter", "erase", "establish", "evacuate",
+  "examine", "exceed", "exclude", "execute", "exploit", "explore", "expose",
+  "extend", "gather", "generate", "give", "govern", "grab", "greet", "homer",
+  "hurt", "identify", "ignore", "illustrate", "impose", "impress", "improve",
+  "include", "induct", "inherit", "initiate", "injure", "insert", "inspect",
+  "inspire", "install", "interrupt", "intervene", "introduce", "invade",
+  "invent", "investigate", "invite", "involve", "isolate", "join", "knock",
+  "lend", "locate", "lose", "maintain", "marry", "modify", "navigate",
+  "neglect", "negotiate", "neutralize", "obtain", "occupy", "offend",
+  "organize", "overcome", "overhaul", "overturn", "place", "prepare",
+  "preserve", "produce", "prosecute", "protect", "provide", "publish",
+  "punish", "pursue", "reach", "rebuild", "receive", "recognize", "recover",
+  "reduce", "remove", "renew", "repeat", "replace", "rescue", "restore",
+  "restrict", "resurrect", "retain", "reverse", "revise", "rip", "satisfy",
+  "save", "scare", "scramble", "secure", "seek", "seize", "sell", "send",
+  "separate", "serve", "solve", "steal", "sue", "suffer", "surround",
+  "survive", "suspend", "sustain", "terminate", "transform", "translate",
+  "undermine", "unveil", "vie", "violate", "welcome", "withdraw",
   // mental states, perception, stance
   "apologize", "appear", "assume", "believe", "belong", "calculate", "compare",
   "compete", "comply", "conclude", "consist", "cooperate", "cope", "dare",
@@ -92,9 +112,9 @@ const VERB_LEMMAS = [
   "forget", "forgive", "glance", "imagine", "imply", "keep", "listen", "obey",
   "observe", "owe", "perform", "possess", "postpone", "react", "realize",
   "recall", "refer", "regard", "rely", "remember", "remind", "resemble",
-  "resign", "resist", "retire", "seem", "shout", "sing", "sit", "speak",
-  "stare", "succeed", "teach", "tend", "thank", "try", "vary", "wait", "wake",
-  "wander", "want", "weigh", "wonder", "write",
+  "resign", "resist", "retire", "seem", "shout", "shrug", "sing", "sit",
+  "speak", "stare", "succeed", "teach", "tend", "thank", "try", "vary", "wait",
+  "wake", "wander", "want", "weigh", "wonder", "write",
 ] as const;
 
 /**
@@ -118,6 +138,14 @@ const VERB_LEMMAS = [
  * English, and only an unambiguous predicate ("agree", "urge", "confirm")
  * keeps the bare route.
  *
+ * `homer` and `place` are the deliberate absences, and the ones to check here
+ * first: "a homer" and "a place" ARE ordinary nouns by this list's own test,
+ * and they are still not on it. The module comment says why — their nominal
+ * reading needs a numeral or an adjective in front, never a name, so the only
+ * pairs that clear the proper-noun bar are the clauses (`Brewers Place`,
+ * `Riley Homer`). Same trade as `beat` and `die`, and the same price: a bigram
+ * that really did want the noun is refused, and refusing is cheap.
+ *
  * Typed to VERB_LEMMAS rather than to `string`, so a lemma misspelled here —
  * which would silently protect nothing — is a compile error rather than a
  * quiet re-run of the bug this list exists to fix.
@@ -127,11 +155,11 @@ const BARE_NOUN_LEMMAS: ReadonlySet<(typeof VERB_LEMMAS)[number]> = new Set<
 >([
   "advance", "blame", "capture", "climb", "combine", "convict", "crush",
   "divide", "elect", "escape", "exploit", "express", "float", "fly", "grab",
-  "hail", "halt", "highlight", "lean", "leap", "leave", "mock",
-  "neglect", "permit", "preserve", "produce", "reach", "rebuild", "recall",
-  "refuse", "rescue", "resume", "reveal", "reverse", "rip", "rise", "save",
-  "scare", "secure", "select", "sink", "slam", "slide", "slip", "stay", "vow",
-  "wait", "wake", "welcome", "wonder",
+  "hail", "halt", "highlight", "lean", "leap", "leave", "mock", "near",
+  "neglect", "overhaul", "permit", "preserve", "produce", "reach", "rebuild",
+  "recall", "refuse", "rescue", "resume", "reveal", "reverse", "rip", "rise",
+  "save", "scare", "secure", "select", "shrug", "sink", "slam", "slide",
+  "slip", "stay", "vow", "wait", "wake", "welcome", "wonder",
 ]);
 
 /** VERB_LEMMAS minus the ones whose bare form is a noun. */
@@ -139,8 +167,16 @@ const BARE_VERBAL_LEMMAS = VERB_LEMMAS.filter((lemma) => !BARE_NOUN_LEMMAS.has(l
 
 /**
  * Only the -ing has nominalized: a WARNING, a HEARING, the SPENDING, a
- * BUILDING, a MEETING. The -s form of each is still purely verbal ("Trump
- * warns", "court hears"), so these fire on -s and -ed but never on -ing.
+ * BUILDING, a MEETING, a CLEARING, an ASKING price, BAKING soda. The -s form
+ * of each is still purely verbal ("Trump warns", "court hears", "Senate
+ * clears", "Estrada asks", "Europe bakes"), so these fire on -s and -ed but
+ * never on -ing.
+ *
+ * `ok` is here for its -s alone. "Senate OKs", "ERC OKs" is a live headline
+ * idiom and `oks` is no kind of noun, while the bare form is an adjective and
+ * an interjection before it is anything else and "oking" is not a word — the
+ * -ed route the derivation builds for it ("oked") simply never matches a
+ * token, which the file's own over-generation note says is safe.
  *
  * `jump` sat in PAST_ONLY_LEMMAS until a live "AGL Jumps" label showed the -s
  * reading the list down there assumed. Both readings are real — "ski jumps"
@@ -151,14 +187,21 @@ const BARE_VERBAL_LEMMAS = VERB_LEMMAS.filter((lemma) => !BARE_NOUN_LEMMAS.has(l
  * once: the three are alternatives, one classification per lemma.
  */
 const FINITE_ONLY_LEMMAS = [
-  "build", "ease", "heal", "hear", "hire", "jump", "kill", "learn", "meet",
-  "plead", "shoot", "spend", "warn",
+  "ask", "bake", "build", "clear", "ease", "heal", "hear", "hire", "jump",
+  "kill", "learn", "meet", "ok", "plead", "shoot", "spend", "warn",
 ] as const;
 
 /**
  * The -s form is an ordinary plural noun too — "funds", "plans", "calls",
  * "games", "talks", "cuts", "votes". These are why "medicaid funding" and
  * "patriot games" cannot be judged morphologically. Past tense only.
+ *
+ * `place` was classified here on that reading ("places" is a plural noun, and
+ * so is "a place") until `Brewers Place` and `Titans Place` showed the reading
+ * the classification had priced in as unreachable. It moved to VERB_LEMMAS —
+ * moved, not copied: the three lists are alternatives, and a lemma in two of
+ * them is two contradictory answers with the more permissive one silently
+ * winning.
  */
 const PAST_ONLY_LEMMAS = [
   "arrest", "attack", "back", "ban", "bar", "blast", "block", "boost", "break",
@@ -170,25 +213,25 @@ const PAST_ONLY_LEMMAS = [
   "fold", "force", "form", "fund", "gain", "grant", "guarantee", "guide",
   "hand", "handle", "hang", "harm", "head", "help", "hide", "hit", "hold",
   "hope", "host", "hunt", "import", "increase", "influence", "invest", "issue",
-  "judge", "kick", "lack", "land", "last", "launch", "lead", "lift",
-  "limit", "link", "list", "live", "load", "lock", "look", "love", "manage",
-  "mark", "match", "matter", "mean", "measure", "mind", "miss", "mix",
-  "monitor", "move", "murder", "name", "note", "notice", "object", "offer",
-  "open", "operate", "order", "pass", "pause", "pay", "pick", "place", "plan",
-  "play", "pledge", "point", "pour", "pray", "praise", "present", "press",
-  "protest", "prove", "pull", "purchase", "push", "question", "quote", "raise",
-  "rally", "record", "reform", "register", "regret", "relate", "release",
-  "remark", "rent", "repair", "reply", "report", "request", "respect",
-  "result", "return", "review", "ride", "risk", "roll", "rule", "run", "rush",
-  "sail", "scan", "search", "shake", "shape", "share", "shift", "shine",
-  "show", "shut", "sign", "signal", "sleep", "smile", "sound", "spill",
-  "split", "spot", "spread", "stand", "start", "state", "step", "stick",
-  "stop", "store", "stress", "stretch", "strike", "struggle", "study",
-  "supply", "support", "surge", "surprise", "surrender", "suspect", "sweep",
-  "switch", "talk", "target", "tear", "test", "touch", "trade", "train",
-  "transfer", "travel", "treat", "trigger", "trust", "turn", "understand",
-  "use", "value", "veto", "view", "visit", "vote", "walk", "wash", "waste",
-  "wear", "win", "wish", "witness", "work", "worry", "yield",
+  "judge", "kick", "lack", "land", "last", "launch", "lead", "lift", "limit",
+  "link", "list", "live", "load", "lock", "look", "love", "manage", "mark",
+  "match", "matter", "mean", "measure", "mind", "miss", "mix", "monitor",
+  "move", "murder", "name", "note", "notice", "object", "offer", "ok", "open",
+  "operate", "order", "pass", "pause", "pay", "pick", "plan", "play", "pledge",
+  "point", "pour", "pray", "praise", "present", "press", "protest", "prove",
+  "pull", "purchase", "push", "question", "quote", "raise", "rally", "record",
+  "reform", "register", "regret", "relate", "release", "remark", "rent",
+  "repair", "reply", "report", "request", "respect", "result", "return",
+  "review", "ride", "risk", "roll", "rule", "run", "rush", "sail", "scan",
+  "search", "shake", "shape", "share", "shift", "shine", "show", "shut",
+  "sign", "signal", "sleep", "smile", "sound", "spill", "split", "spot",
+  "spread", "stand", "start", "state", "step", "stick", "stop", "store",
+  "stress", "stretch", "strike", "struggle", "study", "supply", "support",
+  "surge", "surprise", "surrender", "suspect", "sweep", "switch", "talk",
+  "target", "tear", "test", "touch", "trade", "train", "transfer", "travel",
+  "treat", "trigger", "trust", "turn", "understand", "use", "value", "veto",
+  "view", "visit", "vote", "walk", "wash", "waste", "wear", "win", "wish",
+  "witness", "work", "worry", "yield",
 ] as const;
 
 /**
