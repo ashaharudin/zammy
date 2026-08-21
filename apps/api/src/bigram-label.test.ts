@@ -238,5 +238,55 @@ describe("bigramLabel", () => {
         ]),
       ).toBe("Kelowna Deal");
     });
+
+    // The bare form is a FOURTH inflection, and VERB_LEMMAS membership is
+    // decided on the other two. "rises"/"rising" and "hails"/"hailing" name
+    // nothing, so both lemmas belong there — but "a pay rise" and "a hail
+    // storm" are nouns, so their bare forms cannot ride along. Gating them
+    // does not merely rank the phrase lower; it takes the whole label away
+    // (BARE_NOUN_LEMMAS in verb-lexicon.ts).
+    it.each([
+      [
+        "rise",
+        "Bitcoin Rise",
+        [
+          article(
+            "Bitcoin rise continues",
+            "The Bitcoin rise continued overnight. Traders watched Bitcoin closely.",
+          ),
+          article("Analysts explain the Bitcoin rise", "A sharp Bitcoin rise followed the news."),
+        ],
+      ],
+      [
+        "hail",
+        "Kelowna Hail",
+        [
+          article(
+            "Kelowna hail storm damages homes",
+            "A hail storm hit Kelowna overnight. Crews across Kelowna cleared debris.",
+          ),
+          article(
+            "Kelowna hail storm cleanup begins",
+            "The hail storm left Kelowna towns without power.",
+          ),
+        ],
+      ],
+      [
+        "leave",
+        "Kelowna Leave",
+        [
+          article(
+            "Kelowna leave policy challenged",
+            "The leave policy in Kelowna drew criticism. Workers in Kelowna objected.",
+          ),
+          article(
+            "Court hears Kelowna leave case",
+            "Officials in Kelowna defended the leave policy.",
+          ),
+        ],
+      ],
+    ])("keeps %s, a VERB_LEMMAS entry whose bare form nominalized", (_lemma, label, corpus) => {
+      expect(bigramLabel(corpus as PhraseArticle[])).toBe(label);
+    });
   });
 });

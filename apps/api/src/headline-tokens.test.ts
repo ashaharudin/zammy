@@ -248,8 +248,70 @@ describe("contentTokenPairs does not fabricate adjacency (issue #100)", () => {
 
   it("keeps a pair that really is adjacent", () => {
     const pairs = contentTokenPairs("Royals agree deal, Padres celebrate");
-    expect(pairs).toContainEqual(["deal", "padres"]);
+    expect(pairs).toContainEqual(["royals", "agree"]);
+    expect(pairs).toContainEqual(["agree", "deal"]);
     expect(pairs).toContainEqual(["padres", "celebrate"]);
+  });
+
+  it("drops a pair punctuation separated, which the tokenizer throws away", () => {
+    // The harder half of the same bug: a stopword at least survives into the
+    // token stream, but the comma is DISCARDED, so "deal" lands next to
+    // "padres" with nothing left to show that anything stood between them.
+    const pairs = contentTokenPairs("Royals agree deal, Padres celebrate");
+    expect(pairs).not.toContainEqual(["deal", "padres"]);
+  });
+
+  it("drops a pair a spaced hyphen separated, as feed titles write it", () => {
+    // A hyphen is kept INSIDE a word so CVE-2026-1234 survives whole (§10.2),
+    // so a hyphen standing alone as a source separator has to break the run
+    // some other way: it is a chunk that trims to nothing.
+    const pairs = contentTokenPairs("Bitcoin rise continues - Kelowna");
+    expect(pairs).toContainEqual(["bitcoin", "rise"]);
+    expect(pairs).not.toContainEqual(["continues", "kelowna"]);
+  });
+
+  it("partitions the token stream without changing it", () => {
+    // Runs are a regrouping of `splitTokens`, not a second tokenizer: the
+    // possessive still folds, the curly apostrophe still survives (#101), and
+    // the hyphenated identifier still comes through whole so it can be
+    // dropped whole for containing a digit (§10.2).
+    expect(contentTokens("Dillard's patch doesn’t land, Kelowna says")).toEqual([
+      "dillard",
+      "patch",
+      "doesn't",
+      "land",
+      "kelowna",
+    ]);
+    expect(contentTokens("The CVE-2026-1234 patch - Kelowna")).toEqual(["patch", "kelowna"]);
+  });
+});
+
+describe("properNounEvidence needs prose, not Title Case (issue #100)", () => {
+  it("promotes nothing from a corpus that is Title Case throughout", () => {
+    // Ignoring the segment's FIRST capital is not enough on its own: every
+    // later word of a Title Case headline is a mid-segment capital too, so
+    // the gate used to read "Quarter", "Eps" and "Estimate" as names and
+    // admit the exact vocabulary pairs it exists to refuse.
+    const evidence = properNounEvidence([
+      { title: "Second Quarter Eps Estimate Revised Again", description: null },
+      { title: "Eps Estimate Beats Second Quarter Forecast", description: null },
+    ]);
+
+    expect(evidence("eps")).toBe(false);
+    expect(evidence("estimate")).toBe(false);
+    expect(evidence("quarter")).toBe(false);
+  });
+
+  it("still promotes a name once one segment is written as prose", () => {
+    // One description in running text is all it takes: "chiefs" shows up
+    // lowercase there and "Kelowna" does not, which is the whole test.
+    const evidence = properNounEvidence([
+      { title: "Kelowna Chiefs Urge Inquiry", description: null },
+      { title: "Chiefs Answer Critics", description: "The chiefs met in Kelowna." },
+    ]);
+
+    expect(evidence("kelowna")).toBe(true);
+    expect(evidence("chiefs")).toBe(false);
   });
 });
 

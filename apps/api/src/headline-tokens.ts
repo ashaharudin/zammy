@@ -51,14 +51,24 @@ export function contentTokens(text: string): string[] {
  * #100). The bigram label (`bigram-label.ts`) is exactly that caller, so it
  * needs pairs computed over the full token stream, before filtering, kept
  * only when both sides survive it.
+ *
+ * Punctuation fabricates adjacency the same way, and has to be excluded by the
+ * same rule. The tokenizer DISCARDS its delimiters, so "Ukraine, Russia talks"
+ * leaves `ukraine` sitting next to `russia` in the token stream with nothing
+ * to show that a comma stood between them — and unlike "agree deal" the
+ * proper-noun gate cannot catch it, because both halves really are names. So
+ * pairs are drawn from RUNS (see `tokenRuns`) rather than from the flat
+ * stream: two words are adjacent only if nothing but whitespace separated
+ * them.
  */
 export function contentTokenPairs(text: string): Array<[string, string]> {
-  const tokens = tokenize(text);
   const pairs: Array<[string, string]> = [];
-  for (let i = 0; i + 1 < tokens.length; i += 1) {
-    const first = tokens[i]!;
-    const second = tokens[i + 1]!;
-    if (keepable(first) && keepable(second)) pairs.push([first, second]);
+  for (const run of tokenRuns(text.toLowerCase())) {
+    for (let i = 0; i + 1 < run.length; i += 1) {
+      const first = run[i]!;
+      const second = run[i + 1]!;
+      if (keepable(first) && keepable(second)) pairs.push([first, second]);
+    }
   }
   return pairs;
 }
@@ -74,16 +84,51 @@ function tokenize(text: string): string[] {
 }
 
 function splitTokens(text: string): string[] {
-  return text
+  return tokenRuns(text).flat();
+}
+
+/**
+ * The same tokens, grouped by what SEPARATED them. A run holds words that
+ * nothing but whitespace stood between; anything else — a comma, a dash, a
+ * period, a bracket, a quote — starts a new one.
+ *
+ * `splitTokens` flattens this away, because a caller counting words does not
+ * care what sat between them. `contentTokenPairs` does care: a comma is as
+ * good as a stopword at making two unrelated words look like a phrase, and it
+ * leaves even less trace, since the delimiter is discarded rather than
+ * filtered.
+ *
+ * Splitting on the outer class and then on whitespace is exactly equivalent to
+ * splitting once on the union of the two, so the tokens are the same tokens,
+ * only partitioned. The one thing the union hides is a chunk that is nothing
+ * BUT wrapping punctuation: the spaced hyphen in "Bitcoin Rise - Reuters" is
+ * a separator, not a word that happened to vanish, so it ends the run too.
+ */
+function tokenRuns(text: string): string[][] {
+  const runs: string[][] = [];
+  const segments = text
     .normalize("NFKC")
     // NFKC does not fold a typographic apostrophe (U+2019, and the modifier
     // letter U+02BC some sources use instead) to ASCII "'" — left alone, the
     // split below treats it as a word boundary and shreds "doesn't" into
     // "doesn" + "t".
     .replaceAll(/[’ʼ]/g, "'")
-    .split(/[^\p{L}\p{N}'-]+/u)
-    .map(trimWordPunctuation)
-    .filter((token) => token.length > 0);
+    .split(/[^\p{L}\p{N}'\-\s]+/u);
+
+  for (const segment of segments) {
+    let run: string[] = [];
+    for (const chunk of segment.split(/\s+/u)) {
+      const token = trimWordPunctuation(chunk);
+      if (token.length > 0) {
+        run.push(token);
+      } else if (chunk.length > 0 && run.length > 0) {
+        runs.push(run);
+        run = [];
+      }
+    }
+    if (run.length > 0) runs.push(run);
+  }
+  return runs;
 }
 
 /**
@@ -112,9 +157,11 @@ export function trimWordPunctuation(token: string): string {
  * often Title Case, so a capital there proves nothing on its own — but a
  * generic word will betray itself in lowercase somewhere in the corpus's
  * prose, and a name never will. A term qualifies when it is capitalized at
- * least once mid-sentence and NEVER seen lowercase. Conservative by
+ * least once mid-sentence IN PROSE and NEVER seen lowercase. Conservative by
  * construction: a name that only ever opens sentences fails the test and
- * waits for a corpus that uses it mid-sentence.
+ * waits for a corpus that uses it mid-sentence, and a corpus that is Title
+ * Case throughout yields no evidence at all rather than promoting every word
+ * in it.
  *
  * Exported, and typed to the two fields it actually reads, because the
  * storyline phrase (`storyline-phrase.ts`) runs the verb gate below over a
@@ -143,6 +190,19 @@ export function properNounEvidence(
       // sentence-ish punctuation and ignore each segment's first token.
       for (const segment of text.split(/[.!?;:…]+\s+/)) {
         const tokens = splitTokens(segment);
+        // Neither does capitalization in a TITLE CASE segment, where every
+        // content word wears a capital whatever it is. Dropping only the
+        // sentence-initial capital is not enough to catch that: in "Second
+        // Quarter Eps Estimate Revised Again" the words after the first are
+        // all mid-segment capitals, so every one of them would qualify as a
+        // name and the gate would admit exactly the vocabulary pairs it
+        // exists to refuse. What makes a capital mean something is a segment
+        // that would have shown a common word LOWERCASE, so evidence is taken
+        // only from segments that show at least one — running prose.
+        const isProse = tokens.some(
+          (token, index) =>
+            index > 0 && keepable(token.toLowerCase()) && /^\p{Ll}/u.test(token),
+        );
         tokens.forEach((token, index) => {
           const lower = token.toLowerCase();
           // `keepable` before `fold`, the order `contentTokens` uses: the
@@ -151,7 +211,7 @@ export function properNounEvidence(
           const folded = fold(lower);
           if (/^\p{Ll}/u.test(token)) {
             seenLowercase.add(folded);
-          } else if (index > 0 && /^\p{Lu}/u.test(token)) {
+          } else if (isProse && index > 0 && /^\p{Lu}/u.test(token)) {
             capitalizedMidSentence.add(folded);
           }
         });

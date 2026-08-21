@@ -96,6 +96,46 @@ const VERB_LEMMAS = [
 ] as const;
 
 /**
+ * The BARE form of these has nominalized, even though their -s and -ing did
+ * not: a pay RISE, a hail STORM, paid LEAVE, a grand SLAM, a work PERMIT, a
+ * product RECALL, a land GRAB, carbon CAPTURE, a nature PRESERVE.
+ *
+ * They sit in VERB_LEMMAS because that list is decided on the -s and -ing
+ * forms ("rises"/"rising", "hails"/"hailing" name nothing), and the bare form
+ * is a FOURTH inflection that the file's own question — has this form become a
+ * noun in its own right? — has to be asked of separately. It cannot be
+ * inherited from the other two: "rise" nominalized and "rises" did not, the
+ * same way "funding" nominalized and "funds" did not one list down.
+ *
+ * The cost of getting it wrong is asymmetric, which is why the entries here
+ * are generous. Gating a word that is really a noun refuses a good label
+ * outright — "Bitcoin Rise", "Texas Hail", "Product Recall" all become no
+ * label at all. Failing to gate one leaves a single clause-shaped fallback
+ * that the proper-noun gate above may well refuse anyway. So a lemma lands
+ * here whenever its bare form is an ordinary noun or premodifier of news
+ * English, and only an unambiguous predicate ("agree", "urge", "confirm")
+ * keeps the bare route.
+ *
+ * Typed to VERB_LEMMAS rather than to `string`, so a lemma misspelled here —
+ * which would silently protect nothing — is a compile error rather than a
+ * quiet re-run of the bug this list exists to fix.
+ */
+const BARE_NOUN_LEMMAS: ReadonlySet<(typeof VERB_LEMMAS)[number]> = new Set<
+  (typeof VERB_LEMMAS)[number]
+>([
+  "advance", "capture", "climb", "combine", "convict", "crush", "divide",
+  "elect", "escape", "exploit", "express", "float", "fly", "grab", "hail",
+  "halt", "highlight", "lean", "leap", "leave", "mock", "neglect", "permit",
+  "preserve", "produce", "reach", "rebuild", "recall", "refuse", "rescue",
+  "resume", "reveal", "reverse", "rise", "save", "scare", "secure", "select",
+  "sink", "slam", "slide", "slip", "stay", "vow", "wait", "wake", "welcome",
+  "wonder",
+]);
+
+/** VERB_LEMMAS minus the ones whose bare form is a noun. */
+const BARE_VERBAL_LEMMAS = VERB_LEMMAS.filter((lemma) => !BARE_NOUN_LEMMAS.has(lemma));
+
+/**
  * Only the -ing has nominalized: a WARNING, a HEARING, the SPENDING, a
  * BUILDING, a MEETING. The -s form of each is still purely verbal ("Trump
  * warns", "court hears"), so these fire on -s and -ed but never on -ing.
@@ -212,19 +252,19 @@ function inflect(
  * third person singular of a verb whose every inflection stays verbal, and
  * the present participle of a verb that has not nominalized.
  *
- * The bare lemma is only safe to include for VERB_LEMMAS. That list exists
- * because both its -s AND its -ing form stay verbal ("advances", "advancing"
- * name nothing) — the same test, applied to a third inflection, says the bare
- * form does not nominalize either. FINITE_ONLY_LEMMAS and PAST_ONLY_LEMMAS are
- * separate lists precisely because some inflection of them IS a common noun
- * ("funding", "plans", "talks", "cuts"), and the bare form sits on that side
- * of the ambiguity, not the other — "plan", "talk", "cut" are nouns as often
- * as verbs, so gating them here would cost "Trade Plan" and "Border Deal" to
- * fix a headline like "Royals Agree Deal" that the bare VERB_LEMMAS form
- * alone already reaches.
+ * The bare lemma comes only from VERB_LEMMAS, and only after BARE_NOUN_LEMMAS
+ * is taken back out of it. FINITE_ONLY_LEMMAS and PAST_ONLY_LEMMAS are
+ * excluded wholesale: they are separate lists precisely because some
+ * inflection of them IS a common noun ("funding", "plans", "talks", "cuts"),
+ * and the bare form sits on that side of the ambiguity — "plan", "talk",
+ * "cut" are nouns as often as verbs, so gating them here would cost "Trade
+ * Plan" and "Border Deal" to fix a headline like "Royals Agree Deal" that the
+ * bare VERB_LEMMAS form alone already reaches. Membership of VERB_LEMMAS is
+ * not by itself enough either: it is decided on the -s and -ing forms, and a
+ * bare form nominalizes on its own schedule ("a pay rise", "paid leave").
  */
 export const VERB_FORMS: ReadonlySet<string> = new Set([
-  ...VERB_LEMMAS,
+  ...BARE_VERBAL_LEMMAS,
   ...inflect(VERB_LEMMAS, ["s", "ing"]),
   ...inflect(FINITE_ONLY_LEMMAS, ["s"]),
 ]);
