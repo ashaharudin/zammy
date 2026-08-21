@@ -362,8 +362,19 @@ tokens, replayed over the whole archive:
 
 Ten piles for ten real storylines — 1:1, the same trade as every threshold, for
 the price of re-deriving `story_tokens` across the archive and rebuilding
-`story_token_days`. Not shipped. (It may still be right on other grounds; it is
-not a fix for *this*.)
+`story_token_days`. Not a fix for *this*, and refused on that basis.
+
+**Shipped later, on other grounds (2026-08-21, `TOKENIZER_VERSION` 6).** The
+replay above stripped each article's *own* source identity, matched against its
+domain. What shipped is narrower and needs no domain: `stripSourceAttribution`
+peels trailing segments that are attribution-SHAPED, which catches the case this
+table could not price separately — a title suffix whose tokens are worth **mass
+19.88 against a floor of 20** on the trailing fortnight to 2026-08-21, so a
+Global News dateline was one coincidence short of a storyline on its own. The
+1:1 trade recorded here still stands as the honest expectation for the general
+case; it was the *specific* arithmetic of one outlet's suffix that decided it.
+The price was paid as stated — see `TOKENIZER_VERSION` in `grouping.ts` for the
+three-step repair a bump like this obliges.
 
 Wire and journal boilerplate is likewise real and likewise a minority: 41 of
 338 declined storylines (12.1%) are built entirely from press-release, filings,

@@ -102,7 +102,16 @@ export function contentTokenPairs(text: string): Array<[string, string]> {
  * reads "The Korea Times" and a headline's tail reads "and faster than
  * expected".
  * Peeling repeats, because the edition sits between the headline and the site
- * ("- National | Globalnews.ca"), and stops before it could eat the headline.
+ * ("- National | Globalnews.ca"), and stops before it could eat the headline:
+ * `MIN_HEADLINE_WORDS` words must survive, and at most
+ * `MAX_ATTRIBUTION_SEGMENTS` segments come off per call.
+ *
+ * The shape rule buys its cheapness with both kinds of error, and both are
+ * measured rather than assumed. It keeps mastheads with an internal function
+ * word ("the Globe and Mail" — see `ARTICLES`), and it peels a short verbless
+ * tail that reads like a name ("- a stunning upset"). The second costs two
+ * tokens on one article; the first leaves that outlet's chrome exactly where it
+ * was.
  *
  * What it deliberately does NOT do is consult `source_domain`. Matching the
  * segment against the outlet's own domain would be the precise rule — and it
@@ -135,6 +144,17 @@ const MAX_ATTRIBUTION_SEGMENTS = 3;
 const MAX_ATTRIBUTION_WORDS = 4;
 /** What must survive the peel. */
 const MIN_HEADLINE_WORDS = 2;
+/**
+ * The only function words an outlet's own name opens with. A masthead that
+ * carries one INSIDE it — "the Globe and Mail", "The Times of India" — is
+ * refused by the rule above and survives into the vocabulary. That is the
+ * shape rule's known blind spot, left as-is: the discriminator that would
+ * catch it is the segment's own capitalization, and admitting `and`/`of`
+ * anywhere would take "top of the table" and "and faster than expected" with
+ * it. Consulting `source_domain` remains the precise fix, at the plumbing cost
+ * the module comment describes.
+ */
+const ARTICLES: ReadonlySet<string> = new Set(["a", "an", "the"]);
 
 function countWords(text: string): number {
   return text.split(/\s+/u).filter((word) => word.length > 0).length;
@@ -162,12 +182,17 @@ function isAttribution(segment: string): boolean {
 
   return tokens.every((token, index) => {
     if (VERB_FORMS.has(token) || PAST_FORMS.has(token)) return false;
-    // A leading article is how outlets write their own names ("The Korea
+    // A leading ARTICLE is how outlets write their own names ("The Korea
     // Times"); a function word anywhere else is prose ("and faster than
     // expected", "top of the table"). This reads grammar rather than the whole
     // stopword list, because half that list is desk furniture — `times` and
     // `news` are furniture in a headline and an outlet's NAME here.
-    return index === 0 || !FUNCTION_WORDS.has(token);
+    //
+    // Articles only, not every function word at index 0. Exempting the whole
+    // class peeled "- some quiet relief" and "- an unexpected reversal", which
+    // are headline tails; no outlet is named "Some ...".
+    if (index === 0) return ARTICLES.has(token) || !FUNCTION_WORDS.has(token);
+    return !FUNCTION_WORDS.has(token);
   });
 }
 

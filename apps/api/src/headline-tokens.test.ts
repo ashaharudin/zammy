@@ -122,7 +122,7 @@ describe("the outlet's own name is not vocabulary", () => {
   // attribution is a token like any other and the WORST kind: it is carried by
   // every article from that outlet whatever the article is about. Measured on
   // the dev archive (2026-08-21): `winnipeg`, `globalnew`, `ca` and `manitoba`
-  // together are worth mass 19.56 against a linker floor of 20, which is how
+  // together are worth mass 19.88 against a linker floor of 20, which is how
   // ten unrelated Manitoba stories became one arc called "Manitoba Beekeepers".
 
   it("peels the site, then the edition behind it", () => {
@@ -134,10 +134,17 @@ describe("the outlet's own name is not vocabulary", () => {
   });
 
   it("keeps the outlet's words out of the tokens the layers match on", () => {
-    // The composition every TITLE reader now uses: `headlineTokens`,
-    // `storyTokens` and the bigram extractor all strip before they tokenize.
-    // `contentTokens` itself does not, because it is also handed descriptions
-    // and `${title} ${description}`, where there is no end to peel from.
+    // The composition every title TOKENIZER now uses: `headlineTokens`,
+    // `storyTokens`, `properNounEvidence`, `headlineFigures` and the bigram
+    // extractor all strip before they read the title. `contentTokens` itself
+    // does not, because it is also handed descriptions and
+    // `${title} ${description}`, where there is no end to peel from.
+    //
+    // Not every reader of a title: `buildLabelPrompt` still shows the model the
+    // raw title, deliberately. Its wording is a measured artifact, and the
+    // grounding vocabulary it is checked against comes from `storyTokens`,
+    // which strips — so an outlet name the model echoes fails grounding rather
+    // than becoming a label.
     const tokens = contentTokens(
       stripSourceAttribution(
         "Angler reels in training grenade from Red River in Selkirk: RCMP - Winnipeg | Globalnews.ca",
@@ -167,8 +174,30 @@ describe("the outlet's own name is not vocabulary", () => {
     "Ferry service resumes - he has a bad record with them",
     // And a stopword anywhere but the front.
     "Harvest ends early - and faster than expected",
+    // A leading function word is exempt only when it is an ARTICLE. No outlet
+    // is called "Some ..." or "Their ...", so these are tails too.
+    "Ottawa tables budget - some quiet relief",
+    "Rates hold steady - their fourth such call",
   ])("leaves a headline's own tail alone: %s", (title) => {
     expect(stripSourceAttribution(title)).toBe(title);
+  });
+
+  it("keeps a masthead that carries a function word inside it", () => {
+    // The shape rule's known blind spot, pinned so it is a decision rather
+    // than a surprise: `and` is not at the front, so the segment reads as
+    // prose and the chrome survives. Catching it needs the segment's own
+    // capitalization, or `source_domain` — see `ARTICLES` and the module
+    // comment. "top of the table" is why the loose rule is not taken.
+    expect(stripSourceAttribution("Ottawa unveils plan - the Globe and Mail")).toBe(
+      "Ottawa unveils plan - the Globe and Mail",
+    );
+  });
+
+  it("peels a short verbless tail that reads like a name", () => {
+    // The other side of the same coin, and the cost the module comment quotes:
+    // an article plus two content words is the shape of "The Korea Times", so
+    // this is indistinguishable by shape alone. Two tokens on one article.
+    expect(stripSourceAttribution("Trump wins Ohio - a stunning upset")).toBe("Trump wins Ohio");
   });
 
   it("never peels a headline down to nothing", () => {

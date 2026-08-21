@@ -50,6 +50,15 @@ export interface PhraseArticle {
 }
 
 /**
+ * Callers must pass the articles OLDEST FIRST. The tie-break below resolves on
+ * the earliest member, and it reads that from array position rather than a date,
+ * so the order is a precondition rather than a preference — a reversed array
+ * names the arc after its newest arrival, which is the instability the
+ * tie-break was changed to remove. `selectLabelMembers` already sorts this way,
+ * and it is what both production callers hand in.
+ */
+
+/**
  * The same extractor, FREED FROM THE CONTAINMENT RULE — the storyline labeler's
  * fallback when Gemini is unavailable, refuses, or breaks its contract
  * (ADR-0011, "Labels").
@@ -86,6 +95,13 @@ export function bigramLabel(articles: readonly PhraseArticle[]): string | null {
  * The extractor. `candidateTitles` picks which articles' TITLES may donate a
  * phrase; descriptions never do — they support a phrase, they do not propose
  * one.
+ *
+ * That asymmetry is worth holding in mind at the support floor: support counts a
+ * MEMBER whose title or description says the phrase, so "only one headline says
+ * it" is the motivating case rather than the exact test — one headline plus a
+ * second member's description also clears the floor. Deliberate, and the same
+ * reading the storyline layer takes of a description, but it means the floor
+ * proves shared vocabulary across the coverage, not across its headlines.
  */
 function bestBigram(
   corpus: readonly PhraseArticle[],
@@ -95,9 +111,12 @@ function bestBigram(
   // proposes the dateline: "Globalnews Ca" is a real label in the dev archive,
   // on a real six-group storyline.
   const headlines = corpus.map((article) => stripSourceAttribution(article.title));
-  const isProperNoun = properNounEvidence(
-    corpus.map((article, index) => ({ ...article, title: headlines[index]! })),
-  );
+  // `corpus`, not `headlines`: `properNounEvidence` strips its own input, and
+  // the peel is capped per call, so handing it an already-peeled title made the
+  // two sides disagree about the headline whenever a title carried more than
+  // `MAX_ATTRIBUTION_SEGMENTS` delimiters — the evidence gate would then judge
+  // a shorter string than the pair extractor had read.
+  const isProperNoun = properNounEvidence(corpus);
   // Adjacency per article, so a phrase can be ranked by how much of the
   // coverage actually says it — the description gets its say, as it does in
   // the storyline layer itself, but its tokens never run on from the title's.
@@ -180,10 +199,17 @@ interface Candidate {
  * costs 4.6 points of yield (92.9% → 88.3%) and withdraws 56 of the 360 bigram
  * labels live today. Refusing is cheap: a null label still renders (ADR-0011).
  */
+/**
+ * `members` is the SAMPLE handed to `bigramLabel`, not the storyline's size —
+ * every caller passes `selectLabelMembers(members, STORYLINE_LABEL_SAMPLE)`. A
+ * sample configured below `SUPPORT_FLOOR_AT_MEMBERS` therefore turns the floor
+ * off, however large the arc behind it; the config's own doc records that.
+ */
 function minSupport(members: number): number {
   return members >= SUPPORT_FLOOR_AT_MEMBERS ? 2 : 1;
 }
 
+/** At five, not past it: a five-member sample already needs two headlines. */
 const SUPPORT_FLOOR_AT_MEMBERS = 5;
 
 /**
