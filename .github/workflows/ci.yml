@@ -1,11 +1,19 @@
-# CI — verify, then publish the deploy artifact to OCIR (DEPLOYMENT-OCI §2.3).
+# CI — verify, and build the deploy artifact to prove it still builds.
 #
-# Everything here runs on arm64 because the deployment target is OCI Ampere,
-# which is arm64-only. `ubuntu-24.04-arm` is a native arm64 runner (available in
-# private repositories since 2026-01-29, 2 vCPU, free-minutes eligible), so the
-# image is built on the architecture it will run on — no QEMU, and no gap
-# between "builds in CI" and "boots on the VM". This is also what pins §2.2's
-# architecture decision: it is the runner label, not the builder's mood.
+# It no longer PUBLISHES anywhere. The `publish image to OCIR` job was removed
+# 2026-08-21 when the OCI deploy was abandoned (docs/DEPLOYMENT-OCI.md is
+# archival): it pushed an image on every merge to a tenancy nobody watches,
+# using credentials we no longer need. Both OCI secrets and the three OCI_*
+# repository variables were deleted with it, so restoring the job needs new
+# credentials rather than just this file.
+#
+# ⚠️ arm64 is now an UNJUSTIFIED CONSTRAINT, deliberately left in place.
+# Everything ran on arm64 because the target was OCI Ampere, which is arm64-only
+# — that reason is gone and no replacement target is chosen. `ubuntu-24.04-arm`
+# is a native arm64 runner (2 vCPU, free-minutes eligible), so this is not
+# costing us QEMU, and flipping architecture on the way out would be churn on a
+# guess. Revisit when a target exists: the next platform decides this, and
+# whoever makes that call should know arm64 here is inertia, not a requirement.
 
 name: CI
 
@@ -79,12 +87,20 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
 
-  # The deploy artifact is otherwise only built on pushes to main (below), so a
-  # Dockerfile regression would surface after merge. Build-only on PRs: no
-  # registry, no push, and reads the main-built layer cache without writing it.
+  # Proves the deploy artifact still builds. Runs on BOTH events on purpose.
+  #
+  # It used to run on pull requests only, because the push-to-main `image` job
+  # covered main and wrote the layer cache this job reads. Removing that job took
+  # both away with it, so this job absorbs them: without the main-push run a
+  # Dockerfile regression could land unbuilt, and without `cache-to` nothing
+  # would ever populate the cache `cache-from` reads, quietly turning every PR
+  # build cold. Same topology as before, minus the registry.
   dockerfile:
     name: dockerfile builds (arm64)
-    if: github.event_name == 'pull_request'
+    # No `needs: verify` — it runs alongside verify for faster feedback. The old
+    # publish job gated on verify so it could not push something unverified;
+    # nothing is pushed now, so the gate would only serialise two jobs that have
+    # no reason to wait for each other.
     runs-on: ubuntu-24.04-arm
 
     steps:
@@ -97,92 +113,12 @@ jobs:
           context: .
           file: apps/api/Dockerfile
           platforms: linux/arm64
+          # Never pushed — there is no registry and no deploy target. This job
+          # exists to fail when the Dockerfile breaks, nothing more.
           push: false
           provenance: false
           sbom: false
           cache-from: type=gha
-
-  image:
-    name: publish image to OCIR
-    needs: verify
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04-arm
-
-    # Consumed by the staging deploy once there is a host to deploy to. Always
-    # the digest — a tag is a mutable pointer and the README already documents
-    # what stale-image resolution costs locally; it is worse on a server.
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
-      image: ${{ steps.meta.outputs.image }}
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: docker/setup-buildx-action@v4
-
-      # An unset variable would otherwise surface as a malformed registry path
-      # deep in a push error. Named here instead, before anything is built.
-      - name: Check tenancy variables
-        env:
-          OCI_REGISTRY: ${{ vars.OCI_REGISTRY }}
-          OCI_NAMESPACE: ${{ vars.OCI_NAMESPACE }}
-          OCI_REPO_PREFIX: ${{ vars.OCI_REPO_PREFIX }}
-        run: |
-          for name in OCI_REGISTRY OCI_NAMESPACE OCI_REPO_PREFIX; do
-            if [ -z "${!name}" ]; then
-              echo "::error::repository variable $name is not set (Settings → Secrets and variables → Actions → Variables). See docs/DEPLOYMENT-OCI.md §2."
-              exit 1
-            fi
-          done
-
-      - name: Log in to OCIR
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ vars.OCI_REGISTRY }}
-          username: ${{ secrets.OCI_USERNAME }}
-          password: ${{ secrets.OCI_AUTH_TOKEN }}
-
-      - name: Compose image reference
-        id: meta
-        # The component — `api` — is hardcoded rather than carried in a variable.
-        # It is a property of this job (which Dockerfile it builds), not of the
-        # tenancy, and the variable holds only the part that differs per tenancy.
-        # Phase 4's web job appends /web the same way, which is what makes it
-        # impossible for either job to publish over the other's path.
-        env:
-          OCI_REGISTRY: ${{ vars.OCI_REGISTRY }}
-          OCI_NAMESPACE: ${{ vars.OCI_NAMESPACE }}
-          OCI_REPO_PREFIX: ${{ vars.OCI_REPO_PREFIX }}
-        run: echo "image=${OCI_REGISTRY}/${OCI_NAMESPACE}/${OCI_REPO_PREFIX}/api" >> "$GITHUB_OUTPUT"
-
-      - name: Build and push
-        id: build
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: apps/api/Dockerfile
-          platforms: linux/arm64
-          push: true
-          # SHA-tagged only. No `latest`, no moving `staging` tag: deploys
-          # resolve the digest below, and a mutable tag beside it is an
-          # invitation to deploy something nobody can name afterwards.
-          tags: ${{ steps.meta.outputs.image }}:${{ github.sha }}
-          # OCIR is strict about the extra attestation manifests these attach;
-          # they turn a single-arch push into an index and buy us nothing while
-          # there is exactly one platform.
-          provenance: false
-          sbom: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Report the digest
-        run: |
-          {
-            echo "### Image published"
-            echo
-            echo '```'
-            echo "${{ steps.meta.outputs.image }}@${{ steps.build.outputs.digest }}"
-            echo '```'
-            echo
-            echo "Tag: \`${{ github.sha }}\` — deploy by digest, never by tag."
-          } >> "$GITHUB_STEP_SUMMARY"
+          # Write the cache from main only. Letting every PR write it invites
+          # concurrent branches thrashing each other's entries for no gain.
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
