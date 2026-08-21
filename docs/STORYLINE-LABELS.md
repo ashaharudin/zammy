@@ -263,6 +263,51 @@ yield drops, real storylines go unlabelled more often, and the cloud shrinks —
 traded for a floor that stops manufacturing names. A null label still renders
 (ADR-0011, "Labels"), which is what makes the trade affordable.
 
+### Lexicon gaps behind the gate (2026-08-20, issue #100 follow-up)
+
+The gate above is only as good as the lexicon it reads, and a live check after
+both gate-fix commits landed found labels still passing it: `Rangers Beat`,
+`Gigabyte Brings`, `Danon Blames`, `AGL Jumps`, `Fire Rips`, `Boxer Dies`.
+Every one is a verb the lexicon simply did not contain, so `beat`, `bring`,
+`blame`, `jump`, `rip` and `die` were added by the file's own test — does the
+-s/-ing/bare form nominalize? — with `blame` and `rip` keeping their bare forms
+via `BARE_NOUN_LEMMAS` ("the blame", "a rip") and `beaten` added to
+`IRREGULAR_PAST`, which no -ed rule reaches.
+
+`jump` was the interesting one: it was ALREADY in the file, classified
+PAST_ONLY on the reading that "ski jumps" is a plural noun. "AGL Jumps" says
+the other reading is live too. Both are real, so it moved to
+FINITE_ONLY_LEMMAS — gated on -s and -ed, -ing left alone, since "show
+jumping" and "ski jumping" are where the nominalization actually sits. One
+classification per lemma; a lemma in two lists is two contradictory answers,
+and the more permissive list silently wins.
+
+Two of these exposed spelling bugs in `participles`, which matter more than a
+missing lemma because a misspelled form gates nothing while looking present:
+
+- **`-ie` derived "diing", not "dying"** (and had been quietly doing it to the
+  pre-existing `vie` → "viing").
+- **`-ee` derived "agreeed", not "agreed"** — the bug this issue named in
+  passing, still live until now. It cost `agree` and `disagree` their past
+  route, and `guarantee`, which is PAST_ONLY, the only route it had; a corpus
+  saying "the terms were agreed in Kelowna" yielded `Kelowna Agreed`.
+
+Deliberately left ungated: `hold`, `attempt`, `top`, `set`, `call`, `ban`,
+`open`, `score` also appear in clause-shaped labels, but their -s/bare forms
+are genuine headline nouns (escape attempts, mountain top, TV set, travel
+bans, The Open, game score), so gating them would cost real compounds under
+the asymmetric-cost rule. Accepted false negatives, like `hold` and `ban`
+before them.
+
+`beat` and `die` keep their bare forms gated, which is the one place this
+trades a real noun away ("earnings beat", "the crime beat", a semiconductor
+"die"). It is affordable because a bigram needs proper-noun evidence to be a
+candidate at all: `Earnings Beat` has none and was already refused, while the
+pairs that DO clear that bar — `Rangers Beat` — are the clauses.
+
+Not re-measured against the live archive; same reasoning as above, this is a
+vocabulary change, not a new sweep.
+
 ## What is validated, and what is not
 
 `validateLabel` enforces three of the contract's four clauses:
