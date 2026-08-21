@@ -188,7 +188,7 @@ port.
 
 ### 3.5 The per-IP rate limit — ~0.5 day, a decision more than a build
 
-[server.ts:106](../apps/api/src/server.ts) registers in-process counters, with a comment explaining
+[server.ts:116](../apps/api/src/server.ts) registers in-process counters, with a comment explaining
 why that was right: "a Redis-held counter would add a shared failure mode to the request path for
 precision nobody needs." Elastic instances make the effective ceiling
 `RATE_LIMIT_PER_MINUTE × instances`, and §9.4 leans on this limit as a budget guard against
@@ -261,7 +261,7 @@ as code.
 ## 7. What is lost, plainly
 
 - **`/metrics` stops meaning anything.** `prom-client` counters are per-process
-  ([server.ts:137](../apps/api/src/server.ts)) and there is no stable scrape target. Either push to
+  ([server.ts:147](../apps/api/src/server.ts)) and there is no stable scrape target. Either push to
   a gateway, lean on Vercel's own observability and delete the endpoint's story, or keep it knowing
   a scrape samples one instance's fragment of the day. §12 needs updating either way.
 - **Runtime logs retain for 1 hour on Hobby**, 1 day on Pro. Debugging a nightly chore that ran at

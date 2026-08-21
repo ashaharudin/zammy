@@ -49,7 +49,7 @@ production genuinely differ":
 - **`web`'s API base URL** stops being build-time configurable. A `vercel.json` rewrite sends
   `/api/*` to the function; relative fetches work in dev (Vite proxy,
   [vite.config.ts:12](../apps/web/vite.config.ts)) and in production unchanged.
-- **CORS** stops mattering. `CORS_ORIGIN` ([.env.example:209](../.env.example)) becomes the
+- **CORS** stops mattering. `CORS_ORIGIN` ([.env.example:243](../.env.example)) becomes the
   same-origin value, and `@fastify/cors` is left registered against a boundary nothing crosses.
 
 **Postgres is a like-for-like move.** Supabase is stock Postgres with the extensions on top, so
@@ -68,7 +68,7 @@ needs `functions.includeFiles` in `vercel.json` — it is not traced automatical
 
 ## 3. The blocker: §9.1's consumer has nowhere to live
 
-[server.ts:191](../apps/api/src/server.ts) starts a BullMQ worker inside the api process:
+[server.ts:201](../apps/api/src/server.ts) starts a BullMQ worker inside the api process:
 
 ```ts
 queue.startConsumer((job) =>
@@ -135,7 +135,7 @@ That last one lands directly on three call sites, and they do not all land the s
 |---|---|---|
 | [coverage.ts:35](../packages/storage/src/coverage.ts) | `pg_advisory_xact_lock` | **Safe.** Transaction-scoped, and a transaction is pinned to one backend for its duration. |
 | [migrator.ts:71](../packages/storage/src/migrator.ts) | `pg_advisory_lock` on a pinned connection | **Broken.** Session-scoped; the pin is a pool pin, not a backend pin. |
-| [chores-cli.ts:135](../apps/api/src/chores-cli.ts) | `pg_try_advisory_lock` | **Broken.** Same reason — and this one is a correctness guard, not a backstop: it is what makes a chore pass exactly-once now that the schedule lives outside the app. |
+| [chores-cli.ts:147](../apps/api/src/chores-cli.ts) | `pg_try_advisory_lock` | **Broken.** Same reason — and this one is a correctness guard, not a backstop: it is what makes a chore pass exactly-once now that the schedule lives outside the app. |
 
 So the deployment needs **two connection strings**, not one:
 
@@ -156,8 +156,8 @@ takes a lock on the wrong backend.
 ### 4.2 TLS is currently unspecified, and `pg` will not warn
 
 Both pool constructions pass a connection string and nothing else —
-[server.ts:86](../apps/api/src/server.ts) (`max: 10`) and
-[database.ts:328](../packages/storage/src/database.ts) (`max: 10` by default,
+[server.ts:92](../apps/api/src/server.ts) (`max: 10`) and
+[database.ts:381](../packages/storage/src/database.ts) (`max: 10` by default,
 [chores-cli.ts:109](../apps/api/src/chores-cli.ts) overrides to 4). Against Compose that is correct;
 against Supabase it needs deciding, and there is a trap: **when the URL carries `sslmode`,
 node-postgres silently ignores the `ssl` options object.** A connection string ending
@@ -248,18 +248,18 @@ but it has not been measured at 90 days of corpus.
 ## 7. Smaller findings, each of which needs a decision
 
 - **The per-IP rate limit stops meaning what §9.4 says it means.** `@fastify/rate-limit` is
-  registered with in-process counters on purpose ([server.ts:106](../apps/api/src/server.ts) — "a
+  registered with in-process counters on purpose ([server.ts:116](../apps/api/src/server.ts) — "a
   Redis-held counter would add a shared failure mode to the request path"). With one Fargate task
   that reasoning holds. With elastic Fluid instances, the effective ceiling is
   `RATE_LIMIT_PER_MINUTE × instances`, and §9.4 leans on this limit as a budget guard against
   novel-fingerprint spam minting topics. The platform substitute is Vercel's WAF rate limiting
   (Pro), or the counter moves to Redis and accepts the coupling.
-- **`TRUSTED_PROXY_HOPS` must become 1.** It defaults to 0 ([.env.example:100](../.env.example)),
+- **`TRUSTED_PROXY_HOPS` must become 1.** It defaults to 0 ([.env.example:130](../.env.example)),
   which is correct with nothing in front. On Vercel there is exactly one hop we operate, and the
   comment's own warning applies: over-counting trusts a client-supplied `X-Forwarded-For` entry and
   hands every caller an unlimited bucket.
 - **`/metrics` becomes decorative.** `prom-client` counters are per-process
-  ([server.ts:137](../apps/api/src/server.ts)); on ephemeral instances a scrape samples one random
+  ([server.ts:147](../apps/api/src/server.ts)); on ephemeral instances a scrape samples one random
   instance's life so far, and there is no stable scrape target to point Prometheus at. §12's
   observability story needs a push-based replacement or it needs dropping honestly.
 - **Graceful SIGTERM drain becomes dead code** ([index.ts:29–56](../apps/api/src/index.ts)). Not
