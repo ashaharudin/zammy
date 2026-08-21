@@ -1,4 +1,4 @@
-import { contentTokens } from "./headline-tokens.js";
+import { contentTokens, stripSourceAttribution } from "./headline-tokens.js";
 import { singular } from "./grouping.js";
 
 /**
@@ -17,5 +17,12 @@ import { singular } from "./grouping.js";
  * `story_tokens` in storage is a materialized derivation of exactly this.
  */
 export function storyTokens(title: string, description: string | null): string[] {
-  return [...new Set(contentTokens(`${title} ${description ?? ""}`).map(singular))];
+  // The title is stripped BEFORE the concatenation, not after: the outlet's
+  // name is only at the end of the TITLE, and once the description follows it
+  // there is no end to peel it from.
+  return [
+    ...new Set(
+      contentTokens(`${stripSourceAttribution(title)} ${description ?? ""}`).map(singular),
+    ),
+  ];
 }

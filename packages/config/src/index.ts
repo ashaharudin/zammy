@@ -314,6 +314,12 @@ const EnvSchema = z
      * How many member headlines the label is generated from. ~10 per ADR-0011:
      * enough for the model to see what the story IS rather than what its latest
      * turn was, and few enough that the prompt stays a flash-tier call.
+     *
+     * It also arms the bigram fallback's support floor, which is the one reason
+     * to think twice before lowering it: that floor reads the SAMPLE it was
+     * handed, not the storyline, so a value under 5 turns it off for arcs of any
+     * size (`SUPPORT_FLOOR_AT_MEMBERS`, `bigram-label.ts`) and the all-support-1
+     * lottery it exists to stop comes back.
      */
     STORYLINE_LABEL_SAMPLE: z.coerce.number().int().min(2).max(40).default(10),
     /**
