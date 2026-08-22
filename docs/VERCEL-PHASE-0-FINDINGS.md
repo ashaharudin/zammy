@@ -61,15 +61,8 @@ Three properties make this worse than a big number:
   ([chores-cli.ts:77](../apps/api/src/chores-cli.ts)). So the lever ADR-0015 relies on for the
   label pass does not exist for the pass that needs it more.
 
-A bound alone is not enough, either. At ~290 s of usable budget the sweep covers ~7,000 of 12,338
-groups — so a plain `--max-groups` would cover the newest 7,000 every night and **never reach the
-rest**, because the sweep restarts from the window's start each run
-([chores.ts:193](../apps/api/src/chores.ts) seeds the cursor from the window, not from where the
-last run stopped). Bounding it without making it resumable converts an over-deadline pass into a
-silently incomplete one, which is worse: the tally would report a clean `offered: 7000` every night.
-
-**This is unscoped work.** It is not large — a `maxGroups` on `StorylinePassDeps`, a `--max-groups`
-flag, and a persisted cursor — but it belongs in Phase 4 and it was not there.
+§2.4 is what to do about it, and it is not the obvious thing — building that missing lever is the
+option of last resort rather than the plan.
 
 ### 2.1 Where the 41 ms goes
 
@@ -155,8 +148,50 @@ Worth putting beside the cost, because it is what decides whether the answer is 
 ~3.5% of offers change anything on a first pass, and re-offering the same groups with no new
 coverage between runs changes almost nothing — which is what a nightly sweep over a 14-day window
 mostly is. (In production a night's ingest does move some candidate sets, so the real repeat yield
-sits above zero.) **Most of the 465 s buys nothing**, and "offer only the groups whose candidate
+sits above zero.) **Most of the 506 s buys nothing**, and "offer only the groups whose candidate
 set could have changed" is where the order of magnitude is, rather than in the query.
+
+### 2.4 What the unscoped work actually is
+
+Something has to change, and there are three candidates. They are not alternatives of equal
+standing: two attack the cost and one only redistributes it.
+
+**1. Offer fewer groups.** The largest by far, and the one §2.3 points at: ~96.5% of offers change
+nothing, so the sweep's cost is almost entirely in asking questions whose answer cannot have moved
+since last night. A filter — only groups whose candidate set could have changed — or the inverted
+form, offering late candidates when a storyline changes rather than sweeping for them nightly
+(the shape [PR #114](https://github.com/ashaharudin/zammy/pull/114) used for the label-agreement
+merge), would cut the work by orders of magnitude rather than percentages. What it has to buy
+first is a completeness argument: the sweep's guarantee today is "every group in the window, every
+night", and anything narrower has to say what it can no longer promise. Open.
+
+**2. Cap the tokens used for candidate retrieval.** The tail is profile width (§2.1): probing 51
+GIN keys costs 114 ms where 12 costs 2.5. Retrieving on the rarest ~12 tokens rather than all of
+them would move p90 calls toward the p50 and plausibly take the sweep to ~130–150 s. It also
+changes **which candidates the linker is shown**, and therefore can change linking decisions — so
+it needs a measurement of *decisions changed*, not a speed number. `qualifyingStorylines` re-checks
+rarity in TypeScript regardless, which is an argument that it might be safe rather than a proof.
+Open.
+
+**3. Bound it and make it resumable.** `runLateCandidateChore` already accepts `maxGroups`
+([chores.ts:181](../apps/api/src/chores.ts)); it needs a field on `StorylinePassDeps`, a
+`--max-groups` flag, and — critically — a persisted cursor, because the sweep restarts from the
+window's start on every run ([chores.ts:193](../apps/api/src/chores.ts) seeds the cursor from the
+window, not from where the last run stopped). A bound *without* the cursor turns an over-deadline
+pass into a silently incomplete one, which is worse: at ~290 s of usable budget it would offer the
+newest ~7,000 of 12,338 groups every night, never reach the rest, and report a clean
+`offered: 7000` while doing it.
+
+This third one is the fallback, not the plan. It changes no decision and needs no argument to
+justify, which is its whole merit — but it reduces nothing, so the pass still does ~506 s of work,
+just spread across the several invocations a minute-precision scheduler makes available anyway
+(§3.3 of the scope doc: Supabase Cron, not Hobby's once-a-day). **And if either of the first two
+lands, the cursor is unnecessary rather than necessary** — a sweep that only offers what could have
+changed reaches the end of its own list.
+
+So the unscoped work is a decision before it is an implementation: settle 1, then 2, and hold 3 as
+the thing to build if neither survives scrutiny. Whichever it is, it lands in Phase 4, and none of
+it was there.
 
 ## 3. The label pass: a backlog, not a nightly cost
 
