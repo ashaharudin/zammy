@@ -224,7 +224,10 @@ wrapper plus one new table:
   ([chores.ts:193](../apps/api/src/chores.ts)), so a plain `--max-groups` would sweep the newest
   7,000 every night and never reach the rest, reporting a clean tally while doing it. This is
   unscoped work — a `maxGroups` on `StorylinePassDeps`, a `--max-groups` flag, and a persisted
-  cursor — and it lands in Phase 4 (VERCEL-PHASE-0-FINDINGS §2).
+  cursor — and it lands in Phase 4 (VERCEL-PHASE-0-FINDINGS §2). Worth reading §2.3 before building
+  it, though: ~3.5% of the sweep's offers change anything, so "offer only the groups whose candidate
+  set could have changed" is a far larger saving than any bound, and would make the cursor
+  unnecessary rather than necessary. A denormalized sort key was tested and rejected at 8% (§2.2).
 - **The label backlog must not run in this route.** 2,981 of 3,934 promoted storylines have never
   been labelled and **zero have drifted**, so the nightly drift pass is nearly free while the
   backlog is 3.3 hours of paced calls — quota-bound, ~6 days of Gemini free tier. It is

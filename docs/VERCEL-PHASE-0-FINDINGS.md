@@ -51,14 +51,9 @@ Three properties make this worse than a big number:
 - **It does not shrink with retention.** The window is a fixed 14 days, so unlike the corpus-size
   question (§4) this does not improve by pruning. It scales with *daily volume*, which is the one
   input we expect to grow.
-- **It is latency-bound, not CPU-bound.** Measured: **4.36 database round trips per group**
-  (2,180 transactions over 500 groups) and **6.2 ms of Node CPU per group** (3.1 s user time over
-  500) — so of the 41 ms, roughly 6 ms is compute and the rest is waiting on Postgres. Against a
-  Docker Postgres on loopback that wait is nearly free. Against Supabase's pooler it is not:
-  **every additional millisecond of round-trip time adds 4.4 ms per group, which is 54 s over the
-  full window.** A 2 ms RTT — unremarkable for a pooler in the same region — puts the sweep at
-  ~615 s. This is the one phase where moving Postgres off the loopback makes the deadline problem
-  materially worse rather than neutral.
+- **It is one query, and that query has a fat tail.** `readCandidateStorylines` is 34 of the 41 ms;
+  everything else in the sweep together is under 2 ms per group, and the per-call cost runs from
+  2.5 ms at p10 to 76 ms at p90 (§2.1).
 - **It has no deployment parameter.** `runLateCandidateChore` accepts `maxGroups`
   ([chores.ts:181](../apps/api/src/chores.ts)) but `runStorylinePass` calls it with the bare deps
   ([chores.ts:458](../apps/api/src/chores.ts)), `StorylinePassDeps` has no field for it, and the
@@ -75,6 +70,93 @@ silently incomplete one, which is worse: the tally would report a clean `offered
 
 **This is unscoped work.** It is not large — a `maxGroups` on `StorylinePassDeps`, a `--max-groups`
 flag, and a persisted cursor — but it belongs in Phase 4 and it was not there.
+
+### 2.1 Where the 41 ms goes
+
+Attributed with Kysely's own `log` hook, so every statement in the sweep is measured rather than
+inferred. 400 groups, per group:
+
+| ms/group | calls | mean ms | statement |
+|---|---|---|---|
+| **33.99** | 400 | 33.99 | **`readCandidateStorylines`** ([storylines.ts:960](../packages/storage/src/storylines.ts)) |
+| 0.69 | 400 | 0.69 | `readStoryDf` — the trailing corpus |
+| 0.61 | 400 | 0.61 | `readGroupStorylines` |
+| 0.47 | 400 | 0.47 | the `story_corpus_days` size sum |
+| 0.17 | 1 | 66.48 | `readLinkableGroups` — one batch of 500 |
+| 0.10 | 67 | 0.62 | `linkGroup`'s own-group count |
+| ~0.09 | 76 | — | alias resolution, bridges, transaction control |
+
+96% of wall clock is inside a driver call (14,451 ms of 15,095); only 644 ms is JavaScript. **One
+query is 90% of the sweep**, and everything else together is under 2 ms per group.
+
+That query's cost is not evenly spread. Per call, over the same 400 groups:
+
+| | p10 | p50 | p90 | p99 | max |
+|---|---|---|---|---|---|
+| duration | 2.5 ms | 5.8 ms | **75.9 ms** | 93.6 ms | 114.6 ms |
+| profile tokens | 12 | 19 | 29 | — | 51 |
+
+**The mean is almost entirely tail.** The driver is profile *width*: `profile_tokens && $1` probes
+one GIN key per token and unions the bitmaps, so a 51-token profile costs 114 ms while a 12-token
+one costs 2.5. `CANDIDATE_LIMIT` ([storyline-linker.ts:97](../apps/api/src/storyline-linker.ts))
+caps the 200 rows returned, not the ~1,200 scanned — the median group's profile overlaps 1,145
+storylines (mean 1,194, max 3,681 over a 300-group sample), and `qualifyingStorylines` then
+discards nearly all of them in TypeScript.
+
+**Round trips are a second-order term, contrary to what this section first claimed.** The count is
+real — 4.36 per group, from `pg_stat_database.xact_commit` deltas — so a pooler's RTT does add
+~4.4 ms per group, or ~54 s over the full window per added millisecond. But that is a surcharge on
+a cost that is dominated by one query executing, not by waiting for the network.
+
+### 2.2 A denormalized sort key: tested, 8%, rejected
+
+Worth recording as a negative result, because the plan shape is suggestive enough that someone will
+try it again. `readCandidateStorylines` ordered by a correlated subquery
+([storylines.ts:983](../packages/storage/src/storylines.ts)):
+
+```
+Sort  Sort Key: ((SubPlan 1)) DESC NULLS LAST, s.id
+  ->  Bitmap Heap Scan on storylines  (actual time=2.922..38.192 rows=459)
+      SubPlan 1
+        ->  Aggregate (actual time=0.061..0.061 rows=1 loops=459)
+```
+
+A computed sort key stops the `LIMIT` pushing below the sort, so the subquery ran once per
+overlapping storyline rather than once per returned row. Denormalizing it onto
+`storylines.last_coverage` — written by `refreshDaySlots` in the same statement that derives the
+slots, backfilled exactly (0 mismatches across 26,010 storylines) — fixes the plan and does help
+the query: at a median-width profile, `EXPLAIN` goes from 8.8 ms to 3.7 ms.
+
+It does **not** help the sweep enough to matter. A/B on one clone, baseline measured first:
+
+| | 500 groups | 2000 groups |
+|---|---|---|
+| subquery sort key | 42.5 ms/group | 40.4 ms/group |
+| `last_coverage` column | 39.0 ms/group | 37.7 ms/group |
+
+**~8%** — a uniform slice off every call, which leaves the tail intact and the sweep at ~465 s
+instead of ~506.
+Reverted: 8% does not earn a denormalized column with three maintenance sites. The lesson is the
+one §2.1 records — the fix has to attack profile width or the number of groups offered, not the
+per-call constant.
+
+### 2.3 What the sweep actually achieves
+
+Worth putting beside the cost, because it is what decides whether the answer is "make it faster" or
+"do less of it". Attachments per groups offered:
+
+| Run | Offered | Attached | Merges |
+|---|---|---|---|
+| First sweep of a restored clone | 500 | 20 | 1 |
+| First sweep of a restored clone | 2,000 | 68 | 4 |
+| Re-sweeping the same clone | 500 | 0 | 0 |
+| Re-sweeping the same clone | 2,000 | 2 | 0 |
+
+~3.5% of offers change anything on a first pass, and re-offering the same groups with no new
+coverage between runs changes almost nothing — which is what a nightly sweep over a 14-day window
+mostly is. (In production a night's ingest does move some candidate sets, so the real repeat yield
+sits above zero.) **Most of the 465 s buys nothing**, and "offer only the groups whose candidate
+set could have changed" is where the order of magnitude is, rather than in the query.
 
 ## 3. The label pass: a backlog, not a nightly cost
 
@@ -234,16 +316,26 @@ round trips.
   `candidates × 60000/GEMINI_MAX_RPM`, which is what `labelPass` itself computes
   ([storyline-backfill.ts:378](../apps/api/src/storyline-backfill.ts)).
 - **Sweep rate**: `runLateCandidateChore` with `labeler` omitted, at `maxGroups` of 250/500/1000/2000
-  on freshly restored clones; 41.3, 41.3, 40.0, 41.3 ms/group respectively, plus 61.7 at 250 where
-  fixed setup is amortised over fewer groups. Round trips from `pg_stat_database.xact_commit`
-  deltas; CPU from `/usr/bin/time`.
+  on freshly restored and `ANALYZE`d clones; 41.3, 41.3/42.5, 40.0, 41.3/40.4 ms/group, plus 61.7 at
+  250 where fixed setup is amortised over fewer groups. Round trips from
+  `pg_stat_database.xact_commit` deltas; CPU from `/usr/bin/time`.
+- **Sweep attribution (§2.1)**: a `Kysely` built with a `log` hook in place of `createDb`, summing
+  `queryDurationMillis` per statement shape over 400 groups, plus every candidate call's duration
+  and parameter length kept individually for the distribution. Overlap sizes from a 300-group sample
+  of real profiles counted against `profile_tokens &&`. Both plans re-checked with
+  `EXPLAIN (ANALYZE)` at a p10-width and a median-width profile — the second because the first
+  measurement was taken at p10 and read as typical, which is the error §2.2 exists to record.
 - **Cold start**: five fresh processes per mode, `performance.now()` deltas around each `import`.
 
 Distrust these:
 
 - **The machine is not the platform.** Everything here ran on an M-series Mac against Postgres on
-  loopback. The sweep's projection is the number most sensitive to that, and §2 gives the
+  loopback. The sweep's projection is the number most sensitive to that, and §2.1 gives the
   sensitivity rather than a single figure for exactly that reason.
+- **One sample is not a distribution.** §2.2 is in this document because the first attempt at §2.1
+  reasoned from a single hand-picked `EXPLAIN`, which happened to sit at the p10 of a distribution
+  whose p90 is 30× larger, and produced a projection that was wrong by a factor of four. Any per-call
+  figure quoted here without a percentile beside it should be read as suspect for the same reason.
 - **One contended measurement ran 6× slow.** Two sweep runs taken while the container was under
   memory pressure (336 MB of a 512 MB limit) and autovacuuming a fresh restore measured 258 ms/group
   rather than 41. It did not reproduce afterwards — fresh, analyzed, warm and thrice-repeated clones
