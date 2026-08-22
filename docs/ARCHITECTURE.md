@@ -151,20 +151,23 @@ request *and* generates the TS type), **Kysely** for typed SQL — deliberately 
 ([ADR-0003](adr/0003-kysely-and-hand-written-sql-instead-of-an-orm.md)). Migrations use Kysely's
 `Migrator` and run as a discrete deploy step, never on boot.
 
-### 4.1 Deployment target — none chosen; AWS is the standing plan; local development on Docker Compose
+### 4.1 Deployment target — Vercel + Supabase (ADR-0015); local development on Docker Compose
 
-**Open, as of 2026-08-21.** There is no deployment target: OCI was abandoned on free-Ampere
-capacity (DEPLOYMENT-OCI, archival) and nothing has replaced it. **AWS as described below is the
-standing plan, not a decision** — it was chosen once, superseded by OCI, and is now simply the
-best-documented candidate. It remains a Terraform rewrite rather than an application rewrite, which
-is the property that survived both changes of target.
+**Decided 2026-08-22 (ADR-0015):** the target is Vercel + Supabase + Upstash, Hobby-shaped —
+Plan A of RESEARCH-VERCEL-SUPABASE, scoped and priced in
+[VERCEL-ALL-IN-SCOPE.md](VERCEL-ALL-IN-SCOPE.md), whose §1 topology table is the deployment map.
+This replaced OCI (abandoned 2026-08-21 on free-Ampere capacity; DEPLOYMENT-OCI is archival),
+which had replaced AWS. The AWS sketch below is kept as the persistent-host alternative — it is
+what "Plan B" concretely looks like if Hobby's ceilings are outgrown — and it retains the property
+that survived every change of target: moving is an infrastructure rewrite, not an application
+rewrite.
 
 Docker Compose is the **local development
 environment**, not a deployment target — built as a faithful rehearsal of production. The **same
 images** run in both, differing only by environment variables. No code path may branch on
 environment; the moment one does, local development stops predicting production.
 
-| Unit | Local dev (Compose) | AWS (deploy target) |
+| Unit | Local dev (Compose) | AWS (the persistent-host alternative, not the target) |
 | --- | --- | --- |
 | `api` + in-process consumer | container | ECS **Fargate** service behind an ALB |
 | `web` | Vite dev server | static build on S3 + CloudFront |
@@ -175,14 +178,18 @@ environment; the moment one does, local development stops predicting production.
 
 The two places local and production genuinely differ, needing explicit configuration:
 
-- **`web`'s API base URL** — a Vite dev-server proxy locally, an absolute origin behind CloudFront
-  in AWS. Build-time configurable.
+- **`web`'s API origin** — the browser fetches `/api/v1/*` relative (api.ts), served by a Vite
+  dev-server proxy locally and by the single Vercel project's own origin in production. Same-origin
+  is deliberate — no CORS preflight, no build-time base URL — and is what the single-project layout
+  (VERCEL-ALL-IN-SCOPE §1.1) exists to protect.
 - **CORS** — pinned per environment (§12), never a permissive default.
 
-**This resolves the scale-to-zero question.** Fargate keeps CPU allocated for the life of a task, so
-the **in-process consumer (§9.1) is viable in production** and no separate `consumer` service is
-needed initially. Splitting it out is a deployment decision with no code change, needed only if
-ingestion outgrows the API or a later target suspends CPU between requests.
+**The scale-to-zero question resolved the other way.** Vercel Functions suspend between requests,
+so the **in-process consumer (§9.1) is not viable in production**: it moves behind the same
+`IngestQueue` surface to a Vercel Queues push consumer (VERCEL-ALL-IN-SCOPE §3.2), and `buildApp`
+splits so a request instance never starts a consumer. In-process remains exactly right for Compose
+— and would be again on any persistent host, which is why the seam is a constructor option, not a
+fork.
 
 **Production requirements that Compose usefully exercises early:**
 
@@ -208,11 +215,13 @@ ingestion outgrows the API or a later target suspends CPU between requests.
 - Modest memory limits on the Postgres and Redis containers; the dataset is a few hundred MB at
   90-day retention.
 
-**What the AWS move will require** — infrastructure, not application code: task definitions, RDS and
-ElastiCache provisioning, secret wiring, an ALB using the existing `/healthz` and `/readyz` probes
-(§6.1), and the `Migrator` as a discrete deploy task. Images are multi-stage with
-`pnpm deploy --filter`, already deploy-shaped. IaC is worth writing at the point of the move, not
-before.
+**What the Vercel move requires** is scoped and phased in VERCEL-ALL-IN-SCOPE §3 and §9: the
+`buildApp` split, the queue reimplementation, the chores route, the Redis quota governor and
+rate-limit store, config, and a CI migration step (ADR-0003's discrete `Migrator` step survives as
+CI, since Vercel has no post-deploy hook). If the persistent-host alternative is ever taken
+instead, the AWS sketch above is the starting point — task definitions, RDS/ElastiCache, an ALB on
+the existing `/healthz` and `/readyz` probes (§6.1) — and IaC is worth writing at the point of that
+move, not before.
 
 ---
 
@@ -912,11 +921,12 @@ The worker also handles coverage-span merging and a daily `/available/*` refresh
 
 **The nightly chores are not in this process.** Retention (§7.5) and the storyline lifecycle pass
 (ADR-0011) are one-shot runs of `apps/api/src/chores-cli.ts` — `pnpm chores retention`, `pnpm chores
-storylines` — on the platform's scheduler: systemd timers at 03:00/04:00 UTC on the staging VM
-(`deploy/staging/cloud-init.yaml`), OCI Resource Scheduler in production (DEPLOYMENT-OCI §1) —
-both **archival**, as no OCI staging VM was ever created and OCI was abandoned 2026-08-21; whatever
-target replaces it needs its own scheduler for these, and the requirement is the pass, not the
-mechanism.
+storylines` — on the platform's scheduler. In production that is Supabase Cron firing an HTTP
+chores route (VERCEL-ALL-IN-SCOPE §3.3): 202 + `waitUntil`, every pass individually addressable
+for on-demand reruns, and each run writing a durable `chore_runs` record because 1-hour Hobby log
+retention cannot answer "did last night's chores run?". The earlier schedulers — systemd timers on
+a staging VM, OCI Resource Scheduler — are **archival** (no OCI VM was ever created; OCI abandoned
+2026-08-21). The requirement is the pass, not the mechanism.
 
 The chores were once a BullMQ job scheduler registered at boot, which bought exactly-once across N
 instances from Redis-shared state; the runner buys it from a Postgres advisory lock, one key per
@@ -924,8 +934,8 @@ pass.
 
 Two consequences, neither of them visible in the api's logs. A schedule the app registers cannot be
 forgotten, while an external one is absent until someone configures it — so if nothing schedules the
-runner, every pass silently never runs and `/readyz` stays green throughout (`systemctl list-timers
-'zammy-chore-*'` is the check). And the labelling pacer no longer spans both: it is a window inside
+runner, every pass silently never runs and `/readyz` stays green throughout (the `chore_runs`
+table's most recent row is the check; locally, `systemctl list-timers` was). And the labelling pacer no longer spans both: it is a window inside
 one Gemini client, so two processes labelling at once is up to 2x `GEMINI_MAX_RPM` on the shared key
 (STORYLINE-LABELS, "The pacer's scope"). What it buys is an api that need not be awake at 3am for
 any of this to happen.
@@ -938,10 +948,13 @@ upstream call via the single-flight lock (§6.3).
 The queue is Redis-backed with **at-least-once delivery** (BullMQ, or `BLMOVE` + processing list +
 reaper) — a plain `LPOP` is not sufficient on a platform that recycles instances (§4.1).
 
-The consumer runs **in-process in the API**, viable in production because Fargate keeps CPU
-allocated (§4.1). It stays structured as a separable unit — moving it out is a deployment decision
-with no code change — and draws from the shared quota snapshot (§5.4), so adding tasks cannot breach
-the 60/60s burst ceiling.
+The consumer runs **in-process in the API** under Compose, and as a Vercel Queues push consumer in
+production (§4.1, VERCEL-ALL-IN-SCOPE §3.2) — it stays structured as a separable unit, and the
+split is a `buildApp` option, not a fork. Quota honesty: the shared quota snapshot (§5.4) that
+would let N instances share the 60/60s burst ceiling is **designed and not built** (quota.ts, §13
+"Designed but unbuilt"); today's governor is per-process. One process, one governor is safe; the
+Vercel build carries the Redis burst window (VERCEL-ALL-IN-SCOPE §3.4) precisely because the
+consumer and the request path scale independently there.
 
 ### 9.2 Why demand-driven wins here
 
@@ -1290,9 +1303,14 @@ apart see the same cloud.
 ## 12. Cross-cutting
 
 - **Config** via env, validated with Zod at boot — refuse to start on bad config.
-- **Observability:** structured JSON logs with a request id; metrics for cache hit ratio by tier,
-  upstream calls per user request (the key efficiency number), quota headroom against observed
-  `x-ratelimit-remaining`, p95 latency by `servedFrom`, normalization drop rate. Two metrics exist
+- **Observability:** structured JSON logs with a request id; the numbers that matter are cache hit
+  ratio by tier, upstream calls per user request (the key efficiency number), quota headroom
+  against observed `x-ratelimit-remaining`, p95 latency by `servedFrom`, normalization drop rate.
+  **The `/metrics` Prometheus endpoint is deleted under the Vercel target (ADR-0015)** — per-process
+  prom-client counters mean nothing across ephemeral instances and nothing scrapes them. Latency
+  and invocation counts come from platform observability; the domain numbers above are carried as
+  structured log fields, and quota spend lands in the nightly `chore_runs` record so it survives
+  1-hour log retention. Two of the numbers exist
   because of probe findings: **unique-articles-per-upstream-call** (baseline ~8 of 20 — a fall means
   duplication is worsening) and **truncated-segment rate** (§11). A third,
   **articles-grouped rate** (grouped / created), exists because §14.3's similarity threshold ships
@@ -1380,13 +1398,17 @@ probe payload was a ready-made regression fixture.
 ### Designed but unbuilt
 
 Carried here because these are described elsewhere in the present tense, which reads as though they
-exist. No phase currently carries them.
+exist. No phase in this table carries them (the quota governor's burst half is carried by the
+Vercel plan's phases instead — see below).
 
 - **The shared quota governor (§5.4).** Quota is counted in-process, not in the Redis-held snapshot
   §5.4 describes: replicas do not share a budget, and a restart forgets the day's spend. Currents
   self-corrects from `x-ratelimit-*` one call later; GNews sends no headers, so its count stays
   wrong until a 403 arrives — the exact outcome pre-flight refusal exists to prevent.
   `createNewsClient` already accepts per-provider governors via `deps.quota`; a contained change.
+  **The burst half is now carried by the Vercel build** (VERCEL-ALL-IN-SCOPE §3.4, Phase 3):
+  sliding burst window plus the Currents observed-snapshot write, fail-open. The day-rolling ledger
+  for headerless providers stays unbuilt, deliberately — enabling GNews requires building it first.
 - **Per-provider coverage (ADR-0012).** `topic_coverage` is per topic, so a best-effort second
   provider cannot contribute to end-of-results. Cost: a GNews-only article inside an
   already-covered span may never be fetched.
