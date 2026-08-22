@@ -65,6 +65,12 @@ import { resolvePendingFormations, type FormationDeps } from "./storyline-format
  * cheap read, a model call only when membership has genuinely doubled.
  * Anything else would scale Gemini spend with attach volume rather than with
  * promotions — the unbounded mode the header above rules out.
+ *
+ * Returns what it labelled, because a label write is the one moment a label
+ * COLLISION can come into being: the collision-triggered merge
+ * (`storyline-label-merge-trigger.ts`) reads these outcomes to know which
+ * labels are worth counting. Callers that predate the trigger ignore the
+ * return value — which is why it is a return value and not a callback.
  */
 export async function labelLinkedStorylines(
   deps: {
@@ -82,7 +88,7 @@ export async function labelLinkedStorylines(
     formations?: { timeZone: string };
   },
   outcomes: readonly LinkOutcome[],
-): Promise<void> {
+): Promise<LabelOutcome[]> {
   // FORMATIONS FIRST (ADR-0011's amendment). A deferred formation is a promotion
   // that has not happened yet: the storyline is still provisional, so nothing in
   // the trigger pass below would name it, and the verdict that permits it is the
@@ -120,13 +126,16 @@ export async function labelLinkedStorylines(
     for (const merge of outcome.merged) propose(merge.winnerId, "merge");
   }
 
+  const labelled: LabelOutcome[] = [];
   for (const [storylineId, trigger] of triggers) {
     try {
       const storyline = await readStoryline(deps.db, storylineId);
       // Gone or merged away since the batch: whatever absorbed it will be
       // labelled under its own outcome.
       if (!storyline || storyline.mergedInto !== null) continue;
-      await labelStoryline({ db: deps.db, ...deps.labeler }, { storyline, trigger });
+      labelled.push(
+        await labelStoryline({ db: deps.db, ...deps.labeler }, { storyline, trigger }),
+      );
     } catch (error) {
       deps.log?.warn(
         { err: error, storylineId, trigger },
@@ -134,6 +143,7 @@ export async function labelLinkedStorylines(
       );
     }
   }
+  return labelled;
 }
 
 export interface LabelerDeps {

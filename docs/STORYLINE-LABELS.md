@@ -561,6 +561,64 @@ archive, not a clever test. At 258 model labels there were two shared labels
 and no gap between any pair of arcs; at 855 there were four, two separated. The
 knob was untestable until the backfill ran.
 
+### Fired by the collision, not only by the clock (2026-08-21)
+
+The merge was a nightly chore because the evidence only exists after the label
+is written — which makes a **label write the exact moment a collision can come
+into being**, and the ingest tail is standing right there holding the name. On
+2026-08-21 the gap between those two facts was measured the unpleasant way: an
+afternoon backfill left six live arcs named "Canada US Trade Talks" (sixteen
+duplicates across six labels) standing on the front page until an operator ran
+the CLI by hand, because nothing was scheduling the chore at all.
+
+So the tail now asks (`storyline-label-merge-trigger.ts`): after
+`labelLinkedStorylines` writes a batch's labels, each model-written name gets
+one GIN-indexed count of its live holders, and a name held by
+`STORYLINE_LABEL_MERGE_TRIGGER` or more storylines (default 2; 0 turns the
+trigger off) fires the same `mergeAgreeingLabels` pass the chore runs — scoped
+to that one label. The decision is unchanged by construction: one planner, one
+grounding guard, one grace window, one component valve, whichever caller asks.
+The trigger changes *when*, never *whether*.
+
+Three properties make it safe on the ingest tail:
+
+- **Cheap when nothing collides**, which is almost always — one indexed count
+  per label written; the candidate and coverage reads are paid only on a hit.
+- **Concurrency by inheritance** — `mergeStorylines` serializes every merge
+  behind its advisory lock, so two tails firing on one label degrade to one
+  merging and one no-op.
+- **It follows the survivor.** A relabelled survivor can land on another live
+  arc's name — observed the same day: the pass-one survivor was re-named
+  "Canada US Trade Talks", colliding with the arc it had not merged with — so
+  the trigger re-counts each survivor's new name and runs again, bounded by a
+  round cap of 4. Each merging round shrinks the number of live storylines,
+  which is what makes the loop terminate without the cap.
+
+Two costs it does not hide:
+
+- **It counts a different column than the planner reads.** The count is a GIN
+  scan over `label_words`; the planner reads `label` and folds it in JS. Those
+  agree only because `setStorylineLabel` writes both — a labelled row that
+  predates migration 0016 and never had `backfill:label-words` run against it
+  carries `'{}'`, is invisible to the count, and so does not fire a trigger the
+  nightly pass would still catch. Measured 2026-08-21: 0 of 298 eligible
+  labelled storylines on the dev archive carry empty `label_words`, so the gap
+  is closed there by the backfill having been run, not by construction.
+- **It lengthens the one job that waits for the tail.** `processSampleJob`
+  (§10.1) awaits the label tails before clearing the trending cache, and the
+  consumer runs at concurrency 1, so a sample that triggers a merge holds the
+  only worker for the merge rounds too — model relabels included. Free in the
+  ordinary case, where nothing collides; the lever if it bites is the consumer's
+  concurrency, not dropping the await.
+
+The threshold is 2 and should stay 2: of the six collision components the
+backfill produced, three held exactly two arcs, and a higher value leaves every
+pair standing until a scheduled pass runs. 1 is refused outright — a shared
+label needs two holders, so it would pay a candidate read per label and never
+merge. The nightly chore keeps running as the unscoped backstop — a crashed
+tail, a disabled trigger, a row the backfill never reached, or a collision
+assembled by drift relabels still needs a pass that asks about everything.
+
 ## Operating it
 
 ```bash

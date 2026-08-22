@@ -433,6 +433,34 @@ const EnvSchema = z
      * magnitude to spare, and still refuses a swallow.
      */
     STORYLINE_LABEL_MERGE_MAX_COMPONENT: z.coerce.number().int().min(2).default(25),
+    /**
+     * How many live storylines must share one label before the ingest tail runs
+     * the label-agreement merge for that label, without waiting for the nightly
+     * chore. 0 turns the trigger off; the nightly pass still runs either way.
+     *
+     * 2 — the merge machinery's own bar — is the only defensible setting, and the
+     * 2026-08-21 backfill is why: of the six collision components it produced,
+     * three held exactly two arcs. A higher threshold leaves every pair standing
+     * until a scheduled pass runs, which on a host with no scheduler is forever;
+     * this knob exists to make that pass event-driven, so a value that recreates
+     * the wait defeats it. It is a knob at all only as an off-switch with a
+     * paper trail, not because 3 is a setting anyone should run.
+     *
+     * 1 is refused rather than accepted-and-ignored. It reads like "fire on
+     * every label" and cannot: `sharedLabels` drops any bucket holding fewer
+     * than two storylines, so a threshold of 1 pays a full candidate read and
+     * bucketing for every model label written and can never plan a merge. Off
+     * is 0; on is 2 or more.
+     */
+    STORYLINE_LABEL_MERGE_TRIGGER: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .refine((value) => value !== 1, {
+        message:
+          "STORYLINE_LABEL_MERGE_TRIGGER=1 costs a candidate read per label and can never merge (a shared label needs two holders). Use 0 to disable, or 2.",
+      })
+      .default(2),
     // --- the v2 linker (ADR-0011); every default below is pinned from
     //     `pnpm measure:storylines-v2`, recorded in docs/STORYLINE-LINKING.md ---
     // There is deliberately NO storyline on/off switch here any more.

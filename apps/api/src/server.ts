@@ -12,7 +12,7 @@ import { createDb, databaseSsl } from "@zammy/storage";
 import { registerHealthRoutes } from "./health.js";
 import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
 import { IngestQueue } from "./ingest-queue.js";
-import { createLabeler, createLinkerConfig } from "./wiring.js";
+import { createLabeler, createLabelMergeRules, createLinkerConfig } from "./wiring.js";
 import { Metrics, registerMetricsRoute } from "./metrics.js";
 import { processSegmentJob, type TimelineDeps } from "./timeline-service.js";
 import { processSampleJob, type TrendingDeps } from "./trending-service.js";
@@ -182,6 +182,14 @@ export async function buildApp(config: Config): Promise<App> {
         // exist to re-offer the linker what it declined, and an offer judged at
         // a different bar is a different decision (`wiring.ts`).
         linker: createLinkerConfig(config),
+        // The collision-triggered label merge: the nightly repair, run by the
+        // ingest tail at the moment a label write creates the collision. The
+        // rules are the chore's own knobs — a merge decided at a different
+        // grace or valve than the nightly pass would be a different decision.
+        labelMerge: {
+          rules: createLabelMergeRules(config),
+          threshold: config.STORYLINE_LABEL_MERGE_TRIGGER,
+        },
       },
     },
     now: () => new Date(),

@@ -652,6 +652,51 @@ export async function readLabelMergeCandidates(
 }
 
 /**
+ * How many live, promoted, model-labelled storylines carry the given label
+ * words — the cheap pre-check the ingest tail's collision trigger runs on every
+ * label it writes, so the full candidate read (a spans aggregate over every
+ * labelled storyline) is paid only when a label is actually shared.
+ *
+ * The lifecycle filters are `readLabelMergeCandidates`' own, minus the
+ * `storyline_days` join: a storyline with no day slots is counted here and then
+ * excluded there, which over-fires the trigger into a planner that refuses.
+ * Same shape for the comparison itself: `@>` and `<@` are SET operators, so a
+ * label with a repeated word matches its deduplicated twin here and is told
+ * apart by `labelKey`'s multiset in the planner. Both containments, so the
+ * partial GIN index on `label_words` carries the scan.
+ *
+ * It can UNDER-fire in exactly one way, and it is worth stating rather than
+ * claiming a safety this does not have: this counts `label_words`, while the
+ * planner reads `label` and folds it in JS. `label_words` is written by
+ * `setStorylineLabel` and defaults to `'{}'` (migration 0016), so a labelled
+ * row that predates that column and never had `backfill:label-words` run
+ * against it is invisible HERE and visible THERE — the trigger misses a
+ * collision the nightly pass then catches. Measured on the dev archive
+ * 2026-08-21: 0 of 298 eligible labelled storylines carry empty `label_words`,
+ * so the gap is closed on this data by the backfill having been run, not by
+ * construction. The nightly pass is what makes that acceptable rather than a
+ * hole; it is also why this must not become the only repair.
+ */
+export async function countStorylinesSharingLabelWords(
+  db: Kysely<Database>,
+  words: readonly string[],
+): Promise<number> {
+  if (words.length === 0) return 0;
+  const { rows } = await sql<{ n: string }>`
+    select count(*) as n
+    from storylines s
+    where s.merged_into is null
+      and s.status <> 'provisional'
+      and s.label is not null
+      and s.label_source is not null
+      and s.label_source <> 'bigram'
+      and s.label_words @> ${[...words]}::text[]
+      and s.label_words <@ ${[...words]}::text[]
+  `.execute(db);
+  return Number(rows[0]?.n ?? 0);
+}
+
+/**
  * Every member article's title and description for a set of storylines — the
  * corpus the label-agreement merge derives its proper-noun evidence from.
  *

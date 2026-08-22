@@ -48,6 +48,15 @@ export interface LabelMergeDeps {
   db: Kysely<Database>;
   rules: LabelMergeRules;
   /**
+   * Present, only components whose `labelKey` is in the set are planned — the
+   * ingest tail's collision trigger asking about the one label it just wrote,
+   * rather than the nightly pass asking about all of them. Scoping happens
+   * AFTER bucketing rather than in the candidate query so a scoped run and the
+   * nightly run bucket identically — two spellings of "which storylines share
+   * this label" would eventually disagree about what a collision is.
+   */
+  onlyLabelKeys?: ReadonlySet<string>;
+  /**
    * When present the survivor is re-named. Absent — no `GEMINI_API_KEY`, or a
    * dry run — the merge still stands: a stale label on a correct storyline is
    * ADR-0011's own ordering, since the nightly drift pass repairs labels and
@@ -81,7 +90,7 @@ export interface LabelMergeReport {
  * planned differently from the real thing would be worse than no dry run.
  */
 export async function planLabelMerges(
-  deps: Pick<LabelMergeDeps, "db" | "rules">,
+  deps: Pick<LabelMergeDeps, "db" | "rules" | "onlyLabelKeys">,
 ): Promise<{ plans: LabelMergePlan[]; refusals: LabelMergeRefusal[]; sharedLabels: number }> {
   const rows = await readLabelMergeCandidates(deps.db);
   const candidates: LabelMergeCandidate[] = rows.map((row) => ({
@@ -93,6 +102,13 @@ export async function planLabelMerges(
   }));
 
   const components = sharedLabels(candidates);
+  if (deps.onlyLabelKeys) {
+    // Before the coverage reads below, which are the expensive half: a scoped
+    // run exists to pay for one label's corpus, not every shared label's.
+    for (const key of [...components.keys()]) {
+      if (!deps.onlyLabelKeys.has(key)) components.delete(key);
+    }
+  }
   const plans: LabelMergePlan[] = [];
   const refusals: LabelMergeRefusal[] = [];
 

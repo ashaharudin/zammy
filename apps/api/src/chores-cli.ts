@@ -6,7 +6,12 @@ import {
   type ChoreDeps,
   type StorylinePassDeps,
 } from "./chores.js";
-import { createConfiguredDb, createLabeler, createLinkerConfig } from "./wiring.js";
+import {
+  createConfiguredDb,
+  createLabeler,
+  createLabelMergeRules,
+  createLinkerConfig,
+} from "./wiring.js";
 
 /**
  * `pnpm chores <retention|storylines> [--label-rate=N] [--max-labels=N]` — the
@@ -155,10 +160,7 @@ try {
           ...choreDeps,
           linker: createLinkerConfig(config),
           labeler: createLabeler(config, log),
-          rules: {
-            graceDays: config.STORYLINE_LABEL_MERGE_GRACE_DAYS,
-            maxComponent: config.STORYLINE_LABEL_MERGE_MAX_COMPONENT,
-          },
+          rules: createLabelMergeRules(config),
           // Defaults to the configured ceiling, so the pass paces itself rather
           // than piling into the client's pacer and waiting there.
           // `--label-rate` can only usefully go SLOWER: the client enforces the
