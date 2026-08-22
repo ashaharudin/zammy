@@ -3,6 +3,7 @@ import { createDb, databaseSsl, type Database } from "@zammy/storage";
 import type { Kysely } from "kysely";
 import { createGeminiClient } from "./gemini.js";
 import type { LabelerDeps } from "./storyline-label-service.js";
+import type { LabelMergeRules } from "./storyline-label-merge.js";
 import type { LinkerConfig } from "./storyline-linker.js";
 
 /**
@@ -86,6 +87,25 @@ export function createLinkerConfig(config: Config): LinkerConfig {
       timeZone: config.APP_TIMEZONE,
     },
     timeZone: config.APP_TIMEZONE,
+  };
+}
+
+/**
+ * The bar the label-agreement merge judges at, for the two processes that repair
+ * on the SAME evidence: the nightly chore, and the ingest tail's collision
+ * trigger. Same reason as `createLinkerConfig` — the trigger exists to run the
+ * nightly decision earlier, so a grace window or component valve that differed
+ * between them would make "earlier" mean "different", and the row would not
+ * record which bar was applied.
+ *
+ * `storyline-label-merge-cli.ts` deliberately does NOT use this: its whole
+ * purpose is letting an operator try another bar with `--grace` and
+ * `--max-component`, which is the documented kind of divergence above.
+ */
+export function createLabelMergeRules(config: Config): LabelMergeRules {
+  return {
+    graceDays: config.STORYLINE_LABEL_MERGE_GRACE_DAYS,
+    maxComponent: config.STORYLINE_LABEL_MERGE_MAX_COMPONENT,
   };
 }
 

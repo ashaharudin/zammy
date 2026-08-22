@@ -12,7 +12,7 @@ import { createDb, databaseSsl } from "@zammy/storage";
 import { registerHealthRoutes } from "./health.js";
 import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
 import { IngestQueue } from "./ingest-queue.js";
-import { createLabeler, createLinkerConfig } from "./wiring.js";
+import { createLabeler, createLabelMergeRules, createLinkerConfig } from "./wiring.js";
 import { Metrics, registerMetricsRoute } from "./metrics.js";
 import { processSegmentJob, type TimelineDeps } from "./timeline-service.js";
 import { processSampleJob, type TrendingDeps } from "./trending-service.js";
@@ -187,10 +187,7 @@ export async function buildApp(config: Config): Promise<App> {
         // rules are the chore's own knobs — a merge decided at a different
         // grace or valve than the nightly pass would be a different decision.
         labelMerge: {
-          rules: {
-            graceDays: config.STORYLINE_LABEL_MERGE_GRACE_DAYS,
-            maxComponent: config.STORYLINE_LABEL_MERGE_MAX_COMPONENT,
-          },
+          rules: createLabelMergeRules(config),
           threshold: config.STORYLINE_LABEL_MERGE_TRIGGER,
         },
       },

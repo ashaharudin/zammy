@@ -445,8 +445,22 @@ const EnvSchema = z
      * this knob exists to make that pass event-driven, so a value that recreates
      * the wait defeats it. It is a knob at all only as an off-switch with a
      * paper trail, not because 3 is a setting anyone should run.
+     *
+     * 1 is refused rather than accepted-and-ignored. It reads like "fire on
+     * every label" and cannot: `sharedLabels` drops any bucket holding fewer
+     * than two storylines, so a threshold of 1 pays a full candidate read and
+     * bucketing for every model label written and can never plan a merge. Off
+     * is 0; on is 2 or more.
      */
-    STORYLINE_LABEL_MERGE_TRIGGER: z.coerce.number().int().min(0).default(2),
+    STORYLINE_LABEL_MERGE_TRIGGER: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .refine((value) => value !== 1, {
+        message:
+          "STORYLINE_LABEL_MERGE_TRIGGER=1 costs a candidate read per label and can never merge (a shared label needs two holders). Use 0 to disable, or 2.",
+      })
+      .default(2),
     // --- the v2 linker (ADR-0011); every default below is pinned from
     //     `pnpm measure:storylines-v2`, recorded in docs/STORYLINE-LINKING.md ---
     // There is deliberately NO storyline on/off switch here any more.

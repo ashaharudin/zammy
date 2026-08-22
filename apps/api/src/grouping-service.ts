@@ -77,6 +77,12 @@ export interface GroupingDeps {
    * an emptied cloud and caches it (`processSampleJob`). Dropping this promise
    * is a latency decision, and it is only correct where there is latency to
    * protect.
+   *
+   * What the tail carries grew: it now also runs the collision-triggered label
+   * merge (`storyline-label-merge-trigger.ts`), up to four rounds, each able to
+   * relabel a survivor with a model call. A caller that keeps this promise
+   * therefore waits for merge convergence, not just for names — which is the
+   * cost `processSampleJob` accepts and documents at its await.
    */
   labelTail?: (task: Promise<void>) => void;
   metrics?: Metrics;

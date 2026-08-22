@@ -337,6 +337,16 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
   // right trade while the cloud is the thing being fixed — a segment job is
   // late, whereas the cloud was wrong for an hour — but it is the first thing
   // to revisit if §6.5 latency regresses.
+  //
+  // That hold got longer, and this is where to look when it bites. The tail now
+  // carries the collision-triggered label merge as well: per model-written name
+  // one indexed count, and on a collision up to four rounds of the nightly
+  // merge pass, each of which can spend a model call relabelling a survivor. It
+  // is free when nothing collides — which is the ordinary case — and on the
+  // afternoon that motivated it (six colliding arcs) it would have been the
+  // difference between a correct cloud and a wrong one, so the trade still
+  // holds. Raising the consumer's concurrency is the lever, not dropping the
+  // await: this job's whole point is that nothing else is waiting on it.
   try {
     await deps.redis.del(cacheKeyFor(deps, job.language));
   } catch {

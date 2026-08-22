@@ -594,10 +594,29 @@ Three properties make it safe on the ingest tail:
   round cap of 4. Each merging round shrinks the number of live storylines,
   which is what makes the loop terminate without the cap.
 
+Two costs it does not hide:
+
+- **It counts a different column than the planner reads.** The count is a GIN
+  scan over `label_words`; the planner reads `label` and folds it in JS. Those
+  agree only because `setStorylineLabel` writes both — a labelled row that
+  predates migration 0016 and never had `backfill:label-words` run against it
+  carries `'{}'`, is invisible to the count, and so does not fire a trigger the
+  nightly pass would still catch. Measured 2026-08-21: 0 of 298 eligible
+  labelled storylines on the dev archive carry empty `label_words`, so the gap
+  is closed there by the backfill having been run, not by construction.
+- **It lengthens the one job that waits for the tail.** `processSampleJob`
+  (§10.1) awaits the label tails before clearing the trending cache, and the
+  consumer runs at concurrency 1, so a sample that triggers a merge holds the
+  only worker for the merge rounds too — model relabels included. Free in the
+  ordinary case, where nothing collides; the lever if it bites is the consumer's
+  concurrency, not dropping the await.
+
 The threshold is 2 and should stay 2: of the six collision components the
 backfill produced, three held exactly two arcs, and a higher value leaves every
-pair standing until a scheduled pass runs. The nightly chore keeps running as
-the unscoped backstop — a crashed tail, a disabled trigger, or a collision
+pair standing until a scheduled pass runs. 1 is refused outright — a shared
+label needs two holders, so it would pay a candidate read per label and never
+merge. The nightly chore keeps running as the unscoped backstop — a crashed
+tail, a disabled trigger, a row the backfill never reached, or a collision
 assembled by drift relabels still needs a pass that asks about everything.
 
 ## Operating it
