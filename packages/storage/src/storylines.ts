@@ -884,6 +884,41 @@ export interface StorylineStats {
   linkedGroups: number;
   /** Groups in the biggest storyline: the percolation alarm. */
   largestStoryline: number;
+  /**
+   * The same alarm's denominator — the size distribution the largest arc sits
+   * at the top of, bucketed. It travels WITH `largestStoryline` because the
+   * maximum on its own is not evidence of anything: through the whole
+   * late-candidate runaway (VERCEL-PHASE-0-FINDINGS §2.6) the largest arc held
+   * at 124 for four bounded passes while the population underneath it was
+   * collapsing, and the one metric that looked calm is the reason that took
+   * four sessions to find.
+   *
+   * The edges are 1 / 2–4 / 5–19 / 20–99 / 100+, and they are NOT chosen here:
+   * they are the buckets docs/STORYLINE-LINKING.md's "Graph shape, before and
+   * after" table already reports, so a night's numbers and that document's
+   * measurements can be read against each other directly. Two of the edges have
+   * independent meaning as well — 2 is ADR-0011's promotion line ("holding more
+   * than one group"), and 20 is the size at which that ADR hand-reads arcs for
+   * coherence ("the 21 named arcs at ≥20 groups"), so the 20–99 bucket is the
+   * population a human has actually inspected.
+   *
+   * What they are for: percolation moves the TOP bucket while the middle
+   * thins — a swallow is arcs disappearing into one arc. A backlog draining
+   * correctly moves the middle and leaves the top alone, which is exactly what
+   * the retrieval fix measured (20–99 went 15 → 22, 100+ stayed at 1).
+   */
+  singletons: number;
+  arcs2To4: number;
+  arcs5To19: number;
+  arcs20To99: number;
+  arcs100Plus: number;
+  /**
+   * Standing rows in `storyline_bridges` — the same fact from the evidence
+   * side, and the LEADING one: K bridges are what merge a pair, so bridge
+   * accumulation precedes the merges that move the buckets above. §2.6's
+   * runaway showed 1,913 → 10,282 bridges over the passes that grew the arc.
+   */
+  bridges: number;
   daySlots: number;
   labelled: number;
   /** Promoted storylines that were asked and produced no label at all. */
@@ -894,10 +929,45 @@ export interface StorylineStats {
  * The report (S5). One round trip, because every number here is a count over a
  * table the backfill just wrote and an operator reads them together or not at
  * all — `largest` above all, which is ADR-0009's 1,179-group swallow expressed
- * as a number that can be watched.
+ * as a number that can be watched. Read nightly as well as after a backfill
+ * (`runStorylineGraphChore`), which is what makes it a series rather than a
+ * number somebody once saw.
+ *
+ * The arc-size numbers all come out of ONE aggregate over `storyline_groups`,
+ * and that is why adding the distribution cost nothing: it replaced the two
+ * separate passes `largest` and `promoted` used to each make. Measured on the
+ * dev corpus (27,083 `storyline_groups` rows, 17,008 live storylines): the
+ * seven shape numbers together are **6.6–9.4 ms**, against **12.3–16.0 ms** for
+ * just the two aggregates they replace, and the whole function is **16–21 ms**
+ * (measured both in `psql` and through the driver) where it was 23–39 ms. The
+ * rest is the six scalar subqueries over `storylines` / `storyline_days`,
+ * unchanged. Against the 300-second function ceiling this is noise.
+ *
+ * The numbers it returns on that corpus reproduce docs/STORYLINE-LINKING.md's
+ * "Graph shape" baseline row exactly — 17,008 live, 13,074 / 3,241 / 677 / 15 /
+ * 1, largest 124, 1,913 bridges — which is the check that the buckets here mean
+ * what that table means.
+ *
+ * `sizes` covers exactly the live storylines: `mergeStorylines` DELETES the
+ * loser's `storyline_groups` rows rather than leaving them pointing at an
+ * alias, so there is nothing here to filter on `merged_into` and the buckets
+ * sum to `storylines`.
  */
 export async function readStorylineStats(db: Kysely<Database>): Promise<StorylineStats> {
   const { rows } = await sql<Record<string, string>>`
+    with sizes as (
+      select count(*) as n from storyline_groups group by storyline_id
+    ), shape as (
+      select
+        coalesce(max(n), 0)                         as largest,
+        count(*) filter (where n > 1)               as promoted,
+        count(*) filter (where n = 1)               as singletons,
+        count(*) filter (where n between 2 and 4)   as arcs_2_4,
+        count(*) filter (where n between 5 and 19)  as arcs_5_19,
+        count(*) filter (where n between 20 and 99) as arcs_20_99,
+        count(*) filter (where n >= 100)            as arcs_100_plus
+      from sizes
+    )
     select
       (select count(*) from storylines where merged_into is null)          as storylines,
       (select count(*) from storylines where merged_into is not null)      as aliases,
@@ -907,13 +977,10 @@ export async function readStorylineStats(db: Kysely<Database>): Promise<Storylin
         where merged_into is null and label is not null)                   as labelled,
       (select count(*) from storylines
         where merged_into is null and label is null and label_at is not null) as unlabelled,
-      coalesce((select max(n) from (
-        select count(*) as n from storyline_groups group by storyline_id
-      ) sizes), 0)                                                         as largest,
-      (select count(*) from (
-        select storyline_id from storyline_groups
-        group by storyline_id having count(*) > 1
-      ) promoted)                                                          as promoted
+      (select count(*) from storyline_bridges)                             as bridges,
+      shape.largest, shape.promoted, shape.singletons,
+      shape.arcs_2_4, shape.arcs_5_19, shape.arcs_20_99, shape.arcs_100_plus
+    from shape
   `.execute(db);
 
   const row = rows[0] ?? {};
@@ -924,6 +991,12 @@ export async function readStorylineStats(db: Kysely<Database>): Promise<Storylin
     aliases: n("aliases"),
     linkedGroups: n("linked_groups"),
     largestStoryline: n("largest"),
+    singletons: n("singletons"),
+    arcs2To4: n("arcs_2_4"),
+    arcs5To19: n("arcs_5_19"),
+    arcs20To99: n("arcs_20_99"),
+    arcs100Plus: n("arcs_100_plus"),
+    bridges: n("bridges"),
     daySlots: n("day_slots"),
     labelled: n("labelled"),
     unlabelled: n("unlabelled"),

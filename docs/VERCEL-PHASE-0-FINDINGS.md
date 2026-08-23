@@ -358,6 +358,22 @@ and the uncertainty points the same way that has already been wrong twice in thi
    "discovered by accident later" into "visible the week it starts". With `/metrics` deleted (§7) the
    home is the pass's structured log and the `chore_runs` row Phase 4 adds.
 
+   **Done, with one of the three numbers deliberately absent.** `runStorylineGraphChore`
+   ([chores.ts](../apps/api/src/chores.ts)) reads `readStorylineStats` at the end of every pass and
+   logs largest arc, arc count and the size distribution on the bucket edges
+   [STORYLINE-LINKING.md](STORYLINE-LINKING.md)'s "Graph shape" table already uses (1 / 2–4 / 5–19 /
+   20–99 / 100+), plus the standing bridge count — the leading indicator, since K bridges are what
+   merge a pair. Measured **16–21 ms** on 27,083 `storyline_groups` rows, which is *less* than the
+   stats read cost before the distribution was added: the seven arc-size numbers come out of one
+   aggregate where `largest` and `promoted` used to make two. **Merges per night is not there**:
+   birth-path merges are recorded nowhere and the schema has no merge timestamp, so counting them is
+   a schema change rather than a field, and the snapshot series carries the same signal — arc count
+   falling while largest arc climbs *is* the merge rate, seen where it has a consequence. And **no
+   threshold was set**: 1,179 was 99% of a single day's groups and cannot be reused as an
+   archive-wide count without changing what it measured, while 50 and 1,347 bracket a range nothing
+   has measured — production's 124 is cap-built and §2.7 above is precisely the question of which way
+   it drifts. A fortnight of these rows is what a threshold should come off.
+
 ## 3. The label pass: a backlog, not a nightly cost
 
 The scan says 2,986 of 3,938 promoted storylines want a label, which at 15 RPM is 3.3 hours. That

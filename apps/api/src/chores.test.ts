@@ -12,6 +12,7 @@ import {
 import {
   runDormancyChore,
   runLateCandidateChore,
+  runStorylineGraphChore,
   runStorylineLabelChore,
   runStorylinePass,
   type ChoreDeps,
@@ -452,5 +453,125 @@ describe("the late-candidate sweep is gated out of the nightly pass", () => {
     expect(report.lateCandidates.offered).toBe(4);
     expect(report.lateCandidates.attachedTo).toBeGreaterThan(0);
     expect("skipped" in report.lateCandidates).toBe(false);
+  });
+});
+
+/**
+ * The graph's shape on the nightly report (VERCEL-PHASE-0-FINDINGS §2.7,
+ * action 3).
+ *
+ * `readStorylineStats` has computed ADR-0011's percolation alarm since the
+ * backfill needed it, and nothing watched it: it was printed after a manual
+ * backfill and during a manual measurement run, so the late-candidate runaway
+ * §2.6 records took four sessions and two wrong projections to surface. These
+ * tests are about the two properties that make a series of nights readable —
+ * the numbers describe the archive the night LEFT, and they land somewhere a
+ * log pipeline can pick one line per night out of.
+ */
+describe("the graph shape on the nightly report", () => {
+  const LINKER = {
+    enabled: true,
+    rules: {
+      anchorMaxShare: 0.5,
+      anchorDfFloor: 4,
+      massThreshold: 1,
+      dormancyDays: 90,
+      dormantStrictness: 1.5,
+    },
+    mergeBridges: 2,
+    coherenceGate: false,
+    storyDf: { windowDays: 14, timeZone: "UTC" },
+    timeZone: "UTC",
+  };
+  // No generator: the label pass takes its bigram path and spends no quota.
+  const PASS = {
+    linker: LINKER,
+    labeler: { generator: null, sampleSize: 10, driftFactor: 2, now: () => NOW },
+    rules: { graceDays: 14, maxComponent: 25 },
+  };
+
+  async function seedCorpus(day: string): Promise<void> {
+    await db
+      .insertInto("story_corpus_days")
+      .values({ day, language: "en", articles: 100 })
+      .execute();
+    await db
+      .insertInto("story_token_days")
+      .values(["fausto", "hawaii"].map((token) => ({ day, language: "en", token, df: 4 })))
+      .execute();
+  }
+
+  /** The largest arc, asked of the rows directly rather than of the report. */
+  async function largestArc(): Promise<number> {
+    const { rows } = await sql<{ n: string }>`
+      select coalesce(max(n), 0) as n
+      from (select count(*) as n from storyline_groups group by storyline_id) sizes
+    `.execute(db);
+    return Number(rows[0]?.n ?? 0);
+  }
+
+  it("partitions the live arcs by size, so a quiet night is still a readable row", async () => {
+    // Two arcs of two groups and one singleton. The distribution is the half
+    // that makes the maximum mean anything: through §2.6's runaway the largest
+    // arc held at 124 for four passes while the population under it collapsed,
+    // so a night that reports only a maximum can look calm through a failure.
+    await seedCorpus("2026-08-13");
+    await storyline([YESTERDAY, YESTERDAY]);
+    await storyline([MARCH, "2026-03-03T09:00:00.000Z"]);
+    const alone = await group(YESTERDAY);
+    await createProvisionalStoryline(db, { groupId: alone, ...TZ });
+
+    const report = await runStorylinePass({ ...deps(), ...PASS });
+
+    expect(report.graph).toMatchObject({
+      arcs: 3,
+      promoted: 2,
+      largestArc: 2,
+      linkedGroups: 5,
+      singletons: 1,
+      arcs2To4: 2,
+      arcs5To19: 0,
+      arcs20To99: 0,
+      arcs100Plus: 0,
+    });
+  });
+
+  it("reports the shape the night ENDED in, not the one it found", async () => {
+    // The whole value of the series is that tonight's row is comparable with
+    // last night's, which requires the read to happen after everything that
+    // moves membership. The sweep is the step that moves it, so a report taken
+    // before it would describe an archive that no longer exists by the time the
+    // line is written.
+    await seedCorpus("2026-08-13");
+    await storyline([YESTERDAY, YESTERDAY]);
+    await storyline([YESTERDAY, YESTERDAY]);
+    const before = await largestArc();
+
+    const report = await runStorylinePass({ ...deps(), ...PASS, lateCandidateSweep: true });
+
+    expect(report.lateCandidates.attachedTo).toBeGreaterThan(0);
+    expect(report.graph.largestArc).toBe(await largestArc());
+    expect(report.graph.largestArc).toBeGreaterThan(before);
+  });
+
+  it("puts the shape on its own log line, which is what makes it a series", async () => {
+    // A number in a corner of the pass summary is the failure mode this change
+    // exists to fix. One message per night, greppable, is the alarm — there is
+    // deliberately no threshold, because the three reference points that exist
+    // (the replay's 50, §2.6's 1,347, ADR-0009's 1,179-of-1,190) do not bracket
+    // one, and `runStorylineGraphChore` has the reasoning.
+    await seedCorpus("2026-08-13");
+    await storyline([YESTERDAY, YESTERDAY]);
+    const lines: { msg: string; obj: object }[] = [];
+
+    const graph = await runStorylineGraphChore({
+      ...deps(),
+      log: { info: (obj, msg) => lines.push({ obj, msg }), warn: () => {} },
+    });
+
+    const line = lines.find((entry) => entry.msg.includes("graph shape"));
+    expect(line?.obj).toEqual({ graph });
+    // Recorded, never warned: nothing here should raise the pass's log level.
+    expect(graph.largestArc).toBe(2);
   });
 });

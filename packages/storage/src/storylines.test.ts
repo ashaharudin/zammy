@@ -13,10 +13,12 @@ import {
   readGroupStorylines,
   readStoryline,
   readStorylineDays,
+  readStorylineStats,
   refreshStoryline,
   resolveStoryline,
   setStorylineLabel,
   setStorylineStatus,
+  type StorylineStats,
 } from "./storylines.js";
 import { createTestDatabase, type TestDatabase } from "./test-support.js";
 
@@ -814,6 +816,109 @@ describe("storylines in storage", () => {
       expect(
         await countBridges(harness.db, { storylineA: kept, storylineB: otherStoryline.id }),
       ).toBe(1);
+    });
+  });
+
+  /**
+   * ADR-0011's percolation alarm, as the numbers the nightly pass now reports
+   * (VERCEL-PHASE-0-FINDINGS §2.7, action 3).
+   *
+   * The fixture is memberships inserted straight into `storyline_groups`, and
+   * that is deliberate: what is under test is the bucketing SQL, and reaching
+   * the 19/20 and 99/100 edges through the linker would take 376 real groups
+   * and make the fixture the subject. A synthetic membership is a legal row —
+   * `group_id` carries no foreign key by design (migration 0007) — and the
+   * distribution is a pure function of this table.
+   *
+   * Runs last in the file and truncates first, because it is the only test here
+   * whose subject is a count over EVERYTHING rather than one storyline.
+   */
+  describe("the graph-shape report", () => {
+    // One arc on each side of every bucket edge, so an off-by-one in any
+    // `between` shows up as a bucket that is wrong by exactly one arc: 1 |
+    // 2..4 | 5..19 | 20..99 | 100+. The 124 is the dev corpus's actual largest
+    // arc, kept as the maximum so the assertion below reads like a real night.
+    const SIZES = [1, 1, 1, 2, 4, 5, 19, 20, 99, 100, 124];
+    let stats: StorylineStats;
+
+    beforeAll(async () => {
+      await sql`
+        truncate storylines, storyline_groups, storyline_days, storyline_bridges cascade
+      `.execute(harness.db);
+
+      let groupId = 0;
+      const ids: string[] = [];
+      for (const size of SIZES) {
+        const row = await harness.db
+          .insertInto("storylines")
+          .defaultValues()
+          .returning("id")
+          .executeTakeFirstOrThrow();
+        ids.push(row.id);
+        await harness.db
+          .insertInto("storyline_groups")
+          .values(
+            Array.from({ length: size }, () => {
+              groupId += 1;
+              return { storyline_id: row.id, group_id: String(groupId) };
+            }),
+          )
+          .execute();
+      }
+      // An alias holding nothing, which is what a merge leaves behind. It must
+      // count as neither an arc nor a singleton, or every merge would look like
+      // the graph growing a fragment.
+      await harness.db
+        .insertInto("storylines")
+        .values({ merged_into: ids[0] as string })
+        .execute();
+      await harness.db
+        .insertInto("storyline_bridges")
+        .values({
+          storyline_lo: [ids[1], ids[2]].sort()[0] as string,
+          storyline_hi: [ids[1], ids[2]].sort()[1] as string,
+          group_id: "1",
+        })
+        .execute();
+
+      stats = await readStorylineStats(harness.db);
+    });
+
+    it("buckets arc size on the edges docs/STORYLINE-LINKING.md reports", () => {
+      expect(stats.largestStoryline).toBe(124);
+      expect(stats.singletons).toBe(3);
+      expect(stats.arcs2To4).toBe(2);
+      expect(stats.arcs5To19).toBe(2);
+      expect(stats.arcs20To99).toBe(2);
+      expect(stats.arcs100Plus).toBe(2);
+    });
+
+    it("accounts for every live arc exactly once, so the buckets are a partition", () => {
+      // The property that makes a night's row readable: a bucket moving means an
+      // arc CHANGED SIZE, never that a count drifted from the population. This
+      // is also the assertion that catches an arc falling into no bucket at all.
+      const bucketed =
+        stats.singletons + stats.arcs2To4 + stats.arcs5To19 + stats.arcs20To99 + stats.arcs100Plus;
+      expect(bucketed).toBe(SIZES.length);
+      expect(stats.storylines).toBe(SIZES.length);
+      // Promoted is "more than one group" (ADR-0011), which is everything but
+      // the singletons — the same partition read a second way.
+      expect(stats.promoted).toBe(SIZES.length - stats.singletons);
+    });
+
+    it("excludes aliases from the population without filtering on merged_into", () => {
+      // `mergeStorylines` deletes the loser's `storyline_groups` rows, so the
+      // size aggregate never sees an alias and needs no `merged_into` clause.
+      // If that ever changes, this is the test that says so.
+      expect(stats.aliases).toBe(1);
+      expect(stats.storylines).toBe(SIZES.length);
+      expect(stats.linkedGroups).toBe(SIZES.reduce((sum, size) => sum + size, 0));
+    });
+
+    it("reports standing bridge evidence, the count that moves BEFORE the buckets do", () => {
+      // K bridges merge a pair, so bridges accumulate first and the arc sizes
+      // follow. §2.6's runaway showed 1,913 → 10,282 bridges.
+      expect(stats.bridges).toBe(1);
     });
   });
 });
