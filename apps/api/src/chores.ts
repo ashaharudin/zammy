@@ -6,6 +6,7 @@ import {
   readLinkDirtyClock,
   pruneStoryDf,
   readLinkableGroups,
+  readStorylineStats,
   retentionReport,
   type Database,
   type RetentionReport,
@@ -550,6 +551,127 @@ export async function runStorylineLabelChore(
   return labelled;
 }
 
+/**
+ * The graph's shape at the end of the night — ADR-0011's percolation alarm,
+ * finally somewhere a series of nights can be read off it.
+ *
+ * Flat and numeric on purpose. The home this wants is the `chore_runs` row
+ * Phase 4 adds (VERCEL-PHASE-0-FINDINGS §2.7, action 3; `/metrics` is gone,
+ * §7), and until that table exists the structured log is the whole deliverable
+ * — same argument as `runRetentionChore`. Every field here is one column when
+ * it moves, with the same meaning it has here, so the move is a copy and not a
+ * redefinition.
+ */
+export interface StorylineGraphReport {
+  /** Live storylines. The denominator for everything below. */
+  arcs: number;
+  /** Arcs holding more than one group — the ones that are REAL (ADR-0011). */
+  promoted: number;
+  /** Groups in the biggest arc. THE alarm; the rest of this exists to read it. */
+  largestArc: number;
+  /** Groups the linker has reached — what `largestArc` is a share OF. */
+  linkedGroups: number;
+  singletons: number;
+  arcs2To4: number;
+  arcs5To19: number;
+  arcs20To99: number;
+  arcs100Plus: number;
+  /** Standing rows in `storyline_bridges`: K of these merge a pair. */
+  bridges: number;
+}
+
+/**
+ * Put the graph's shape on the nightly report.
+ *
+ * ## Why this exists at all
+ *
+ * `readStorylineStats` has computed the percolation alarm since the backfill
+ * needed it, and its own comment calls the largest-arc number "ADR-0009's
+ * 1,179-group swallow expressed as a number that can be watched". Nothing was
+ * watching it: it was printed after a manual backfill and during a manual
+ * measurement run, and the nightly pass reported `dormant`, `bridges`,
+ * `lateCandidates`, `labels` and `labelMerge` — no graph shape at all. So the
+ * late-candidate runaway (VERCEL-PHASE-0-FINDINGS §2.6) had to be discovered by
+ * a human running a harness by hand, which took four sessions and two wrong
+ * projections. This is §2.7's action 3, the one that needed no measurement and
+ * no decision first.
+ *
+ * It reuses `readStorylineStats` rather than asking its own question, because a
+ * second definition of "largest arc" is how the nightly number and the
+ * document's number quietly stop being the same number.
+ *
+ * ## Why the distribution and not just the maximum
+ *
+ * §2.6's transferable lesson: the largest arc held at **124 for four bounded
+ * passes** while the population underneath it was collapsing, and per-offer cost
+ * IMPROVED as the graph degraded. A single metric can look calm through a
+ * failure. The buckets are what tell a swallow (top bucket grows, middle thins)
+ * from a suppressed backlog draining correctly (middle thickens, top still 1) —
+ * which is precisely the reading docs/STORYLINE-LINKING.md's "Graph shape"
+ * table makes, on these same bucket edges.
+ *
+ * ## Why there is no merges-per-night count
+ *
+ * §2.7 asked for three numbers and this reports two of them. Merges on the
+ * BIRTH path are recorded nowhere — `mergeStorylines` writes no merge event and
+ * the schema has no merge timestamp, only `storylines.merged_into`, which says
+ * a merge happened once and never when — so a per-night count is a schema
+ * change, not a field. It is a real gap and it is deliberately not filled here.
+ *
+ * What makes that acceptable is that **the series is the alarm**. Percolation is
+ * a trend, not an event: arc count falling while `largestArc` climbs and the
+ * buckets shift upward IS the merge rate, observed at the only place it has a
+ * consequence. A merge counter would be a nicer instrument, not a necessary
+ * one, and the counter is not missing because anyone forgot.
+ *
+ * ## Why it does not warn, only records
+ *
+ * Deliberate, and the reasoning is worth keeping because "add a threshold" is
+ * the obvious next thought. The three reference points that exist:
+ *
+ *   - **50** — the largest arc the replay harness builds at the pinned bar
+ *     (share 0.002, mass 20). The steady state of a *correctly built* archive.
+ *   - **1,347** — §2.6's runaway, ~11% of the window in one arc.
+ *   - **1,179** — ADR-0009's swallow, which was 1,179 of a **single day's**
+ *     1,190 groups: a 99% share of a day, not an archive-wide count.
+ *
+ * None of them yields a line. The 1,179 cannot: reused as an archive-wide
+ * count it would silently mean something different from what it measured, and
+ * as a share it is 99% — a threshold that fires only once the graph is already
+ * destroyed. And the two that ARE archive-wide bracket a range nothing has
+ * measured: production sits at 124 today because it was built under the
+ * candidate cap, §2.7 says it should drift as the hybrid converges, and whether
+ * it converges DOWN toward 50 or up is the unmeasured question that section
+ * exists to pose. Any number between 124 and 1,347 would be picked by feel, and
+ * this codebase does not ship tuned constants it cannot justify.
+ *
+ * So: record, and let the series be the alarm — which is the thing that has
+ * been missing, not the threshold. Once a fortnight of these rows exists,
+ * *then* a threshold can come off the data instead of out of the air.
+ */
+export async function runStorylineGraphChore(deps: ChoreDeps): Promise<StorylineGraphReport> {
+  const stats = await readStorylineStats(deps.db);
+  const graph: StorylineGraphReport = {
+    arcs: stats.storylines,
+    promoted: stats.promoted,
+    largestArc: stats.largestStoryline,
+    linkedGroups: stats.linkedGroups,
+    singletons: stats.singletons,
+    arcs2To4: stats.arcs2To4,
+    arcs5To19: stats.arcs5To19,
+    arcs20To99: stats.arcs20To99,
+    arcs100Plus: stats.arcs100Plus,
+    bridges: stats.bridges,
+  };
+  // Its own log line, not a corner of the pass's summary object: a log pipeline
+  // grepping one message per night is what turns this into the series above.
+  deps.log.info(
+    { graph },
+    "storyline graph shape — ADR-0011's percolation alarm (no threshold set)",
+  );
+  return graph;
+}
+
 export interface StorylinePassDeps extends ChoreDeps {
   /** The bar the live write path judges at — see `wiring.createLinkerConfig`. */
   linker: LinkerConfig;
@@ -611,6 +733,12 @@ export interface StorylinePassReport {
   lateCandidates: Awaited<ReturnType<typeof runLateCandidateChore>> & { skipped?: true };
   labels: Awaited<ReturnType<typeof runStorylineLabelChore>>;
   labelMerge: LabelMergeReport;
+  /**
+   * The shape the night ended in. Note `graph.bridges` is the STANDING count of
+   * bridge evidence, where `bridges` above is what tonight's sweep found — a
+   * total and a delta, not two spellings of one number.
+   */
+  graph: StorylineGraphReport;
 }
 
 /**
@@ -687,6 +815,14 @@ export async function runStorylinePass(
         };
   const labels = await runStorylineLabelChore(deps);
   const labelMerge = await runLabelMergeChore(deps);
+  // 6. Read the graph's shape LAST, so the row describes the archive the night
+  //    leaves behind rather than the one it found. It changes nothing, which is
+  //    why it can sit outside the ordering argument above — and it is one round
+  //    trip, 16-21 ms measured on 27,083 `storyline_groups` rows, against a
+  //    300-second function ceiling (VERCEL-ALL-IN-SCOPE §3.3). It is CHEAPER
+  //    than the stats read was before the distribution was added; see
+  //    `readStorylineStats`.
+  const graph = await runStorylineGraphChore(deps);
 
-  return { dormant, bridges, lateCandidates, labels, labelMerge };
+  return { dormant, bridges, lateCandidates, labels, labelMerge, graph };
 }
