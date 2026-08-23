@@ -260,6 +260,9 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
     const ingested = await ingestSightings(deps.db, {
       fingerprint,
       sightings: result.sightings,
+      // The same day rule grouping runs on: a fold moves which day an article
+      // belongs to, and the ingest keeps its storylines' slots in step.
+      timeZone: deps.config.grouping.timeZone,
     });
     deps.metrics?.articlesIngested(ingested.articlesCreated);
     // The sample is a write path into `articles` like any other, so it owes

@@ -152,13 +152,15 @@ export async function attachGroup(
  * day slots it was written to keep honest were led by the wrong article
  * whenever a piece published earlier than the day's lead joined the group.
  *
- * Two neighbouring cases are NOT covered here, and neither is a refresh:
- *  - a singleton MOVING out of its own group (regroup's pass 2) leaves any
- *    storyline holding that now-empty group with no articles behind it, and
- *    re-deriving it to zero slots is not obviously better than dissolving it;
- *  - `ingestSightings` folding a sighting with an earlier `published` can drag
- *    an article across a day boundary (`lowerGroupPosition`), which needs a day
- *    slot the storyline has no row for, inside the ingest transaction.
+ * The ingest path's sibling case — a fold dragging an article's `published`
+ * earlier, onto a day the storyline may have no slot for — is covered by
+ * `ingestSightings` calling `refreshStorylineDerivations` directly: it is
+ * already inside a transaction, and this opens its own.
+ *
+ * One neighbouring case is NOT covered, and is not a refresh: a singleton
+ * MOVING out of its own group (regroup's pass 2) leaves any storyline holding
+ * that now-empty group with no articles behind it, and re-deriving it to zero
+ * slots is not obviously better than dissolving it.
  */
 export async function refreshStoryline(
   db: Kysely<Database>,

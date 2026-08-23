@@ -3,6 +3,7 @@ import { deriveDedupKey, type Sighting } from "@zammy/news-client";
 import { hexToBytea } from "./database.js";
 import { ingestSightings, upsertTopic } from "./ingest.js";
 import { migrateToLatest } from "./migrator.js";
+import { createProvisionalStoryline, readStorylineDays } from "./storylines.js";
 import {
   createTestDatabase,
   loadClimateSightings,
@@ -53,6 +54,7 @@ describe("the collapse over the recorded duplication payload", () => {
 
   it("collapses 100 sightings into 42 articles", async () => {
     const result = await ingestSightings(harness.db, {
+      timeZone: "UTC",
       fingerprint: CLIMATE_TOPIC,
       sightings,
     });
@@ -108,6 +110,7 @@ describe("the collapse over the recorded duplication payload", () => {
     // a user request race harmlessly (§7.4). Seeing the same upstream UUID
     // twice must not inflate sighting_count.
     const result = await ingestSightings(harness.db, {
+      timeZone: "UTC",
       fingerprint: CLIMATE_TOPIC,
       sightings,
     });
@@ -153,6 +156,7 @@ describe("the collapse over the recorded duplication payload", () => {
     });
 
     const result = await ingestSightings(harness.db, {
+      timeZone: "UTC",
       fingerprint: SECOND_TOPIC,
       sightings: sightings.slice(0, 10),
     });
@@ -175,6 +179,7 @@ describe("the collapse over the recorded duplication payload", () => {
 
   it("ingesting nothing is a no-op", async () => {
     const result = await ingestSightings(harness.db, {
+      timeZone: "UTC",
       fingerprint: CLIMATE_TOPIC,
       sightings: [],
     });
@@ -225,6 +230,7 @@ describe("the earliest sighting owns the display fields", () => {
     // of a story arrives LAST. A later re-emission must not rewrite the
     // headline (§7.4) — display fields follow the earliest sighting.
     await ingestSightings(harness.db, {
+      timeZone: "UTC",
       fingerprint: TOPIC,
       sightings: [
         emission("00000000-0000-4000-8000-000000000002", "2026-08-04T12:00:00.000Z", "Rewritten headline"),
@@ -247,6 +253,7 @@ describe("the earliest sighting owns the display fields", () => {
 
   it("an even earlier emission in a later fetch takes over the display fields", async () => {
     await ingestSightings(harness.db, {
+      timeZone: "UTC",
       fingerprint: TOPIC,
       sightings: [
         emission("00000000-0000-4000-8000-000000000003", "2026-08-04T06:00:00.000Z", "First headline of all"),
@@ -300,5 +307,209 @@ describe("upsertTopic", () => {
     expect(topic.keywords).toEqual(["climate", "policy"]);
     expect(Number(topic.hit_count)).toBe(2);
     expect(topic.last_hit_at.getTime()).toBeGreaterThanOrEqual(topic.created_at.getTime());
+  });
+});
+
+/**
+ * The fold moves a storyline's day slots, not just its group's position.
+ *
+ * `published = LEAST` (ADR-0002) means a sighting arriving later can drag an
+ * article EARLIER in time, and both storyline derivations are computed over
+ * member ARTICLES — so a fold that moves an article invalidates the day slots
+ * of every storyline holding its group. `lowerGroupPosition` maintains the
+ * group's own position on the §7.3 keyset axis and nothing else.
+ *
+ * Deliberately zoned, and deliberately WITHIN one UTC day: both sightings below
+ * land on 2026-08-12 in UTC and on different days in Vancouver. A UTC-thinking
+ * test sees nothing here, which is exactly how the gap survived.
+ */
+describe("a fold re-derives the day slots of the storylines holding the article", () => {
+  let harness: TestDatabase;
+  const TOPIC = testFingerprint("f01dab1e");
+  const ZONE = "America/Vancouver";
+
+  const emission = (input: {
+    id: string;
+    url: string;
+    published: string;
+  }): Sighting => ({
+    id: input.id,
+    url: input.url,
+    provider: "currents",
+    providerSightingId: input.url,
+    dedupKey: deriveDedupKey(input.url),
+    title: "Harbour spill widens",
+    description: "Crews worked through the night",
+    author: null,
+    imageUrl: null,
+    language: "en",
+    categories: ["world"],
+    sourceCategories: [],
+    sourceDomain: "example.com",
+    published: input.published,
+    raw: { id: input.id, published: input.published },
+  });
+
+  const days = async (storylineId: string) =>
+    (await readStorylineDays(harness.db, storylineId)).map((day) => ({
+      dayKey: day.dayKey,
+      published: day.daySlotPublished.toISOString(),
+      lead: day.leadArticleId,
+    }));
+
+  /**
+   * The change marker (migration 0017). Asserted alongside the slots because it
+   * is the only witness to whether the guard FIRED: the derivation is
+   * idempotent, so a re-derivation that changed nothing and no re-derivation at
+   * all leave identical slots behind.
+   */
+  const dirtyAt = async (storylineId: string): Promise<Date | null> => {
+    const row = await harness.db
+      .selectFrom("storylines")
+      .select("link_dirty_at")
+      .where("id", "=", storylineId)
+      .executeTakeFirstOrThrow();
+    return row.link_dirty_at;
+  };
+
+  /** One article, from one sighting, with a storyline over its group of one. */
+  const seed = async (input: {
+    url: string;
+    published: string;
+    sightingId: string;
+  }): Promise<{ articleId: string; storylineId: string }> => {
+    const ingested = await ingestSightings(harness.db, {
+      fingerprint: TOPIC,
+      timeZone: ZONE,
+      sightings: [emission({ id: input.sightingId, url: input.url, published: input.published })],
+    });
+    const articleId = ingested.createdArticles[0]!.id;
+    const storyline = await createProvisionalStoryline(harness.db, {
+      groupId: articleId,
+      timeZone: ZONE,
+    });
+    return { articleId, storylineId: storyline.id };
+  };
+
+  beforeAll(async () => {
+    harness = await createTestDatabase();
+    await migrateToLatest(harness.db);
+    await upsertTopic(harness.db, { fingerprint: TOPIC, keywords: ["spill"] });
+  });
+
+  afterAll(async () => {
+    await harness.drop();
+  });
+
+  it("moves the slot onto the day the fold moved the article to", async () => {
+    // 18:00Z on the 12th is 11:00 on the 12th in Vancouver; 05:00Z on the 12th
+    // is 22:00 on the ELEVENTH. Folding the later-arriving, earlier-published
+    // sighting therefore moves the article across an APP_TIMEZONE midnight —
+    // and the storyline has no slot for the day it landed on. Left unrefreshed,
+    // the timeline pages over `storyline_days` and that day's coverage is
+    // invisible to a reader until a merge or a --restart backfill rebuilds it.
+    const url = "https://example.com/spill-across-midnight";
+    const { articleId, storylineId } = await seed({
+      url,
+      published: "2026-08-12T18:00:00.000Z",
+      sightingId: "00000000-0000-4000-8000-00000000f01d",
+    });
+
+    expect(await days(storylineId)).toEqual([
+      { dayKey: "2026-08-12", published: "2026-08-12T18:00:00.000Z", lead: articleId },
+    ]);
+    expect(await dirtyAt(storylineId)).toBeNull();
+
+    await ingestSightings(harness.db, {
+      fingerprint: TOPIC,
+      timeZone: ZONE,
+      sightings: [
+        emission({
+          id: "00000000-0000-4000-8000-00000000f01e",
+          url,
+          published: "2026-08-12T05:00:00.000Z",
+        }),
+      ],
+    });
+
+    const article = await harness.db
+      .selectFrom("articles")
+      .select(["published", "group_published"])
+      .where("id", "=", articleId)
+      .executeTakeFirstOrThrow();
+    expect(article.published.toISOString()).toBe("2026-08-12T05:00:00.000Z");
+    expect(article.group_published?.toISOString()).toBe("2026-08-12T05:00:00.000Z");
+
+    // The whole storyline is re-derived, so the day it LEFT goes too: a slot is
+    // a day its member groups have an article on, and after the fold no member
+    // article is on the twelfth.
+    expect(await days(storylineId)).toEqual([
+      { dayKey: "2026-08-11", published: "2026-08-12T05:00:00.000Z", lead: articleId },
+    ]);
+    // Re-derived, therefore re-offered: the nightly sweep's changed-set filter
+    // pages over this marker, and an arc missing from it is an arc the filtered
+    // pass never asks about.
+    expect(await dirtyAt(storylineId)).not.toBeNull();
+  });
+
+  it("lowers the slot's position when the fold stays inside the day", async () => {
+    // The same staleness one notch smaller, and the same cause: a slot IS its
+    // day's earliest article, so a fold that moves the article earlier without
+    // crossing midnight leaves the slot sitting later on the §7.3 keyset axis
+    // than the coverage it represents. The reader sees the day in the wrong
+    // place rather than not at all.
+    const url = "https://example.com/spill-within-the-day";
+    const { articleId, storylineId } = await seed({
+      url,
+      published: "2026-08-13T20:00:00.000Z",
+      sightingId: "00000000-0000-4000-8000-00000000f02d",
+    });
+
+    await ingestSightings(harness.db, {
+      fingerprint: TOPIC,
+      timeZone: ZONE,
+      sightings: [
+        emission({
+          id: "00000000-0000-4000-8000-00000000f02e",
+          url,
+          published: "2026-08-13T16:00:00.000Z",
+        }),
+      ],
+    });
+
+    expect(await days(storylineId)).toEqual([
+      { dayKey: "2026-08-13", published: "2026-08-13T16:00:00.000Z", lead: articleId },
+    ]);
+  });
+
+  it("a fold that moves nothing leaves the slots alone", async () => {
+    // The guard's other side: the overwhelmingly common fold is a re-emission
+    // no earlier than what is stored, and it must not spend a storyline
+    // re-derivation. Asserted on the OUTCOME rather than on the absence of a
+    // query — the derivation is idempotent, so only the slot itself can say
+    // the late sighting was not mistaken for a move.
+    const url = "https://example.com/spill-re-emitted";
+    const { articleId, storylineId } = await seed({
+      url,
+      published: "2026-08-14T09:00:00.000Z",
+      sightingId: "00000000-0000-4000-8000-00000000f03d",
+    });
+
+    await ingestSightings(harness.db, {
+      fingerprint: TOPIC,
+      timeZone: ZONE,
+      sightings: [
+        emission({
+          id: "00000000-0000-4000-8000-00000000f03e",
+          url,
+          published: "2026-08-14T23:00:00.000Z",
+        }),
+      ],
+    });
+
+    expect(await days(storylineId)).toEqual([
+      { dayKey: "2026-08-14", published: "2026-08-14T09:00:00.000Z", lead: articleId },
+    ]);
+    expect(await dirtyAt(storylineId)).toBeNull();
   });
 });

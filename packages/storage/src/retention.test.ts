@@ -48,8 +48,12 @@ beforeAll(async () => {
   await upsertTopic(db, { fingerprint: ACTIVE, keywords: ["climate"] });
   await upsertTopic(db, { fingerprint: IDLE, keywords: ["climate", "policy"] });
 
-  await ingestSightings(db, { fingerprint: ACTIVE, sightings: [shared] });
-  await ingestSightings(db, { fingerprint: IDLE, sightings: [shared, ...oldIdle, youngIdle] });
+  await ingestSightings(db, { timeZone: "UTC", fingerprint: ACTIVE, sightings: [shared] });
+  await ingestSightings(db, {
+    timeZone: "UTC",
+    fingerprint: IDLE,
+    sightings: [shared, ...oldIdle, youngIdle],
+  });
 
   // Shape the ages: everything ancient except the young article.
   await db

@@ -738,6 +738,7 @@ async function fillSegment(
     const ingested = await ingestSightings(deps.db, {
       fingerprint: query.fingerprint,
       sightings: result.sightings,
+      timeZone: deps.config.grouping.timeZone,
     });
     deps.metrics?.articlesIngested(ingested.articlesCreated);
 
