@@ -36,6 +36,14 @@ const config = loadConfig();
 const db = createConfiguredDb(config);
 const TZ = config.APP_TIMEZONE;
 const WINDOW = config.STORYLINE_DF_WINDOW_DAYS;
+/**
+ * The retrieval the replay models, from the same flag the service reads
+ * (`STORYLINE_NARROW_RETRIEVAL`). Not an argument of this CLI: the point of the
+ * sweep is that it pins thresholds against the candidate set production will
+ * judge, so a `--narrow` override would be a way to certify numbers nothing runs.
+ * Flip the env var, and the grid below describes the mode that is deployed.
+ */
+const NARROW = config.STORYLINE_NARROW_RETRIEVAL;
 
 try {
   const from = new Date(Date.now() - days * 86_400_000);
@@ -72,7 +80,8 @@ try {
   const groups = [...byGroup.values()];
   console.log(
     `${rows.length} articles in ${groups.length} groups over ${days} days ` +
-      `(timezone ${TZ}, df window ${WINDOW}d)`,
+      `(timezone ${TZ}, df window ${WINDOW}d, retrieval ` +
+      `${NARROW ? "anchor-eligible, cap 4000" : "whole profile, cap 200"})`,
   );
 
   // ---- the trailing corpus, windowed in memory ----
@@ -188,7 +197,7 @@ try {
   for (const anchorMaxShare of SHARES) {
     for (const massThreshold of MASSES) {
       const rules: LinkRules = { ...BASE, anchorMaxShare, massThreshold };
-      const result = replayLinker(groups, corpusAt, rules, 2);
+      const result = replayLinker(groups, corpusAt, rules, 2, NARROW);
       console.log(
         `${String(anchorMaxShare).padEnd(7)} ${String(massThreshold).padEnd(5)} ` +
           `${String(result.storylines).padStart(10)}  ${String(result.promoted).padStart(8)}  ` +
@@ -213,7 +222,7 @@ try {
   console.log(`\nbridge count K (share=${focus.anchorMaxShare}, mass=${focus.massThreshold}):`);
   console.log("K   storylines  promoted  merges  LARGEST  share%");
   for (const k of [1, 2, 3, 4]) {
-    const result = replayLinker(groups, corpusAt, { ...BASE, ...focus }, k);
+    const result = replayLinker(groups, corpusAt, { ...BASE, ...focus }, k, NARROW);
     console.log(
       `${String(k).padEnd(3)} ${String(result.storylines).padStart(10)}  ` +
         `${String(result.promoted).padStart(8)}  ${String(result.merges).padStart(6)}  ` +
@@ -235,6 +244,7 @@ try {
         corpusAt,
         { ...BASE, ...focus, dormancyDays, dormantStrictness },
         2,
+        NARROW,
       );
       console.log(
         `${String(dormancyDays).padEnd(5)} ${String(dormantStrictness).padEnd(11)} ` +
@@ -254,7 +264,18 @@ try {
   // evidence, and ADR-0009's own history is the argument: the 1,179-group
   // swallow was found by looking at what a storyline had absorbed, not by
   // noticing a number had moved.
-  const focused = replayLinker(groups, corpusAt, { ...BASE, ...focus }, 2);
+  const focused = replayLinker(groups, corpusAt, { ...BASE, ...focus }, 2, NARROW);
+
+  // What the grid above does NOT model: the service cuts the candidate set at a
+  // row limit and this harness does not, so a non-zero count here means the
+  // numbers were certified against a set production would have truncated. That
+  // silence is how the pre-2026-08-22 cap hid — 99% of groups, unreported. Zero
+  // is the narrowed retrieval's censused answer over the whole dev window.
+  console.log(
+    `\ncandidate cap: ${focused.cappedGroups} of ${groups.length} groups exceeded the ` +
+      `${NARROW ? "4,000" : "200"}-row limit the service would apply` +
+      `${focused.cappedGroups > 0 ? " — the grid above is NOT what production judges" : ""}`,
+  );
   const headline = new Map<string, string>();
   for (const row of rows) if (!headline.has(row.group_id)) headline.set(row.group_id, row.title);
 

@@ -49,6 +49,7 @@ try {
           // Linking is off in this CLI (`enabled: false`); the gate has nothing
           // to gate.
           coherenceGate: false,
+          narrowRetrieval: config.STORYLINE_NARROW_RETRIEVAL,
           storyDf: {
             windowDays: config.STORYLINE_DF_WINDOW_DAYS,
             timeZone: config.APP_TIMEZONE,

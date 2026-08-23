@@ -256,8 +256,11 @@ wrapper plus one new table:
   **And it is not a deployment problem at all — it is off** (findings §2.5, §2.6). `CANDIDATE_LIMIT`
   binds on 12,266 of 12,366 window groups, discarding ~90% of the candidate set by recency, while the
   replay that pinned the linking thresholds has no cap: production ran a capped decision against
-  thresholds certified uncapped. Correcting the retrieval is free and lossless, and it ships for the
-  *birth* path — but running the corrected sweep over the full window is a **runaway**, 124 → 1,347
+  thresholds certified uncapped. Correcting the retrieval is free and lossless, and it went to the
+  *birth* path — **and as of 2026-08-23 that correction is gated too and off by default**
+  (`STORYLINE_NARROW_RETRIEVAL`), because the replay that said the birth path was safe was not
+  modelling the merge (findings §2.5) — but running the corrected sweep over the full window is a
+  **runaway**, 124 → 1,347
   groups in one arc across four passes, because the 200-row cap had been doing the bounding K=2 was
   believed to be doing. **So the sweep is gated off** (`STORYLINE_LATE_CANDIDATE_SWEEP=false`),
   blocked on re-measuring K, and `--late-candidates` runs it deliberately. Both a changed-set filter

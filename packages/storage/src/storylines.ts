@@ -1080,8 +1080,10 @@ export interface StorylineCandidate {
  * the decision reads — mass and anchor df are. The ordering is deterministic
  * (`s.id` breaks ties) so a replay cuts the same rows, and that is all it is
  * for. **When this limit binds, real links are being lost**; the caller's job is
- * to pass an array narrow enough that it does not. See the linker's
- * `CANDIDATE_LIMIT` for the census that sets the value.
+ * to pass an array narrow enough that it does not. `candidateRetrieval`
+ * (`apps/api/src/storyline-link.ts`) is the one place that pairs an array with a
+ * limit, and it carries the census behind each value — 200 with the whole
+ * profile, 4,000 with the anchor-eligible subset, never a mix.
  */
 export async function readCandidateStorylines(
   db: Kysely<Database>,

@@ -82,6 +82,8 @@ export function createLinkerConfig(config: Config): LinkerConfig {
     // No model, no verdict to wait for — deferring would only lose formations
     // to a tail that can never resolve them.
     coherenceGate: config.STORYLINE_COHERENCE_GATE && Boolean(config.GEMINI_API_KEY),
+    // Both halves of the retrieval, from one flag (`candidateRetrieval`).
+    narrowRetrieval: config.STORYLINE_NARROW_RETRIEVAL,
     storyDf: {
       windowDays: config.STORYLINE_DF_WINDOW_DAYS,
       timeZone: config.APP_TIMEZONE,

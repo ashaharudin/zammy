@@ -123,6 +123,10 @@ const linkerConfig: LinkerConfig = {
   // a backfill does not erase existing refusals, since those are keyed on GROUPS
   // and survive any amount of storyline churn.
   coherenceGate: false,
+  // The configured retrieval, not a choice of the backfill's: a rebuild that
+  // narrowed while the live path did not would leave an archive nothing has
+  // measured, and the backfill is the one process that rewrites everything.
+  narrowRetrieval: config.STORYLINE_NARROW_RETRIEVAL,
   storyDf: {
     windowDays: config.STORYLINE_DF_WINDOW_DAYS,
     timeZone: config.APP_TIMEZONE,

@@ -793,8 +793,8 @@ dry run.
 Everything above was measured by the in-memory replay, and the replay retrieves
 candidates by *"every storyline sharing at least one token"* with **no limit**.
 The service does not. `readCandidateStorylines` adds `limit 200`
-(`CANDIDATE_LIMIT`), and it was documented as *"a safety valve for a pathological
-token, not a tuning knob"*.
+(`WHOLE_PROFILE_CANDIDATE_LIMIT`, then called `CANDIDATE_LIMIT`), and it was
+documented as *"a safety valve for a pathological token, not a tuning knob"*.
 
 It was not a valve. Measured over **all 12,366 groups** in the dev archive's
 trailing window (31,308 articles, 17,008 live storylines, read-only against
@@ -833,8 +833,10 @@ explicitly — `linkEvidence` scores a token missing from the df map as df 1,
 "genuinely the rarest thing there is". 0 of 237,944 profile tokens were absent on
 this corpus, so only a unit test holds that line.
 
-`CANDIDATE_LIMIT` is now **4,000**: it binds on 0 of the 12,366 groups where 200
-binds on 1,131 and discards ~10% of qualifiers. It stays a limit rather than
+The narrowed probe's cap is **4,000** (`NARROWED_CANDIDATE_LIMIT`): it binds on 0
+of the 12,366 groups where 200 binds on 1,131 and discards ~10% of qualifiers.
+The two move together and only together — see the gate below. It stays a limit
+rather than
 being deleted because narrowing does not bound the fan-out structurally — a token
 can be rare in the 14-day window and still sit in many long-lived storyline
 profiles, since storylines outlive the window that measures them (`openai`:
@@ -878,9 +880,52 @@ was silently doing the bounding that K was believed to be doing.
 
 **What this leaves open.** Turning the sweep back on wants K re-measured against
 a replay that re-offers groups, which does not exist yet. The retrieval fix
-itself is unconditional: it makes the birth path — the one the replay *does*
-model — match the candidate set these thresholds were certified against, and the
-replay now narrows identically so the two cannot drift apart again silently.
+itself shipped unconditionally on the birth path, on the argument that the birth
+path is the one the replay *does* model — and **that is no longer where it
+stands** (below).
+
+### The narrowing is gated too (2026-08-23)
+
+`STORYLINE_NARROW_RETRIEVAL`, **default off**, and off is the pre-2026-08-22
+behaviour exactly: whole profile, `limit 200`.
+
+The birth-path argument above rested on a replay that says 50 at the pinned bar.
+A later re-measurement found that harness was **not modelling `mergeStorylines`**
+— the service re-points a merge loser's bridges onto the winner rather than
+dropping them with the alias, which is the mechanism that makes merging
+self-reinforcing, and the harness modelled neither that nor the drop. Modelled
+with it, **birth-only** at the pinned bar leaves a largest arc of **2,591 groups
+(9.96%)** where that harness reported 72. So the number that justified shipping
+this unconditionally was measured against a harness that skipped the merge. (Those
+two figures are recorded from that re-measurement; this change did not re-run
+them — the harness for it is the same one the K re-measurement above needs.)
+
+Nothing is damaged: all **1,913** standing bridge pairs hold exactly one
+independent bridge and **none is at K=2**, so no merge is pending. But a bad merge
+is unrecoverable — ADR-0011 refuses to build a split, and the only repair is
+`backfill:storylines --restart`, which discards all label history.
+
+**The flag switches a PAIR, and that is the load-bearing part.** #117 changed two
+things: the probe tokens, *and* the cap from 200 to 4,000 — a value censused
+against the *narrowed* probe. Gating only the narrowing would leave whole profile
++ 4,000, which is neither behaviour: it is the broad probe (p50 1,903 rows, max
+8,054) with its only bound effectively removed, feeding `bridgePairs`' O(n²)
+cross-product — more percolation-prone than the old behaviour and than the new
+one. So both halves come out of one function, `candidateRetrieval`, one object
+literal per mode, and `LinkerConfig` carries no other retrieval input.
+
+**The replay reads the same flag**, so the grid above still describes what the
+service does — the correspondence whose silent loss caused all of this. Verified
+on the 2026-08-23 corpus (29,658 articles in 24,655 groups, read-only): the
+pre-#117 replay, the gated replay with the flag **off**, and the gated replay with
+it **on** produce an identical 30-row grid, storyline-for-storyline, and the
+committed numbers above stand at the pinned bar (largest 50, 0.20%, on a corpus
+that has grown since). What the replay still does not APPLY is the row cap — it
+now **reports** it instead, as `cappedGroups`: **12,734 of 24,655** groups exceed
+the off mode's 200 rows, and **0** exceed the on mode's 4,000 — 0 at the pinned
+bar and its neighbours, 1-3 only at the 0.01 and 0.02 shares this document
+already refuses. That is the truncation as a printed number rather than a
+silence.
 
 ## The group whose own membership changed (2026-08-22)
 

@@ -109,7 +109,7 @@ export function anchorCeiling(corpusSize: number, rules: LinkRules): number {
  * median profile is 19 tokens and the median eligible subset is 7, the
  * retrieval goes from 34.9 ms to 2.2 ms at the mean, and it finds 35× the
  * qualifiers while losing NONE — because the whole-profile retrieval was being
- * truncated by `CANDIDATE_LIMIT` on 99% of groups (see the linker's note there).
+ * truncated by the 200-row cap on 99% of groups (`WHOLE_PROFILE_CANDIDATE_LIMIT`).
  *
  * **An absent token is eligible, and that is the load-bearing line.**
  * `linkEvidence` scores a token the corpus has not seen as df 1 — "genuinely
@@ -136,6 +136,99 @@ export function anchorEligibleTokens(
     const df = corpus.df.get(token);
     return df === undefined || df <= ceiling;
   });
+}
+
+/**
+ * Row cap for the NARROWED probe, and it is a census of that probe rather than a
+ * feel. Over all 12,366 groups in the dev archive's trailing window the
+ * anchor-eligible retrieval returns p50 78 rows, p99 684, max 2,625:
+ *
+ *   | cap   | binds on      | qualifiers it discards |
+ *   |-------|---------------|------------------------|
+ *   | 200   | 1,131/12,366  | ~10% of them           |
+ *   | 1,000 | 39/12,366     | 0 of 1,181 sampled     |
+ *   | 4,000 | 0/12,366      | 0                      |
+ *
+ * 4,000 because it is the first round value the whole window clears, at ~1.5×
+ * the observed max and ~24% of the 17,008 live storylines — a bound on the
+ * query, not a participant in the decision.
+ *
+ * What it still guards is narrower than "a pathological token" and worth naming,
+ * because narrowing does not make the fan-out structurally small: a token can be
+ * rare in the 14-day df window and still sit in many long-lived storyline
+ * profiles, since storylines outlive the window that measures them. `openai` on
+ * this corpus has a window df of 27 — comfortably anchor-eligible — and appears
+ * in 73 live profiles. A group carrying a dozen tokens like that legitimately
+ * probes into ~2,600 storylines, and a corpus ten times deeper could do worse.
+ */
+const NARROWED_CANDIDATE_LIMIT = 4_000;
+
+/**
+ * Row cap for the WHOLE-PROFILE probe — the value that shipped from the start,
+ * documented as "a safety valve for a pathological token, not a tuning knob".
+ *
+ * It was not a valve. Probing with the whole profile it bound on **12,266 of
+ * 12,366** window groups, whose median profile overlaps ~1,903 live storylines,
+ * so the cut was the normal operating point: ~90% of the candidate set
+ * discarded, ordered by `last_coverage` recency, which is not what the decision
+ * reads. The thresholds it truncated below were pinned by a replay with no cap
+ * at all, so production ran a capped decision against bars certified on an
+ * uncapped one (docs/VERCEL-PHASE-0-FINDINGS.md §2.5).
+ *
+ * It stays at 200 anyway, because with the broad probe it is the only bound
+ * there is — see `candidateRetrieval`.
+ */
+const WHOLE_PROFILE_CANDIDATE_LIMIT = 200;
+
+/** How to retrieve candidates: what to probe with, and how much may come back. */
+export interface CandidateRetrieval {
+  /** Tokens to overlap `profile_tokens` against. */
+  tokens: string[];
+  /** Rows the probe may return, cut by `last_coverage desc, id`. */
+  limit: number;
+}
+
+/**
+ * The candidate retrieval, as ONE decision — because the token array and the row
+ * cap are a PAIR, and separating them is the failure this function exists to
+ * make impossible.
+ *
+ * `narrowed: true` probes with the anchor-eligible subset and caps at 4,000.
+ * `false` probes with the whole profile and caps at 200. Those are the only two
+ * combinations, they are returned from one object literal each, and neither half
+ * can be obtained without the other. That matters more than it looks:
+ *
+ *  - the subset is a proven NECESSARY CONDITION (`anchorEligibleTokens`), so it
+ *    is safe *because* nothing that would qualify is unreachable through it;
+ *  - 4,000 is safe *because* it is a census of the narrowed probe's row counts —
+ *    it binds on 0 of 12,366 groups narrowed, and the broad probe's p50 is 1,903
+ *    rows with a max of 8,054.
+ *
+ * So whole profile + 4,000 is not "the old behaviour with a roomier valve", it is
+ * the broad probe with its only bound effectively removed: a wider qualifier set
+ * than either mode, feeding an O(n²) `bridgePairs` cross-product, in a loop that
+ * is self-reinforcing because `mergeStorylines` re-points a merge loser's bridges
+ * onto the winner. More percolation-prone than the old behaviour AND than the new
+ * one. If you are here to simplify this, the two branches are the simplification;
+ * splitting the flag into two knobs re-opens exactly that state.
+ *
+ * `STORYLINE_NARROW_RETRIEVAL` chooses the mode, and `storyline-replay.ts` reads
+ * the same flag through this same function — the correspondence between service
+ * and replay is what pins every threshold in docs/STORYLINE-LINKING.md, and its
+ * silent loss is the root of §2.5.
+ */
+export function candidateRetrieval(
+  groupTokens: readonly string[],
+  corpus: Corpus,
+  rules: LinkRules,
+  narrowed: boolean,
+): CandidateRetrieval {
+  return narrowed
+    ? {
+        tokens: anchorEligibleTokens(groupTokens, corpus, rules),
+        limit: NARROWED_CANDIDATE_LIMIT,
+      }
+    : { tokens: [...groupTokens], limit: WHOLE_PROFILE_CANDIDATE_LIMIT };
 }
 
 /**

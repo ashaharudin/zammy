@@ -1,6 +1,6 @@
 import {
-  anchorEligibleTokens,
   bridgePairs,
+  candidateRetrieval,
   groupProfile,
   qualifyingStorylines,
   storylineProfile,
@@ -65,6 +65,21 @@ export interface ReplayResult {
   p50: number;
   p99: number;
   /**
+   * Groups whose candidate set was LARGER than the configured row cap — i.e.
+   * where the service's `limit` would have truncated the decision this replay
+   * just certified, and the replay did not.
+   *
+   * Reported rather than applied, and the distinction is the whole of §2.5 in
+   * docs/VERCEL-PHASE-0-FINDINGS.md: the replay has never modelled the cut, so
+   * for months the thresholds below were pinned against an uncapped candidate set
+   * while production ran a capped one, and nothing in the output said so. It says
+   * so now. Non-zero means this grid does not describe what the service will do;
+   * narrowed it is measured at 0 over the dev archive's whole window, which is
+   * the only reason a limit there and none here is a difference without a
+   * consequence.
+   */
+  cappedGroups: number;
+  /**
    * The storylines themselves, biggest first — profile and member groups.
    * A sweep table cannot say whether a storyline is COHERENT; only reading
    * some can, and a threshold pinned off counts alone is pinned off half the
@@ -80,12 +95,19 @@ export interface ReplayResult {
  * the sweep slides a real 14-day window over `story_token_days` rather than
  * measuring every decision against today's corpus, because a threshold tuned
  * against a corpus the linker will never see is not measured, it is guessed.
+ *
+ * `narrowRetrieval` is `STORYLINE_NARROW_RETRIEVAL`, and it is a REQUIRED
+ * argument rather than a defaulted one: the replay must model whichever mode is
+ * configured, because a threshold is only pinned against the candidate set
+ * production will actually judge, and a default here is how the two quietly come
+ * apart again.
  */
 export function replayLinker(
   groups: readonly ReplayGroup[],
   corpusAt: (group: ReplayGroup, tokens: readonly string[]) => Corpus,
   rules: LinkRules,
   mergeBridges: number,
+  narrowRetrieval: boolean,
 ): ReplayResult {
   const storylines = new Map<string, ReplayStoryline>();
   /** token → storyline ids carrying it: the in-memory stand-in for the GIN index. */
@@ -98,6 +120,7 @@ export function replayLinker(
   let attached = 0;
   let merges = 0;
   let nextId = 0;
+  let cappedGroups = 0;
 
   const resolve = (id: string): string => {
     let current = id;
@@ -156,22 +179,30 @@ export function replayLinker(
     // while production ran a capped one, on 99% of groups. The divergence was
     // invisible for exactly as long as both comments sounded right.
     //
-    // So: probe with the anchor-eligible subset, as `linkGroup` does. Doing it
-    // here is provably a no-op on the RESULT — the filter is a necessary
-    // condition (`anchorEligibleTokens`), so the qualifier set is identical
-    // either way, and `storyline-link.test.ts` asserts that. It is done anyway
-    // because "the same rule, written once, called twice" is a correspondence a
-    // reader can check, and "a superset that happens to qualify the same" is one
-    // they have to re-derive. The limit is the other half of the agreement, and
-    // the service's `CANDIDATE_LIMIT` is now set so that it never binds on the
-    // corpus it was measured over — a value at which having no limit here and a
-    // limit there is a difference with no consequence.
+    // So the probe tokens come from `candidateRetrieval`, the same call
+    // `linkGroup` makes, with the same flag: narrowed, this is the
+    // anchor-eligible subset and provably a no-op on the RESULT (the filter is a
+    // necessary condition, and `storyline-link.test.ts` asserts it); broad, it is
+    // the whole profile, exactly the retrieval every number in
+    // docs/STORYLINE-LINKING.md was measured against.
+    //
+    // The row cap is the half this harness still does not APPLY, and it says so
+    // out loud instead: `cappedGroups` counts the groups where the service's
+    // limit would have cut the candidate set the grid below certifies. Narrowed,
+    // that count is 0 over the whole dev window by census, so no limit here and
+    // 4,000 there is a difference without a consequence. Broad, it is the known
+    // divergence §2.5 records — the grid is the uncapped one the thresholds were
+    // pinned on, and production cuts at 200 — which is a fact about the pre-#117
+    // behaviour the flag restores, not something this replay may quietly repair
+    // by applying a cut the thresholds were never certified under.
+    const retrieval = candidateRetrieval(profile, corpus, rules, narrowRetrieval);
     const candidateIds = new Set<string>();
-    for (const token of anchorEligibleTokens(profile, corpus, rules)) {
+    for (const token of retrieval.tokens) {
       for (const id of byToken.get(token) ?? []) {
         if (id !== own.id) candidateIds.add(id);
       }
     }
+    if (candidateIds.size > retrieval.limit) cappedGroups += 1;
 
     const candidates: LinkCandidate[] = [];
     for (const id of candidateIds) {
@@ -273,6 +304,7 @@ export function replayLinker(
     daySlots,
     p50: at(0.5),
     p99: at(0.99),
+    cappedGroups,
     built,
   };
 }

@@ -542,13 +542,75 @@ const EnvSchema = z
       .default("true")
       .transform((value) => value === "true"),
     /**
+     * Probe candidate retrieval with the ANCHOR-ELIGIBLE subset of the group
+     * profile, capped at 4,000 rows, instead of the whole profile capped at 200
+     * (`candidateRetrieval`, `storyline-link.ts`). Off is the pre-2026-08-22
+     * behaviour exactly: whole profile, `limit 200`.
+     *
+     * **It is one flag for two changes because they are a pair, and the split
+     * state is worse than either.** The subset is a proven necessary condition —
+     * `qualifyingStorylines` rejects a candidate whose rarest shared token is
+     * above `anchorCeiling`, so a storyline sharing no eligible token cannot
+     * qualify — and 4,000 is a census of THAT probe: it binds on 0 of the dev
+     * archive's 12,366 window groups, where 200 binds on 1,131. The broad probe
+     * returns p50 1,903 rows and max 8,054, so whole profile with a 4,000 cap is
+     * not "the old behaviour, roomier": it is the broad probe with its only bound
+     * effectively removed, feeding an O(n^2) `bridgePairs` cross-product. More
+     * percolation-prone than the old behaviour and than the new one.
+     *
+     * MEASURED both ways, and the second measurement is why this is off. The cap
+     * was truncating the decision: it bound on 12,266 of 12,366 groups, dropping
+     * ~90% of the candidate set by `last_coverage` recency, which is not what the
+     * decision reads — so production has judged a capped candidate set against
+     * bars pinned by an uncapped replay, and narrowing is what makes the birth
+     * path match those bars. But the cap was also doing the bounding K
+     * (`STORYLINE_MERGE_BRIDGES`) was believed to be doing. Widen the qualifier
+     * set and more pairs reach K, each merge unions two profiles, `mergeStorylines`
+     * re-points the loser's bridges onto the winner rather than dropping them, and
+     * a wider profile overlaps more on the next arrival. Modelled WITH that
+     * re-pointing and the loser's drop, birth-only at the pinned bar leaves a
+     * largest arc of 2,591 groups (9.96%); the harness that first justified
+     * shipping this unconditionally modelled neither and reported 72.
+     * docs/VERCEL-PHASE-0-FINDINGS.md 2.5-2.7 is the history, in the order it was
+     * learned.
+     *
+     * **What turning it on costs.** If it percolates, the archive is not
+     * recoverable in place: ADR-0011 refuses to build a split, so the only repair
+     * is `backfill:storylines --restart`, which rewrites every storyline and
+     * discards all label history — ~3,934 promoted storylines to relabel at the
+     * free tier's 500/day, about eight days of quota, against an ADR-0015 that
+     * calls the arcs and label history "the product". Nothing is on fire today:
+     * all 1,913 standing bridge pairs hold exactly one independent bridge and
+     * none is at K=2, so no merge is pending.
+     *
+     * **What would justify turning it on.** K re-measured against a harness that
+     * models the merge — bridge re-pointing included — rather than one that skips
+     * it; and then a fortnight of the nightly graph numbers
+     * (`runStorylineGraphChore`: largest arc, arc count, arc-size distribution,
+     * standing bridges) with it on, showing largest arc flat. Arc count falling
+     * while largest arc climbs is the merge rate seen where it has a consequence,
+     * and it is the signal to turn this back off. The recommended real fix is a
+     * top-2-qualifiers bound on what may bridge, which is a different change with
+     * its own evidence and is not this flag.
+     *
+     * `storyline-replay.ts` reads the same value, so the sweep that pins
+     * thresholds models whichever mode is configured. Do not let those two
+     * diverge: a replay narrowing while the service does not (or the reverse) is
+     * precisely the bug 2.5 records, and it was invisible for months.
+     */
+    STORYLINE_NARROW_RETRIEVAL: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+    /**
      * Run the nightly late-candidate sweep (`runLateCandidateChore`).
      *
      * **Off by default, and the default is the measurement.** The sweep re-offers
      * every group in the trailing window, and it used to do so against a
      * candidate set silently truncated to 200 rows — so how much its bridges
      * could merge was bounded by a bug rather than by a rule. With candidate
-     * retrieval fixed (`anchorEligibleTokens`), four passes over 2,000 groups on
+     * retrieval narrowed (`STORYLINE_NARROW_RETRIEVAL`, itself off by default
+     * now), four passes over 2,000 groups on
      * a clone of the dev archive took the largest storyline from 124 groups to
      * 201 and built four arcs over 100 groups where there was one, and the
      * biggest of them chains Gaza, the Israel-Iran war and Russia-Ukraine
@@ -585,10 +647,11 @@ const EnvSchema = z
      * retroactive slot against a set truncated to 200 rows, and that spend is
      * monotone — once `existing.length > 1` the group can never take another
      * arc — so firing at ingest frequency made an irreversible choice earlier
-     * and against the worse candidate set. That cap is gone
-     * (`anchorEligibleTokens`), and on the OLD retrieval this trigger bought
-     * nothing measurable anyway: 42 retroactive arcs against a control cohort's
-     * 29, about 1.5 sigma.
+     * and against the worse candidate set. That cap lifts only when
+     * `STORYLINE_NARROW_RETRIEVAL` is on — off, which is the default, it is still
+     * there and this reason still stands. On the OLD retrieval this trigger
+     * bought nothing measurable anyway: 42 retroactive arcs against a control
+     * cohort's 29, about 1.5 sigma.
      *
      * Against the NARROWED retrieval it is worth 1.39x the arcs and 2.33x the
      * merges of that control — and the merges are the problem, because merges

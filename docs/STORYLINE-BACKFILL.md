@@ -72,7 +72,8 @@ absorbed 1,179 of a day's 1,190 groups — 99%, the specification's north star.
 The backfill's 0.14% is below even the sweep's 0.18%, the safe direction:
 err-narrow formation holds when the linker runs for real, through Postgres,
 over the whole archive. The remaining gaps are the corpus difference and the
-storage the sweep substitutes — it has no `CANDIDATE_LIMIT`, and it models
+storage the sweep substitutes — it applies no candidate row cap, reporting one
+instead (`cappedGroups`), and it models
 absorb-into-winner slightly differently from the real merge path.
 
 ### 6,555 aliases is not 6,555 merges
