@@ -1,6 +1,9 @@
 import type { Kysely } from "kysely";
 import {
+  clearStorylineLinkDirty,
   markDormantStorylines,
+  markStorylinesLinkDirty,
+  readLinkDirtyClock,
   pruneStoryDf,
   readLinkableGroups,
   retentionReport,
@@ -9,6 +12,7 @@ import {
 } from "@zammy/storage";
 import { storyDfDay } from "./story-df.js";
 import { labelPass } from "./storyline-backfill.js";
+import { readChangedSetBatch } from "./storyline-changed-set.js";
 import { labelLinkedStorylines, type LabelerDeps } from "./storyline-label-service.js";
 import type { LabelMergeRules } from "./storyline-label-merge.js";
 import {
@@ -19,6 +23,7 @@ import {
   linkGroup,
   runBridgeSweep,
   type BridgeSweepReport,
+  type LinkableGroup,
   type LinkOutcome,
   type LinkerConfig,
 } from "./storyline-linker.js";
@@ -157,6 +162,31 @@ export async function runDormancyChore(deps: ChoreDeps): Promise<{ dormant: numb
  * is idempotent (`linkGroup` re-derives rather than re-homes), which is what
  * makes running this every night cost reads and nothing else.
  *
+ * ## Two modes, and what the narrow one stops promising
+ *
+ * `changedOnly` narrows the offer set to the groups whose ANSWER could have moved
+ * since the markers were last cleared — the changed arcs' member groups, plus
+ * whatever their inverse retrieval names (`storyline-changed-set.ts`). It is the
+ * same decision on the same bar: the filter is a retrieval bound, and `linkGroup`
+ * is still the only thing that decides.
+ *
+ * It is a **3.4× narrowing, not an order of magnitude**, and not the ~24× it was
+ * designed for — a night of 250 changed arcs names 3,698 of the window's 12,558
+ * groups. docs/STORYLINE-LINKING.md, "The nightly sweep's changed-set filter",
+ * has why: the mass-and-anchor predicates that would have made it selective
+ * cannot be evaluated here at all, because they are functions of which fortnight
+ * the reader is standing in, and pushing them into SQL anyway reached 38.9% of
+ * the pairs the forward decision qualified.
+ *
+ * What it gives up is the unfiltered pass's one-line guarantee — "every group in
+ * the window, every night" — and the classes it stops reaching are real:
+ * trailing-corpus drift under a group and an arc that neither changed (last
+ * night's retention prune moves the verdict with no storyline anywhere in the
+ * causal chain), and a group holding no storyline at all, which has no marker to
+ * carry it here. docs/ARCHITECTURE.md §9.1 has the full list. Those want an
+ * unfiltered pass on some cadence, which is why this is a knob and not a
+ * replacement, and why `STORYLINE_LATE_CANDIDATE_CHANGED_ONLY` ships off.
+ *
  * Never throws for one group's sake, exactly as the linker and the backfill
  * don't: a group the sweep could not process is a group standing where it stood.
  */
@@ -175,72 +205,187 @@ export async function runLateCandidateChore(
     batchSize?: number;
     /** Hard ceiling on a night's offers, however wide the window is. */
     maxGroups?: number;
+    /**
+     * Offer only the groups whose candidate set could have changed since the
+     * markers were last cleared, instead of the whole window
+     * (`storyline-changed-set.ts`). See this function's doc comment for what the
+     * narrow mode stops promising, and docs/ARCHITECTURE.md §9.1 for the list.
+     */
+    changedOnly?: boolean;
   },
-): Promise<{ offered: number; attachedTo: number; merges: number; failures: number }> {
+): Promise<{
+  offered: number;
+  attachedTo: number;
+  merges: number;
+  failures: number;
+  /** Changed arcs consumed. Zero in the unfiltered mode, which reads no markers. */
+  changedArcs: number;
+}> {
   const batchSize = deps.batchSize ?? 500;
   const maxGroups = deps.maxGroups ?? 20_000;
   const from = new Date(
     deps.now().getTime() - deps.config.storyDfWindowDays * 86_400_000,
   );
 
-  const tally = { offered: 0, attachedTo: 0, merges: 0, failures: 0 };
+  const tally = { offered: 0, attachedTo: 0, merges: 0, failures: 0, changedArcs: 0 };
   const changed: LinkOutcome[] = [];
-  // The keyset `readLinkableGroups` pages on is `(group_published, group_id)`,
-  // so the window's start IS a cursor: group id 0 is below every real id, which
-  // makes the first read begin at the window rather than at the archive.
-  // `publishedFrom` pushes the same bound INTO the aggregate, so each batch
-  // scans the fortnight instead of GROUP BY-ing the whole archive.
-  let after: { published: Date; groupId: string } = { published: from, groupId: "0" };
 
-  for (;;) {
-    const batch = await readLinkableGroups(deps.db, {
-      after,
-      publishedFrom: from,
-      limit: batchSize,
-    });
-    if (batch.length === 0) break;
-
-    for (const group of batch) {
-      if (tally.offered >= maxGroups) break;
-      tally.offered += 1;
-      after = { published: group.published, groupId: group.groupId };
-      try {
-        const outcome = await linkGroup(
-          { db: deps.db, config: deps.linker, log: deps.log },
-          {
-            groupId: group.groupId,
-            memberTokens: group.memberTokens,
-            language: group.language,
-            published: group.published,
-          },
-        );
-        tally.attachedTo += outcome.attachedTo.length;
-        tally.merges += outcome.merged.length;
-        // A withheld formation travels too: its attachedTo and merged are both
-        // empty — the merge is the thing being withheld — and dropping it here
-        // would leave labelLinkedStorylines' resolvePendingFormations as the
-        // retry this sweep is supposed to be. The pair would be re-withheld and
-        // re-dropped every night, forever.
-        if (
-          outcome.attachedTo.length > 0 ||
-          outcome.merged.length > 0 ||
-          outcome.pendingFormation !== undefined
-        ) {
-          changed.push(outcome);
-        }
-      } catch (error) {
-        // The tally line says how many; only this line can say WHICH and WHY.
-        // A sweep that reports `failures: 18400` with no err is a regression
-        // that persists for weeks.
-        tally.failures += 1;
-        deps.log.warn(
-          { err: error, groupId: group.groupId },
-          "late-candidate sweep: one group's offer failed; it stands where it stood",
-        );
+  /**
+   * One group's offer. Shared by both modes on purpose: the filter decides WHICH
+   * groups are asked and nothing else, so a second copy of this loop would be a
+   * second set of rules about what an offer means.
+   */
+  const offer = async (group: LinkableGroup): Promise<void> => {
+    tally.offered += 1;
+    try {
+      const outcome = await linkGroup(
+        { db: deps.db, config: deps.linker, log: deps.log },
+        {
+          groupId: group.groupId,
+          memberTokens: group.memberTokens,
+          language: group.language,
+          published: group.published,
+        },
+      );
+      tally.attachedTo += outcome.attachedTo.length;
+      tally.merges += outcome.merged.length;
+      // A withheld formation travels too: its attachedTo and merged are both
+      // empty — the merge is the thing being withheld — and dropping it here
+      // would leave labelLinkedStorylines' resolvePendingFormations as the
+      // retry this sweep is supposed to be. The pair would be re-withheld and
+      // re-dropped every night, forever.
+      if (
+        outcome.attachedTo.length > 0 ||
+        outcome.merged.length > 0 ||
+        outcome.pendingFormation !== undefined
+      ) {
+        changed.push(outcome);
       }
+      // And a withheld formation must keep TRAVELLING, which in the filtered
+      // mode is a second obligation: a withhold writes nothing at all — both
+      // groups keep their own storylines and the only carrier is the in-memory
+      // outcome — so nothing marked anything, and the clear below would drop the
+      // pair out of the changed set for good. Re-marking the group's own arc puts
+      // it back: next pass offers this group again, re-derives the same withhold,
+      // and the loop is exactly the one the unfiltered sweep has always run.
+      if (outcome.pendingFormation !== undefined) {
+        await markStorylinesLinkDirty(deps.db, [
+          outcome.storylineId,
+          outcome.pendingFormation.winnerId,
+        ]);
+      }
+    } catch (error) {
+      // The tally line says how many; only this line can say WHICH and WHY.
+      // A sweep that reports `failures: 18400` with no err is a regression
+      // that persists for weeks.
+      tally.failures += 1;
+      deps.log.warn(
+        { err: error, groupId: group.groupId },
+        "late-candidate sweep: one group's offer failed; it stands where it stood",
+      );
     }
+  };
 
-    if (tally.offered >= maxGroups || batch.length < batchSize) break;
+  if (deps.changedOnly) {
+    let after: { dirtyAt: Date; id: string } | undefined;
+    /**
+     * Groups this pass has already offered.
+     *
+     * The changed set is deduped WITHIN a batch of arcs, and that is not enough:
+     * a group named by an arc in batch one and again by an arc in batch four is
+     * two offers of the same question against a database that has not changed in
+     * between. MEASURED, and it is not marginal — a filtered pass over the dev
+     * archive offered 20,000 times against a window of 12,558 groups, so most of
+     * the excess was the same groups over again. Bounded by the window, so at
+     * most ~12k ids.
+     */
+    const offeredIds = new Set<string>();
+    // The queue as it stands NOW. Everything this pass marks — and it marks
+    // plenty, since an attach or a merge is exactly what the marker records —
+    // lands after this and waits for the next run. Without the bound one pass
+    // follows its own cascade to convergence, which is not a nightly pass.
+    //
+    // The DATABASE's clock, not `deps.now()`: the markers are stamped server-side
+    // and comparing them against an app clock is comparing two clocks. The chore
+    // clock is injectable, so in a test the two are not even the same year.
+    const markedBefore = await readLinkDirtyClock(deps.db);
+    for (;;) {
+      const batch = await readChangedSetBatch(
+        { db: deps.db, config: deps.linker, log: deps.log },
+        { publishedFrom: from, markedBefore, limit: batchSize, ...(after ? { after } : {}) },
+      );
+      tally.changedArcs += batch.markers.length;
+
+      let cutShort = false;
+      if (batch.groupIds.length > 0) {
+        // Publication order, so a replay of one pass reaches the same
+        // assignments (§7.4) — `onlyGroupIds` returns them ordered, which is the
+        // same order `linkSeededGroups` sorts a batch into.
+        const groups = await readLinkableGroups(deps.db, {
+          onlyGroupIds: batch.groupIds,
+          limit: batch.groupIds.length,
+        });
+        for (const group of groups) {
+          if (tally.offered >= maxGroups) {
+            cutShort = true;
+            break;
+          }
+          // The window bound, which `onlyGroupIds` deliberately does not apply —
+          // it ignores the keyset entirely, by design, for the resume case. A
+          // changed arc's member groups can be older than the trailing corpus
+          // that would judge them, and the unfiltered pass does not offer those:
+          // rarity is measured against the fortnight, so a group older than it
+          // has no decision left to make. MEASURED, and not a rounding error —
+          // with every arc marked, unbounded member groups name 26,006 groups
+          // against the window's 12,558.
+          if (group.published < from) continue;
+          if (offeredIds.has(group.groupId)) continue;
+          offeredIds.add(group.groupId);
+          await offer(group);
+        }
+      }
+
+      // Cleared AFTER the offers, and only for markers no newer than the ones
+      // read: an attach or merge one of these offers just performed has moved
+      // the marker forward, and that arc is a genuinely new question for the
+      // next pass rather than one this pass already answered.
+      //
+      // And NOT AT ALL when `maxGroups` cut the batch short. The markers are
+      // per-arc but the offers are the union over the batch, so there is no
+      // telling which arc an un-offered group came from — clearing here would
+      // retire questions this pass never asked, and the tally would still read
+      // clean. Leaving the whole batch marked costs a repeat next pass, which is
+      // idempotent; the alternative loses offers silently, which is the one
+      // failure mode a changed-set filter must not have.
+      if (!cutShort) await clearStorylineLinkDirty(deps.db, batch.markers);
+
+      if (batch.next === null || tally.offered >= maxGroups) break;
+      after = batch.next;
+    }
+  } else {
+    // The keyset `readLinkableGroups` pages on is `(group_published, group_id)`,
+    // so the window's start IS a cursor: group id 0 is below every real id, which
+    // makes the first read begin at the window rather than at the archive.
+    // `publishedFrom` pushes the same bound INTO the aggregate, so each batch
+    // scans the fortnight instead of GROUP BY-ing the whole archive.
+    let after: { published: Date; groupId: string } = { published: from, groupId: "0" };
+
+    for (;;) {
+      const batch = await readLinkableGroups(deps.db, {
+        after,
+        publishedFrom: from,
+        limit: batchSize,
+      });
+      if (batch.length === 0) break;
+
+      for (const group of batch) {
+        if (tally.offered >= maxGroups) break;
+        after = { published: group.published, groupId: group.groupId };
+        await offer(group);
+      }
+
+      if (tally.offered >= maxGroups || batch.length < batchSize) break;
+    }
   }
 
   // Label what the sweep changed — awaited, because 3am has no reader waiting
@@ -260,7 +405,12 @@ export async function runLateCandidateChore(
   }
 
   deps.log.info(
-    { ...tally, from: from.toISOString(), windowDays: deps.config.storyDfWindowDays },
+    {
+      ...tally,
+      changedOnly: deps.changedOnly === true,
+      from: from.toISOString(),
+      windowDays: deps.config.storyDfWindowDays,
+    },
     "late-candidate sweep — retroactive attachment over the trailing window (ADR-0011)",
   );
   return tally;
@@ -443,6 +593,15 @@ export interface StorylinePassDeps extends ChoreDeps {
    * command run against a clone, not a thing that happens at 3am unattended.
    */
   lateCandidateSweep?: boolean;
+  /**
+   * Narrow the late-candidate sweep to the changed set
+   * (`STORYLINE_LATE_CANDIDATE_CHANGED_ONLY`, `--changed-only` / `--full`).
+   * Absent is the unfiltered pass, which is what this has always done.
+   *
+   * Only consulted when `lateCandidateSweep` is on — filtering a pass that does
+   * not run is not a state worth having two ways to spell.
+   */
+  lateCandidatesChangedOnly?: boolean;
 }
 
 export interface StorylinePassReport {
@@ -507,8 +666,25 @@ export async function runStorylinePass(
   // accident survives a month of clean-looking nightly logs.
   const lateCandidates =
     deps.lateCandidateSweep === true
-      ? await runLateCandidateChore(deps)
-      : { offered: 0, attachedTo: 0, merges: 0, failures: 0, skipped: true as const };
+      ? await runLateCandidateChore({
+          ...deps,
+          ...(deps.lateCandidatesChangedOnly !== undefined
+            ? { changedOnly: deps.lateCandidatesChangedOnly }
+            : {}),
+        })
+      : {
+          // Every field the real tally carries, so a skipped night is the same
+          // SHAPE as a run that changed nothing and only `skipped` tells them
+          // apart. `changedArcs` arrived with the changed-set filter; a zero
+          // here is honest either way, since a pass that did not run marked
+          // nothing.
+          offered: 0,
+          attachedTo: 0,
+          merges: 0,
+          failures: 0,
+          changedArcs: 0,
+          skipped: true as const,
+        };
   const labels = await runStorylineLabelChore(deps);
   const labelMerge = await runLabelMergeChore(deps);
 

@@ -989,3 +989,176 @@ visible until the TTL expires — the measured trending precedent is 61 labels
 landing in the ~3 minutes after a cloud of 3 was cached. For this trigger it is
 the mild version: the group already renders in its own slot and what it gains is
 a second arc on a storyline page. Recorded as a known cost, not a blocker.
+
+## The nightly sweep's changed-set filter, and what measuring it turned up (2026-08-22)
+
+`STORYLINE_LATE_CANDIDATE_CHANGED_ONLY`, off by default, and
+`storylines.link_dirty_at` (migration 0017). The design, the marker's home and the
+guarantee it gives up are in docs/ARCHITECTURE.md §9.1. This is what the
+measurement pass found, including two things it was not looking for.
+
+Clone of the dev archive throughout — `pg_dump -Fc` / `pg_restore`, freshly
+`ANALYZE`d, the real exported `runLateCandidateChore`, **`labeler` omitted so no
+model call was made at any point** — 31,308 articles, 26,006 groups, 17,008 live
+storylines, 12,558 groups in the trailing window.
+
+### The inverse retrieval cannot filter on rarity, and that is not a bug
+
+The filter was specified to push `qualifyingStorylines`' own predicates into SQL:
+one shared token with `df <= anchorCeiling(N)`, and `Σ ln(N/df) >= massFloor`.
+Both are functions of `N` and `df`, and **both are functions of which fortnight
+the reader is standing in.** The inverse retrieval stands in the changed arc's;
+`linkGroup` will stand in each candidate group's. `pruneStoryDf` deletes buckets
+past `windowDays + 1`, so an old group's window is mostly gone and its corpus is a
+fraction of a recent arc's — while `anchorDfFloor` does not scale down with it.
+
+One real missed pair, both sides computed:
+
+| | corpus `N` | anchor ceiling | shared tokens' `df` | verdict |
+| --- | --- | --- | --- | --- |
+| forward, at the group's window | 1,074 | 10 (the floor binds) | 6 | mass 31.8, **qualifies** |
+| inverse, at the arc's window | 13,489 | 27 | 32–171 | **no anchor-eligible token at all** |
+
+Over 400 sampled window groups, that form reached **38.9%** of the (group, arc)
+pairs the real forward decision qualified — 197 of 506. A filter that misses three
+in five is worse than a slow sweep, because the tally still reads clean. And it
+cannot be repaired by loosening: pruning can shrink a group's `df` arbitrarily, so
+for any token there is some group whose window makes it rare, and there is no
+window-independent anchor filter to loosen to.
+
+What survives is the corollary of the mass floor, which is window-independent: the
+largest weight one token can carry is `ln(N)`, so clearing the floor needs at
+least `ceil(massFloor / ln(N))` shared tokens — 3 at every corpus size this
+archive has held, and monotonically more as `N` shrinks. Deriving it from the
+widest `N` makes the bound the loosest and therefore the safe one.
+
+| inverse retrieval, 400 sampled groups / 483 arcs | recall | groups named per arc (mean / p50 / p90) | ms (mean / p90) |
+| --- | --- | --- | --- |
+| mass + anchor, as specified | **38.9%** | 2.1 / 1 / 6 | 2.9 / 5.1 |
+| overlap + window + shared-token floor | **87.4%** | **105.6 / 95 / 200** | 101 / 220 |
+
+Every one of the 64 remaining misses is the 200-row safety valve, not the
+predicate — all of them sit against an arc that named exactly 200. So the cap is a
+dial between lossiness and volume with no good setting, and the selectivity the
+design was priced on was being bought with the lossiness above.
+
+**So the narrowing is ~3.4×, not ~24×.** A realistic night — 250 arcs marked
+dirty, weighted toward recent coverage — names **3,698 window groups, 29.4% of the
+window**, for 5.6s of retrieval. Useful, but not the order of magnitude the filter
+was proposed for.
+
+### The percolation alarm does ring, and bounding the sweep is what hid it
+
+Measured while pricing the above, because the filter had to be priced against
+something. Four passes of the *unfiltered* sweep on one clone, with the
+anchor-eligible retrieval narrowing applied behind a temporary local gate since
+that is where the linker is going:
+
+| pass | offered | attachedTo | merges | live | bridges | 20–99 | 100+ | **largest** | ms/offer |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| — | — | — | — | 17,008 | 1,913 | 15 | 1 | **124** | — |
+| 1 | 12,275 | 3,487 | 1,411 | 14,229 | 9,700 | 54 | 2 | **588** | 17.1 |
+| 2 | 12,275 | 823 | 208 | 13,945 | 10,099 | 55 | 5 | **906** | 8.2 |
+| 3 | 12,274 | 115 | 88 | 13,851 | 9,806 | 53 | 5 | **1,214** | 5.0 |
+| 4 | 12,273 | 30 | 35 | 13,815 | 9,625 | 52 | 5 | **1,347** | 4.3 |
+
+**1,347 groups is 10.7% of the window in one arc**, against 124 before and the
+0.18% the pinned bar was measured at. It is still climbing on pass 4 while
+attaches have nearly stopped — the last 133 groups came from 35 *merges*, so the
+arc is absorbing other arcs rather than recruiting groups. For scale, ADR-0009's
+transitive first cut — the failure this design's north star is set by — absorbed
+1,179 of 1,190 groups.
+
+**Two methodological findings, and the first one matters more than the number.**
+
+1. **A bounded sweep hides it completely.** The same four passes with
+   `maxGroups: 2000` (which, with no cursor, re-sweeps the same first 2,000 groups)
+   converge cleanly and the largest storyline never leaves 124: 615/272 on pass one,
+   then 163/49, 12/13, 1/0. The runaway needs the whole window to express itself,
+   because the vector is width — a wider qualifier set feeds `bridgePairs`, which is
+   the full cross-product over qualifiers, so pairs grow superlinearly in that
+   width, more pairs reach K, merges union profiles, and wider profiles overlap
+   more on the next pass. Two thousand groups is not a small version of the
+   fortnight; it is a different experiment.
+2. **Per-offer cost gets better as the graph gets worse.** 17.1 → 4.3 ms/offer
+   across the passes, because the work drains. Reading that as "the sweep now fits
+   the ceiling" is reading the wrong metric: it fits because there is less left to
+   link, and there is less left to link because it has been absorbed.
+
+`recordBridge` is idempotent on `(storyline_lo, storyline_hi, group_id)`, so
+re-offering the same group does not re-record a bridge. The growth is not repeated
+observation; it is new pairs from wider qualifier sets.
+
+### Two things the queue needs that a window keyset gets for free
+
+Both found by running it, and both are the same rule: **a marker may only be
+cleared by a pass that actually asked its question.**
+
+1. **Bound the queue to where it stood when the pass began.** The keyset reads
+   forward through `(link_dirty_at, id)`, and every attach and merge an offer
+   performs stamps its arc with `now()` — which lands *ahead* of the cursor and is
+   picked up later in the same pass. It terminates (§6's monotone measures still
+   hold) but it turns one night into "run until the graph stops moving": without
+   the bound, a filtered pass over the dev archive was still finding **~2,400
+   dirty arcs after twenty minutes**, its own re-marks outpacing the drain. The
+   bound also restores the ordering discipline the unfiltered pass has for nothing
+   — one pass, one fixed set of questions — and leaves the cascade to the next run.
+2. **Do not clear a batch `maxGroups` cut short.** Markers are per-arc, offers are
+   the union over the batch, so there is no telling which arc an un-offered group
+   came from. Clearing retires questions the pass never asked and the tally reads
+   clean either way; leaving the batch marked costs an idempotent repeat.
+
+One smaller thing worth recording because it cost an infinite loop: the marker
+column is `timestamptz(3)`. Postgres `now()` is microsecond-precision and a
+JavaScript `Date` is millisecond, so at full precision the marker is strictly
+greater than the `Date` the driver returns for it — `(link_dirty_at, id) > ($read,
+$id)` then matches every row and the keyset never advances, while
+`link_dirty_at <= $read` matches none and nothing ever clears. Rounding in the
+column makes the round trip exact whatever a writer used. Every writer also uses
+the DATABASE's clock, and the pass reads its bound from the same clock, so there
+is only ever one.
+
+### Does the filter damp the runaway? No — it accelerates it
+
+The obvious hope is that a filter which offers only what changed is a way to run
+the sweep *safely* rather than merely faster. Measured head to head, it is the
+opposite. Two clones, both starting from the same restore, both with the narrowed
+retrieval; pass 1 is unfiltered in both arms so they diverge only after it, and
+the two pass-1 rows agreeing to within 2 attaches is the calibration that lets
+the rest be compared.
+
+| pass | offered | attachedTo | merges | seconds | **largest** |
+| --- | --- | --- | --- | --- | --- |
+| 0 | — | — | — | — | 124 |
+| 1 — unfiltered | 12,275 | 3,487 | 1,411 | 210 | 588 |
+| 2 — unfiltered | 12,275 | 823 | 208 | 101 | 906 |
+| 3 — unfiltered | 12,274 | 115 | 88 | 61 | 1,214 |
+| 4 — unfiltered | 12,273 | 30 | 35 | 53 | **1,347** |
+| 1 — same, other clone | 12,270 | 3,489 | 1,409 | 205 | 588 |
+| 2 — **filtered** | 10,219 | 799 | 249 | 165 | 1,069 |
+| 3 — **filtered** | 7,501 | 122 | 88 | 81 | 1,566 |
+| 4 — **filtered** | 3,045 | 42 | 67 | 23 | **1,782** |
+
+The filter does what it says on offers — 12,275 → 10,219 → 7,501 → 3,045 — and
+**arrives at a 32% LARGER runaway arc than the unfiltered pass it replaces**, at
+every pass along the way (1,069 vs 906, 1,566 vs 1,214, 1,782 vs 1,347). It is
+also not reliably faster: pass 2 filtered took 165s against the unfiltered 101s,
+because ~2,300 changed arcs at ~100ms of inverse retrieval each is most of a pass
+on its own.
+
+The mechanism is not subtle once stated. The arcs that change on every pass ARE
+the arcs the feedback loop runs through — a merge is what marks an arc, and the
+runaway grows by merging. So the filter selects for the runaway: it drops the
+harmless offers and keeps the productive ones, and in a percolation regime
+"productive" is the problem. **A changed-set filter is a way to run the sweep
+cheaper, never a way to run it safely.**
+
+### What this leaves the filter for
+
+Not speed, and not safety, on this evidence. What it leaves behind that is
+unambiguously useful is the marker: a durable, crash-safe record of which arcs'
+linking inputs actually moved, which is the scoping instrument a threshold
+re-measurement needs, and `--changed-only` / `--full`, which let an operator run a
+targeted late-candidate pass instead of the whole fortnight. The filter itself
+should not be switched on before the bar the sweep judges at has been re-measured;
+until then it would reach the same wrong answers sooner.

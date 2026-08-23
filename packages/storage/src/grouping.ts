@@ -1,5 +1,6 @@
 import { sql, type Kysely } from "kysely";
 import type { Database } from "./database.js";
+import { markGroupStorylinesLinkDirty } from "./storyline-link-dirty.js";
 import { absorbMergedGroup } from "./storylines.js";
 
 /**
@@ -104,15 +105,25 @@ export async function readGroupCandidates(
  * makes the call idempotent: a replayed batch (retries make that routine,
  * §7.4) re-runs it as a no-op.
  *
- * Nothing here touches storylines. A group's storyline membership lives in
- * `storyline_groups` now, and a group that MOVES does not change it — the
- * group is the unit a storyline holds, so moving an article between groups is
- * invisible one layer up (ADR-0011). What does change is the day slots and the
- * profile of every storyline holding the group, both being derivations over
- * member ARTICLES — and the caller is what refreshes them. `groupArticle` does
- * that for the group an arrival joined; it went unrefreshed for months on the
- * strength of this sentence, so if you are adding a caller, it is a real debt
- * and not a formality.
+ * A group's storyline MEMBERSHIP is untouched here, and that part has not
+ * changed: membership lives in `storyline_groups`, the group is the unit a
+ * storyline holds, so an article moving between groups leaves every
+ * `storyline_groups` row exactly where it was (ADR-0011).
+ *
+ * What this used to say — that the move is therefore invisible one layer up —
+ * was the half of it that was wrong, and the sentence cost months. Two things
+ * DO move, neither of them membership:
+ *
+ *   - **The derivations.** A storyline's day slots and its profile are computed
+ *     over its member groups' ARTICLES, so an arrival makes both stale.
+ *     `groupArticle` re-derives them on the spot rather than deferring; a wrong
+ *     day slot is a wrong lead article on a card a reader is looking at now. If
+ *     you are adding a caller that moves an article, that refresh is a real
+ *     debt and not a formality.
+ *   - **The change marker** (`markGroupStorylinesLinkDirty`, migration 0017).
+ *     The arriving group's own majority profile can widen, handing it a
+ *     vocabulary the linker has never judged — so the marker is how the nightly
+ *     sweep's changed-set filter learns the group is worth re-offering.
  */
 export async function recordGrouping(
   db: Kysely<Database>,
@@ -159,6 +170,11 @@ export async function recordGrouping(
 
     if (Number(moved.numUpdatedRows) > 0) {
       await refreshGroupPosition(trx, input.groupId);
+      // The group the article joined now says something it did not say before,
+      // and that is the class no storyline-shaped signal can carry (migration
+      // 0017). Marked on the group it JOINED, not on the group it left: the
+      // article was a group of one, so what it left has nothing left in it.
+      await markGroupStorylinesLinkDirty(trx, input.groupId);
     }
   });
 }
@@ -211,6 +227,12 @@ export async function mergeGroups(
 
     // Every storyline that held the loser holds the winner instead.
     await absorbMergedGroup(trx, input);
+
+    // The winner group's OWN storylines, which `absorbMergedGroup` does not
+    // reach: it re-derives the arcs that held the LOSER, and the winner's arcs
+    // kept their membership while the articles under it changed (migration
+    // 0017).
+    await markGroupStorylinesLinkDirty(trx, input.winnerGroupId);
 
     return { merged: true };
   });

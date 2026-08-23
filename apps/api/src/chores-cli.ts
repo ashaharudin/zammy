@@ -15,7 +15,8 @@ import {
 
 /**
  * `pnpm chores <retention|storylines> [--label-rate=N] [--max-labels=N]
- * [--late-candidates]` — the nightly chores as a one-shot process
+ * [--late-candidates] [--changed-only|--full]` — the nightly chores as a one-shot
+ * process
  * (ARCHITECTURE 9.1).
  *
  * A chore, not a command: unlike `regroup` or `backfill:storylines` this is not
@@ -76,7 +77,8 @@ const num = (name: string): number | undefined => {
 const named = args.filter((arg) => !arg.startsWith("--"));
 if (named.length !== 1 || !PASSES.includes(named[0] as Pass)) {
   console.error(
-    `usage: chores <${PASSES.join("|")}> [--label-rate=N] [--max-labels=N] [--late-candidates]`,
+    `usage: chores <${PASSES.join("|")}> [--label-rate=N] [--max-labels=N] ` +
+      "[--late-candidates] [--changed-only|--full]",
   );
   console.error("");
   console.error("  retention   the retention report, and the trailing-corpus prune");
@@ -90,6 +92,15 @@ if (named.length !== 1 || !PASSES.includes(named[0] as Pass)) {
   );
   console.error(
     "                     K is re-measured (docs/STORYLINE-LINKING.md).",
+  );
+  console.error(
+    "  --changed-only     that sweep: offer only groups whose candidate set could",
+  );
+  console.error(
+    "                     have changed. --full forces the unscoped pass. Neither",
+  );
+  console.error(
+    "                     does anything without --late-candidates.",
   );
   process.exit(64);
 }
@@ -187,6 +198,15 @@ try {
           // not a flag flipped once and forgotten. The config default is off.
           lateCandidateSweep:
             args.includes("--late-candidates") || config.STORYLINE_LATE_CANDIDATE_SWEEP,
+          // That sweep's scope, read only when it runs. `--full` is the flag
+          // that matters: the narrow pass gives up "every group in the window,
+          // every night" (docs/ARCHITECTURE.md §9.1 lists what that costs), so an
+          // operator needs a way to run the unscoped pass without changing the
+          // environment the scheduler reads.
+          lateCandidatesChangedOnly: args.includes("--full")
+            ? false
+            : args.includes("--changed-only") ||
+              config.STORYLINE_LATE_CANDIDATE_CHANGED_ONLY,
         };
         const report = await runStorylinePass(storylineDeps);
         log.info({ report }, "storyline pass complete");

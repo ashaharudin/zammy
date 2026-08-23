@@ -225,6 +225,13 @@ export interface StorylinesTable {
    */
   merged_into: string | null;
   created_at: Generated<Date>;
+  /**
+   * Something the LINKER reads about this arc changed, and no late-candidate
+   * offer has been made against it since (migration 0017). Null means carried
+   * forward. The nightly sweep's changed-set filter is the only reader, and it
+   * clears what it consumed.
+   */
+  link_dirty_at: Timestamp | null;
 }
 
 /** Group ↔ storyline, many-to-many: a group may belong to several storylines. */

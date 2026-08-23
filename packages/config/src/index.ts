@@ -564,6 +564,10 @@ const EnvSchema = z
      * no storyline in the causal chain at all.
      */
     STORYLINE_LATE_CANDIDATE_SWEEP: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+    /**
      * Re-offer a group to the linker when an arriving article JOINS it
      * (`storyline-rejoin-trigger.ts`), on the ingest tail. Off is the pre-trigger
      * behaviour exactly: only seeded groups are linked, and an enlarged group
@@ -594,6 +598,39 @@ const EnvSchema = z
      * one blocker.
      */
     STORYLINE_REOFFER_JOINED_GROUPS: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+    /**
+     * Narrow the nightly late-candidate sweep to the groups whose candidate set
+     * could have changed since the last pass cleared its markers
+     * (`storyline-changed-set.ts`, `storylines.link_dirty_at`). Off is the
+     * unfiltered pass: every group in the trailing DF window, every night.
+     *
+     * This is where the order of magnitude is — MEASURED, ~12s a night against
+     * ~275s — and it is the same decision at the same bar, because the filter is
+     * a retrieval bound and `linkGroup` still makes every call.
+     *
+     * It ships off for two reasons, and the second is the real one.
+     *
+     * The marker column starts NULL on every existing row, so a filtered pass
+     * finds nothing at all until a night of ordinary writes has marked
+     * something. Turning this on in the same deploy as the migration would be a
+     * silent no-op night that reports a clean tally, which is the exact failure
+     * mode a changed-set filter has to be defended against. Deploy, let markers
+     * accumulate, then flip.
+     *
+     * And it narrows a GUARANTEE. The unfiltered pass promises "every group in
+     * the window, every night"; this promises "every group whose answer could
+     * have moved, as far as a marker can tell". Trailing-corpus drift moves a
+     * verdict with no storyline anywhere in the causal chain — last night's
+     * retention prune shrinks the window under a group that has not changed —
+     * and a group holding no storyline at all has no marker to carry it. Those
+     * classes want an unfiltered pass on some cadence (`chores storylines
+     * --full`), and the bounded, resumable version of that pass is not built
+     * yet. docs/ARCHITECTURE.md §9.1 has the full list.
+     */
+    STORYLINE_LATE_CANDIDATE_CHANGED_ONLY: z
       .enum(["true", "false"])
       .default("false")
       .transform((value) => value === "true"),
