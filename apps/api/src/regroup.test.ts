@@ -61,6 +61,7 @@ async function seedStaleRows() {
   await upsertTopic(harness.deps.db, { fingerprint, keywords: ["harper"], language: "en" });
 
   const ingested = await ingestSightings(harness.deps.db, {
+    timeZone: "UTC",
     fingerprint,
     sightings: [
       sighting("dailymail.com", MAIL, "2026-08-11T20:06:00.000Z"),
@@ -160,6 +161,7 @@ describe("regroup", () => {
       bridge: "Mayor resigns over budget scandal at city hall",
     };
     const ingested = await ingestSightings(harness.deps.db, {
+      timeZone: "UTC",
       fingerprint,
       sightings: Object.values(titles).map((title, i) =>
         sighting(`outlet${i}.example`, title, `2026-08-11T10:0${i}:00.000Z`),

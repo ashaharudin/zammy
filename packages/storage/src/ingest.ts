@@ -2,6 +2,8 @@ import { sql, type Kysely } from "kysely";
 import type { Sighting } from "@zammy/news-client";
 import { hexToBytea, type Database } from "./database.js";
 import { lowerGroupPosition } from "./grouping.js";
+import { readGroupStorylines, refreshStorylineDerivations } from "./storylines.js";
+import { markStorylinesLinkDirty } from "./storyline-link-dirty.js";
 
 /**
  * The sighting→article collapse (ARCHITECTURE 7.4, ADR-0002).
@@ -90,14 +92,38 @@ export interface CreatedArticle {
  *     display fields to it if it is now the EARLIEST emission, so a later
  *     re-emission never rewrites the headline (ADR-0002);
  *  4. link the article to the topic, per ARTICLE, so one repeatedly-re-emitted
- *     post cannot flood the topic's timeline.
+ *     post cannot flood the topic's timeline;
+ *  5. and once per batch, re-derive the storylines holding a group whose
+ *     article step 3 moved earlier — a fold changes which day an article
+ *     belongs to, and a storyline's day slots are derived from exactly that.
+ *     Step 5 alone is DERIVED, and fenced by a savepoint accordingly: steps
+ *     1–4 commit whether or not it succeeds.
  *
  * The caller must have upserted the topic first (the membership row has a
  * foreign key on it).
  */
 export async function ingestSightings(
   db: Kysely<Database>,
-  input: { fingerprint: string; sightings: readonly Sighting[] },
+  input: {
+    fingerprint: string;
+    sightings: readonly Sighting[];
+    /**
+     * The calendar day storyline slots are bucketed by, since a fold can move
+     * which day an article belongs to and this re-derives them. Here for the
+     * reason `mergeGroups` takes one: the day rule is bucketed in SQL, so the
+     * zone is all storage needs to keep a derivation honest — the JUDGEMENT
+     * about what belongs with what stays in the api layer.
+     */
+    timeZone: string;
+    /**
+     * Where a failed storyline re-derivation goes. The re-derivation is DERIVED
+     * and is fenced so it cannot fail the ingest (see the savepoint below), so
+     * a warning is the only trace it leaves — without one the fence would hide
+     * a broken derivation instead of a broken ingest, which is a worse trade
+     * than the one it exists to make.
+     */
+    log?: { warn: (obj: object, msg: string) => void };
+  },
 ): Promise<IngestResult> {
   const fingerprint = hexToBytea(input.fingerprint);
   const result: IngestResult = {
@@ -108,7 +134,9 @@ export async function ingestSightings(
   };
   if (input.sightings.length === 0) return result;
 
-  const createdIds: string[] = [];
+  const createdIds = new Set<string>();
+  /** Groups holding an article a fold moved earlier — see the guard below. */
+  const movedGroups = new Set<string>();
 
   await db.transaction().execute(async (trx) => {
     for (const sighting of input.sightings) {
@@ -143,7 +171,17 @@ export async function ingestSightings(
             dedup_key: (eb) => eb.ref("excluded.dedup_key"),
           }),
         )
-        .returning(["id", sql<boolean>`(xmax = 0)`.as("was_created")])
+        // `published` and `group_id` are read back as they stood BEFORE this
+        // sighting: the conflict branch's assignment touches `dedup_key` and
+        // nothing else, so RETURNING reports the stored row. That pre-fold
+        // timestamp is what makes the storyline guard below free — the
+        // alternative is asking the row again after the fold.
+        .returning([
+          "id",
+          "published",
+          "group_id",
+          sql<boolean>`(xmax = 0)`.as("was_created"),
+        ])
         .executeTakeFirstOrThrow();
 
       const inserted = await trx
@@ -191,6 +229,32 @@ export async function ingestSightings(
         // The fold may have dragged this article — and therefore its group's
         // position on the §7.3 keyset axis — earlier in time (§14.3).
         await lowerGroupPosition(trx, { articleId: article.id, published });
+
+        // And the storyline layer above it moves too. A day slot IS its day's
+        // earliest member article, so an article that moved earlier can leave
+        // its storylines' slots stale in either of two ways: on a new day, the
+        // storyline has no `storyline_days` row at all and that day's coverage
+        // is invisible to a timeline that pages over the table; within the day,
+        // the slot keeps a position later than the coverage it stands for.
+        //
+        // Guarded twice, which is what makes this affordable on the §6.3
+        // sync-fill path. The fold must have actually MOVED the article: the
+        // overwhelmingly common sighting is a re-emission no earlier than what
+        // is stored, and it spends nothing here. And the article must have
+        // EXISTED before this batch: one created a moment ago is in no
+        // storyline yet — the linker runs after ingest and births one from the
+        // article's final state — so collecting it would buy an index scan
+        // that can only come back empty. Not a rare case worth skipping
+        // cheaply but the common one: upstream returns newest-first, so a
+        // cold page routinely creates an article and then folds an earlier
+        // emission of it two sightings later.
+        //
+        // What is left is rare. Measured on the dev archive: 334 articles of
+        // 31,308 carry more than one sighting at all, and 33 have sightings
+        // that straddle a UTC midnight.
+        if (published < article.published && !createdIds.has(article.id)) {
+          movedGroups.add(article.group_id);
+        }
       }
 
       // Per ARTICLE and unconditional: a sighting already seen under another
@@ -203,7 +267,7 @@ export async function ingestSightings(
 
       if (article.was_created) {
         result.articlesCreated += 1;
-        createdIds.push(article.id);
+        createdIds.add(article.id);
       }
     }
 
@@ -223,11 +287,11 @@ export async function ingestSightings(
     // row created earlier in this very loop. Grouping must see the article as
     // it ended up, and this runs after the orphan sweep so a deleted row is
     // never handed on.
-    if (createdIds.length > 0) {
+    if (createdIds.size > 0) {
       const rows = await trx
         .selectFrom("articles")
         .select(["id", "title", "description", "language", "published"])
-        .where("id", "in", createdIds)
+        .where("id", "in", [...createdIds])
         .execute();
       result.createdArticles = rows.map((row) => ({
         id: row.id,
@@ -236,6 +300,101 @@ export async function ingestSightings(
         language: row.language,
         published: row.published,
       }));
+    }
+
+    // Re-derive every storyline holding a group whose article moved.
+    //
+    // Once per BATCH, not once per fold: one batch can carry the same URL
+    // twice, and a storyline re-derived mid-loop would be re-derived again for
+    // the same article. After the orphan sweep for the reason the read above
+    // gives — a deleted row is never handed on, and never refreshed either.
+    //
+    // Inside the transaction, so the day a reader can see is never a day the
+    // articles disagree with. Handing the moved ids back for the caller to
+    // refresh was the alternative, and it buys a shorter transaction at the
+    // price of a window where the timeline is wrong and a second transaction
+    // to close it — worth it if this fired often, and it does not. The work
+    // also belongs here: a re-derivation is storage's, the way `mergeGroups`
+    // re-derives the same slots from the same place and takes the same
+    // `timeZone` to do it. What the api layer owns is the JUDGEMENT about what
+    // belongs with what, and no judgement is made here.
+    //
+    // `refreshStorylineDerivations`, not `refreshStoryline`: the latter opens
+    // its own transaction, and resolves an alias first — which nothing here
+    // needs, because a merged storyline holds no groups for
+    // `readGroupStorylines` to find. Both derivations rather than the slots
+    // alone, though only the slots can be stale from a fold: `story_tokens`
+    // are written by grouping and untouched here, so the profile half is a
+    // no-op. One redundant statement on a path this rare beats exporting a
+    // second seam into the storyline tables to avoid it.
+    //
+    // And the change marker with it (migration 0017), because every caller of
+    // that re-derivation owes it. This case earns it least of the four — the
+    // profile CANNOT widen here, so the arc attracts exactly what it attracted
+    // before, and a re-offer can only find what the last one found. What did
+    // move is the arc's coverage, which is the other thing `linkGroup` reads
+    // about it; at ~0.68ms against a path this rare, one rule for "re-derived,
+    // therefore re-offer" is worth more than the statement it saves.
+    //
+    // Fenced by a SAVEPOINT, which is what lets it be both in the transaction
+    // and unable to fail it. Every other derived value on this path is allowed
+    // to fail on its own — `recordStoryDfForArticles` catches for the reason it
+    // states, "an ingest triggered by a reader's search must not fail because a
+    // derived counter did", and grouping never throws for the same reason — but
+    // both of those run AFTER this transaction commits, so a plain catch is all
+    // they need. In here a plain catch would be worse than none: Postgres
+    // aborts the whole transaction on the first failed statement, COMMIT on an
+    // aborted transaction is a silent ROLLBACK, and `ingestSightings` would
+    // return a result reporting sightings it had just discarded. MEASURED both
+    // ways on a throwaway clone: unfenced, one raise inside the re-derivation
+    // loses the sighting and fails the reader's search; fenced, the fold
+    // commits and the slots stay as stale as they were before this existed.
+    //
+    // What can fail is not hypothetical. This is the first thing on the ingest
+    // path to take write locks on `storyline_days` and `storylines`, tables the
+    // merge and attach paths also write under their own lock order, so a
+    // deadlock (40P01) or a serialization failure is exactly the shape of error
+    // to expect — and losing a paid upstream page to one is strictly worse than
+    // the stale day slot this fix exists to prevent. A stale slot is repaired
+    // by the next merge or a `backfill:storylines --restart`; a dropped
+    // emission is repaired by nothing.
+    //
+    // Only when there is work: the guard's whole point is that the common
+    // sighting spends nothing here, and two unconditional round trips for
+    // SAVEPOINT and RELEASE would undo that.
+    //
+    // What one moved group costs, MEASURED over 400 real storyline-holding
+    // groups on a clone of the dev archive: mean 2.9ms, p90 3.6, p99 5.8 for
+    // the read plus a refresh per storyline plus the marker. The widest arc
+    // this archive holds — 124 groups, 219 articles — is 7ms. The N is bounded
+    // by the batch, and a batch is ONE upstream page (`CURRENTS_MAX_PAGE_SIZE`,
+    // 20 by default), so the ceiling is ~54ms against §6.3's 1,200ms even in
+    // the case where every sighting on the page moves a different group — a
+    // case the 33-of-31,308 population above says will not happen. Worth
+    // re-measuring if that page size is ever raised toward its 200 cap.
+    if (movedGroups.size > 0) {
+      await sql`savepoint storyline_derivations`.execute(trx);
+      try {
+        const dirty: string[] = [];
+        for (const groupId of movedGroups) {
+          for (const storylineId of await readGroupStorylines(trx, groupId)) {
+            await refreshStorylineDerivations(trx, storylineId, input.timeZone);
+            dirty.push(storylineId);
+          }
+        }
+        await markStorylinesLinkDirty(trx, dirty);
+        await sql`release savepoint storyline_derivations`.execute(trx);
+      } catch (error) {
+        // ROLLBACK TO leaves the savepoint in place, so it still needs
+        // releasing; and if THIS throws the connection itself is gone, which is
+        // not a derived failure and must not be swallowed.
+        await sql`rollback to savepoint storyline_derivations`.execute(trx);
+        await sql`release savepoint storyline_derivations`.execute(trx);
+        input.log?.warn(
+          { err: error, groups: movedGroups.size },
+          "storyline day slots not re-derived for this batch; a group merge or a --restart backfill repairs them",
+        );
+      }
     }
   });
 

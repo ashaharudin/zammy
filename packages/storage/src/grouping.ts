@@ -268,16 +268,12 @@ async function refreshGroupPosition(
  * the overwhelmingly common case (a sighting no earlier than the position)
  * into a no-op.
  *
- * The storyline's own position does NOT move with it, and that is a known gap
- * rather than a design. This said `refreshDaySlots` re-derives the day slot
- * one layer up; nothing on this path calls it. Its only caller is
- * `ingestSightings`, inside the transaction that folded the sighting, and a
- * fold that drags `published` back across an APP_TIMEZONE midnight puts the
- * article on a day the storyline has no `storyline_days` row for — a timeline
- * day that is simply missing until a group merge or a `backfill:storylines
- * --restart` rebuilds it. The sibling case, a new article JOINING a member
- * group, is fixed in `groupArticle`; this one is not, because the refresh would
- * have to run inside ingest's transaction on the hot path.
+ * The storyline layer one level up moves too, and NOT from here: this call
+ * maintains `articles.group_published` and nothing else. Its only caller,
+ * `ingestSightings`, re-derives the day slots of every storyline holding a
+ * moved article once per batch, in the same transaction. Keeping the two apart
+ * is what makes the storyline half affordable — this runs on every new
+ * sighting, that one only when a fold actually moved something.
  */
 export async function lowerGroupPosition(
   db: Kysely<Database>,

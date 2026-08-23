@@ -132,7 +132,7 @@ function sighting(input: {
 async function seed(sightings: Sighting[]): Promise<CanonicalQuery> {
   const fingerprint = randomBytes(32).toString("hex");
   await upsertTopic(db, { fingerprint, keywords: ["storm"], language: "en" });
-  const ingested = await ingestSightings(db, { fingerprint, sightings });
+  const ingested = await ingestSightings(db, { ...TZ, fingerprint, sightings });
   await groupCreatedArticles(
     { db, config: harness.deps.config.grouping },
     ingested.createdArticles,
@@ -234,6 +234,7 @@ describe("paging over storyline-days", () => {
     // later upstream page. It JOINS the existing group: same group id, no
     // membership change, so no `attachGroup`, no `mergeGroups`, no merge.
     const late = await ingestSightings(db, {
+      ...TZ,
       fingerprint: query.fingerprint,
       sightings: [
         sighting({

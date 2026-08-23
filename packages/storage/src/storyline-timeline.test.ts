@@ -71,7 +71,7 @@ describe("timeline reads over the collapsed fixture", () => {
 
     await upsertTopic(harness.db, { fingerprint: TOPIC, keywords: ["climate"], language: "en" });
     await upsertTopic(harness.db, { fingerprint: OTHER_TOPIC, keywords: ["quiet"] });
-    await ingestSightings(harness.db, { fingerprint: TOPIC, sightings });
+    await ingestSightings(harness.db, { timeZone: TZ, fingerprint: TOPIC, sightings });
     await seedStorylines(harness);
   });
 
@@ -226,6 +226,7 @@ describe("a storyline's day is one slot in the timeline", () => {
     // Two groups, both covering one story on one day: the syndicated pair and
     // an angle piece. Under ADR-0011 they are one storyline, so one slot.
     const ingested = await ingestSightings(harness.db, {
+      timeZone: TZ,
       fingerprint: GROUPED_TOPIC,
       sightings: [
         story("00000000-0000-4000-8000-000000000021", "https://a.example/x", `${DAY}T09:00:00.000Z`, "Bank holds rate"),
@@ -337,6 +338,7 @@ describe("a storyline's day is one slot in the timeline", () => {
     // ever spans days, so the keyset survives unchanged in shape.
     const NEXT = "2026-08-05";
     const ingested = await ingestSightings(harness.db, {
+      timeZone: TZ,
       fingerprint: GROUPED_TOPIC,
       sightings: [
         story("00000000-0000-4000-8000-000000000024", "https://d.example/z", `${NEXT}T08:00:00.000Z`, "Rate hold reaction"),
@@ -388,6 +390,7 @@ describe("slots sharing a position", () => {
     await migrateToLatest(harness.db);
     await upsertTopic(harness.db, { fingerprint: TIED_TOPIC, keywords: ["tie"] });
     await ingestSightings(harness.db, {
+      timeZone: TZ,
       fingerprint: TIED_TOPIC,
       sightings: [
         story("00000000-0000-4000-8000-000000000011", "https://example.com/a", TIE),

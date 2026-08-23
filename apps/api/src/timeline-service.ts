@@ -738,6 +738,10 @@ async function fillSegment(
     const ingested = await ingestSightings(deps.db, {
       fingerprint: query.fingerprint,
       sightings: result.sightings,
+      timeZone: deps.config.grouping.timeZone,
+      // The storyline re-derivation inside it is fenced and cannot fail this
+      // fill; the warning is the only place a failed one surfaces.
+      ...(deps.log ? { log: deps.log } : {}),
     });
     deps.metrics?.articlesIngested(ingested.articlesCreated);
 
