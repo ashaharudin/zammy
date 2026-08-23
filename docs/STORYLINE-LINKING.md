@@ -1471,8 +1471,13 @@ Two controls worth recording, both on this instrument:
   and flat over the corrected window, against the flag-off control's **0.015**. Seven corrected days
   take the largest arc 24 → 71; eleven take it to 818; fourteen to 1,699, against the from-scratch
   2,591 those days would have produced. **645 of 667** post-switch merges fuse two cap-shaped arcs,
-  which a from-scratch replay cannot produce at all. Full write-up, distributions and the hand-read
-  arcs: VERCEL-PHASE-0-FINDINGS §2.7 step 1.
+  which a from-scratch replay cannot produce at all.
+
+  **Bounded at the top 2, the drift goes and the hybrid question dissolves**: 0.034 per arrival, and
+  the cap-built and from-scratch archives both end at **22** where unbounded they end at 71 and 2,591.
+  The two starting states stop being distinguishable in the outcome, because the cross-product was the
+  mechanism that made them differ. Full write-up, distributions and the hand-read arcs:
+  VERCEL-PHASE-0-FINDINGS §2.7 step 1.
 
 ### The four options, priced against the same instrument
 

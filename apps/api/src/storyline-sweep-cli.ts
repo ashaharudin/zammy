@@ -248,6 +248,46 @@ try {
     }
   };
 
+  // ---- the variant under test, for every branch below ----
+  //
+  // Comma-separated, because the answer may well be a combination and pricing
+  // one requires running one — `cap:2,days,birth-bridges`. Parsed ONCE, above
+  // the branches, so `--reoffer` and `--hybrid` cannot come to mean different
+  // things by the same flag: the two are the same decision at different offer
+  // rates, and a variant that applied to only one of them would make them
+  // incomparable exactly where the comparison is the point.
+  const variantName = flag("variant") ?? "base";
+  const parts = variantName.split(",");
+  const cap = parts.find((part) => part.startsWith("cap:"));
+  const independence = parts.find((part) => part === "days" || part === "domains");
+  // `cap:N` overrides the configured bound; with no `cap:` part the run models
+  // whatever `STORYLINE_MAX_BRIDGING_QUALIFIERS` is set to, so an unqualified
+  // `--variant=base` describes the deployed mode rather than a hypothetical.
+  // `cap:0` is how a run asks for UNBOUNDED against a configured bound, which
+  // is what reproducing the committed option table needs once the flag is on.
+  if (cap !== undefined && !/^cap:\d+$/.test(cap)) {
+    console.error(`--variant cap must be a non-negative integer, got \`${cap}\``);
+    process.exit(1);
+  }
+  const configuredCap = cap === undefined ? CONFIGURED_BOUND : Number(cap.slice(4)) || undefined;
+  const variant: ReplayVariant = {
+    ...(configuredCap !== undefined ? { maxBridgingQualifiers: configuredCap } : {}),
+    ...(independence !== undefined ? { independence: independence as "days" | "domains" } : {}),
+    ...(parts.includes("birth-bridges") ? { bridgeOffers: "first" as const } : {}),
+  };
+  const unknown = parts.filter(
+    (part) =>
+      part !== "base" &&
+      part !== "birth-bridges" &&
+      part !== "days" &&
+      part !== "domains" &&
+      !part.startsWith("cap:"),
+  );
+  if (unknown.length > 0) {
+    console.error(`unknown --variant part(s): ${unknown.join(", ")}`);
+    process.exit(1);
+  }
+
   // ---- K, re-measured against a replay that RE-OFFERS ----
   //
   // The measurement `STORYLINE_LATE_CANDIDATE_SWEEP`,
@@ -273,42 +313,6 @@ try {
       cascadeMerges: cascade,
       ...(cappedBuild !== undefined ? { cappedRetrievalLimit: Number(cappedBuild) } : {}),
     };
-    // Comma-separated, because the answer may well be a combination and
-    // pricing one requires running one — `cap:2,days,birth-bridges`.
-    const variantName = flag("variant") ?? "base";
-    const parts = variantName.split(",");
-    const cap = parts.find((part) => part.startsWith("cap:"));
-    const independence = parts.find((part) => part === "days" || part === "domains");
-    // `cap:N` overrides the configured bound; with no `cap:` part the run models
-    // whatever `STORYLINE_MAX_BRIDGING_QUALIFIERS` is set to, so an unqualified
-    // `--variant=base` describes the deployed mode rather than a hypothetical.
-    // `cap:0` is how a run asks for UNBOUNDED against a configured bound, which
-    // is what reproducing the committed option table needs once the flag is on.
-    if (cap !== undefined && !/^cap:\d+$/.test(cap)) {
-      console.error(`--variant cap must be a non-negative integer, got \`${cap}\``);
-      process.exit(1);
-    }
-    const configuredCap = cap === undefined ? CONFIGURED_BOUND : Number(cap.slice(4)) || undefined;
-    const variant: ReplayVariant = {
-      ...(configuredCap !== undefined ? { maxBridgingQualifiers: configuredCap } : {}),
-      ...(independence !== undefined
-        ? { independence: independence as "days" | "domains" }
-        : {}),
-      ...(parts.includes("birth-bridges") ? { bridgeOffers: "first" as const } : {}),
-    };
-    const unknown = parts.filter(
-      (part) =>
-        part !== "base" &&
-        part !== "birth-bridges" &&
-        part !== "days" &&
-        part !== "domains" &&
-        !part.startsWith("cap:"),
-    );
-    if (unknown.length > 0) {
-      console.error(`unknown --variant part(s): ${unknown.join(", ")}`);
-      process.exit(1);
-    }
-
     console.log(
       `\n=== K against a re-offering replay: ${reoffer}, variant ${variantName}` +
         `${cascade ? ", cascade+repoint" : ""}` +
@@ -433,7 +437,13 @@ try {
         `after ${switchOn} (${corrected.length} of ${dayKeys.length} days): ` +
         `${NARROW ? "anchor-eligible probe, cap 4,000 reported not applied" : "UNCHANGED — the flag-off control, cap stays applied"}\n` +
         `birth-only: every group offered exactly ONCE, no sweep — ` +
-        `K=${k}${cascade ? ", cascade+repoint modelled" : ", cascade NOT modelled"}\n` +
+        `K=${k}${cascade ? ", cascade+repoint modelled" : ", cascade NOT modelled"}, ` +
+        `variant ${variantName}` +
+        `${
+          configuredCap === undefined
+            ? " (bridge cross-product UNBOUNDED)"
+            : ` (at most ${configuredCap} qualifiers may bridge)`
+        }\n` +
         // Named in the header because `--share`/`--mass` default to the
         // operator's exploration focus (0.01/16) and NOT to the shipped bar
         // (0.002/20) — a trajectory read against the wrong bar is off by an
@@ -462,6 +472,7 @@ try {
       ...(cappedBuild !== undefined ? { cappedRetrievalLimit: Number(cappedBuild) } : {}),
       switchOn,
       fidelity: { cascadeMerges: cascade },
+      variant,
       onDay: (day, result) => {
         const delta = result.merges - previousMerges;
         previousMerges = result.merges;

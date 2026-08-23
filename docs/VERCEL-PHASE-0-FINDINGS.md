@@ -511,9 +511,13 @@ always self-homed.
    straight because they look alike. What §2.6 caught was a *measurement* that could not see a feedback
    loop, not a rule against offering once: the loop is that a merge widens the survivor's profile so
    the next offer retrieves more, and here it runs across DAYS instead of across sweep passes — each
-   day's arrivals are judged against the archive the previous day's merges left. Six runs, thirty
+   day's arrivals are judged against the archive the previous day's merges left. Ten runs, thirty
    simulated days each, and the trajectory is reported per day for exactly that reason. Bounding it to
    2,000 groups, or to `--days=31`, is the shortcut — see below, where the second one nearly happened.
+
+   Every row of the next table is at the **unbounded** bridge cross-product, which is
+   `STORYLINE_MAX_BRIDGING_QUALIFIERS`' default; the bound is priced against the same instrument two
+   tables down, and it changes the answer.
 
    | corrected days | archive at the switch | largest at the end | share% | live arcs | post-switch merges | of which fuse two cap-shaped arcs |
    | --- | --- | --- | --- | --- | --- | --- |
@@ -604,12 +608,11 @@ always self-homed.
    is a trajectory and not a ceiling.
 
    **The recommendation, and it is a recommendation rather than a change.** Nothing here justifies
-   turning `STORYLINE_NARROW_RETRIEVAL` on: the birth path alone, from production's own starting
-   state, merges 17× more and shows no sign of stopping, and the largest thing it builds in the first
-   week is a pile rather than a story. Both flags stay off, and PR #130's stay off with them. What
-   *would* change the answer is the same lever §2.6 names — a bound on how many qualifiers one group
-   may bridge — because the drift is 97% cap/cap fusion driven by `bridgePairs`' cross-product, which
-   is the thing that bound removes.
+   turning `STORYLINE_NARROW_RETRIEVAL` on *by itself*: the birth path alone, from production's own
+   starting state, merges 17× more and shows no sign of stopping, and the largest thing it builds in
+   the first week is a pile rather than a story. All flags stay at their defaults. What *would* change
+   the answer is the lever §2.6 names and PR #130 has since built — a bound on how many qualifiers one
+   group may bridge — because the drift is 97% cap/cap fusion driven by `bridgePairs`' cross-product.
 
    **And that bound now exists, so the interaction is measured rather than recommended.**
    `STORYLINE_MAX_BRIDGING_QUALIFIERS` (PR #130, default 0 — unbounded — so today's behaviour exactly)
@@ -617,21 +620,31 @@ always self-homed.
    24 → 67 → 103 → 123 → **161, flat from pass 4** (0.62%). On the birth path, at the top 2 and
    everything else held:
 
-   | 7 corrected days | largest at end | post-switch merges | per arrival | cap/cap | piles | named | kept |
-   | --- | --- | --- | --- | --- | --- | --- | --- |
-   | unbounded | 71 | 667 | 0.256 | 645 | 81.3% | 38.7% | 66.1% |
-   | **top 2** | **31** | **73** | **0.028** | 68 | 76.5% | 38.5% | 65.6% |
-   | flag off | 31 | 38 | 0.015 | — | 76.9% | 38.2% | 64.3% |
+   | 7 corrected days | cross-product | largest at end | post-switch merges | per arrival | cap/cap | piles | named | kept |
+   | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+   | flag off | unbounded | 31 | 38 | 0.015 | — | 76.9% | 38.2% | 64.3% |
+   | flag off | top 2 | 24 | 24 | 0.009 | — | 76.3% | 37.3% | 63.5% |
+   | **hybrid** | unbounded | **71** | 667 | **0.256** | 645 | 81.3% | 38.7% | 66.1% |
+   | **hybrid** | **top 2** | **22** | 89 | **0.034** | 75 | 80.7% | 37.2% | 62.9% |
+   | from scratch | unbounded | 2,591 | 420 | — | 0 | 74.1% | 31.1% | 62.0% |
+   | from scratch | top 2 | **22** | 117 | — | 0 | 69.8% | 26.8% | 57.5% |
 
-   **The bound removes the drift on the birth path too, and it is not close.** 0.028 merges per
-   arrival against 0.256 — a **9× reduction**, landing within 2× of the flag-off control rather than
-   17× above it — and the largest arc ends exactly where leaving the flag off leaves it, at 31. Piles
-   formed goes back to the flag-off level (76.5% against 76.9%) while `named` and `kept` hold, which is
-   the one direction in this whole section where a change costs nothing measurable. So the two flags
-   are not independent decisions: **narrowed retrieval is safe on the birth path only with the pair
-   count bounded**, and unbounded it is the 17× drift above. That is a fact about the pair, and which
-   of the two to enable first is still a decision for someone with the nightly rows in front of them,
-   not something this measurement gets to make.
+   **The bound removes the drift on the birth path, and it is not close.** 0.034 merges per arrival
+   against 0.256 — a **7.5× reduction** — and the largest arc ends at **22**, *below* where leaving the
+   flag off leaves it (31 unbounded, 24 bounded). Fourteen corrected days bounded reach 39, against
+   1,699 unbounded. Piles formed barely moves (80.7% against 81.3%), so the bound is not buying the
+   alarm at the cost of the pile count; `named` and `kept` do fall, which is what §2.6 warns to expect
+   when percolation stops inflating them rather than a cost to weigh against it.
+
+   **And the hybrid question DISSOLVES under the bound, which is the strongest thing here.** Bounded,
+   the cap-built archive and the from-scratch one both end at **22** — the same number, where unbounded
+   they end at 71 and 2,591. §2.7 exists because those two starting states are different populations;
+   with the pair count bounded they are no longer distinguishable in the outcome, because the mechanism
+   that made them differ was the cross-product. So the two flags are **not independent decisions**:
+   narrowed retrieval on the birth path is a 17× drift unbounded and a smaller archive than today's
+   bounded. Which to enable, and in what order, is still a decision for someone with a fortnight of the
+   nightly graph rows in front of them — this measurement says only that enabling the retrieval WITHOUT
+   the bound is the one combination the evidence refuses.
 
    With `STORYLINE_NARROW_RETRIEVAL` and `STORYLINE_MAX_BRIDGING_QUALIFIERS` both at their defaults,
    none of this is running, which is what buys the time to watch a fortnight of the nightly graph rows

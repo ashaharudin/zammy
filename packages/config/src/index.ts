@@ -582,6 +582,14 @@ const EnvSchema = z
      *
      * Turn it on WITH `STORYLINE_NARROW_RETRIEVAL`, not instead of it: narrowing
      * is what widens the qualifier set, and this is what makes that safe.
+     * Measured on the BIRTH path from production's own cap-built starting state,
+     * which is the configuration a rollout would actually walk: narrowed and
+     * unbounded merges at 0.256 per arriving group and takes the largest arc to
+     * 71 in a week; narrowed and bounded at the top 2 merges at 0.034 and ends
+     * at 22, below the 31 that leaving both off leaves. And bounded, the
+     * cap-built and from-scratch archives both land on 22 — the hybrid's two
+     * starting states stop being distinguishable, because the cross-product was
+     * the mechanism that made them differ (VERCEL-PHASE-0-FINDINGS §2.7 step 1).
      * `storyline-replay.ts` reads the same value through the same
      * `bridgePairs`, so the sweep models whichever bound is configured — do not
      * let the two diverge (§2.5 is what that costs).
@@ -672,7 +680,15 @@ const EnvSchema = z
      * merges at 0.25 per arriving group against the flag-off control's 0.015 —
      * ~17x, flat over the whole corrected window rather than decaying as a
      * repaired backlog would — with 97% of those merges fusing two cap-shaped
-     * arcs. That is §2.7 step 1, and it is why this stays off.
+     * arcs. That is §2.7 step 1, and it is why this stays off *by itself*.
+     *
+     * With `STORYLINE_MAX_BRIDGING_QUALIFIERS` at the top 2 the same run is 0.034
+     * per arrival and its largest arc ends at 22, BELOW where leaving this off
+     * leaves it — and the cap-built and from-scratch archives both land on 22,
+     * so under the bound the hybrid's two starting states stop being
+     * distinguishable at all. These two are therefore one decision, not two:
+     * the combination the evidence refuses is this flag on with the
+     * cross-product unbounded.
      *
      * **What would justify turning it on.** K re-measured against a harness that
      * models the merge — bridge re-pointing included — rather than one that skips
