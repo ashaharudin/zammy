@@ -266,6 +266,7 @@ describe("the nightly late-candidate sweep", () => {
     // as falsy. The one test that is ABOUT the gate spreads this and sets true.
     coherenceGate: false,
     narrowRetrieval: false,
+    maxBridgingQualifiers: undefined,
     storyDf: { windowDays: 14, timeZone: "UTC" },
     timeZone: "UTC",
   };
@@ -401,6 +402,7 @@ describe("the late-candidate sweep is gated out of the nightly pass", () => {
     mergeBridges: 2,
     coherenceGate: false,
     narrowRetrieval: false,
+    maxBridgingQualifiers: undefined,
     storyDf: { windowDays: 14, timeZone: "UTC" },
     timeZone: "UTC",
   };
@@ -483,6 +485,7 @@ describe("the graph shape on the nightly report", () => {
     mergeBridges: 2,
     coherenceGate: false,
     narrowRetrieval: false,
+    maxBridgingQualifiers: undefined,
     storyDf: { windowDays: 14, timeZone: "UTC" },
     timeZone: "UTC",
   };

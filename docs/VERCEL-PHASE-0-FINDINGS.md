@@ -204,6 +204,17 @@ the pass did not fit. It is now moot in the near term for a different reason: th
 (§2.6). It comes back the day the sweep is switched on again, and on that day it is not optional —
 §2.6's runaway was found by removing exactly this kind of bound.
 
+**A fourth has since been built, and it is the one §2.5 and §2.6 point at rather than any of the
+three above.** `STORYLINE_MAX_BRIDGING_QUALIFIERS` bounds how many of a group's qualifiers may
+BRIDGE — the input to `bridgePairs`' O(n²) cross-product, which is the quadratic term the other three
+leave untouched. **Default 0, unbounded, so nothing changes until it is set.** Measured on the same
+instrument, retrieval narrowed, at the top 2: the birth path's largest arc goes 2,591 → **22** with
+nothing above 49 groups in the distribution, and post-hoc converges flat at 128 where unbounded
+converges at 4,668. It is not free — birth-path merges fall 3,408 → 475 and the FIFA/Infantino crisis
+comes out as about forty arcs instead of one — and there is no gentle setting, since 3 leaves 2,760
+and 5 leaves 4,145. docs/STORYLINE-LINKING.md, "Bounding what one group may bridge", has the tables,
+the hand-read arcs and the cost.
+
 ### 2.5 The cap that made the sweep look necessary
 
 Follow-up research into option 2 turned up the reason option 1 exists. The load-bearing claims below
@@ -297,6 +308,18 @@ census behind 4,000 is a census at the bar that ships, and that is where it hold
 The recommended real fix — a top-2-qualifiers bound on what may bridge — is deliberately **not** in
 this change. It is a different decision with its own evidence, and the flag is what buys the time to
 gather it.
+
+**That evidence has since been gathered and the bound is built** —
+`STORYLINE_MAX_BRIDGING_QUALIFIERS`, its own knob, **default 0 (unbounded)**, applied inside
+`bridgePairs` where the cross-product is generated. It is a PAIR with this flag in practice rather
+than in the type system, and the numbers are what make that the right shape: the bound bites on 26% of
+the live archive's bridging groups with the retrieval narrowed and on **0.5%** without it (max 4
+qualifiers broad, against 53 narrowed), so turned on alone it is close to a no-op, and turned on
+together with narrowing it takes the birth path's largest arc from 2,591 groups to 22. Unlike the
+probe-and-cap pair here, no combination of the two is worse than both — broad-and-bounded is merely
+stricter than today — so welding them would buy no safety and would cost the ability to re-run the
+unbounded baseline every number in docs/STORYLINE-LINKING.md was taken at. See "Bounding what one
+group may bridge" there, including the two corrections it makes to the cost this fix was priced at.
 
 ### 2.6 The drain, and why the sweep is switched off
 
@@ -452,6 +475,19 @@ happens.
 
    With `STORYLINE_NARROW_RETRIEVAL` now defaulting to **off** (§2.5), none of this is running, which
    is what buys the time to close the remaining gaps rather than guess them.
+
+   **And the hybrid question is now bounded from the other end, which changes what step 1 has to
+   settle.** The bound below exists (`STORYLINE_MAX_BRIDGING_QUALIFIERS`, default unbounded), and at
+   the top 2 the same `--capped-build=200` control that ran away to 4,668 goes
+   24 → 67 → 103 → 123 → **161 and is flat from pass 4** (0.62%). Fusing cap-created fragments is
+   what widens profiles past the thresholds, and the pair count is what turns a widened profile into
+   a merge — so the trajectory step 1 could not choose between is a trajectory of the *unbounded*
+   cross-product. Step 1's three gaps are all about TIMESCALE and starting breadth, and none of them
+   is load-bearing once the endpoint is 161 rather than 4,668. What it still cannot answer is whether
+   the arcs at that endpoint are the right ones: the bound's cost is measured in arcs, not in the
+   alarm (see the hand-reading). Note also that this control's judged columns are the BEST in the
+   whole exercise — 81.4% piles, 38.0% named, 64.3% kept — which is the same warning §2.6 records
+   about reading `named` and `kept` while a graph degrades, arriving from the opposite direction.
 2. **Then choose: repair, or converge.** `backfill:storylines --restart` calls `resetStorylines` and
    rewrites every storyline, eliminating the hybrid by construction — and discards all label history,
    ~3,934 promoted storylines to relabel at the free tier's 500/day, so about **eight days of quota**,

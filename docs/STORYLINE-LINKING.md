@@ -1640,6 +1640,14 @@ than softer (57% of the final arc is birth-path, against 44% as first reported).
    a standing pair at K means the check did not fire — the linker only tests on an
    INSERT, and `readBridgedPairs` has found stranded pairs before. Worth its own look
    before step 2; out of scope for a re-measurement.
+
+   **Looked at, in the section below** ("The seven pending repairs"). They are stranded
+   rather than pending: none of the seven is re-derivable against today's archive at
+   all, because the bridging group has since been retroactively attached to one or both
+   sides of its own pair and a member's qualification for its own arc is excluded from
+   bridge evidence by design. So the check did not fail to fire — the evidence is a
+   fossil of a state no arrival can reproduce. What that also settles is the question
+   step 2 needed answering: a top-2 bound is not what would suppress them.
 2. **Then option 2 as the primary lever, at the top 2 qualifiers**, not a higher K —
    and the argument is the BIRTH path, which is where the problem is. There it beats
    K=6 on the alarm decisively (largest **22** against **85**) and on `named`
@@ -1649,6 +1657,11 @@ than softer (57% of the final arc is birth-path, against 44% as first reported).
    K=6's 205), which is not an argument for K=6, because the sweep is off. Option 2
    attacks the quadratic term instead of raising the bar every merge must clear, and
    its value is *not* tunable: 3 and 5 leave 2,760 and 4,145.
+
+   **Built, and still off** — `STORYLINE_MAX_BRIDGING_QUALIFIERS`, default 0
+   (unbounded). Every figure in this row reproduces on the shipped code, and the
+   section below has the arc-size distributions, the hand-reading, and two corrections
+   to the cost stated here.
 3. **Option 4 alongside it if the sweep is ever switched on**, because it is nearly
    free and removes the sweep's entire contribution — corrected, slightly more than
    all of it.
@@ -1683,3 +1696,263 @@ metrics a reasonable person would reach for get *better* as this fails.
   the test that would have caught this — a multi-homed group whose two homes later
   merge — did not exist until the bug was found by reasoning about a share that could
   exceed 100%.
+
+## Bounding what one group may bridge (2026-08-23)
+
+The option-2 lever the section above recommends, built: **at most N of a group's
+qualifiers may bridge, best mass first**, behind
+`STORYLINE_MAX_BRIDGING_QUALIFIERS`, **0 (unbounded) by default** — today's
+behaviour exactly.
+
+**Where it lands.** `bridgePairs` takes the bound as an argument, and
+`bridgingQualifiers` beside it is the prefix both the write and the linker's
+report come off. Not `qualifyingStorylines`: that function returns every
+qualifier for two reasons the attach depends on — the group joins its BEST
+qualifier, and the re-offer path takes the best arc it is not already in — so
+narrowing it there would cost linking, not only evidence. Bounded at the pairing,
+the group lands in exactly the arc it would have landed in; all it loses is the
+right to testify about pairs it ranks low for. `storyline-linker.ts` and
+`storyline-replay.ts` call the same function with the same argument, which is the
+one thing PR #128 exists to stop happening again.
+
+**One ordering decision, and it is observable.** On the re-offer path a group's
+own homes are removed from its evidence before the bound applies, not after. The
+other order is worse and not by a little: a doubly-homed group whose two homes
+outrank everything would spend both slots on itself and testify about nothing,
+which is not a decision anyone made. `storyline-linker.test.ts` pins it.
+
+**No tiebreak was invented.** The bound is a PREFIX of `qualifyingStorylines`'
+order — mass descending, then the older storyline, then the id — so it inherits
+that tiebreak by construction. A test builds two candidates tied on mass and
+separated only by coverage age, and checks the surviving pair is the one that
+order names rather than the one the ids would.
+
+### It reproduces the option table exactly, which is the calibration
+
+Every figure below is `--days=45`, 31,308 articles in 26,006 groups, anchor share
+0.002, mass 20, K=2, cascade modelled, **retrieval NARROWED**
+(`STORYLINE_NARROW_RETRIEVAL=true`, which is **not** the default). Unbounded rows
+reproduce the committed table to the digit — largest 2,591 birth-only and 4,540
+interleaved, 4,608 merges, 74.2%/32.2%/63.3% judged — so the refactor is a no-op
+where it should be, and the bounded rows are the same instrument.
+
+**Interleaved, one sweep pass a night, final night 2026-08-21** — arc-size
+distribution, not only the maximum:
+
+| bound | live-sl | LARGEST | share% | merges | retro | 2-4 | 5-9 | 10-19 | 20-49 | 50-99 | 100+ | piles | named | kept |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| unbounded | 14,277 | **4,540** | 17.46 | 4,608 | 6,713 | 3,186 | 613 | 121 | 28 | 3 | 2 | 74.2% | 32.2% | 63.3% |
+| top-2 | 16,245 | **299** | 1.15 | 2,106 | 7,191 | 4,091 | 714 | 136 | 33 | **9** | **3** | 67.8% | 29.2% | 58.3% |
+| top-3 | 14,914 | 2,760 | 10.61 | 3,633 | 7,405 | 3,476 | 656 | 113 | 32 | 3 | 5 | 72.9% | 31.2% | 61.2% |
+| top-5 | 14,401 | 4,145 | 15.94 | 4,343 | 7,197 | 3,249 | 602 | 110 | 27 | 6 | 3 | 72.5% | 33.2% | 63.8% |
+
+**Birth-only, the same bar — and this is the path that is live**, since the sweep
+is gated off:
+
+| bound | live-sl | promoted | LARGEST | share% | merges | 2-4 | 5-9 | 10-19 | 20-49 | 50-99 | 100+ | piles | named | kept |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| unbounded | 15,430 | 3,039 | **2,591** | 9.96 | 3,408 | 2,572 | 355 | 85 | 21 | 3 | 3 | 74.1% | 31.1% | 62.0% |
+| top-2 | 17,862 | 3,894 | **22** | 0.08 | 475 | 3,463 | 369 | 59 | **3** | **0** | **0** | 69.8% | 26.8% | 57.5% |
+| top-3 | 17,315 | 3,649 | 94 | 0.36 | 1,131 | 3,106 | 445 | 85 | 11 | 2 | 0 | — | — | — |
+| top-5 | 16,558 | 3,336 | 407 | 1.57 | 2,065 | 2,786 | 424 | 94 | 28 | 1 | 3 | — | — | — |
+
+**The distribution says something the maximum does not, and it cuts both ways.**
+Birth-only at the top 2 there is **no arc above 49 groups at all** and only three
+between 20 and 49 — the cleanest distribution any option in this document has
+produced. Sweep-on at the top 2 the maximum falls 15× but the COUNT of large arcs
+goes UP: nine arcs at 50–99 against the baseline's three, and three at 100+
+against two. That is the same effect K=6 showed — a 4,540-group pile trivially
+contains every other large arc, so removing it reveals what it was swallowing —
+and it is a reason to distrust a largest-arc metric on its own, not a reason to
+prefer the pile.
+
+**Post-hoc, eight passes, top-2: 22 → 67 → 128 and then flat from pass 2**
+(0.49%, five arcs at 50–99, one at 100+). So both shapes are bounded under top-2,
+and the two no longer bracket a runaway.
+
+**And the unbounded post-hoc control is 5,320, not 4,668 — a number this document
+did not have.** Measured here: from-scratch, unbounded, eight passes, it goes
+2,591 → 4,614 → 5,275 → 5,317 → **5,320 (20.46%)** and is flat from pass 4. The
+4,668 above is the `--capped-build=200` control, and the sentence comparing "the
+two shapes" was comparing a CAP-BUILT post-hoc against a FROM-SCRATCH
+interleaved — two variables at once. Compared properly, from-scratch post-hoc
+(5,320) sits above from-scratch interleaved (4,540, still climbing), so the
+direction of that finding survives and the margin is wider than reported.
+
+**The cap-built control, top-2** (`--capped-build=200`, eight passes): 24 → 67 →
+103 → 123 → **161 and flat from pass 4** (0.62%), against 4,668 unbounded. That is
+the §2.7 hybrid experiment, and it is the one number in this exercise that
+addresses production's actual starting state rather than a from-scratch archive.
+Worth pairing with a warning: this run's judged columns are the BEST anywhere in
+this document — **81.4% piles, 38.0% named, 64.3% kept** — while its arc
+distribution is the second-tightest. So `named` and `kept` do not simply improve
+as a graph degrades; on this row they improve as it is repaired, which means
+neither direction can be read from them alone.
+
+### The seven pending repairs: the bound is not what threatens them
+
+The section above flagged **7 standing pairs at or above K** on the dev archive
+and asked whether a top-2 bound would suppress them. Re-counted here:
+**1,874 bridge observations over 1,865 pairs, 7 at or above K=2** — the same
+seven, reproduced.
+
+Measured, and the answer is not the one the question expected. For every one of
+the seven, each bridging group's qualifier ranking was recomputed against the
+archive and the trailing corpus as they stand, with the pair's two storylines
+looked for in it:
+
+| pair | K | derivable today | at top-2 |
+| --- | --- | --- | --- |
+| Canada US Trade Negotiations × (prov) | 3 | 0 of 3 | 0 |
+| Hayden Panettiere × Hayden Panettiere | 3 | 1 of 3 | **1 — and at ranks 1 and 2** |
+| Trump Canada Tariff Dispute × (prov) | 2 | 0 of 2 | 0 |
+| European Solar Eclipse × (prov) | 2 | 0 of 2 | 0 |
+| Tsx Stocks × Canadian Dividend | 2 | 0 of 2 | 0 |
+| 2026 FedEx St Jude Championship × Fedex St | 2 | 0 of 2 | 0 |
+| (prov) × (prov) | 2 | 0 of 2 | 0 |
+
+**Not one of the seven is re-derivable today, bound or no bound**, and the
+dominant reason is printed by the probe: the bridging group has since been
+retroactively attached to one or both sides of its own pair, and a member's
+qualification for its own arc is excluded from bridge evidence by design. Six of
+the seven have at least one side reported as *"not retrieved (is a home)"*. Where
+both sides DO still qualify — one group of the Hayden Panettiere pair — they are
+that group's **top two qualifiers**, so top-2 permits it.
+
+So the concern is real and the bound is not its cause. These seven are **stranded
+evidence**: the merge is pending on the next INSERT into either pair, the linker
+only checks on an insert, and no arrival can now produce one. That is the
+`readBridgedPairs` class this document already records 31 of, arrived at from the
+other direction. It wants its own look, and a bound would not change it.
+
+**And a much larger sample says the cost to evidence is real.** Over all 1,874
+observations, narrowed:
+
+| | re-derivable today | kept at top-2 | top-3 | top-5 | top-10 |
+| --- | --- | --- | --- | --- | --- |
+| homes kept in the candidate list | 437 (23%) | 27.2% | 43.9% | 70.3% | 91.5% |
+| today's homes removed (a re-offer now) | 40 (2%) | 7.5% | 27.5% | 62.5% | 82.5% |
+
+Top-2 keeps about a quarter of the bridge evidence that is still derivable. The
+mechanism is visible in the qualifier counts: **26.3% of bridging groups exceed 2
+qualifiers narrowed** (p90 6, p99 20, max 53), and the observations concentrate on
+exactly those groups because a 20-qualifier group writes 190 pairs. Most pairs are
+therefore NOT a group's top two, which is the quadratic term seen on real data
+rather than in a replay.
+
+### The arcs, hand-read — and the recorded cost was attributed to the wrong arc
+
+Birth-only, cascade modelled, the live path.
+
+**Unbounded (the baseline).** The alarm is a pile and the profile says so:
+
+- **2,591 groups, 39 days, profile EMPTY** — head is Canadian/Asian market and
+  oil-price coverage, body a tenth of the archive. **Incoherent.** An empty
+  profile also makes it unretrievable, so it grows only by merge.
+- **191 groups, profile EMPTY** — MLB recaps. A beat; ADR-0011 forbids beats.
+- **152 groups, `cup, fifa, gianni, infantino, president, world`** — the FIFA
+  privatisation crisis over 11 days. **Coherent end to end**, and correctly named.
+- **53 groups, profile EMPTY** — football transfer rumours. **Incoherent.**
+- **54 groups, `eclipse, solar, total`** and **50 groups,
+  `hawaii, hurricane, storm, tropical`** — the first coherent as an event, the
+  second a weather BEAT spanning several unrelated storms.
+
+**Top-2.** No pile, every profile populated, and the failures are the boilerplate
+families this document already records:
+
+- **22 groups, `company, gave, nyse, price, rating, research, share, target`** —
+  analyst price-target syndication. **Incoherent, pre-existing** residue.
+- **20 groups, `championship, cup, fedex, jude, pga, playoff, st, tour`** — the
+  FedEx Cup playoff run. **Coherent** as a tournament series.
+- **20 groups, `childhood, ... trump, vaccination, vaccine`** — the childhood
+  vaccine executive order. **Coherent**, one story.
+- **19 groups, `... marketbeat, screener, ... stock, tool`** — template residue,
+  known family. **Incoherent.**
+- **18 groups, `abraham, family, lincoln, sailor, uss`** — the carrier
+  deployment. **Coherent.**
+- **18 groups, `crowley, david, democratic, francesca, gubernatorial, hong, primary, wisconsin`**
+  — the Wisconsin primary, with the election-beat contamination this document
+  already knows about (a Michigan primary headline is in it). **Mostly coherent.**
+- **17 groups, `binface, by-election, clacton, count, farage, nigel`** —
+  **coherent**, one event.
+
+**The arc it gets wrong, and it is worse than this document recorded.** The
+FIFA/Infantino crisis. Unbounded, birth-only, it is ONE 152-group arc profiled
+`cup, fifa, gianni, infantino, president, world`. Under top-2 its largest fragment
+is **12 groups** (`... fifa, football, gianni, infantino, javier, la, liga, ... teba`)
+and the story comes apart into **about forty arcs of 2 to 6 groups** — "possible
+successors", "UEFA votes to boycott", "the Motsepe/CAF election", "the stake sale
+abandoned", "the affair allegations", "the AFC/CONCACAF joint letter" — each
+internally coherent and narrowly named, and collectively forty timeline entries
+where a reader wants one. That is err-narrow, which ADR-0011 prefers, and it is
+the single clearest cost measured here.
+
+**The correction:** the four-options section priced this as "a 23-group arc rather
+than the 151-group FIFA/Infantino arc". Measured separately, the 23-group figure
+is the **FedEx/PGA** arc (20 groups birth-only here), which is coherent; the FIFA
+cost is **152 → 12**, roughly twice as severe as recorded and against a different
+arc. The two were conflated.
+
+**A second correction, in the other direction.** "Canada tariffs split into ten
+narrow arcs" reads as a cost of the bound, and mostly it is not: unbounded
+birth-only the Canada/tariff coverage is ALREADY 34 / 18 / 17 / 9 / 8 / 8 / 7
+groups rather than one arc. Top-2 takes its largest from 34 to 17. Real, and a
+difference of degree rather than the fragmentation of a single coherent arc.
+
+### Its own knob, not a property of the narrowed mode
+
+`candidateRetrieval` welds the probe to the row cap because the split state —
+broad probe, 4,000-row cap — is worse than either mode, so it has to be
+unreachable. **That argument does not transfer, and the measurement says why.**
+
+Consider all four combinations. Narrowed-and-bounded is the recommended state.
+Narrowed-and-unbounded is the baseline every number in this document was taken
+at. Broad-and-bounded is merely *stricter* than today rather than dangerous — and
+nearly inert: **only 0.5% of the live archive's bridging groups exceed 2
+qualifiers under the broad probe** (max 4), against 26.3% narrowed. So no
+combination is worse than both, which is the whole of the retrieval's argument for
+coupling.
+
+**That 0.5% comes from the live archive and could not have come from the replay**,
+which is worth stating because the absence of a broad-mode row in the tables above
+otherwise looks like an omission. The replay REPORTS the row cap and does not apply
+it (`cappedGroups`), and the two probes are a proven necessary condition of each
+other, so a broad-mode replay reproduces the narrowed one exactly — birth-only 2,591
+either way, verified. The whole broad/narrow difference for this bound lives in the
+200-row cut the service applies and the harness does not, so measuring it required
+the archive rather than the simulator. That is the one question in this line of work
+where the replay is the wrong instrument.
+
+What coupling would cost is measurement. Folding the bound into
+`STORYLINE_NARROW_RETRIEVAL` makes narrowed-and-unbounded unreachable — and that
+is the configuration the option table above was measured in and must be re-runnable
+in. A state nothing can reach is a state nothing can re-measure, which is §2.5's
+mistake one level up. Two knobs, and the flag's own note says to turn them on
+together.
+
+`storyline-sweep-cli.ts` follows `NARROW`'s precedent: the grids and an
+unqualified `--reoffer` run model the CONFIGURED bound and print it, so a run
+describes the deployed decision; `--variant=cap:N` overrides it explicitly for
+pricing a bound the configuration does not have, and `cap:0` asks for unbounded
+against a configured bound.
+
+### What this changes, and what it does not
+
+**Nothing is enabled.** The default is unbounded, `STORYLINE_MERGE_BRIDGES` stays
+at 2, and the four default-off knobs are untouched. What exists now is the lever,
+measured on the instrument that measured the problem.
+
+**What would justify turning it on**, and it is a pair with
+`STORYLINE_NARROW_RETRIEVAL` rather than a substitute for it: narrowing is what
+widens the qualifier set, and this is what bounds the pairs that come of it.
+Turned on together, the birth path's largest arc goes from 2,591 to 22 and the
+distribution has nothing above 49. Turned on alone, against the broad probe, it
+is close to a no-op and buys nothing.
+
+**What to weigh against it**, stated plainly because three separate measurements
+here say the cost is real: 3,408 birth-path merges become 475, `kept` falls 62.0%
+→ 57.5%, about three-quarters of the archive's still-derivable bridge evidence
+would not be written, and the FIFA crisis comes out as forty arcs instead of one.
+ADR-0011 prefers err-narrow and also says the merge is the only repair err-narrow
+formation has. This buys the alarm by giving up most of the cure, and that trade
+is a decision rather than a conclusion.

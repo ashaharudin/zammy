@@ -169,6 +169,27 @@ describe("loadConfig", () => {
     ).toThrow(ConfigError);
   });
 
+  it("leaves the bridge cross-product UNBOUNDED by default, and coerces a bound", () => {
+    // 0 is the off position rather than an absent variable, because 1 is a
+    // legitimate setting — one qualifier is no pair, so it turns bridge
+    // evidence off entirely — and must not collide with "not set".
+    expect(
+      loadConfig({ ...base } as NodeJS.ProcessEnv).STORYLINE_MAX_BRIDGING_QUALIFIERS,
+    ).toBe(0);
+    expect(
+      loadConfig({
+        ...base,
+        STORYLINE_MAX_BRIDGING_QUALIFIERS: "2",
+      } as NodeJS.ProcessEnv).STORYLINE_MAX_BRIDGING_QUALIFIERS,
+    ).toBe(2);
+    expect(() =>
+      loadConfig({
+        ...base,
+        STORYLINE_MAX_BRIDGING_QUALIFIERS: "-1",
+      } as NodeJS.ProcessEnv),
+    ).toThrow(ConfigError);
+  });
+
   it("defaults TLS to disable, since the Compose Postgres offers none", () => {
     expect(loadConfig({ ...base } as NodeJS.ProcessEnv).DATABASE_SSL).toBe("disable");
   });

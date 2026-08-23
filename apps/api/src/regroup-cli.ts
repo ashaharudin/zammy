@@ -1,6 +1,6 @@
 import { loadConfig } from "@zammy/config";
 import { regroup } from "./regroup.js";
-import { createConfiguredDb } from "./wiring.js";
+import { createConfiguredDb, maxBridgingQualifiers } from "./wiring.js";
 
 /**
  * `pnpm regroup [--days=N] [--tokens-only]` — re-derive stored grouping state
@@ -50,6 +50,9 @@ try {
           // to gate.
           coherenceGate: false,
           narrowRetrieval: config.STORYLINE_NARROW_RETRIEVAL,
+          // Nothing bridges here either, for the same reason. Configured anyway
+          // so this literal never becomes the one place a bound is missing.
+          maxBridgingQualifiers: maxBridgingQualifiers(config),
           storyDf: {
             windowDays: config.STORYLINE_DF_WINDOW_DAYS,
             timeZone: config.APP_TIMEZONE,

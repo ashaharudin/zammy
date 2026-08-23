@@ -343,6 +343,7 @@ describe("the tail actually resolves them (the wiring, not the rule)", () => {
     mergeBridges: 2,
     coherenceGate: true,
     narrowRetrieval: false,
+    maxBridgingQualifiers: undefined,
     storyDf: { windowDays: 14, timeZone: ZONE },
     timeZone: ZONE,
   };

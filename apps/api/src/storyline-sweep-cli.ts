@@ -10,7 +10,7 @@ import {
 } from "./storyline-replay.js";
 import type { Corpus, LinkRules } from "./storyline-link.js";
 import { readJudgedStorylines, scoreJudged, type JudgedStoryline } from "./storyline-judged.js";
-import { createConfiguredDb } from "./wiring.js";
+import { createConfiguredDb, maxBridgingQualifiers } from "./wiring.js";
 
 /**
  * `pnpm measure:storylines-v2 [--days=N]` — the ADR-0011 threshold sweep.
@@ -50,6 +50,26 @@ const WINDOW = config.STORYLINE_DF_WINDOW_DAYS;
  * Flip the env var, and the grid below describes the mode that is deployed.
  */
 const NARROW = config.STORYLINE_NARROW_RETRIEVAL;
+/**
+ * The bridge bound the replay models by DEFAULT, from the same flag the service
+ * reads (`STORYLINE_MAX_BRIDGING_QUALIFIERS`; `undefined` is unbounded).
+ *
+ * Same reasoning as `NARROW` — a grid that describes a bound nothing is running
+ * certifies nothing — with one difference that matters for the option table:
+ * `--variant=cap:N` DOES override it. Pricing a bound the configuration does not
+ * have is the entire purpose of that table, and the override is explicit in the
+ * run's own header, so it cannot be mistaken for the deployed mode the way a
+ * silent default could.
+ */
+const CONFIGURED_BOUND = maxBridgingQualifiers(config);
+/**
+ * The configured bound as a variant, for the grids below — which take no
+ * `--variant` and must still describe the deployed decision, exactly as they
+ * take `NARROW` rather than a flag. Empty when the bound is off, which is the
+ * default and why the committed grid keeps reproducing.
+ */
+const GRID_VARIANT: ReplayVariant =
+  CONFIGURED_BOUND === undefined ? {} : { maxBridgingQualifiers: CONFIGURED_BOUND };
 
 try {
   const from = new Date(Date.now() - days * 86_400_000);
@@ -102,7 +122,8 @@ try {
   console.log(
     `${rows.length} articles in ${groups.length} groups over ${days} days ` +
       `(timezone ${TZ}, df window ${WINDOW}d, retrieval ` +
-      `${NARROW ? "anchor-eligible, cap 4000" : "whole profile, cap 200"})`,
+      `${NARROW ? "anchor-eligible, cap 4000" : "whole profile, cap 200"}, configured ` +
+      `bridge bound ${CONFIGURED_BOUND === undefined ? "UNBOUNDED" : `top-${CONFIGURED_BOUND}`})`,
   );
 
   // ---- the trailing corpus, windowed in memory ----
@@ -256,8 +277,18 @@ try {
     const parts = variantName.split(",");
     const cap = parts.find((part) => part.startsWith("cap:"));
     const independence = parts.find((part) => part === "days" || part === "domains");
+    // `cap:N` overrides the configured bound; with no `cap:` part the run models
+    // whatever `STORYLINE_MAX_BRIDGING_QUALIFIERS` is set to, so an unqualified
+    // `--variant=base` describes the deployed mode rather than a hypothetical.
+    // `cap:0` is how a run asks for UNBOUNDED against a configured bound, which
+    // is what reproducing the committed option table needs once the flag is on.
+    if (cap !== undefined && !/^cap:\d+$/.test(cap)) {
+      console.error(`--variant cap must be a non-negative integer, got \`${cap}\``);
+      process.exit(1);
+    }
+    const configuredCap = cap === undefined ? CONFIGURED_BOUND : Number(cap.slice(4)) || undefined;
     const variant: ReplayVariant = {
-      ...(cap !== undefined ? { maxBridgingQualifiers: Number(cap.slice(4)) } : {}),
+      ...(configuredCap !== undefined ? { maxBridgingQualifiers: configuredCap } : {}),
       ...(independence !== undefined
         ? { independence: independence as "days" | "domains" }
         : {}),
@@ -295,6 +326,17 @@ try {
         NARROW
           ? "anchor-eligible probe, cap 4,000 — STORYLINE_NARROW_RETRIEVAL=true, NOT the default"
           : "whole-profile probe, cap 200 — STORYLINE_NARROW_RETRIEVAL=false, today's default"
+      }`,
+    );
+    // Printed for the same reason, and it is the reason `cap:0` exists: the
+    // bound changes what every row below means, and a reader who assumes the
+    // default reads a bounded table as the baseline.
+    console.log(
+      `bridge bound: ${
+        configuredCap === undefined
+          ? "UNBOUNDED — STORYLINE_MAX_BRIDGING_QUALIFIERS=0, today's default"
+          : `top-${configuredCap} qualifiers may bridge` +
+            `${cap === undefined ? " — from STORYLINE_MAX_BRIDGING_QUALIFIERS" : " — from --variant"}`
       }`,
     );
 
@@ -369,7 +411,7 @@ try {
   for (const anchorMaxShare of SHARES) {
     for (const massThreshold of MASSES) {
       const rules: LinkRules = { ...BASE, anchorMaxShare, massThreshold };
-      const result = replayLinker(groups, corpusAt, rules, 2, NARROW);
+      const result = replayLinker(groups, corpusAt, rules, 2, NARROW, {}, GRID_VARIANT);
       console.log(
         `${String(anchorMaxShare).padEnd(7)} ${String(massThreshold).padEnd(5)} ` +
           `${String(result.storylines).padStart(10)}  ${String(result.promoted).padStart(8)}  ` +
@@ -390,7 +432,7 @@ try {
   console.log(`\nbridge count K (share=${focus.anchorMaxShare}, mass=${focus.massThreshold}):`);
   console.log("K   storylines  promoted  merges  LARGEST  share%");
   for (const k of [1, 2, 3, 4]) {
-    const result = replayLinker(groups, corpusAt, { ...BASE, ...focus }, k, NARROW);
+    const result = replayLinker(groups, corpusAt, { ...BASE, ...focus }, k, NARROW, {}, GRID_VARIANT);
     console.log(
       `${String(k).padEnd(3)} ${String(result.storylines).padStart(10)}  ` +
         `${String(result.promoted).padStart(8)}  ${String(result.merges).padStart(6)}  ` +
@@ -413,6 +455,8 @@ try {
         { ...BASE, ...focus, dormancyDays, dormantStrictness },
         2,
         NARROW,
+        {},
+        GRID_VARIANT,
       );
       console.log(
         `${String(dormancyDays).padEnd(5)} ${String(dormantStrictness).padEnd(11)} ` +
@@ -432,7 +476,7 @@ try {
   // evidence, and ADR-0009's own history is the argument: the 1,179-group
   // swallow was found by looking at what a storyline had absorbed, not by
   // noticing a number had moved.
-  const focused = replayLinker(groups, corpusAt, { ...BASE, ...focus }, 2, NARROW);
+  const focused = replayLinker(groups, corpusAt, { ...BASE, ...focus }, 2, NARROW, {}, GRID_VARIANT);
 
   // What the grid above does NOT model: the service cuts the candidate set at a
   // row limit and this harness does not, so a non-zero count here means the

@@ -196,6 +196,14 @@ export interface ReplayVariant {
    * count at the source rather than raising the bar every pair must clear. The
    * ATTACH is untouched — the group still joins its best qualifier — so this
    * costs no linking, only evidence.
+   *
+   * **This is the same argument `bridgePairs` takes on the write path**
+   * (`STORYLINE_MAX_BRIDGING_QUALIFIERS`, via `LinkerConfig`), applied by the
+   * same function rather than modelled by a second one. It stays on
+   * `ReplayVariant` because a measurement must be able to price a bound the
+   * configuration does not have — that is what the option table is — and
+   * `storyline-sweep-cli.ts` defaults it from the flag so an unqualified run
+   * still describes the deployed mode.
    */
   maxBridgingQualifiers?: number;
   /**
@@ -433,12 +441,12 @@ const recordBridgesAmong = (
   qualified: readonly { candidate: { id: string } }[],
   group: ReplayGroup,
 ): void => {
-  const bridging =
-    world.variant.maxBridgingQualifiers === undefined
-      ? qualified
-      : qualified.slice(0, world.variant.maxBridgingQualifiers);
-
-  for (const [a, b] of bridgePairs(bridging)) {
+  // The bound is `bridgePairs`' own argument now, not a slice here — the service
+  // applies it in the same call, so the two cannot drift the way the retrieval
+  // did (PR #128). `maxBridgingQualifiers` reaches this from
+  // `STORYLINE_MAX_BRIDGING_QUALIFIERS` by default and from `--variant=cap:N`
+  // when a measurement overrides it.
+  for (const [a, b] of bridgePairs(qualified, world.variant.maxBridgingQualifiers)) {
     const left = resolve(world, a);
     const right = resolve(world, b);
     if (left === right) continue;

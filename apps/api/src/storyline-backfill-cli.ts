@@ -4,7 +4,7 @@ import { createGeminiClient, type TextGenerator } from "./gemini.js";
 import { backfillStorylines } from "./storyline-backfill.js";
 import { runBridgeSweep, type LinkerConfig } from "./storyline-linker.js";
 import { labelLinkedStorylines } from "./storyline-label-service.js";
-import { createConfiguredDb } from "./wiring.js";
+import { createConfiguredDb, maxBridgingQualifiers } from "./wiring.js";
 
 /**
  * `pnpm backfill:storylines [--restart] [--labels-only] [--no-labels]
@@ -127,6 +127,12 @@ const linkerConfig: LinkerConfig = {
   // narrowed while the live path did not would leave an archive nothing has
   // measured, and the backfill is the one process that rewrites everything.
   narrowRetrieval: config.STORYLINE_NARROW_RETRIEVAL,
+  // Likewise the configured bridge bound. A rebuild is where the whole archive's
+  // bridge evidence is written, so a backfill that bounded differently from the
+  // live path would leave a graph whose standing pairs no arrival can reproduce
+  // — which is what the live archive's seven stranded pairs at K already look
+  // like for an unrelated reason.
+  maxBridgingQualifiers: maxBridgingQualifiers(config),
   storyDf: {
     windowDays: config.STORYLINE_DF_WINDOW_DAYS,
     timeZone: config.APP_TIMEZONE,

@@ -223,6 +223,39 @@ describe("maxBridgingQualifiers", () => {
     expect(bounded.bridgedPairs).toBe(1);
     expect(bounded.attached).toBe(wide.attached);
   });
+
+  it("is the SERVICE's bound, applied by the same function", () => {
+    // `bridgePairs(qualified, max)` is what both call now — the replay used to
+    // slice the list itself, and a second implementation of a bound is how the
+    // retrieval quietly came apart for months (PR #128). This pins the
+    // semantics the two share rather than re-deriving them: 1 is no pair at all,
+    // and a bound at or above the qualifier count is the unbounded result.
+    const groups = [
+      group(A, { day: 1 }),
+      group(A, { day: 1 }),
+      group(B, { day: 2 }),
+      group(B, { day: 2 }),
+      group(C, { day: 3 }),
+      group(C, { day: 3 }),
+      group([...A, ...B, ...C], { day: 4 }),
+    ];
+    const at = (max: number | undefined): number =>
+      replayLinker(
+        groups,
+        corpusAt,
+        RULES,
+        2,
+        NARROW,
+        {},
+        max === undefined ? {} : { maxBridgingQualifiers: max },
+      ).bridgedPairs;
+
+    expect(at(1)).toBe(0);
+    expect(at(2)).toBe(1);
+    expect(at(3)).toBe(3);
+    // Inert above the qualifier count, which is most offers.
+    expect(at(9)).toBe(at(undefined));
+  });
 });
 
 describe("a multi-homed group whose two homes later merge", () => {
