@@ -139,7 +139,25 @@ live outside `/api` so they need two rewrites (`/metrics` also lived outside and
 third — it is deleted instead, §7); and the 4.5 MB response cap is far above any timeline page but
 worth knowing.
 
-**Three things the spike settled by deploying** (2026-08-22, `zammy-vercel-spike`):
+**The queue trigger fires.** `POST /api/queues/ingest 200` with `"spike": "consumer fired"` for every
+message published, on a bare `api/` function in a Vite project — the combination no documentation
+shows, and the one this whole plan rested on. Three details from the same log:
+
+- **Push mode is air-gapped and deployment-partitioned, as documented.** Every consumer invocation
+  arrived on the *deployment* host (`…-a7iv80q67-….vercel.app`) while the producer calls came in on
+  the alias. That is §3.2's "queue topics are partitioned by deployment ID" observed rather than read.
+- **A poisoned message is redelivered and then acknowledged away.** Four deliveries at +0 s, +10 s,
+  +70 s, +130 s, then it stopped — the count matches the SDK `retry` handler's
+  `deliveryCount > 3 → acknowledge`, so there is no infinite poison loop and no DLQ needed. The
+  *timing* did not match the handler's `afterSeconds: 5`; treat the retry delay as a hint rather than
+  a contract.
+- **Dedup deduplicates DELIVERY, not publish.** Publishing twice with the same `idempotencyKey`
+  returned two different `messageId`s — so publish is not idempotent and a `DuplicateMessageError` is
+  not what a repeat looks like — but only **one** consumer invocation followed. For §3.2's purpose
+  that is the property that matters, since BullMQ's `jobId` also prevents duplicate *processing*
+  rather than duplicate enqueueing. Worth one more deliberate test before relying on it.
+
+**Three things the spike settled about routing** (2026-08-22, `zammy-vercel-spike`):
 
 - **`api/[...path].ts` is not a catch-all.** Vercel's bare `api/` directory parses the filename as
   ONE dynamic segment literally named `...path`, so `/api/healthz` and `/api/v1` reached the function
