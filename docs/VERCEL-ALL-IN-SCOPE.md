@@ -6,7 +6,9 @@ priced A; on 2026-08-22 **Plan A was adopted**
 ([ADR-0015](adr/0015-all-in-on-vercel-hobby-shaped.md)), reversing that recommendation, and the
 decisions from the adoption review are folded in below. Every codebase claim carries a file:line
 from a sweep of `apps/api`, `packages/news-client` and the web client (re-verified 2026-08-22);
-every platform claim carries a source at the bottom. Scoped 2026-08-21.
+every platform claim carries a source at the bottom. Scoped 2026-08-21. **Phase 0 ran on
+2026-08-22 and moved three of the numbers below — see
+[VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md), and §3.3 and §9 for what it changed.**
 
 **Bottom line: 7–12 focused days, and one piece of it no delivery phase carried.** Two things
 changed the shape of this since the research doc was written:
@@ -151,11 +153,11 @@ uses to scope the trending/sample-lock Redis keys. Miss it and trending locks si
 
 | What BullMQ gives us | Vercel Queues equivalent | Note |
 |---|---|---|
-| `jobId` content-dedup ([`ingestJobId`](../apps/api/src/ingest-queue.ts)) | idempotency key on publish | Dedup window is the message TTL rather than "the pending window" — so **publish with TTL ≈ `STALE_PENDING_MS` (5 min)**, not the 24h default, or a failed run's segment cannot be re-enqueued for a day. TTL is per-message (60s–7d). Billed at 2× the operation. |
-| `attempts: 3`, exponential backoff from 200 ms | `retryAfterSeconds` + the SDK `retry` handler on `deliveryCount` | Forced exponential backoff after 32 attempts. No DLQ; a poisoned message is acknowledged in the handler. |
-| At-least-once via BLMOVE + reaper | at-least-once by contract, 60 s default visibility timeout (0–3600 s configurable, `ExtendLease` for more) | §4.1 called at-least-once a deployment requirement. It survives. |
+| `jobId` content-dedup ([`ingestJobId`](../apps/api/src/ingest-queue.ts)) | `idempotencyKey` on `send` | Dedup window is the message TTL rather than "the pending window" — so **publish with `retentionSeconds: 300`** (≈ `STALE_PENDING_MS`), not the 24h default, or a failed run's segment cannot be re-enqueued for a day. TTL is per-message (60s–7d). Billed at 2× the operation. |
+| `attempts: 3`, exponential backoff from 200 ms | the SDK `retry` callback on `deliveryCount` | Forced exponential backoff after 32 attempts. No DLQ; a poisoned message is acknowledged in the handler. **`retryAfterSeconds` is Nitro-only** — a `nitro.config.ts` trigger option, not a `vercel.json` one, so on the bare `api/` layout the `retry` callback is the whole mechanism. |
+| At-least-once via BLMOVE + reaper | at-least-once by contract; **the SDK's `visibilityTimeoutSeconds` defaults to 300 s and auto-extends the lease while the handler runs** (the raw API's 60 s does neither) | §4.1 called at-least-once a deployment requirement. It survives. |
 | Worker concurrency | max concurrency per consumer group | Useful ceiling for a quota-bearing consumer (§3.4). |
-| A `Worker` in-process | `api/queues/ingest.ts` with a `queue/v2beta` trigger in `vercel.json` | **Air-gapped: no public URL, no auth code to write.** Better than a signed webhook. |
+| A `Worker` in-process | `api/queues/ingest.ts` with a `queue/v2beta` trigger in `vercel.json` | **Air-gapped: no public URL, no auth code to write.** Better than a signed webhook. Use `QueueClient#handleNodeCallback`, not the top-level `handleCallback` — the latter returns a Web-standard `POST` handler and an `api/` function on the Node runtime is handed `(req, res)`. |
 | `obliterate()` in tests | — | Tests change shape (below). |
 
 **The pending set stays in Redis, deliberately.** `pendingCount` is what `meta.ingest` reports and
@@ -209,7 +211,35 @@ wrapper plus one new table:
 - `--max-labels` becomes a deployment parameter, not an operator convenience. At
   `GEMINI_MAX_RPM=15` a label is ≥4 s of pacing plus model latency, so an unbounded night exceeds
   300 s well before it exceeds Gemini's daily quota. The pass is resumable across nights, so a bound
-  costs latency, not labels.
+  costs latency, not labels. **Phase 0 puts the figure at 40–60**: 75 labels is the entire 300 s
+  window, against a default of 500 ([chores.ts:394](../apps/api/src/chores.ts)).
+- **The late-candidate sweep is the phase that actually blows the ceiling.** Measured at
+  **41 ms × 12,338 groups ≈ 506 s** — 1.7× Hobby's 300 s, every night, on loopback Postgres. It is
+  one query: `readCandidateStorylines` is 34 of the 41 ms, and its cost tracks profile width, from
+  2.5 ms at p10 to 76 ms at p90 (findings §2.1). Round trips are a surcharge on that, not the cause.
+  **And it is not a deployment problem at all — it is off** (findings §2.5, §2.6). `CANDIDATE_LIMIT`
+  binds on 12,266 of 12,366 window groups, discarding ~90% of the candidate set by recency, while the
+  replay that pinned the linking thresholds has no cap: production ran a capped decision against
+  thresholds certified uncapped. Correcting the retrieval is free and lossless, and it ships for the
+  *birth* path — but running the corrected sweep over the full window is a **runaway**, 124 → 1,347
+  groups in one arc across four passes, because the 200-row cap had been doing the bounding K=2 was
+  believed to be doing. **So the sweep is gated off** (`STORYLINE_LATE_CANDIDATE_SWEEP=false`),
+  blocked on re-measuring K, and `--late-candidates` runs it deliberately. Both a changed-set filter
+  and a joined-group re-offer were built and are also off by default; the filter measurably makes the
+  runaway *worse*. **Phase 4 therefore inherits no sweep.** With that phase switched off the
+  storyline pass fits 300 s with room to spare — every remaining phase is sub-second bar a bounded
+  label pass. What Phase 4 keeps is only the `REINDEX CONCURRENTLY` sweep and the ordinary chore
+  wiring; the bound and cursor become a safety valve for whenever the sweep is switched back on,
+  worth building then rather than now. A denormalized sort key was tested and rejected at 8% (§2.2).
+- **The label backlog must not run in this route.** 2,981 of 3,934 promoted storylines have never
+  been labelled and **zero have drifted**, so the nightly drift pass is nearly free while the
+  backlog is 3.3 hours of paced calls — quota-bound, ~6 days of Gemini free tier. It is
+  `backfill:storylines` work against the session pooler, and draining it before cutover is the
+  cheaper order since Phase 5 seeds production from this corpus (findings §3).
+- **A `REINDEX TABLE CONCURRENTLY` sweep joins the retention chore.** Index bloat is 22% of the
+  database at 15 days — 41 MB, of which 23 MB is `story_token_days` alone — and 2.0 s of
+  non-blocking work recovers all of it. On a 500 MB budget that is the difference between the
+  storage tripwire reading 1,214 articles/day and 1,485 (findings §4, §5).
 - **Scheduler: Supabase Cron, not Vercel Cron, on the free tier.** Minute precision instead of
   Hobby's once-per-day ±59 min. Vercel Cron is the choice on Pro, where per-minute precision comes
   with the plan.
@@ -384,10 +414,21 @@ The $0 column is the honest headline of Plan A and the reason it was adopted (AD
 genuinely free production deployment, where Plan B has a floor of ~$5–10/month for the api host
 plus $10 for a Redis that BullMQ keeps awake. The preview stack (§4) is a second free-tier
 Supabase + Upstash pair, also $0. What the free column buys with that saving is 1-hour logs, a
-500 MB database, a 300 s ceiling on the nightly pass, and a queue trigger in beta. One caveat from
-the docs sweep: **Queues' included allowance on Hobby (1M ops/month) appears on the marketing
-pricing page but not in the docs' pricing/limits pages** — confirming it in the dashboard is part
-of the Phase 0 spike.
+500 MB database, a 300 s ceiling on the nightly pass, and a queue trigger in beta.
+
+Two things Phase 0 pinned down about that column:
+
+- **The compute allowances are not the constraint.** The nightly sweep runs at 5.7% CPU utilisation
+  — 54 s of CPU across 950 s of wall clock, because it is round-trip-bound — so the chores land
+  around 3 CPU-minutes a night against Hobby's 4 CPU-hours/month, and provisioned memory is
+  similarly slack. **Wall clock is the only Hobby ceiling that binds**, which is worth knowing for
+  certain before designing around the wrong one (findings §2, §6).
+- **The Queues line is worse than unconfirmed — it is undocumented.** The docs' pricing/limits page
+  lists the five operation types, 4 KiB metering and every service limit, then defers included
+  usage to the plan pages; the Hobby plan's included-usage table has **no Queues row**, while
+  listing Workflows (which is built on Queues) at 50,000 events/month. The Queues docs also carry a
+  "Permissions Required" marker. So whether a Hobby project can create a topic at all is open, and
+  this whole column rests on it (§10, question 2).
 
 ---
 
@@ -397,35 +438,52 @@ Each phase ends with something demonstrable; none of them is "and then we cut ov
 
 | Phase | Work | Exit criterion |
 |---|---|---|
-| **0. Spikes** (0.5–1 d) | Prove the project shape (§1.1) on a throwaway deployment: Vite preset + `api/` function + a `queue/v2beta` trigger firing. Measure `buildApp` cold start. Measure `chores storylines` wall-clock at 90 days of corpus, bounded and unbounded. Measure the corpus against Supabase's 500 MB — a **now**-question, since production is seeded from it (Phase 5). Confirm Queues' Hobby allowance in the dashboard (§8). | Three numbers, a working hello-world consumer and a confirmed queue allowance, or a decision to use the two-project layout |
+| **0. Spikes** (0.5–1 d) | Prove the project shape (§1.1) on a throwaway deployment: Vite preset + `api/` function + a `queue/v2beta` trigger firing. Measure `buildApp` cold start. Measure `chores storylines` wall-clock at 90 days of corpus, bounded and unbounded. Measure the corpus against Supabase's 500 MB — a **now**-question, since production is seeded from it (Phase 5). Confirm Queues' Hobby allowance in the dashboard (§8). | **The three numbers are measured** ([VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md)): cold start ~360 ms (a fifth of it deleted by §3.2 + §7); `chores storylines` ~3.5 h unbounded, with the **late-candidate sweep at ~506 s the phase that breaks the ceiling**, not the label pass; corpus 190 MB with the 500 MB tripwire at ~1,485 articles/day after a reindex. The deployment half — the queue trigger on a bare `api/` function, and whether Hobby can create a topic at all — is scaffolded and **still to run**: [deploy/vercel-spike/](../deploy/vercel-spike/) |
 | **1. The api as a Function** (1–2 d) | §3.1. Consumer disabled, chores still manual. Preview in fixture mode against the preview data plane (§4). | `/readyz` green, a timeline read served from Supabase through the pooler, `degraded: "ingest_timeout"` on cold topics — the known, temporary gap |
 | **2. The queue** (2–3 d) | §3.2 — new `IngestQueue` implementation (all seven members), `api/queues/ingest.ts`, 5-min message TTL, rewritten tests. | A cold topic fills behind the reader; `meta.ingest` drains to zero; a killed consumer redelivers |
 | **3. Quota + limits** (1–2 d) | §3.4 (burst-only, fail-open) and §3.5 (Redis store, fail-open). | The burst ceiling holds with the consumer and the request path both running; the per-IP guard is real; both degrade to in-process when Redis is down |
-| **4. Chores** (1–1.5 d) | §3.3 + Supabase Cron + `chore_runs` + the keep-alive ping. | All scheduled passes run on schedule and write `chore_runs` rows, any pass runs on demand by query param, twice-triggered runs skip on the lock, and the 202 arrives from cold within pg_net's configured timeout |
-| **5. Observability + cutover** (1–2 d) | The migration CI jobs (§6, prod + preview), env vars (§4), **seed production from the dev corpus** (dump/restore via the session pooler), DNS. | Production traffic against the seeded corpus, and "did last night's chores run?" is answered by a `chore_runs` query |
+| **4. Chores** (1–1.5 d) | §3.3 + Supabase Cron + `chore_runs` + the keep-alive ping, **plus what Phase 0 added**: the `REINDEX CONCURRENTLY` sweep in the retention chore. The late-candidate sweep is gated off (findings §2.6), so this phase no longer carries a deadline problem; if it is ever switched back on, the bound and persisted cursor come back with it. | All scheduled passes run on schedule and write `chore_runs` rows, any pass runs on demand by query param, twice-triggered runs skip on the lock, the 202 arrives from cold within pg_net's configured timeout, **and a gated night reports `skipped: true` rather than a clean `offered: 0`** |
+| **5. Observability + cutover** (1–2 d) | The migration CI jobs (§6, prod + preview), env vars (§4), **seed production from the dev corpus** (a 24 MB `pg_dump -Fc`, measured at 1.9 s out and 1.1 s in — findings §4), DNS. Drain the 2,981-storyline label backlog first (§3.3). | Production traffic against the seeded corpus, and "did last night's chores run?" is answered by a `chore_runs` query |
 
-**Total: 7–12 days.** The spread is almost entirely Phase 0's spike outcome and Phase 2.
+**Total: 7–13 days.** Phase 0's measurements added the reindex sweep to Phase 4 and took the
+late-candidate sweep's deadline problem out of the plan altogether — it was a linking bug, its fix
+exposed a runaway, and the pass is now gated off (findings §2.6). The remaining spread is Phase 0's
+*deployment* outcome — still unrun — and Phase 2.
 
 ---
 
 ## 10. Open questions
 
-Two were settled by the adoption review (§0, ADR-0015); four remain and are all Phase 0 material.
+Two were settled by the adoption review (§0, ADR-0015) and two by the Phase 0 measurements
+(2026-08-22, [VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md)). Three remain, and only one
+of them is still a question about the plan rather than about a dashboard.
 
-1. **Does the recommended project shape actually work?** (§1.1.) Everything else assumes it. Spike
-   first, and be willing to take the two-project layout.
-2. **How long is `chores storylines` at 90 days of corpus?** If the bounded pass cannot fit 300 s,
-   Hobby is out for the nightly work and Plan A starts at $20/month.
-3. **Is the corpus under 500 MB?** One `pg_total_relation_size` sweep decides — and since
-   production is seeded from this corpus at cutover, the answer gates Phase 5, not some future
-   month.
-4. **Does the breadth sample still paint?** §10.1's first-visitor lock elects one enqueuer per stale
+1. **Does the recommended project shape actually work?** (§1.1.) Everything else assumes it. **Still
+   open** — it needs a deployment, and the throwaway is scaffolded at
+   [deploy/vercel-spike/](../deploy/vercel-spike/) with each answer's meaning written down. Be
+   willing to take the two-project layout.
+2. **Is Queues available on Hobby, and at what allowance?** Promoted from a line item in Phase 0 to
+   an open question, because it turns out to be **undocumented rather than merely unchecked**: the
+   Queues pricing page defers included usage to the plan pages, and the Hobby table has no Queues
+   row while listing Workflows (built on Queues) at 50,000 events/month. §8's $0 column rests on
+   this. One curl from the spike answers it.
+3. **Does the breadth sample still paint?** §10.1's first-visitor lock elects one enqueuer per stale
    window; with the sample now a queue message, the landing page's first visitor waits for a
    consumer round trip rather than an in-process job. Check against `SAMPLE_REFRESH_MINUTES` before
-   assuming the cloud fills.
-5. ~~What replaces `/metrics`?~~ **Settled**: deleted; platform observability plus the `chore_runs`
+   assuming the cloud fills. **Still open** — it needs the queue working first (Phase 2).
+4. ~~How long is `chores storylines` at 90 days of corpus?~~ **Settled, and not as expected.** ~3.5 h
+   unbounded, of which the late-candidate sweep was ~506 s — and that turned out to be a
+   **linking-correctness bug rather than a deployment cost**: `CANDIDATE_LIMIT` discarded ~90% of the
+   candidate set on 99% of groups. Correcting it exposed a runaway in the sweep, so **the sweep is
+   now gated off** and the pass fits 300 s with room to spare (findings §2.6). The label pass fits at
+   `--max-labels` 40–60. Nothing here is Phase 4 work any more.
+5. ~~Is the corpus under 500 MB?~~ **Measured**: 190 MB today at 15 corpus-days, 125 MB restored,
+   and the useful form is a tripwire rather than a number — 500 MB is reached at ~1,485
+   articles/day sustained over 90 days *if* the reindex sweep runs, ~1,214 if it does not, against
+   an observed 742–1,747/day (findings §4, §5).
+6. ~~What replaces `/metrics`?~~ **Settled**: deleted; platform observability plus the `chore_runs`
    record carry what mattered (§7).
-6. ~~Is a beta queue trigger acceptable in the load-bearing position?~~ **Settled**: accepted, with
+7. ~~Is a beta queue trigger acceptable in the load-bearing position?~~ **Settled**: accepted, with
    the pending set as backstop and a manual drain as fallback (§3.2, ADR-0015).
 
 ---
