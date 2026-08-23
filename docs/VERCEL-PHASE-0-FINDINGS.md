@@ -61,8 +61,11 @@ Three properties make this worse than a big number:
   ([chores-cli.ts:77](../apps/api/src/chores-cli.ts)). So the lever ADR-0015 relies on for the
   label pass does not exist for the pass that needs it more.
 
-§2.4 is what to do about it, and it is not the obvious thing — building that missing lever is the
-option of last resort rather than the plan.
+§2.4 is what to do about it, and it is not the obvious thing. **§2.5 is why: the query at the centre
+of this has been running a retrieval that discards ~83% of its candidates, which makes the ceiling
+problem a symptom of a linking-correctness bug rather than a cost of the deployment target.** Fixing
+that takes the sweep to ~275 s — inside the ceiling — and building the missing bound becomes a safety
+valve rather than the plan.
 
 ### 2.1 Where the 41 ms goes
 
@@ -95,6 +98,10 @@ one costs 2.5. `CANDIDATE_LIMIT` ([storyline-linker.ts:97](../apps/api/src/story
 caps the 200 rows returned, not the ~1,200 scanned — the median group's profile overlaps 1,145
 storylines (mean 1,194, max 3,681 over a 300-group sample), and `qualifyingStorylines` then
 discards nearly all of them in TypeScript.
+
+That last sentence is where this section stopped too early. "Caps the rows returned, not the rows
+scanned" is a statement about cost; the same fact is also a statement about **correctness**, because
+the 200 kept are chosen by recency rather than by anything the linking rules weigh. §2.5.
 
 **Round trips are a second-order term, contrary to what this section first claimed.** The count is
 real — 4.36 per group, from `pg_stat_database.xact_commit` deltas — so a pooler's RTT does add
@@ -133,7 +140,7 @@ Reverted: 8% does not earn a denormalized column with three maintenance sites. T
 one §2.1 records — the fix has to attack profile width or the number of groups offered, not the
 per-call constant.
 
-### 2.3 What the sweep actually achieves
+### 2.3 What the sweep achieves — measured under the bug §2.5 found
 
 Worth putting beside the cost, because it is what decides whether the answer is "make it faster" or
 "do less of it". Attachments per groups offered:
@@ -145,53 +152,105 @@ Worth putting beside the cost, because it is what decides whether the answer is 
 | Re-sweeping the same clone | 500 | 0 | 0 |
 | Re-sweeping the same clone | 2,000 | 2 | 0 |
 
-~3.5% of offers change anything on a first pass, and re-offering the same groups with no new
-coverage between runs changes almost nothing — which is what a nightly sweep over a 14-day window
-mostly is. (In production a night's ingest does move some candidate sets, so the real repeat yield
-sits above zero.) **Most of the 506 s buys nothing**, and "offer only the groups whose candidate
-set could have changed" is where the order of magnitude is, rather than in the query.
+Read at face value: ~3.5% of offers change anything on a first pass, and re-offering the same groups
+with no new coverage between runs changes almost nothing — so most of the 506 s buys nothing, and
+doing less of it is the obvious answer.
+
+**That reading is wrong, and §2.5 is why.** Every number in this table was produced by a retrieval
+that discards ~83% of the candidate set before the rules ever see it. Under a corrected retrieval the
+same clone attaches 30.8% and merges 16.2%, and the re-sweep does *not* go quiet — it keeps attaching,
+because there is a backlog of linking the thresholds already certified. The sweep is not mostly
+pointless work; it is work that mostly could not complete. The table is left here because it is what
+was measured, and because the gap between it and §2.5 is the finding.
 
 ### 2.4 What the unscoped work actually is
 
-Something has to change, and there are three candidates. They are not alternatives of equal
-standing: two attack the cost and one only redistributes it.
+Something has to change. Three candidates, and §2.5 reordered them — what looked like the cautious
+option turned out to be both the largest win and the one that needs no trade at all.
 
-**1. Offer fewer groups.** The largest by far, and the one §2.3 points at: ~96.5% of offers change
-nothing, so the sweep's cost is almost entirely in asking questions whose answer cannot have moved
-since last night. A filter — only groups whose candidate set could have changed — or the inverted
-form, offering late candidates when a storyline changes rather than sweeping for them nightly
-(the shape [PR #114](https://github.com/ashaharudin/zammy/pull/114) used for the label-agreement
-merge), would cut the work by orders of magnitude rather than percentages. What it has to buy
-first is a completeness argument: the sweep's guarantee today is "every group in the window, every
-night", and anything narrower has to say what it can no longer promise. Open.
+**1. Narrow the candidate retrieval to the tokens that can anchor (§2.5).** Free, lossless by proof,
+and it takes the sweep from ~506 s to **~275 s — inside Hobby's ceiling**. It is also a correctness
+fix rather than an optimisation, which is why it stopped being third on this list and became the
+whole answer. Its condition is not the retrieval but the *drain*: the backlog it unblocks changes the
+storyline graph materially, and that needs validating on graph shape rather than on speed.
 
-**2. Cap the tokens used for candidate retrieval.** The tail is profile width (§2.1): probing 51
-GIN keys costs 114 ms where 12 costs 2.5. Retrieving on the rarest ~12 tokens rather than all of
-them would move p90 calls toward the p50 and plausibly take the sweep to ~130–150 s. It also
-changes **which candidates the linker is shown**, and therefore can change linking decisions — so
-it needs a measurement of *decisions changed*, not a speed number. `qualifyingStorylines` re-checks
-rarity in TypeScript regardless, which is an argument that it might be safe rather than a proof.
-Open.
+**2. Offer fewer groups.** What §2.3 pointed at, and still worth having — a filter for groups whose
+candidate set could have changed, or the inverted form that offers late candidates when a storyline
+changes rather than sweeping for them nightly (the shape
+[PR #114](https://github.com/ashaharudin/zammy/pull/114) used for the label-agreement merge). But its
+case rested on a yield figure measured under the cap, so the "96.5% of this buys nothing" argument no
+longer holds as stated, and it now competes against a sweep that already fits. Follow-up research
+prices the inverted form at ~3–4 days and puts it third of four, behind a cheaper forward re-offer
+when a *group's* membership changes; it also **requires** option 1 first, or it hands correct offers
+to a `linkGroup` whose capped retrieval cannot act on them.
 
 **3. Bound it and make it resumable.** `runLateCandidateChore` already accepts `maxGroups`
-([chores.ts:181](../apps/api/src/chores.ts)); it needs a field on `StorylinePassDeps`, a
-`--max-groups` flag, and — critically — a persisted cursor, because the sweep restarts from the
-window's start on every run ([chores.ts:193](../apps/api/src/chores.ts) seeds the cursor from the
-window, not from where the last run stopped). A bound *without* the cursor turns an over-deadline
-pass into a silently incomplete one, which is worse: at ~290 s of usable budget it would offer the
-newest ~7,000 of 12,338 groups every night, never reach the rest, and report a clean
-`offered: 7000` while doing it.
+([chores.ts:181](../apps/api/src/chores.ts)); it would need a field on `StorylinePassDeps`, a
+`--max-groups` flag, and a persisted cursor, because the sweep restarts from the window's start on
+every run ([chores.ts:193](../apps/api/src/chores.ts) seeds the cursor from the window, not from
+where the last run stopped). A bound *without* the cursor turns an over-deadline pass into a silently
+incomplete one: at ~290 s of usable budget it would offer the newest ~7,000 of 12,338 groups every
+night, never reach the rest, and report a clean `offered: 7000` while doing it.
 
-This third one is the fallback, not the plan. It changes no decision and needs no argument to
-justify, which is its whole merit — but it reduces nothing, so the pass still does ~506 s of work,
-just spread across the several invocations a minute-precision scheduler makes available anyway
-(§3.3 of the scope doc: Supabase Cron, not Hobby's once-a-day). **And if either of the first two
-lands, the cursor is unnecessary rather than necessary** — a sweep that only offers what could have
-changed reaches the end of its own list.
+This third one changes no decision and needs no argument to justify, which was its whole merit while
+the pass did not fit. Now that option 1 fits it inside the ceiling, it is a safety valve for volume
+growth rather than a deliverable — and worth building as one, since nothing else notices when a
+future ingest rate pushes the pass back over the deadline.
 
-So the unscoped work is a decision before it is an implementation: settle 1, then 2, and hold 3 as
-the thing to build if neither survives scrutiny. Whichever it is, it lands in Phase 4, and none of
-it was there.
+### 2.5 The cap that made the sweep look necessary
+
+Follow-up research into option 2 turned up the reason option 1 exists. The load-bearing claims below
+were re-verified here rather than taken from it, because two projections earlier in this document's
+own history were wrong by 4× and 12× from extrapolating a single sample.
+
+**`CANDIDATE_LIMIT` is not a safety valve.** `readCandidateStorylines` retrieves by
+`profile_tokens && $tokens` ordered by last coverage, `limit 200` —
+[storyline-linker.ts:97](../apps/api/src/storyline-linker.ts), whose comment describes it as
+protection against a pathological token. Measured, it binds on **399 of 400** groups. §2.1 already
+recorded the input without drawing the conclusion: the median group's profile overlaps 1,145 live
+storylines, so the limit discards ~83% of the candidate set on a typical group, ordered by recency
+rather than by anything the linking rules weigh.
+
+**The harness that pinned the thresholds has no cap.**
+[storyline-replay.ts:148](../apps/api/src/storyline-replay.ts) unions candidates over every profile
+token with no limit, and its comment says the retrieval is "exactly what `profile_tokens &&
+story_tokens` returns" — accurate about the predicate, silent about the `limit 200` the service adds.
+So production has been running a **capped** decision against thresholds certified on an **uncapped**
+one. Both halves of this were read directly.
+
+**The fix is a necessary condition, not a second decision.** `qualifyingStorylines` rejects a
+candidate when `evidence.anchorDf > bar.ceiling`, and `anchorDf` is the df of the *rarest shared*
+token ([storyline-link.ts:167](../apps/api/src/storyline-link.ts),
+[storyline-link.ts:103](../apps/api/src/storyline-link.ts)). So a qualifier must share at least one
+token whose window df is at or below `anchorCeiling(corpusSize, rules)` —
+`max(anchorDfFloor, corpusSize × anchorMaxShare)`, today `max(10, ~15,000 × 0.002)` ≈ 30
+([storyline-link.ts:90](../apps/api/src/storyline-link.ts)). The dormant bar only divides that
+ceiling further, so the non-dormant ceiling is the loosest bar any candidate faces. Probing with that
+subset is the same kind of bound `profile_tokens &&` already is, and it is free: `readTrailingCorpus`
+runs before the retrieval, so the df map is already in hand.
+
+Measured by the follow-up: the anchor-eligible subset is 7 tokens at p50 against a 19-token profile;
+the query goes **35.1 → 2.42 ms mean, p90 81.3 → 2.92 ms**; qualifiers go 48 → 572 over 400 groups
+with **zero lost**; and end to end through the real chore, 41.4 → 22.3 ms/group, or
+12,338 × 22.3 ms ≈ **275 s**. For scale, §2.2's denormalized column bought 8% and needed a schema
+change; this buys 41% end to end and needs neither.
+
+**One implementation condition, and it is where this would quietly go wrong.** `linkEvidence` scores
+a token absent from the df map as `Math.max(1, … ?? 1)` — df 1, "genuinely the rarest thing there is"
+— so an absent token is *always* anchor-eligible. The filter must read "df ≤ ceiling **or** absent
+from the map", never as a pass over the map's entries. Measured 0 absent across 8,243 profile tokens
+on this corpus, and it is close to guaranteed by construction since the df counters are written on
+the same write as the tokens — but that is corpus luck plus a gap `recordStoryDfForArticles`
+explicitly tolerates, and the failure mode is a silently missed link on the rarest vocabulary there
+is.
+
+**What is not yet established.** The outcome change is large — the follow-up measured merges going
+4 → 324 per 2,000 groups offered and bridges 1,913 → 5,801 — and the percolation evidence offered for
+it is a single metric, the largest storyline holding at 124 groups across every run. That metric can
+hold while the *number* of live storylines collapses. Live-storyline count, the size distribution,
+and a hand-judged sample of the new merges are outstanding, and so is the question of whether the
+backlog should drain through a deliberate bounded command rather than surprising the nightly chore.
+Until those land, ~275 s is a measured rate on loopback with no margin, not a green light.
 
 ## 3. The label pass: a backlog, not a nightly cost
 

@@ -217,18 +217,22 @@ wrapper plus one new table:
   **41 ms × 12,338 groups ≈ 506 s** — 1.7× Hobby's 300 s, every night, on loopback Postgres. It is
   one query: `readCandidateStorylines` is 34 of the 41 ms, and its cost tracks profile width, from
   2.5 ms at p10 to 76 ms at p90 (findings §2.1). Round trips are a surcharge on that, not the cause.
-  **Phase 4's work here is a decision before it is an implementation** (findings §2.4), in this
-  order: (1) offer fewer groups — ~3.5% of offers change anything, so a filter, or the inverted
-  birth-trigger shape [PR #114](https://github.com/ashaharudin/zammy/pull/114) used for the
-  label-agreement merge, saves orders of magnitude rather than percentages; (2) cap the tokens used
-  for candidate retrieval, which attacks the tail but changes which candidates the linker sees and
-  so needs a count of decisions changed; (3) only if neither survives scrutiny, build the missing
-  bound — a `maxGroups` on `StorylinePassDeps`, a `--max-groups` flag, and a **persisted cursor**,
-  because the cursor is seeded from the window's start ([chores.ts:193](../apps/api/src/chores.ts))
-  and a bound without one would sweep the newest 7,000 nightly, never reach the rest, and report a
-  clean tally while doing it. Note that (3) reduces nothing — it spreads the same 506 s across the
-  several invocations Supabase Cron already allows — and that (1) or (2) landing makes its cursor
-  unnecessary rather than necessary. A denormalized sort key was tested and rejected at 8% (§2.2).
+  **And most of it is not a deployment problem at all** (findings §2.5): `CANDIDATE_LIMIT` binds on
+  399 of 400 groups, discarding ~83% of the candidate set by recency, while the replay harness that
+  pinned the linking thresholds has no cap — so production runs a capped decision against thresholds
+  certified uncapped. Narrowing the retrieval to the anchor-eligible tokens is free, lossless by
+  proof, and takes the sweep to **~275 s, inside the ceiling**; it is a linking-correctness fix that
+  happens to remove this phase's deadline problem, and it is being handled outside this plan. What
+  remains for Phase 4 is therefore smaller than it looked: **the bound as a safety valve** — a
+  `maxGroups` on `StorylinePassDeps`, a `--max-groups` flag and a persisted cursor, since the cursor
+  is seeded from the window's start ([chores.ts:193](../apps/api/src/chores.ts)) and a bound without
+  one would sweep the newest 7,000 nightly, never reach the rest, and report a clean tally while
+  doing it — plus **validating the drain**, because the corrected retrieval unblocks a backlog of
+  linking that changes the storyline graph over several nights. Offering fewer groups (a changed-set
+  filter, or the inverted birth-trigger shape
+  [PR #114](https://github.com/ashaharudin/zammy/pull/114) used for the label-agreement merge)
+  stays worth having but is no longer load-bearing here, and its case rested on a yield figure
+  measured under the cap. A denormalized sort key was tested and rejected at 8% (§2.2).
 - **The label backlog must not run in this route.** 2,981 of 3,934 promoted storylines have never
   been labelled and **zero have drifted**, so the nightly drift pass is nearly free while the
   backlog is 3.3 hours of paced calls — quota-bound, ~6 days of Gemini free tier. It is
@@ -440,12 +444,13 @@ Each phase ends with something demonstrable; none of them is "and then we cut ov
 | **1. The api as a Function** (1–2 d) | §3.1. Consumer disabled, chores still manual. Preview in fixture mode against the preview data plane (§4). | `/readyz` green, a timeline read served from Supabase through the pooler, `degraded: "ingest_timeout"` on cold topics — the known, temporary gap |
 | **2. The queue** (2–3 d) | §3.2 — new `IngestQueue` implementation (all seven members), `api/queues/ingest.ts`, 5-min message TTL, rewritten tests. | A cold topic fills behind the reader; `meta.ingest` drains to zero; a killed consumer redelivers |
 | **3. Quota + limits** (1–2 d) | §3.4 (burst-only, fail-open) and §3.5 (Redis store, fail-open). | The burst ceiling holds with the consumer and the request path both running; the per-IP guard is real; both degrade to in-process when Redis is down |
-| **4. Chores** (2–3 d) | §3.3 + Supabase Cron + `chore_runs` + the keep-alive ping, **plus what Phase 0 added**: the late-candidate sweep decision (§3.3 — offer fewer groups, cap retrieval tokens, or as a last resort bound it with a persisted cursor), and the `REINDEX CONCURRENTLY` sweep in the retention chore. | All scheduled passes run on schedule and write `chore_runs` rows, any pass runs on demand by query param, twice-triggered runs skip on the lock, the 202 arrives from cold within pg_net's configured timeout, **and the storyline pass finishes inside `maxDuration` without the sweep quietly stopping short of its window** |
+| **4. Chores** (1.5–2.5 d) | §3.3 + Supabase Cron + `chore_runs` + the keep-alive ping, **plus what Phase 0 added**: the sweep's bound and persisted cursor as a safety valve (§3.3), and the `REINDEX CONCURRENTLY` sweep in the retention chore. Assumes the retrieval fix (findings §2.5) has landed separately; without it this phase inherits a 506 s pass and the estimate goes back up. | All scheduled passes run on schedule and write `chore_runs` rows, any pass runs on demand by query param, twice-triggered runs skip on the lock, the 202 arrives from cold within pg_net's configured timeout, **and the storyline pass finishes inside `maxDuration` without the sweep quietly stopping short of its window** |
 | **5. Observability + cutover** (1–2 d) | The migration CI jobs (§6, prod + preview), env vars (§4), **seed production from the dev corpus** (a 24 MB `pg_dump -Fc`, measured at 1.9 s out and 1.1 s in — findings §4), DNS. Drain the 2,981-storyline label backlog first (§3.3). | Production traffic against the seeded corpus, and "did last night's chores run?" is answered by a `chore_runs` query |
 
-**Total: 8–14 days**, up from 7–12: Phase 0's measurements added the sweep bound, its cursor and the
-reindex sweep to Phase 4. The remaining spread is Phase 0's *deployment* outcome — still unrun — and
-Phase 2.
+**Total: 7.5–13.5 days.** Phase 0's measurements added the reindex sweep and the sweep's safety-valve
+bound to Phase 4, but took the sweep's deadline problem back out of the plan entirely — it is a
+linking bug with its own fix (findings §2.5), and this plan now depends on that landing rather than
+carrying it. The remaining spread is Phase 0's *deployment* outcome — still unrun — and Phase 2.
 
 ---
 
@@ -470,8 +475,11 @@ of them is still a question about the plan rather than about a dashboard.
    assuming the cloud fills. **Still open** — it needs the queue working first (Phase 2).
 4. ~~How long is `chores storylines` at 90 days of corpus?~~ **Measured**: ~3.5 h unbounded, and the
    binding phase is not the one this document expected. The label pass fits 300 s at
-   `--max-labels` 40–60; the **late-candidate sweep is ~506 s and has no bound at all**, which is
-   now Phase 4 work (§3.3, findings §2).
+   `--max-labels` 40–60; the late-candidate sweep is ~506 s — and most of that turned out to be a
+   **linking-correctness bug rather than a deployment cost**: `CANDIDATE_LIMIT` discards ~83% of the
+   candidate set on 399 of 400 groups, and correcting the retrieval takes the pass to ~275 s,
+   inside the ceiling (findings §2.5). Being fixed outside this plan; what stays in Phase 4 is the
+   bound as a safety valve and validating the drain (§3.3).
 5. ~~Is the corpus under 500 MB?~~ **Measured**: 190 MB today at 15 corpus-days, 125 MB restored,
    and the useful form is a tripwire rather than a number — 500 MB is reached at ~1,485
    articles/day sustained over 90 days *if* the reindex sweep runs, ~1,214 if it does not, against
