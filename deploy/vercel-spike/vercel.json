@@ -16,7 +16,7 @@
     "api/chores.ts": {
       "maxDuration": 300
     },
-    "api/[...path].ts": {
+    "api/index.ts": {
       "maxDuration": 60
     }
   },
@@ -28,12 +28,16 @@
   ],
   "rewrites": [
     {
+      "source": "/api/v1/:path*",
+      "destination": "/api/index"
+    },
+    {
       "source": "/healthz",
-      "destination": "/api/healthz"
+      "destination": "/api/index"
     },
     {
       "source": "/readyz",
-      "destination": "/api/readyz"
+      "destination": "/api/index"
     }
   ]
 }
