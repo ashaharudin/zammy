@@ -564,6 +564,36 @@ const EnvSchema = z
      * no storyline in the causal chain at all.
      */
     STORYLINE_LATE_CANDIDATE_SWEEP: z
+     * Re-offer a group to the linker when an arriving article JOINS it
+     * (`storyline-rejoin-trigger.ts`), on the ingest tail. Off is the pre-trigger
+     * behaviour exactly: only seeded groups are linked, and an enlarged group
+     * waits for the nightly late-candidate sweep.
+     *
+     * The mechanism is not in doubt — it is `linkGroup`, unchanged, one offer
+     * per enlarged group, and the `ownGroups > 1` guard bounds it to ONE
+     * retroactive arc per group whatever the offer rate. It closes a gap the
+     * ingest path opens by design: an article joining a group widens the
+     * MAJORITY profile the linker judged, and nothing was ever going to ask
+     * again.
+     *
+     * It ships OFF anyway, and the reason has changed since it was written. The
+     * original one was the candidate cap: an offer spent a group's ONE lifetime
+     * retroactive slot against a set truncated to 200 rows, and that spend is
+     * monotone — once `existing.length > 1` the group can never take another
+     * arc — so firing at ingest frequency made an irreversible choice earlier
+     * and against the worse candidate set. That cap is gone
+     * (`anchorEligibleTokens`), and on the OLD retrieval this trigger bought
+     * nothing measurable anyway: 42 retroactive arcs against a control cohort's
+     * 29, about 1.5 sigma.
+     *
+     * Against the NARROWED retrieval it is worth 1.39x the arcs and 2.33x the
+     * merges of that control — and the merges are the problem, because merges
+     * are what percolate (see `STORYLINE_LATE_CANDIDATE_SWEEP`). So this now
+     * waits on the same thing the sweep waits on: re-measuring K
+     * (`STORYLINE_MERGE_BRIDGES`) against a replay that re-offers. Two knobs,
+     * one blocker.
+     */
+    STORYLINE_REOFFER_JOINED_GROUPS: z
       .enum(["true", "false"])
       .default("false")
       .transform((value) => value === "true"),

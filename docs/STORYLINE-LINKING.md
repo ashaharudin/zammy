@@ -881,3 +881,111 @@ a replay that re-offers groups, which does not exist yet. The retrieval fix
 itself is unconditional: it makes the birth path — the one the replay *does*
 model — match the candidate set these thresholds were certified against, and the
 replay now narrows identically so the two cannot drift apart again silently.
+
+## The group whose own membership changed (2026-08-22)
+
+`STORYLINE_REOFFER_JOINED_GROUPS`, off by default, and
+`apps/api/src/storyline-rejoin-trigger.ts`.
+
+### What was missing
+
+`groupCreatedArticles` offered the linker **seeded** groups only, on the stated
+grounds that *"an article that JOINED a group inherited that group's storylines,
+so only the ones that SEEDED a group have a decision left to make."* That is
+true about membership and false about qualification. A group is judged on the
+**majority** of its members' story tokens (`groupProfile`), and
+`readLinkableGroups` re-aggregates them on every read — so with two members the
+majority rule needs support from one, and the profile becomes the union. An
+arrival can therefore hand its group a vocabulary the linker has never judged,
+and nothing on the write path was ever going to ask again. The nightly
+late-candidate sweep was the only repair, and it is the one class a
+storyline-change filter cannot see at all: the group moved, no storyline did.
+
+The trigger re-offers that one group through `linkGroup` on the ingest tail. Same
+profile, same corpus, same thresholds, same `ownGroups > 1` guard and therefore
+the same ONE lifetime retroactive arc per group — it changes when the question is
+asked, never whether.
+
+**The predicate is "an article joined this group", never "the profile tokens
+diffed."** A diff misses the case above from the other side: an arrival carrying a
+subset of what the group already said leaves the majority profile byte-identical
+while the group's membership, day slots and corpus contribution all move. The
+test `is asked even when the join left the majority profile byte-identical`
+pins it.
+
+### Yield, measured (2026-08-22)
+
+`pg_dump -Fc` / `pg_restore` clone of the dev archive — 31,308 articles, 26,006
+groups, 17,008 live storylines, 27,083 memberships — freshly `ANALYZE`d, the real
+exported `linkGroup`, **no labeler anywhere**, so no model call was made. The
+trailing window (14 days from the newest group) holds **12,558 groups, of which
+1,071 (8.53%) have more than one member**: those 1,071 are the whole trigger
+population, ~76 a publication day, against the sweep's 12,338 offers a night.
+
+The control matters. The archive was built by a backfill that never re-offered
+anything, so a plain re-offer of *any* window group finds things whether or not a
+join caused them. Both cohorts are the full 1,071, each on its own fresh clone:
+
+| 1,071 offers | attached | retroactive arcs | promoted | merges | ms/offer |
+| --- | --- | --- | --- | --- | --- |
+| membership changed, retrieval as it ships | 6 | 42 | 5 | 4 | 47.2 |
+| control: groups of one, same retrieval | 6 | 29 | 6 | 3 | 37.7 |
+| membership changed, anchor-eligible retrieval | 111 | **430** | 231 | **170** | 18.4 |
+| control: groups of one, anchor-eligible retrieval | 161 | 309 | 226 | 73 | 13.0 |
+
+**On the retrieval as it ships, the trigger buys nothing measurable.** 42
+retroactive arcs against the control's 29 is ~1.5σ on Poisson counts — a hint, not
+a result. **On the anchor-eligible retrieval it is unambiguous**: 1.39× the
+retroactive arcs (430 vs 309, ~4.4σ) and 2.33× the merges (170 vs 73). The
+membership change is real evidence; the 200-row candidate cap was swallowing it.
+
+That is the whole reason the knob ships **off**. The offer spends a group's one
+lifetime retroactive arc, and that spend is monotone — once `existing.length > 1`
+the group can never take another. Firing at ingest frequency rather than nightly
+makes an irreversible choice earlier, and today it would make it against a
+candidate set the cap has truncated on 399 of 400 window groups. Narrowing the
+retrieval first is what makes this knob worth turning on.
+
+Also visible in the control's own numbers: a group of one attaches more often
+(161 vs 111) because it is still sitting in its own birth storyline and takes the
+merge-with-alias path, while an enlarged group is more often already homed and
+takes the retroactive one. Two different doors, and the trigger's population is
+mostly behind the second.
+
+### Graph shape, before and after
+
+The largest-storyline metric alone is not evidence against percolation, so the
+size distribution travels with it. Every run starts from the same clone: 17,008
+live storylines, 13,074 of them singletons, 3,241 at 2–4 groups, 677 at 5–19, 15
+at 20–99, 1 at 100+, largest 124, 1,913 bridges.
+
+| after 1,071 offers | live | singletons | 2–4 | 5–19 | 20–99 | 100+ | largest | bridges |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| membership changed, as shipped | 16,998 | 13,063 | 3,240 | 679 | 15 | 1 | **124** | 1,919 |
+| membership changed, narrowed | 16,727 | 12,666 | 3,318 | 720 | 22 | 1 | **124** | 5,649 |
+| control, narrowed | 16,774 | 12,662 | 3,379 | 714 | 18 | 1 | **124** | 4,118 |
+
+The largest storyline does not move in any run, and neither does the 100+ bucket.
+What grows is the middle: 20–99 goes 15 → 22 on the narrowed trigger cohort
+against 15 → 18 on the control, and groups sitting in a real (≥2 group) arc go
+14,009 → 14,828. That is arcs thickening, which is what a suppressed backlog
+draining looks like — not a swallow, which shows up as the top bucket moving.
+The bridge count tripling (1,913 → 5,649) is the same fact from the evidence
+side and it is the narrowing's, not the trigger's: the control does it too.
+
+### Cost, where it lands
+
+The tail (`void tail` in `grouping-service.ts`), not inline and not the queued
+consumer. Inline would take the linker's share of `SYNC_FILL_DEADLINE_MS` from
+~16% to 24–30%; the queued consumer runs at concurrency 1 and already holds that
+single worker ~3 minutes for the label tails. On the tail, 76 groups a day at
+47 ms is ~3.6 s of work spread over a day's batches — one or two offers per
+upstream page, alongside labels that cost ~8 s each.
+
+The cost that is real and is not latency: **tail work is invisible to
+`meta.ingest` for the cache TTL.** The response caches on `state === "complete"`
+(`timeline-service.ts`), so a retroactive attach landing after that is not
+visible until the TTL expires — the measured trending precedent is 61 labels
+landing in the ~3 minutes after a cloud of 3 was cached. For this trigger it is
+the mild version: the group already renders in its own slot and what it gains is
+a second arc on a storyline page. Recorded as a known cost, not a blocker.
