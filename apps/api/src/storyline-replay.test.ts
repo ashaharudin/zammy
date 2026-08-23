@@ -225,6 +225,66 @@ describe("maxBridgingQualifiers", () => {
   });
 });
 
+describe("a multi-homed group whose two homes later merge", () => {
+  /**
+   * The one state where membership can be counted twice, and it is reachable
+   * only through the re-offer path — which is why nothing caught it until that
+   * path existed.
+   *
+   * `mergeStorylines` inserts the loser's memberships
+   * `on conflict (storyline_id, group_id) do nothing`, so a group belonging to
+   * BOTH sides of a merge is counted ONCE. Concatenating the two membership
+   * lists counts it twice, which inflates `largestStoryline` and `largestShare`
+   * directly and lets the group vote twice in `storylineProfile`'s majority
+   * rule. The tell is a share above 100%.
+   *
+   * Interleaved is required, not incidental: the retroactive attachment has to
+   * land BEFORE the merge, and post-hoc offers every birth first, so `n` below
+   * would merge the pair while `m` still lived in one arc.
+   *
+   * Seven groups: two arcs that share nothing, a third A-family group so night
+   * 4 exists at all, and two groups sharing all of both — `m`, which is born
+   * into one arc and re-offered into the other, and `n`, whose birth supplies
+   * the second independent bridge that takes the pair to K=2. Every one of the
+   * seven ends up in the survivor, so a duplicate shows up as a share ABOVE
+   * one, with nothing else in the archive to hide behind.
+   */
+  const twoHomesThatMerge = (): ReplayGroup[] => [
+    group(A, { day: 1 }),
+    group(A, { day: 1 }),
+    group(B, { day: 2 }),
+    group(B, { day: 2 }),
+    group([...A, ...B], { day: 3 }),
+    group(A, { day: 4 }),
+    group([...A, ...B], { day: 5 }),
+  ];
+
+  const run = () =>
+    replayWithReoffers(twoHomesThatMerge(), corpusAt, RULES, 2, NARROW, {
+      mode: "interleaved",
+      windowDays: 90,
+      passes: 1,
+    });
+
+  it("reaches the state at all — one retroactive arc, then a merge of both homes", () => {
+    // A guard on the fixture. If either of these moves, the assertions below
+    // stop testing what they claim to.
+    const result = run();
+    expect(result.retroAttached).toBe(1);
+    expect(result.merges).toBe(1);
+  });
+
+  it("counts the doubly-homed group ONCE, as `on conflict do nothing` does", () => {
+    const result = run();
+    const survivor = result.built[0]!;
+    expect(new Set(survivor.groupIds).size).toBe(survivor.groupIds.length);
+    // All seven, once each — so a duplicate would read as a share above 100%,
+    // which no real archive can produce and no reader would trust.
+    expect(result.largestStoryline).toBe(7);
+    expect(result.largestShare).toBe(1);
+  });
+});
+
 describe("cascadeMerges — the storage semantics the harness used to omit", () => {
   /**
    * Three disjoint arcs. A–B is bridged TWICE, so it merges the ordinary way;

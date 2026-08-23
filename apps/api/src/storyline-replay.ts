@@ -374,8 +374,27 @@ const mergePair = (world: World, left: string, right: string): string[] => {
   deindex(world, drop);
   world.storylines.delete(drop.id);
   world.alias.set(drop.id, keep.id);
-  keep.groupProfiles.push(...drop.groupProfiles);
-  keep.groupIds.push(...drop.groupIds);
+  // Storage inserts the loser's memberships
+  // `on conflict (storyline_id, group_id) do nothing`, so a group that belongs
+  // to BOTH sides is counted once. Concatenating the two lists counts it twice,
+  // and it is not a rounding error: `snapshot` reads arc size off
+  // `groupProfiles.length`, so a duplicate inflates `largestStoryline` and
+  // `largestShare` directly — the tell being a share above 100% — and the
+  // duplicated profile votes twice in `storylineProfile`'s majority rule, which
+  // widens the survivor, which widens retrieval on the next offer.
+  //
+  // Reachable only through the re-offer path's one retroactive arc, so it could
+  // not happen in a birth-only replay and every birth-only number is unaffected.
+  // `groupProfiles` and `groupIds` are parallel arrays and must be skipped in
+  // lockstep.
+  const held = new Set(keep.groupIds);
+  for (let i = 0; i < drop.groupIds.length; i += 1) {
+    const groupId = drop.groupIds[i]!;
+    if (held.has(groupId)) continue;
+    held.add(groupId);
+    keep.groupIds.push(groupId);
+    keep.groupProfiles.push(drop.groupProfiles[i]!);
+  }
   keep.lastCoverageMs = Math.max(keep.lastCoverageMs, drop.lastCoverageMs);
   for (const day of drop.days) keep.days.add(day);
   keep.promoted = true;

@@ -517,11 +517,18 @@ const EnvSchema = z
      * K is therefore left at 2 deliberately rather than confidently: raising it
      * is the bluntest of the four levers measured — it raises the bar for every
      * merge, and ADR-0011 refuses to build a split, so the merge is the only
-     * repair err-narrow formation has. Bounding how many qualifiers one group may
-     * bridge dominates it on both the alarm and the model-named arcs, and that is
-     * a change to `bridgePairs`' input rather than to this number.
+     * repair err-narrow formation has. On the birth path, bounding how many
+     * qualifiers one group may bridge beats it on the alarm decisively (largest
+     * 22 against K=6's 85) and on the model-named arcs marginally, and that is a
+     * change to `bridgePairs`' input rather than to this number.
      * docs/STORYLINE-LINKING.md, "K, re-measured against a replay that
-     * re-offers", has the four options priced against one instrument.
+     * re-offers", has the four options priced against one instrument — including
+     * where a higher K is the better lever, which is the sweep-on numbers, which
+     * is not a state anything runs in.
+     *
+     * The birth-path figures above are unaffected by the 2026-08-23 correction to
+     * that harness (it double-counted a doubly-homed group's membership, which
+     * only a re-offer can produce) and were re-run to confirm it.
      */
     STORYLINE_MERGE_BRIDGES: z.coerce.number().int().min(1).default(2),
     /**
@@ -637,12 +644,13 @@ const EnvSchema = z
      * **That re-measurement has since been done, and it moved the blocker rather
      * than clearing it** (docs/STORYLINE-LINKING.md, "K, re-measured against a
      * replay that re-offers"). A replay that re-offers says the sweep takes the
-     * largest arc to 5,927 groups — 22.79% of the window, still climbing when the
-     * corpus runs out — so this stays off. But the same instrument, once it models
-     * `mergeStorylines` re-pointing bridges, says the BIRTH path alone reaches
-     * 2,591 at the pinned bar. K is not the binding constraint and this flag is
-     * not the fix; bounding how many qualifiers one group may bridge is the lever
-     * that works, and it applies to both paths.
+     * largest arc to 4,540 groups — 17.46% of the window with the retrieval
+     * narrowed, still climbing when the corpus runs out — so this stays off. But
+     * the same instrument, once it models `mergeStorylines` re-pointing bridges,
+     * says the BIRTH path alone reaches 2,591 at the pinned bar, i.e. 57% of that
+     * final arc. K is not the binding constraint and this flag is not the fix;
+     * bounding how many qualifiers one group may bridge is the lever that works,
+     * and it applies to both paths.
      *
      * The flag rather than a deletion because the sweep is still the only thing
      * that covers the classes no storyline-change trigger can see — a withheld
@@ -685,10 +693,10 @@ const EnvSchema = z
      *
      * **That is now measured, and it says stay off** — for a reason that is not
      * about this trigger. Re-offer bridges are what amplify the runaway (removing
-     * them takes the sweep's largest arc from 5,927 back to the birth path's
-     * 2,702), and this trigger's whole effect is extra offers. It cannot be
-     * safely switched on while an offer's bridge evidence is unbounded, and once
-     * that is bounded it should be re-priced rather than assumed.
+     * them takes the sweep's largest arc from 4,540 to 2,176, below even the birth
+     * path's own 2,591), and this trigger's whole effect is extra offers. It
+     * cannot be safely switched on while an offer's bridge evidence is unbounded,
+     * and once that is bounded it should be re-priced rather than assumed.
      * docs/STORYLINE-LINKING.md, "K, re-measured against a replay that
      * re-offers".
      */
