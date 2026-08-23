@@ -139,6 +139,24 @@ live outside `/api` so they need two rewrites (`/metrics` also lived outside and
 third — it is deleted instead, §7); and the 4.5 MB response cap is far above any timeline page but
 worth knowing.
 
+**Three things the spike settled by deploying** (2026-08-22, `zammy-vercel-spike`):
+
+- **`api/[...path].ts` is not a catch-all.** Vercel's bare `api/` directory parses the filename as
+  ONE dynamic segment literally named `...path`, so `/api/healthz` and `/api/v1` reached the function
+  while `/api/v1/echo` and anything deeper returned Vercel's own `NOT_FOUND` and never invoked it.
+  Every real route here is `/api/v1/<something>`, so the layout as written would have 404ed all of
+  them. **A `rewrites` rule is the catch-all the filename is not**, and it preserves the property
+  this section depends on: a rewrite leaves the original path visible, measured —
+  `/api/v1/echo/deep/path?q=1` arrives at Fastify as exactly that. §1.1's recommended layout stands;
+  only the mechanism changes.
+- **A *named* rewrite capture is appended to the query string.** `/api/v1/:path*` made Fastify see
+  `...?q=1&path=echo%2Fdeep%2Fpath`. Harmless here, a latent collision in the real app — a route
+  taking its own `path` query parameter would receive two. Use an unnamed group, `/api/v1/(.*)`.
+- **`TRUSTED_PROXY_HOPS=1`.** With `trustProxy` off, Fastify reported `request.ip` as `127.0.0.1`
+  with the real client in `x-forwarded-for` — exactly one hop in front. This is not a detail: §3.5's
+  per-IP limit moves to Redis precisely because Hobby has no WAF, and a limiter keyed on
+  `127.0.0.1` would put every visitor in one bucket.
+
 ### 3.2 The queue: BullMQ → Vercel Queues (push mode) — ~2–3 days
 
 The surface is genuinely narrow, which is why this is days and not weeks — but count it honestly:
