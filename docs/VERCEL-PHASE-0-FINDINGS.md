@@ -614,7 +614,7 @@ always self-homed.
    the answer is the lever §2.6 names and PR #130 has since built — a bound on how many qualifiers one
    group may bridge — because the drift is 97% cap/cap fusion driven by `bridgePairs`' cross-product.
 
-   **And that bound now exists, so the interaction is measured rather than recommended.**
+   **It landed while this was being measured, so the interaction is measured rather than recommended.**
    `STORYLINE_MAX_BRIDGING_QUALIFIERS` (PR #130, default 0 — unbounded — so today's behaviour exactly)
    caps how many of a group's qualifiers may pair. On the SWEEP control it already turns 4,668 into
    24 → 67 → 103 → 123 → **161, flat from pass 4** (0.62%). On the birth path, at the top 2 and
@@ -655,6 +655,14 @@ always self-homed.
    against an ADR-0015 that calls the arcs and label history "the product". Letting it converge is
    free and probably right, but it is the option step 1 exists to justify. Choosing it before
    measuring would be the same mistake as the 2,000-group bound.
+
+   **Step 1 now justifies it, on one condition.** Bounded at the top 2 the cap-built archive and a
+   from-scratch one end in the same place (22 groups in the largest arc, both), so the hybrid state is
+   not something a rebuild would improve — there is nothing left for eight days of quota to buy.
+   Unbounded it is the opposite: the hybrid drifts and a rebuild would only re-enter the same drift
+   from a cleaner start, which is not a repair either. Either way **`--restart` is the wrong tool** and
+   the reason is the same one both times: the retrieval and the pair count decide the archive's shape,
+   not the archive's history. Converge, with the bound on.
 3. **Instrument it either way, and this one need not wait.** `largestStoryline` is reported in exactly
    one place — [storyline-backfill-cli.ts:246](../apps/api/src/storyline-backfill-cli.ts) — during a
    backfill. The nightly pass reports `dormant`, `bridges`, `lateCandidates`, `labels` and
