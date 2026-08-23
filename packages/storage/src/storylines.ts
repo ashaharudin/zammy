@@ -1258,10 +1258,19 @@ export async function absorbMergedGroup(
 }
 
 /**
- * Both derivations, for one storyline. Exported so the GROUP layer can call it
- * after a merge re-points membership — the two derivations are computed over
- * member groups' articles, so a change to which groups exist invalidates them
- * exactly as a change to which groups are members would.
+ * Both derivations, for one storyline.
+ *
+ * Exported for `ingestSightings`, its one caller outside this module: both
+ * derivations are computed over the member groups' ARTICLES, so a fold moving
+ * one of those articles invalidates them exactly as changing which groups are
+ * members would. It calls this rather than `refreshStoryline` because it is
+ * already inside a transaction and that one opens its own.
+ *
+ * `mergeGroups` above calls it for the third form of the same invalidation — a
+ * merge re-points membership, so a change to which groups EXIST invalidates
+ * them too — but that is a same-module caller and not what the export is for.
+ * This comment previously said it was, which is worth remembering the next time
+ * an export looks unused: the reason had moved and the comment had not.
  */
 export async function refreshStorylineDerivations(
   db: Kysely<Database>,
