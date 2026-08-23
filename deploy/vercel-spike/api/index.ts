@@ -2,7 +2,18 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import Fastify from "fastify";
 
 /**
- * Spike question 1: does a catch-all `api/` function see the REAL request path?
+ * Spike question 1, ANSWERED 2026-08-22: `api/[...path].ts` is not a catch-all.
+ * Vercel's bare `api/` directory parsed the filename as ONE dynamic segment
+ * literally named `...path` — `/api/healthz` and `/api/v1` reached this function,
+ * `/api/v1/echo` and anything deeper never did, and Vercel answered NOT_FOUND
+ * itself rather than letting Fastify's own handler run. Since zammy's routes are
+ * `/api/v1/timeline` and friends, the layout as designed would have 404ed every
+ * one of them.
+ *
+ * The fix is a rewrite rather than a filename (`vercel.json`), and it preserves
+ * what §3.1 actually needs: a rewrite leaves the ORIGINAL path visible, measured
+ * — `/healthz` rewritten to `/api/healthz` arrived as `/healthz`. So Fastify
+ * still routes on what the browser asked for, and one project keeps one origin.
  *
  * VERCEL-ALL-IN-SCOPE §3.1 wants `api/[...path].ts` handing the request to
  * Fastify with `app.server.emit("request", req, res)`, so the router matches on
