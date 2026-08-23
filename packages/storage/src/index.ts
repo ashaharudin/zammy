@@ -14,5 +14,6 @@ export * from "./retention.js";
 export * from "./trending-storylines.js";
 export * from "./grouping.js";
 export * from "./storylines.js";
+export * from "./storyline-link-dirty.js";
 export * from "./story-df.js";
 export * from "./storyline-timeline.js";

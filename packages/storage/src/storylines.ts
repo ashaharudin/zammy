@@ -1,5 +1,6 @@
 import { sql, type Kysely } from "kysely";
 import type { Database, StorylineStatus } from "./database.js";
+import { markStorylinesLinkDirty } from "./storyline-link-dirty.js";
 
 /**
  * Storylines v2, storage side (ADR-0011).
@@ -126,6 +127,12 @@ export async function attachGroup(
     // both derivations are over membership as it stands, not as it arrived.
     await refreshProfileTokens(trx, target);
     await refreshDaySlots(trx, target, input.timeZone);
+    // The arc's profile may have widened and its last coverage may have moved,
+    // and both are inputs the linker reads — so old groups judged against the
+    // previous version of this arc have a decision to make again (migration
+    // 0017). Marked even when the insert was a no-op: the re-derivation above
+    // runs either way, and a replay that widened the profile still widened it.
+    await markStorylinesLinkDirty(trx, [target]);
 
     const attached = Number(inserted.numInsertedOrUpdatedRows ?? 0) > 0;
     if (attached) await wake(trx, target);
@@ -162,6 +169,8 @@ export async function refreshStoryline(
     if (target === null) return;
     await refreshProfileTokens(trx, target);
     await refreshDaySlots(trx, target, input.timeZone);
+    // Whatever moved the member articles moved the linker's inputs too.
+    await markStorylinesLinkDirty(trx, [target]);
   });
 }
 
@@ -455,14 +464,22 @@ export async function mergeStorylines(
       .where("merged_into", "=", loser)
       .execute();
 
+    // `link_dirty_at` goes with the profile: an alias has no linking decision
+    // left to make, so a marker on one would hand the sweep an arc that cannot
+    // take a group (migration 0017).
     await trx
       .updateTable("storylines")
-      .set({ merged_into: winner, profile_tokens: [] })
+      .set({ merged_into: winner, profile_tokens: [], link_dirty_at: null })
       .where("id", "=", loser)
       .execute();
 
     await refreshProfileTokens(trx, winner);
     await refreshDaySlots(trx, winner, input.timeZone);
+    // The winner's profile is now derived over BOTH memberships and its coverage
+    // spans both — the strongest form of "this arc changed", and the one the
+    // loser's `attached_at` rows deliberately cannot express, since they keep the
+    // timestamps they arrived with.
+    await markStorylinesLinkDirty(trx, [winner]);
     // "Active again when it EARNS coverage" (ADR-0011) — and a merge only
     // earns what the loser brings. A live loser (a provisional birth carrying
     // today's group, or an active arc) is fresh standing; a DORMANT loser is
@@ -1213,7 +1230,11 @@ export async function absorbMergedGroup(
 
     const survivor = survivors[0]?.id;
     if (survivor === undefined) {
+      // The storyline kept its own identity and swapped one member group for
+      // another: its derivations are re-computed over different articles, which
+      // is a change to what the linker reads (migration 0017).
       await refreshStorylineDerivations(db, storyline_id, input.timeZone);
+      await markStorylinesLinkDirty(db, [storyline_id]);
       continue;
     }
 
@@ -1221,7 +1242,7 @@ export async function absorbMergedGroup(
     await db.deleteFrom("storyline_days").where("storyline_id", "=", storyline_id).execute();
     await db
       .updateTable("storylines")
-      .set({ merged_into: survivor, profile_tokens: [] })
+      .set({ merged_into: survivor, profile_tokens: [], link_dirty_at: null })
       .where("id", "=", storyline_id)
       .execute();
     await db
@@ -1230,6 +1251,7 @@ export async function absorbMergedGroup(
       .where("merged_into", "=", storyline_id)
       .execute();
     await refreshStorylineDerivations(db, survivor, input.timeZone);
+    await markStorylinesLinkDirty(db, [survivor]);
   }
 }
 

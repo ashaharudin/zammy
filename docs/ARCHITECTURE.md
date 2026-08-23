@@ -932,6 +932,90 @@ The chores were once a BullMQ job scheduler registered at boot, which bought exa
 instances from Redis-shared state; the runner buys it from a Postgres advisory lock, one key per
 pass.
 
+#### The late-candidate sweep's two modes, and what the narrow one stops promising
+
+`runLateCandidateChore` offers old groups to the linker again (ADR-0011: "a Wednesday storyline may
+pull in Monday's group"). Its bound has always been the trailing DF window — every group in the
+fortnight, every night — and `--changed-only` /
+`STORYLINE_LATE_CANDIDATE_CHANGED_ONLY` narrows that to the groups whose answer could have moved,
+starting from the arcs marked in `storylines.link_dirty_at` (migration 0017). **Both the marker and
+the narrow mode ship off**, and the honest reasons are below rather than in a commit message.
+
+**The marker's home was a decision.** Not `storyline_groups.attached_at`, which deliberately
+preserves the loser's timestamp when a merge re-points membership, so a merge WINNER — whose profile
+was just re-derived over both memberships — never appears in `attached_at > $lastRun`. And not a
+`chore_runs` row: that table belongs to the Vercel deployment plan above and is unbuilt, and a single
+global "when did the pass last run" timestamp is the wrong shape regardless — it is not crash-safe (a
+run that dies half way marks the whole night done), it cannot survive a missed night without a
+lookback window somebody keeps in step with a scheduler this process cannot see, and the schedule is
+explicitly outside the app. A per-row marker cleared by the pass that consumed it has none of those
+problems: rows the pass did not reach are still marked, so a crashed or skipped run costs latency and
+nothing else. The clear is compare-and-clear (`link_dirty_at <= $read`), so a write landing *during*
+the pass is not swallowed by it — which is why the marker is a timestamp and not a boolean.
+
+**What the narrow mode stops guaranteeing.** It reaches an arc whose profile widened or whose
+coverage moved, a candidate crossing 1→2 groups (which un-blocks a coherence refusal, and which can
+leave `profile_tokens` byte-identical — so the predicate is membership, never a profile diff), a
+group an article joined, and a group merge enlarging a winner. It does **not** reach:
+
+1. **Trailing-corpus drift under a fixed group.** `pruneStoryDf` deletes buckets past
+   `windowDays + 1`, so a group's window shrinks as it ages inside the sweep window: same group, same
+   arc, neither side changed, different verdict — driven by last night's retention chore. No storyline
+   is anywhere in the causal chain, so no marker exists. Only an unscoped pass finds these.
+2. **Groups in no storyline at all.** A crash between the group's insert and its birth storyline
+   leaves a group with no timeline slot and no marker to carry it (measured once: 7 groups from
+   2026-07-24..31 sat unlinked with the cursor three weeks past them).
+3. **Bridges and alias re-points lost between qualification and insert**, which a free re-offer
+   repairs because `recordBridge` is idempotent.
+4. **Anything the marker's own write path dropped** — a crashed tail, a rolled-back deploy, a
+   disabled flag.
+
+A **withheld formation** is the interesting near-miss and it IS covered, deliberately: a withhold
+writes nothing at all, so nothing marks anything, and the pass re-marks the group's own arc from the
+in-memory outcome. Without that the pair would drop out of the changed set for good, which is the one
+thing `runLateCandidateChore`'s own comment says it may not do.
+
+**Two things the queue needs that the unfiltered pass gets for free.** The narrow pass reads a keyset
+forward through a queue *it is appending to* — every attach and merge stamps its arc with `now()`,
+which lands ahead of the cursor — so one pass will follow the whole cascade to convergence unless it
+is bounded to the queue as it stood when it began (measured: without the bound, a filtered pass over
+the dev archive was still finding ~2,400 dirty arcs after twenty minutes). And the markers are
+per-arc while the offers are the union over a batch, so when `maxGroups` cuts a batch short there is
+no way to say which arc an un-offered group came from: the pass leaves that whole batch marked rather
+than retiring questions it never asked. Both are the same discipline — a marker may only be cleared
+by a pass that actually asked its question.
+
+**And the narrowing is much weaker than it was designed to be, which is why it is off.** MEASURED on
+a `pg_restore` clone of the dev archive (31,308 articles, 12,558 window groups):
+
+- The inverse retrieval cannot filter on the anchor or the mass floor. Both are functions of `N` and
+  `df`, and both are functions of *which fortnight the reader is standing in* — the arc's, or each
+  candidate group's. One real missed pair: the group's window held 1,074 articles so its ceiling
+  floored out at 10 and its shared tokens had df 6, mass 31.8, qualifying comfortably; the arc's
+  window held 13,489, ceiling 27, and the same tokens had df 32–171, none anchor-eligible. Over 400
+  sampled groups that form reached **38.9%** of the pairs the real forward decision qualified.
+- The sound form — overlap, window, and the shared-token count the mass floor implies at any window —
+  reaches **87.4%**, and every remaining miss is the 200-row safety valve rather than the predicate.
+  But it names **105.6 groups per arc** on average (p50 95, p90 200), not the 2.05 the design was
+  priced at. A realistic night of 250 changed arcs names **3,698 window groups, 29.4% of the
+  window**, in 5.6s of retrieval. A 3.4× narrowing, not the ~24× the pricing assumed.
+
+- And it does not make the sweep **safer**, which was the better case for it. Measured head to head
+  over four passes from one restore, the filtered arm reaches a **32% larger runaway arc** than the
+  unfiltered pass it replaces (1,782 groups against 1,347), and is larger at every pass along the
+  way. The arcs that change every pass are the arcs the percolation runs through — a merge is what
+  marks an arc, and the runaway grows by merging — so the filter selects *for* the runaway. It is not
+  reliably faster either: the first filtered pass after a productive one took 165s against the
+  unfiltered 101s, because ~2,300 changed arcs at ~100ms of retrieval each is most of a pass on its
+  own. docs/STORYLINE-LINKING.md has both trajectories.
+
+So the changed-set filter is a modest saving bought with a real loss of guarantee, the ~12s figure it
+was proposed against does not exist, and it reaches the sweep's answers sooner rather than better. It
+is built, tested and off; what it leaves behind that is unambiguously useful is the marker itself — a
+durable record of which arcs' linking inputs moved, which is the scoping instrument a threshold
+re-measurement needs — and `--full` / `--changed-only`, which let an operator run a targeted
+late-candidate pass instead of the whole fortnight.
+
 Two consequences, neither of them visible in the api's logs. A schedule the app registers cannot be
 forgotten, while an external one is absent until someone configures it — so if nothing schedules the
 runner, every pass silently never runs and `/readyz` stays green throughout (the `chore_runs`

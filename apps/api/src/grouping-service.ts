@@ -24,6 +24,7 @@ import {
 } from "./storyline-linker.js";
 import { labelLinkedStorylines, type LabelerDeps } from "./storyline-label-service.js";
 import { mergeCollidingLabels } from "./storyline-label-merge-trigger.js";
+import { reofferJoinedGroups } from "./storyline-rejoin-trigger.js";
 import type { LabelMergeRules } from "./storyline-label-merge.js";
 import type { Metrics } from "./metrics.js";
 
@@ -59,6 +60,17 @@ export interface GroupingDeps {
      * for the nightly pass, which is the pre-trigger behaviour.
      */
     labelMerge?: { rules: LabelMergeRules; threshold: number };
+    /**
+     * Re-offer a group to the linker when an arriving article JOINS it
+     * (`storyline-rejoin-trigger.ts`). Absent — or false — is the pre-trigger
+     * behaviour: only seeded groups are linked, and an enlarged group waits for
+     * the nightly sweep.
+     *
+     * Off by default in `wiring.ts`, and that is a rollout decision rather than a
+     * doubt about the mechanism — see the knob's own note in
+     * `packages/config/src/index.ts`.
+     */
+    reofferJoinedGroups?: boolean;
   };
   /**
    * The labeler, for the promotion and merge triggers (ADR-0011). Absent means
@@ -178,6 +190,12 @@ export async function groupCreatedArticles(
 
   let grouped = 0;
   const seeded: CreatedArticle[] = [];
+  /**
+   * Groups an article JOINED, for the re-offer trigger below. A group id rather
+   * than an article: what changed is the group's majority vocabulary, and that
+   * is one fact however many of this batch's articles landed in it.
+   */
+  const joined: string[] = [];
   const counted: {
     published: Date;
     language: string | null;
@@ -196,8 +214,13 @@ export async function groupCreatedArticles(
           groupId: null,
         });
         seeded.push(article);
-      } else if ((await groupArticle(deps, article)) !== null) grouped += 1;
-      else seeded.push(article);
+      } else {
+        const joinedGroup = await groupArticle(deps, article);
+        if (joinedGroup !== null) {
+          grouped += 1;
+          joined.push(joinedGroup);
+        } else seeded.push(article);
+      }
       // Only after the decision was recorded: `groupArticle` is what writes
       // `story_tokens`, and counting an article whose tokens never landed
       // would put the aggregate and its source out of step in the one
@@ -230,11 +253,25 @@ export async function groupCreatedArticles(
     counted,
   );
 
-  // The linker (ADR-0011), on the seeded groups only — an article that
-  // JOINED a group inherited that group's storylines, so only the ones that
-  // SEEDED a group have a decision left to make. A DECISION, note: a joining
-  // article still leaves its group's storylines' DERIVATIONS stale, which
-  // `groupArticle` re-derives on the spot rather than deferring to here.
+  // The linker (ADR-0011), INLINE on the seeded groups only. The groups an
+  // article merely joined are re-offered on the tail below instead, and the
+  // split is about latency rather than about who has a decision left to make:
+  //
+  //   - a SEEDED group has no storyline at all until the linker gives it one,
+  //     and the timeline pages over `storyline_days` — so a birth deferred to a
+  //     dropped promise is a card a reader may not see. It stays on the clock.
+  //   - a JOINED group inherited its group's storylines, so its membership is
+  //     already settled and nothing a reader is waiting on depends on the
+  //     answer. What it did NOT inherit is a re-judgement: a group speaks
+  //     through the MAJORITY of its members' tokens, so an arrival can widen the
+  //     profile the linker last saw, and this path used to be where that widened
+  //     profile stopped being asked about (`storyline-rejoin-trigger.ts`).
+  //
+  // Membership and derivations part company here, and the distinction cost
+  // months: a joining article leaves every storyline holding that group with
+  // stale day slots and a stale profile, which `groupArticle` re-derives on the
+  // spot. That is not deferred to the tail, because a wrong day slot is a wrong
+  // lead article on a card a reader is looking at right now.
   //
   // It runs after the df maintenance above deliberately: the arriving group's
   // own tokens belong in the corpus its rarity is measured against, or a story
@@ -258,24 +295,52 @@ export async function groupCreatedArticles(
       await linkableGroups(deps, seeded),
     );
 
-    // The promotion and merge triggers (ADR-0011), and the one thing they must
-    // not be is awaited: a label averages ~8s against a 20s timeout, and the
-    // linker above runs inside the §6.3 deadline a reader is waiting on. The
-    // tail never throws, which is what makes starting-and-dropping it safe.
-    if (deps.labeler && outcomes.length > 0) {
+    // THE TAIL: the membership-change re-offer, the promotion and merge
+    // triggers, and the collision-triggered label merge. The one thing none of
+    // them may be is awaited — a label averages ~8s against a 20s timeout, and
+    // the linker above runs inside the §6.3 deadline a reader is waiting on.
+    // Every step here never throws, which is what makes starting-and-dropping
+    // the whole chain safe.
+    //
+    // What the tail costs a READER is not nothing, and it is not latency: the
+    // ingest response caches on `state === "complete"` (`timeline-service.ts`),
+    // so anything that lands here is invisible to `meta.ingest` for the TTL.
+    // Measured precedent, `trending-service.ts`: 61 labels landed in the ~3
+    // minutes after a cloud of 3 was cached. A retroactive attach is the mildest
+    // version of that — the group already renders in its own slot and what it
+    // gains is a second arc — but it is the same cost, and it is the price of
+    // keeping this off the deadline.
+    const reoffer = deps.config.reofferJoinedGroups === true && joined.length > 0;
+    if (reoffer || (deps.labeler && outcomes.length > 0)) {
       const labeler = deps.labeler;
       const labelMerge = deps.config.labelMerge;
-      const tail = labelLinkedStorylines(
-        {
-          db: deps.db,
-          labeler,
-          // Deferred formations are resolved in this tail, and performing the
-          // merge the linker withheld recomputes day slots.
-          formations: { timeZone: deps.config.linker.timeZone },
-          ...(deps.log ? { log: deps.log } : {}),
-        },
-        outcomes,
-      ).then(async (labelled) => {
+      const linker = deps.config.linker;
+      const tail = (async () => {
+        // The re-offer BEFORE the labels, so an arc a re-offer grows or promotes
+        // is named in the same tail rather than waiting for the nightly drift
+        // pass. Its outcomes join the seeded ones and travel the same path — a
+        // retroactive promotion is the same promotion whichever offer caused it.
+        const rejoined = reoffer
+          ? await reofferJoinedGroups(
+              { db: deps.db, config: linker, ...(deps.log ? { log: deps.log } : {}) },
+              joined,
+            )
+          : [];
+        const linked = outcomes.length > 0 ? [...outcomes, ...rejoined] : rejoined;
+        if (!labeler || linked.length === 0) return;
+
+        const labelled = await labelLinkedStorylines(
+          {
+            db: deps.db,
+            labeler,
+            // Deferred formations are resolved in this tail, and performing the
+            // merge the linker withheld recomputes day slots.
+            formations: { timeZone: linker.timeZone },
+            ...(deps.log ? { log: deps.log } : {}),
+          },
+          linked,
+        );
+
         // The collision-triggered merge, on the names this batch just wrote —
         // the one moment a label collision can come into being. Behind the
         // same dropped promise as the labelling, and safe there for the same
@@ -292,7 +357,7 @@ export async function groupCreatedArticles(
           },
           labelled,
         );
-      });
+      })();
       if (deps.labelTail) deps.labelTail(tail);
       else void tail;
     }

@@ -190,6 +190,10 @@ export async function buildApp(config: Config): Promise<App> {
           rules: createLabelMergeRules(config),
           threshold: config.STORYLINE_LABEL_MERGE_TRIGGER,
         },
+        // The membership-change re-offer (`storyline-rejoin-trigger.ts`), on the
+        // same tail. Off by default — the knob's own note says why, and it is
+        // about the candidate cap rather than about the trigger.
+        reofferJoinedGroups: config.STORYLINE_REOFFER_JOINED_GROUPS,
       },
     },
     now: () => new Date(),

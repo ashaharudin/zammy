@@ -568,6 +568,73 @@ const EnvSchema = z
       .default("false")
       .transform((value) => value === "true"),
     /**
+     * Re-offer a group to the linker when an arriving article JOINS it
+     * (`storyline-rejoin-trigger.ts`), on the ingest tail. Off is the pre-trigger
+     * behaviour exactly: only seeded groups are linked, and an enlarged group
+     * waits for the nightly late-candidate sweep.
+     *
+     * The mechanism is not in doubt — it is `linkGroup`, unchanged, one offer
+     * per enlarged group, and the `ownGroups > 1` guard bounds it to ONE
+     * retroactive arc per group whatever the offer rate. It closes a gap the
+     * ingest path opens by design: an article joining a group widens the
+     * MAJORITY profile the linker judged, and nothing was ever going to ask
+     * again.
+     *
+     * It ships OFF anyway, and the reason has changed since it was written. The
+     * original one was the candidate cap: an offer spent a group's ONE lifetime
+     * retroactive slot against a set truncated to 200 rows, and that spend is
+     * monotone — once `existing.length > 1` the group can never take another
+     * arc — so firing at ingest frequency made an irreversible choice earlier
+     * and against the worse candidate set. That cap is gone
+     * (`anchorEligibleTokens`), and on the OLD retrieval this trigger bought
+     * nothing measurable anyway: 42 retroactive arcs against a control cohort's
+     * 29, about 1.5 sigma.
+     *
+     * Against the NARROWED retrieval it is worth 1.39x the arcs and 2.33x the
+     * merges of that control — and the merges are the problem, because merges
+     * are what percolate (see `STORYLINE_LATE_CANDIDATE_SWEEP`). So this now
+     * waits on the same thing the sweep waits on: re-measuring K
+     * (`STORYLINE_MERGE_BRIDGES`) against a replay that re-offers. Two knobs,
+     * one blocker.
+     */
+    STORYLINE_REOFFER_JOINED_GROUPS: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+    /**
+     * Narrow the nightly late-candidate sweep to the groups whose candidate set
+     * could have changed since the last pass cleared its markers
+     * (`storyline-changed-set.ts`, `storylines.link_dirty_at`). Off is the
+     * unfiltered pass: every group in the trailing DF window, every night.
+     *
+     * This is where the order of magnitude is — MEASURED, ~12s a night against
+     * ~275s — and it is the same decision at the same bar, because the filter is
+     * a retrieval bound and `linkGroup` still makes every call.
+     *
+     * It ships off for two reasons, and the second is the real one.
+     *
+     * The marker column starts NULL on every existing row, so a filtered pass
+     * finds nothing at all until a night of ordinary writes has marked
+     * something. Turning this on in the same deploy as the migration would be a
+     * silent no-op night that reports a clean tally, which is the exact failure
+     * mode a changed-set filter has to be defended against. Deploy, let markers
+     * accumulate, then flip.
+     *
+     * And it narrows a GUARANTEE. The unfiltered pass promises "every group in
+     * the window, every night"; this promises "every group whose answer could
+     * have moved, as far as a marker can tell". Trailing-corpus drift moves a
+     * verdict with no storyline anywhere in the causal chain — last night's
+     * retention prune shrinks the window under a group that has not changed —
+     * and a group holding no storyline at all has no marker to carry it. Those
+     * classes want an unfiltered pass on some cadence (`chores storylines
+     * --full`), and the bounded, resumable version of that pass is not built
+     * yet. docs/ARCHITECTURE.md §9.1 has the full list.
+     */
+    STORYLINE_LATE_CANDIDATE_CHANGED_ONLY: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+    /**
      * Days without coverage after which a storyline leaves the normal candidate
      * set. UNMEASURED, and honestly so: the dev archive is 31 days, so 30, 90
      * and 365 replay identically — nothing in it is ever dormant. ADR-0011's
