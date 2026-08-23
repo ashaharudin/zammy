@@ -304,7 +304,7 @@ exercise it.
 A changed-set filter was also built and measured against this, and it is worth recording that it
 makes things **worse, not safer**: a merge is what marks an arc dirty, so a filter that offers only
 marked groups selects for the feedback loop. Head to head over four passes, unfiltered ends at 1,347
-and filtered at **1,782**, larger at every pass. It is off by default too.
+and filtered at **1,782**. It is off by default too.
 
 ## 3. The label pass: a backlog, not a nightly cost
 
