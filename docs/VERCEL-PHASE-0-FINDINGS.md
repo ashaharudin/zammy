@@ -333,7 +333,8 @@ idempotent; the driver is qualifier width feeding a quadratic pair generator.
 Hand-reading the results says both things are true at once: the new 151-group FIFA/Infantino arc is
 coherent across all 151 groups, a genuine link the cap was suppressing, while the 201-group arc
 chains Gaza, the Israel-Iran war and Russia-Ukraine through shared diplomatic vocabulary. The replay
-at the pinned bar says the largest arc should be **50**.
+at the pinned bar says the largest arc should be **50** — a figure the note at the end of this
+section withdraws, because the replay reaches it only by not modelling the merge.
 
 **So the fix split in two.** The retrieval narrowing shipped on the birth path — the argument being
 that it repairs that path to match the candidate set the thresholds were certified against, and that
@@ -350,6 +351,28 @@ A changed-set filter was also built and measured against this, and it is worth r
 makes things **worse, not safer**: a merge is what marks an arc dirty, so a filter that offers only
 marked groups selects for the feedback loop. Head to head over four passes, unfiltered ends at 1,347
 and filtered at **1,782**. It is off by default too.
+
+> **The K re-measurement this section blocks on has since been done, and it relocated the problem
+> rather than settling it** — docs/STORYLINE-LINKING.md, "K, re-measured against a replay that
+> re-offers". A replay that re-offers confirms the sweep must stay off: interleaved, one pass a
+> night, with the retrieval **narrowed** (`STORYLINE_NARROW_RETRIEVAL=true`, which §2.5 has since
+> made the non-default), the largest arc reaches **4,540 groups (17.46% of the window)** and is still
+> climbing when the corpus runs out. But building that harness exposed why this section's own "the
+> replay says 50" is not a safe baseline: **the replay does not model `mergeStorylines` re-pointing
+> the loser's bridges onto the winner**, which is the mechanism `cascadeMerge` exists to drain.
+> Modelled, the pinned bar builds a **2,591-group arc on the BIRTH path alone** — the path PR #117
+> corrected unconditionally and PR #128 has since gated. So K is not the binding constraint, the
+> sweep is not the only thing that needed gating, and the residual risk this section names ("a
+> from-scratch replay does not exercise it") turns out to point the other way: the from-scratch
+> replay is the pessimistic case, and the live archive is safe only because the cap built it.
+>
+> **Corrected 2026-08-23**, and the correction is in this document's own genre: the first version of
+> that measurement reported **5,927 groups (22.79%)** because its harness counted a doubly-homed
+> group's membership TWICE where `mergeStorylines` counts it once. Only the re-offer figures were
+> affected — the 2,591 above is birth-only and reproduces exactly — and the direction is the one
+> that matters here: the sweep's amplification falls from 2.3x to **1.75x**, so the birth path is
+> **57%** of the final arc rather than 44%. Every conclusion above survives; the load-bearing one
+> got stronger. The bug is written up where the numbers are.
 
 ### 2.7 The hybrid state — the one residual nothing has tested
 
@@ -384,6 +407,11 @@ The likely outcome is benign, and worth stating so the risk is not overdrawn: th
 is that fusing fragments widens profiles past the point the thresholds certify. Nobody knows which,
 and the uncertainty points the same way that has already been wrong twice in this section.
 
+**That guess was wrong, and step 1 below is where it was measured.** A cap-built archive swept with
+the retrieval corrected does not converge toward 50; it converges at 4,668, which is where the
+from-scratch run ends up too. The benign reading is refuted — the second failure mode is the one that
+happens.
+
 **What to do, in order.**
 
 1. **Measure it.** Entirely in memory, no database: replay from scratch *with the cap in place* to
@@ -393,6 +421,37 @@ and the uncertainty points the same way that has already been wrong twice in thi
    re-measurement builds — the same instrument minus the re-offer, plus a cap-built starting state.
    **Held deliberately until that harness exists**, rather than building a second simulator; a forked
    simulator drifting from the service is how §2.5's bug survived.
+
+   **That harness now exists, and its `--capped-build=200` control answers the half of this that
+   decides the choice in step 2.** `ReplayFidelity.cappedRetrievalLimit` builds the archive under the
+   pre-#117 retrieval — whole-profile probe, 200-row cut APPLIED, the only place this replay applies
+   the cut at all — and then sweeps it with the retrieval corrected. No database, no second
+   simulator, one `offerGroup`. Measured (docs/STORYLINE-LINKING.md, "The trajectories"): a cap-built
+   archive starts at a largest arc of **31** and the corrected retrieval takes it to **4,668**,
+   converged by pass 5. **So the hopeful reading is refuted.** These merges are not repairs
+   converging toward the replay's 50; a cap-built archive and a from-scratch one end up in the same
+   place — 4,668 against the from-scratch interleaved 4,540 — because the corrected retrieval is what
+   puts them both there. Fusing cap-created fragments does widen profiles past the point the
+   thresholds certify, which was the failure mode this section named and could not choose between.
+
+   **What it does not answer, and step 1 is not closed.** Three gaps, in order of how much they
+   matter:
+
+   - **It applies the corrected retrieval as sweep RE-OFFERS, not as birth-only arrivals on
+     subsequent days.** That is the ~12,000-a-night rate this section contrasts with the birth path's
+     ~1,300 a day, so it prices the accelerated version of the trajectory rather than the one
+     production would walk. The endpoint is likely right and the *timescale* is not measured.
+   - **There are no "subsequent days".** The control sweeps the archive it built, so there is no
+     per-day series of new arrivals judged against a cap-built base — which is the shape step 1 asked
+     for and the shape a rollout would want to watch against.
+   - **The cap-built archive is the replay's, not production's.** It carries no label-agreement
+     merges, no coherence-gate withholdings, and profiles derived by the replay's majority rule
+     rather than storage's union rule — which is measurably wider (STORYLINE-LINKING.md, "Three
+     things this contradicts"). All three point the same way: production's starting state is
+     *broader* than the one this control builds.
+
+   With `STORYLINE_NARROW_RETRIEVAL` now defaulting to **off** (§2.5), none of this is running, which
+   is what buys the time to close the remaining gaps rather than guess them.
 2. **Then choose: repair, or converge.** `backfill:storylines --restart` calls `resetStorylines` and
    rewrites every storyline, eliminating the hybrid by construction — and discards all label history,
    ~3,934 promoted storylines to relabel at the free tier's 500/day, so about **eight days of quota**,
