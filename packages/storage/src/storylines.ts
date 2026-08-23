@@ -945,11 +945,20 @@ export async function readStorylineDays(
   }));
 }
 
-/** A retrieval candidate: the facts the linker's decision reads, nothing else. */
+/**
+ * A retrieval candidate: the facts the linker's decision reads, nothing else.
+ *
+ * `status` is deliberately NOT here, though the column exists and matters
+ * elsewhere (`timeline-service` renders the dormant pill from it, and
+ * `mergeStorylines` reads a loser's before the merge erases it). The linker's
+ * decision never reads it: `barFor` derives dormancy from `lastCoverageMs` at
+ * decision time, so the column could only disagree with the bar. It was
+ * selected and dropped on the floor by the one caller for as long as this
+ * function has existed.
+ */
 export interface StorylineCandidate {
   id: string;
   profileTokens: string[];
-  status: StorylineStatus;
   /** Its most recent day slot — what dormancy is measured from. */
   lastCoverage: Date;
   groupCount: number;
@@ -964,12 +973,23 @@ export interface StorylineCandidate {
  * index does not contain them and their profiles are emptied on merge —
  * because attaching to a pointer would strand the group.
  *
- * `limit` is a safety valve for a pathological token, not a tuning knob: a
- * group carrying a word half the archive shares would otherwise make one
- * decision an unbounded scan. Ordered by recent coverage first so the cut,
- * when it binds, keeps the storylines a group is most likely to belong to —
- * degrading to a worse link is this layer's cheap direction, exactly as
- * grouping's own candidate cap argues (§14.3).
+ * `tokens` is whatever array the caller has proved sufficient to retrieve on,
+ * NOT necessarily the group's whole profile — the linker passes the
+ * anchor-eligible subset, because a storyline sharing no anchor-eligible token
+ * cannot clear the anchor bar and so cannot qualify (`anchorEligibleTokens`).
+ * This function does not know or check that; it overlaps what it is given.
+ *
+ * `limit` is a safety valve, and the ordering is a last resort rather than a
+ * graceful degradation. Earlier comments here claimed the `last_coverage desc`
+ * cut "keeps the storylines a group is most likely to belong to", and the
+ * measurement says otherwise: at `limit` 200 against a whole-profile probe the
+ * cut bound on 99% of groups and discarded ~10% of the storylines that would
+ * have qualified at the pinned thresholds, because coverage recency is not what
+ * the decision reads — mass and anchor df are. The ordering is deterministic
+ * (`s.id` breaks ties) so a replay cuts the same rows, and that is all it is
+ * for. **When this limit binds, real links are being lost**; the caller's job is
+ * to pass an array narrow enough that it does not. See the linker's
+ * `CANDIDATE_LIMIT` for the census that sets the value.
  */
 export async function readCandidateStorylines(
   db: Kysely<Database>,
@@ -980,13 +1000,11 @@ export async function readCandidateStorylines(
   const { rows } = await sql<{
     id: string;
     profile_tokens: string[];
-    status: StorylineStatus;
     last_coverage: Date | null;
     group_count: string;
   }>`
     select s.id,
            s.profile_tokens,
-           s.status,
            (select max(d.day_slot_published) from storyline_days d
              where d.storyline_id = s.id) as last_coverage,
            (select count(*) from storyline_groups g
@@ -1001,7 +1019,6 @@ export async function readCandidateStorylines(
   return rows.map((row) => ({
     id: row.id,
     profileTokens: row.profile_tokens,
-    status: row.status,
     // A storyline with no day slots has no member articles yet — brand new,
     // and `created_at` is not coverage. Treated as covered now, which is what
     // it is: the arrival that seeded it is what put it here.

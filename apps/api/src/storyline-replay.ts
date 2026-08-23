@@ -1,4 +1,5 @@
 import {
+  anchorEligibleTokens,
   bridgePairs,
   groupProfile,
   qualifyingStorylines,
@@ -145,10 +146,28 @@ export function replayLinker(
     const corpus = corpusAt(group, profile);
     if (corpus.size === 0) continue;
 
-    // Candidate retrieval: every storyline sharing at least one token, which is
-    // exactly what `profile_tokens && story_tokens` returns.
+    // Candidate retrieval, and it must be the SERVICE's retrieval, because a
+    // threshold is only pinned against the candidate set production will
+    // actually judge. That is not a free-standing remark: this comment used to
+    // say the loop below was "exactly what `profile_tokens && story_tokens`
+    // returns", which was true of the predicate and silent about the
+    // `limit 200` the service added on top — so every threshold in
+    // `config/src/index.ts` was certified against an uncapped candidate set
+    // while production ran a capped one, on 99% of groups. The divergence was
+    // invisible for exactly as long as both comments sounded right.
+    //
+    // So: probe with the anchor-eligible subset, as `linkGroup` does. Doing it
+    // here is provably a no-op on the RESULT — the filter is a necessary
+    // condition (`anchorEligibleTokens`), so the qualifier set is identical
+    // either way, and `storyline-link.test.ts` asserts that. It is done anyway
+    // because "the same rule, written once, called twice" is a correspondence a
+    // reader can check, and "a superset that happens to qualify the same" is one
+    // they have to re-derive. The limit is the other half of the agreement, and
+    // the service's `CANDIDATE_LIMIT` is now set so that it never binds on the
+    // corpus it was measured over — a value at which having no limit here and a
+    // limit there is a difference with no consequence.
     const candidateIds = new Set<string>();
-    for (const token of profile) {
+    for (const token of anchorEligibleTokens(profile, corpus, rules)) {
       for (const id of byToken.get(token) ?? []) {
         if (id !== own.id) candidateIds.add(id);
       }

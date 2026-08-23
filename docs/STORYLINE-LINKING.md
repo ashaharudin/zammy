@@ -787,3 +787,97 @@ incoherence, which is why this residue grew into top-ten arcs unnoticed. What
 does surface them is the domain aggregate above, and — at formation only — the
 coherence verdict, which refused two `fool.ca` dividend pairs in the cleanup's
 dry run.
+
+## Candidate retrieval was truncating the decision (2026-08-22)
+
+Everything above was measured by the in-memory replay, and the replay retrieves
+candidates by *"every storyline sharing at least one token"* with **no limit**.
+The service does not. `readCandidateStorylines` adds `limit 200`
+(`CANDIDATE_LIMIT`), and it was documented as *"a safety valve for a pathological
+token, not a tuning knob"*.
+
+It was not a valve. Measured over **all 12,366 groups** in the dev archive's
+trailing window (31,308 articles, 17,008 live storylines, read-only against
+`zammy` and mutating only `pg_restore` clones since dropped):
+
+| probing with | rows returned | cap at 200 binds |
+| --- | --- | --- |
+| the whole group profile | p50 **1,903**, mean 2,074, max 8,054 | **12,266 of 12,366** |
+| the anchor-eligible subset | p50 78, p99 684, max 2,625 | 1,131 of 12,366 |
+
+So on 99% of groups the cut was the normal operating point, discarding ~90% of
+the candidate set by `last_coverage` recency — which is not what the decision
+reads. **Every pinned value in this document was certified against a candidate
+set production has never judged.**
+
+### The fix: probe with the anchor-eligible subset
+
+`qualifyingStorylines` rejects a candidate when `evidence.anchorDf >
+bar.ceiling`, `anchorDf` is the df of the *rarest shared* token, and `barFor`
+only ever divides the ceiling. So a qualifying candidate must share at least one
+token whose window df is at or below `anchorCeiling` — probing on that subset is
+a **necessary condition**, the same kind of retrieval bound `profile_tokens &&`
+already is, and it is free because `readTrailingCorpus` has already returned the
+df map (`anchorEligibleTokens`).
+
+| over 800 sampled window groups | full profile | anchor-eligible |
+| --- | --- | --- |
+| tokens probed with (p50) | 19 | **7** |
+| `readCandidateStorylines` mean | 34.9 ms | **2.2 ms** (15.8×) |
+| qualifiers found | 34 | **1,181** |
+| qualifiers lost | — | **0** |
+
+Zero lost is what a proven necessary condition predicts, and it held over 800
+groups. An **absent** token is anchor-eligible and the filter must say so
+explicitly — `linkEvidence` scores a token missing from the df map as df 1,
+"genuinely the rarest thing there is". 0 of 237,944 profile tokens were absent on
+this corpus, so only a unit test holds that line.
+
+`CANDIDATE_LIMIT` is now **4,000**: it binds on 0 of the 12,366 groups where 200
+binds on 1,131 and discards ~10% of qualifiers. It stays a limit rather than
+being deleted because narrowing does not bound the fan-out structurally — a token
+can be rare in the 14-day window and still sit in many long-lived storyline
+profiles, since storylines outlive the window that measures them (`openai`:
+window df 27, in 73 live profiles).
+
+### …and fixing it exposed a second, independent bug
+
+**The nightly late-candidate sweep percolates against the true candidate set,
+and is now off by default** (`STORYLINE_LATE_CANDIDATE_SWEEP`).
+
+Four passes of the real `runLateCandidateChore` over 2,000 groups on a clone,
+`labeler` omitted so no model call was made:
+
+| | live storylines | largest | 100+ arcs | 20–99 | bridges |
+| --- | --- | --- | --- | --- | --- |
+| baseline (cap 200) | 17,008 → 16,983 | 124 → 124 | 1 | 15 | 1,913 → 1,927 |
+| narrowed, pass 1 | → 16,124 | 124 | 2 | 34 | → 10,002 |
+| narrowed, pass 2 | → 16,045 | **157** | 4 | 30 | → 10,237 |
+| narrowed, pass 3 | → 16,026 | **201** | 4 | 29 | → 10,256 |
+| narrowed, pass 4 | → 16,025 | 201 | 4 | 29 | → 10,282 |
+
+It converges by pass 4, and it converges somewhere wrong. **The largest storyline
+grew 124 → 201 from offering 16% of the window**, and the 201 is not a story: it
+chains Gaza, the Israel-Iran war and Russia-Ukraine together through shared
+diplomatic vocabulary — the transitive percolation K=2 exists to prevent. Two of
+the other new arcs (157, 54 groups) are election *beats*, mixing the South
+Carolina Senate special with Alabama and Michigan primaries.
+
+Not everything it built is wrong, which is what makes this a threshold problem
+rather than a retrieval one: the new 151-group FIFA/Infantino arc — the World Cup
+privatisation plan, UEFA's revolt, Infantino seeking Trump's help — is coherent
+end to end across all 151 groups, and the 200-row cap was suppressing it.
+
+**Why the replay never caught it.** At the pinned bar the replay builds a largest
+storyline of **50** groups. It models birth-time offers only — each group attaches
+once and its provisional arc is absorbed — while the sweep re-offers the same
+group every night, and `bridgePairs` records the full O(n²) cross-product of its
+qualifiers on every offer. Bridges went 1,913 → 10,282 on 2,000 groups. The
+sweep's re-offer path is not modelled by the harness that pinned K, so the cap
+was silently doing the bounding that K was believed to be doing.
+
+**What this leaves open.** Turning the sweep back on wants K re-measured against
+a replay that re-offers groups, which does not exist yet. The retrieval fix
+itself is unconditional: it makes the birth path — the one the replay *does*
+model — match the candidate set these thresholds were certified against, and the
+replay now narrows identically so the two cannot drift apart again silently.
