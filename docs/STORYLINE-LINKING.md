@@ -19,12 +19,20 @@ before **it** arrived, not against today.
 
 | knob | value | status |
 | --- | --- | --- |
-| `STORYLINE_ANCHOR_MAX_SHARE` | 0.002 | measured |
-| `STORYLINE_MASS_THRESHOLD_V2` | 20 | measured |
-| `STORYLINE_MERGE_BRIDGES` (K) | 2 | measured |
+| `STORYLINE_ANCHOR_MAX_SHARE` | 0.002 | measured — but see the note below |
+| `STORYLINE_MASS_THRESHOLD_V2` | 20 | measured — but see the note below |
+| `STORYLINE_MERGE_BRIDGES` (K) | 2 | **measured against a merge the service does not perform** |
 | `STORYLINE_ANCHOR_DF_FLOOR` | 10 | **unmeasured** — never binds in English |
 | `STORYLINE_DORMANCY_DAYS` | 90 | **unmeasured** — archive too short |
 | `STORYLINE_DORMANT_STRICTNESS` | 1.5 | **unmeasured** — same reason |
+
+> **Every "measured" in this table has a caveat as of 2026-08-22, and it is the
+> same one.** The replay that measured them does not model `mergeStorylines`
+> re-pointing the loser's bridges onto the winner, so it under-counts merging on
+> the birth path as well as the re-offer path. Modelled, the pinned bar's largest
+> arc is 2,591 groups rather than 72. See "K, re-measured against a replay that
+> re-offers" at the end of this document; the two sections between here and there
+> were written before it and read the alarm as quiet.
 
 ## Percolation: the alarm never rings
 
@@ -1207,3 +1215,323 @@ re-measurement needs, and `--changed-only` / `--full`, which let an operator run
 targeted late-candidate pass instead of the whole fortnight. The filter itself
 should not be switched on before the bar the sweep judges at has been re-measured;
 until then it would reach the same wrong answers sooner.
+
+## K, re-measured against a replay that re-offers (2026-08-22)
+
+The measurement `STORYLINE_LATE_CANDIDATE_SWEEP`, `STORYLINE_REOFFER_JOINED_GROUPS`
+and `STORYLINE_LATE_CANDIDATE_CHANGED_ONLY` were all gated on. It is recorded here
+rather than in a new document because it revises the threshold grid above and the K
+table beside it, and a finding that revises a table belongs next to it.
+
+**The answer is not about re-offers, and it is worse than the question assumed.**
+Building the missing half of the harness turned up a divergence in the half that
+already existed: the replay does not model what `mergeStorylines` does to bridge
+evidence. With that modelled, **the pinned bar percolates on the BIRTH path alone**,
+and the sweep is a 2.3x amplifier on top of a graph that is already broken. K is not
+the binding constraint, and raising it is not the best available lever.
+
+### The instrument
+
+`storyline-replay.ts`, extended rather than forked — `offerGroup` is one function
+called for a group's birth and for every re-offer, exactly as `linkGroup` has no
+notion of which offer it is serving and splits only on whether the group's own
+storyline still holds nothing but the group. Two modes:
+
+- **interleaved** — each simulated day's new groups are offered, then ONE sweep pass
+  runs over the trailing DF window. This is what production runs, and it is the only
+  shape that gets the re-offer COUNT right: a group sits in the window for 14 nights,
+  so it is re-offered ~14 times, against an archive growing underneath it.
+- **posthoc** — build the archive birth-only, then run N passes over the final
+  window. Cheaper, and the shape §2.6 measured. It is **not** production: it
+  re-offers every group in the window the same number of times regardless of when it
+  was published, and never lets a new day's coverage arrive between two passes. A
+  converged post-hoc state need not equal the state production reaches, and here it
+  does not — post-hoc converges where interleaved is still climbing.
+
+Both model `linkGroup`'s re-offer path faithfully, and the two guards there are what
+keep it from being trivially explosive: **one retroactive arc per group, ever**
+(`existing.length === 1`), and **bridge evidence only from arcs the group is not a
+member of**, so a multi-homed group cannot manufacture K "independent" bridges by
+re-qualifying for its own home night after night. `storyline-replay.test.ts` pins
+both, and pins the merge semantics below.
+
+**What it does not model**, and none of these is a detail:
+
+- **the coherence gate.** No threshold measurement may spend model quota, so every
+  formation forms — the pre-gate behaviour, and the looser of the two. (`.env` has
+  `STORYLINE_COHERENCE_GATE=false` today anyway.)
+- **the label-agreement merge.** A second merge vector entirely, absent here. The
+  live archive has it, so the replay's merge counts are a floor rather than a ceiling.
+- **a group's membership changing.** Production re-aggregates `memberTokens` on every
+  read; here a group's tokens are fixed at their final state.
+- **retention.** `story_token_days` is pruned in production, which moves a verdict
+  with no storyline in the causal chain.
+- **production's hybrid state.** This builds from scratch. The live archive was built
+  under the 200-row cap and its arcs carry cap-shaped profiles.
+
+### Calibration, and one thing it exposed about `--days`
+
+Birth-only mode reproduces the committed grid **byte for byte** before and after the
+refactor, and at `--days=31` (the CLI default) the pinned bar gives a largest arc of
+**50** — the figure VERCEL-PHASE-0-FINDINGS §2.6 quotes. That is the calibration and
+it holds.
+
+Three caveats worth having on the record:
+
+- The **anchor x mass grid above cannot reproduce**, because it was measured on a
+  19,027-group corpus and this one is 26,006. Its shape holds; its numbers do not.
+- **`--days` is not a cosmetic bound.** Groups whose trailing corpus is empty are
+  never linked, but they still seed provisional storylines that later groups retrieve
+  as candidates. So widening the window widens the candidate pool: the pinned bar
+  gives largest 50 at `--days=31` and **72** at `--days=45`. `--days=45` covers the
+  whole archive and is the faithful one, since `readCandidateStorylines` applies no
+  date bound. Every number below is `--days=45`, 0.002/20.
+- The df corpus is only **15 days deep** (`story_corpus_days`: 2026-08-07 to 08-21)
+  against 39 days of publication, so ~11,000 of the 26,006 groups are never judged at
+  all. The replay's effective decision set is the last fortnight, and that bounds all
+  of these numbers including the committed ones.
+
+### The finding: the harness does not model the merge
+
+`mergeStorylines` **re-points the loser's bridges onto the winner**. A third storyline
+holding one bridge to each side therefore reaches K with no bridge inserted and
+nothing to trigger the linker's check, which only ever fires on an INSERT — which is
+why `cascadeMerge` exists, why `MergeResult.repointed` is returned at all, and why
+`readBridgedPairs` found 31 stranded pairs in this archive.
+
+**The replay has never done either.** On a merge it dropped the merged pair's evidence
+and left every other pair keyed under the alias, where the next `resolve` could not
+find it. So the harness that pinned K systematically under-counted merging — and it
+did so on the birth path, not only on the re-offer path nobody had built yet.
+
+Modelled (`ReplayFidelity.cascadeMerges`), birth-only, at the pinned bar:
+
+| K | live storylines | promoted | LARGEST | share% | merges | 100+ arcs |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 13,410 | 2,794 | 87 | 0.33 | 6,524 | 0 |
+| **2** | **15,430** | **3,039** | **2,591** | **9.96** | **3,408** | **3** |
+| 3 | 16,396 | 3,352 | 1,704 | 6.55 | 2,169 | 4 |
+| 4 | 17,010 | 3,616 | 352 | 1.35 | 1,434 | 3 |
+| 5 | 17,327 | 3,706 | 205 | 0.79 | 1,050 | 3 |
+| 6 | 17,630 | 3,859 | 85 | 0.33 | 700 | 0 |
+| 8 | 17,954 | 3,999 | 84 | 0.32 | 342 | 0 |
+| 12 | 18,207 | 4,101 | 40 | 0.15 | 68 | 0 |
+
+The same replay with the merge unmodelled gives **72** at K=2. So the birth path's
+largest arc is 36x what the harness reported, and **every threshold in
+`packages/config` was pinned against a merge the service does not perform.** The
+200-row cap is the only reason production has never shown this: under it a group's
+qualifier set was small, so pairs rarely repeated and the re-pointing avalanche had
+nothing to work with. Read together with the cap section above, the cap was doing the
+bounding K was believed to be doing — and it was doing it on the *birth* path too,
+which PR #117 corrected unconditionally.
+
+Note K=1: **87, better than K=2's 2,591.** With no evidence to accumulate there is no
+avalanche — every bridge merges immediately, while the arcs are still small enough
+that the majority rule tightens the survivor's profile. That is ADR-0011's claimed
+percolation damper, and it only works when merges are not batched.
+
+### The trajectories, with the sweep on
+
+Interleaved, one sweep pass a night over the trailing window, cascade modelled. The
+last night is 2026-08-21; nights before 2026-08-07 have no corpus and decide nothing.
+
+| K | birth-only LARGEST | with re-offers | share% | live storylines | merges | still moving at the end? |
+| --- | --- | --- | --- | --- | --- | --- |
+| **2** | 2,591 | **5,927** | **22.79** | 14,244 | 4,623 | **yes, +338 on the last night** |
+| 3 | 1,704 | 3,922 | 15.08 | 15,354 | 3,166 | yes |
+| 4 | 352 | 2,368 | 9.11 | 16,128 | 2,216 | yes |
+| 6 | 85 | 282 | 1.08 | 17,038 | 1,137 | slowly |
+| 8 | 84 | 189 | 0.73 | 17,535 | 587 | slowly |
+| 12 | 40 | 95 | 0.37 | 17,984 | 107 | slowly |
+
+The K=2 trajectory, night by night, is the shape that matters: 51 → 126 → 180 → 342 →
+1,761 → 2,162 → 3,807 → 4,823 → 4,932 → 4,992 → 5,207 → 5,509 → 5,543 → 5,589 →
+**5,927**. It does not converge inside the archive. §2.6's 1,347 over four passes was
+the same curve, sampled early and from a cap-built archive.
+
+**Post-hoc converges and interleaved does not**, which is the concrete reason to
+prefer the faithful shape: from a cap-built archive the post-hoc form settles at 5,583
+by pass 5, while interleaved is still climbing at 5,927 when the corpus runs out. A
+converged post-hoc number reads like an answer and is not one.
+
+Two controls worth recording, both on this instrument:
+
+- **From-scratch, cascade NOT modelled**, the sweep looks harmless: post-hoc holds at
+  72 across eight passes and interleaved reaches 77. That is the number the committed
+  harness would have produced, and it is the wrong answer.
+- **Cap-built archive, swept corrected** (`--capped-build=200`) reproduces §2.6's
+  experiment: 31 → 3,728 → 5,012 → 5,451 → 5,573 → 5,583, converged. So the drain is
+  real, but it is not a *separate* problem from the birth path — both end in the same
+  place, because the corrected retrieval is what puts them there.
+
+### The four options, priced against the same instrument
+
+All at K=2 unless stated, interleaved, cascade modelled. `piles` is declined
+(unnameable) piles formed — lower is better. `named`/`kept` are the model-named arcs
+left intact and their groups held together — higher is better, **and both are inflated
+by percolation**, because a 5,927-group arc trivially contains every named arc
+"intact" (`scoreJudged`: `intact = together === considered.length`). They are only
+readable against the arc distribution beside them.
+
+| option | LARGEST | share% | merges | 50-99 | 100+ | piles | named | kept |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline (today's rules) | 5,927 | 22.79 | 4,623 | 8 | 4 | 75.7% | 22.9% | 60.3% |
+| **1.** K=6 | 282 | 1.08 | 1,137 | 9 | 9 | 64.6% | 18.5% | 53.9% |
+| **1.** K=8 | 189 | 0.73 | 587 | 8 | 2 | 63.6% | 18.0% | 51.8% |
+| **2.** top-2 qualifiers may bridge | 538 | 2.07 | 2,116 | 13 | 3 | 64.6% | 21.2% | 55.7% |
+| **2.** top-3 | 4,050 | 15.57 | 3,552 | 7 | 7 | 69.4% | 23.0% | 56.9% |
+| **2.** top-5 | 6,745 | 25.94 | 4,465 | 9 | 4 | 72.8% | 24.4% | 61.2% |
+| **3.** K distinct days | 5,526 | 21.25 | 3,944 | 6 | 3 | 71.8% | 23.4% | 59.8% |
+| **3.** K distinct domains | 5,293 | 20.35 | 4,147 | 7 | 4 | 73.8% | 23.4% | 58.0% |
+| **4.** bridge at birth only | 2,702 | 10.39 | 3,340 | 3 | 2 | 68.4% | 22.9% | 55.7% |
+| **2+4.** top-2, birth only | **46** | **0.18** | 594 | **0** | **0** | 62.1% | 18.3% | 48.8% |
+| 2+4+3 (days) | 41 | 0.16 | 406 | 0 | 0 | 63.1% | 17.4% | 48.9% |
+
+What each one is actually worth:
+
+1. **A higher K works, and it is the most expensive way to get there.** K must reach
+   **6** — a 3x rise — to bring the alarm back near 100, and it pays for that by
+   refusing merges everywhere: 4,623 → 1,137, with `named` falling 22.9% → 18.5%.
+   ADR-0011 refuses to build a split, so the merge is the only repair err-narrow
+   formation has, and this raises the bar on all of it.
+2. **Bounding the qualifiers a group may bridge is the strongest single lever, and it
+   is not monotone.** At the top **2** it is decisive — birth-only largest 2,591 → 22
+   — because `bridgePairs` is a full cross-product and two qualifiers is exactly one
+   pair, so the quadratic term is gone rather than merely smaller. At 3 and 5 it is no
+   better than doing nothing (4,050 / 6,745): once the graph is percolating, trimming
+   a 40-qualifier group to 5 still leaves ten pairs an offer and the regime does not
+   change. **There is no gentle version of this knob**, which is itself the finding.
+3. **Strengthening "independent" is not worth building.** Distinct days buys 5,927 →
+   5,526 and distinct domains 5,293. The premise is sound — a day of syndicated
+   coverage does supply several groups trivially — but it is not where the volume is.
+   Cheap to reject, and now rejected on evidence.
+4. **Bridging only at birth does exactly what it promises, and it is not enough.** It
+   removes essentially all of the sweep's amplification — 5,927 → 2,702, against a
+   birth-only 2,591 — while keeping every retroactive attachment (6,060 of them). So
+   it is a correct, cheap fix for the *sweep*. It cannot fix the graph, because the
+   birth path was already at 2,591 without the sweep's help.
+
+**The combination is the only thing that reaches the calibrated range.** Top-2 plus
+birth-only bridging gives a largest arc of **46 groups and no arc above 50 at all** —
+where the birth-only replay at this bar expects 50.
+
+### The arcs, hand-read
+
+A largest-arc number cannot say whether an arc is one story, and this measurement
+turns on that twice.
+
+**Baseline (K=2, sweep on).** Incoherent, and the profile says so before the headlines
+do:
+
+- **5,927 groups, 39 days, profile EMPTY.** No token is carried by half its members,
+  which is what an arc with nothing in common looks like when the majority rule is
+  asked to describe it. Its head is the Strait of Hormuz / Iran-Oman negotiation; its
+  body is a fifth of the archive. An empty profile also makes it *unretrievable*, so
+  it stops growing by attachment and can only grow by merge — a pile that has eaten
+  its own vocabulary.
+- **331 groups, profile EMPTY** — MLB game recaps. A beat, and ADR-0011 forbids beats.
+- **188 groups, profile `wildfire`** — Spain, France, Greece and North America chained
+  into one arc. A theme, not an event.
+
+**K=6 (option 1).** Large but mostly meaningful, which is the case for option 1:
+
+- **282 groups, `graham, primary, senate, south`** — the South Carolina Senate special
+  and Darline Graham's campaign. **Coherent**, over 26 days, tightly profiled. The
+  201-group Gaza/Iran/Ukraine chain §2.6 read is not here.
+- **209 groups, `russia, ukraine`** — defensible as one running war, but a two-token
+  profile is a warning: it is the vocabulary a theme shares, not the vocabulary an
+  event has.
+- **151 groups, profile `beat, night`** — MLB recaps again. **Incoherent**, and the
+  clearest evidence that K does not touch the boilerplate class at all: the profile is
+  literally the two words a sports recap headline always contains.
+- **135 groups, `bank, israeli, palestinian, settler, west`** — West Bank settlement
+  expansion. Correctly profiled; a running theme rather than one event.
+- **126 groups, FedEx St. Jude Championship** — **coherent** as a tournament.
+
+**Top-2 + birth-only bridging (options 2+4).** Nothing is a percolation pile. The
+failures are the boilerplate families this document already records as known residue,
+and the successes are event-shaped:
+
+- **46 groups, `nasdaq, sec, filing, stock, share...`** — institutional-holdings
+  filings. **Incoherent, and pre-existing**: the same syndication residue recorded
+  above under "Known residue", not a new failure.
+- **36 groups, `luigi, mangione, plea, guilty, court`** — **incoherent**. Mangione's
+  federal plea mixed with the Rushdie stabbing trial, the Sam Nordquist murder case
+  and a wildfire arson suspect. A criminal-courts beat, and a genuine linking failure
+  rather than boilerplate.
+- **34 groups, `crowley, francesca, hong, wisconsin, gubernatorial`** — **mostly
+  coherent**, the Wisconsin governor's primary, with the election-beat contamination
+  this document already knows about (a Michigan Senate primary and a Tennessee
+  primary-results page are in it).
+- **30 groups, `marketbeat, screener, publicly, traded`** and **29 groups, `obituary,
+  passed, peacefully, born`** — **incoherent**, both pure template residue, both known
+  families. The obituary arc links unrelated dead people by the phrasing of their
+  notices.
+- **29 groups, `by-election, clacton, farage, nigel`** and **27 groups, `ambassador,
+  hoekstra, canada, petition`** — **coherent**, one event each, end to end.
+
+**And the cost of option 2, read rather than counted.** `kept` falls 56.8% → 48.8%
+against the birth-only baseline, and reading the arcs says what that is:
+FIFA/Infantino comes out at **17 groups** where the sweep on the live archive built a
+**151-group arc this document judged coherent end to end**, and the Canada tariff
+negotiation is split across ten arcs of 26, 16, 15, 13, 11, 11, 10, 10 and 9 groups,
+each correctly and narrowly profiled (Keystone XL, steel, the deadline, Navarro and
+Modi, Quebec). That is **err-narrow**, which ADR-0011 prefers — but ADR-0011 also says
+the merge is the only repair err-narrow formation has, and top-2 removes most of it
+(4,623 merges → 594). Option 2 buys the alarm by giving up the cure.
+
+### What this recommends
+
+**Leave all three knobs off.** Nothing here supports enabling
+`STORYLINE_LATE_CANDIDATE_SWEEP`, `STORYLINE_REOFFER_JOINED_GROUPS` or
+`STORYLINE_LATE_CANDIDATE_CHANGED_ONLY`, and the sweep's own gate is no longer the
+interesting question.
+
+**The blocker on those knobs was stated wrongly, and this is the correction.** It read
+"blocked on re-measuring K against a replay that re-offers". That has now been done,
+and K is not the binding constraint: the same instrument says the *birth* path — fixed
+unconditionally by PR #117, running in production now — builds a 2,591-group arc at
+the pinned bar. The sweep makes a broken graph worse; it is not what breaks it.
+
+**Recommended, in order:**
+
+1. **Confirm the birth-path finding against the live archive before acting on it.** It
+   is the load-bearing claim and it is a *prediction*: the live archive holds 1,913
+   bridge pairs, every one with exactly one bridging group and **0 pairs at or above
+   K**, so the invariant holds today and nothing has percolated yet. That is what a
+   cap-built archive looks like, and it is consistent with the model rather than a
+   refutation of it — but the corrected birth path has barely run. A backfill replay
+   of the archive through `linkGroup` on a clone would settle it, and it needs no
+   model call.
+2. **Then option 2 as the primary lever, at the top 2 qualifiers**, not a higher K. It
+   dominates K=6 on both axes at the birth path — largest 22 against 85, `named` 16.6%
+   against 15.1% — and it attacks the quadratic term instead of raising the bar every
+   merge must clear. Its cost is fragmentation, documented above, and its value is
+   *not* tunable: 3 and 5 are no better than nothing.
+3. **Option 4 alongside it if the sweep is ever switched on**, because it is nearly
+   free and removes the sweep's entire contribution.
+4. **Not option 3.** Measured, ineffective, recorded.
+
+**And do not read speed as safety.** Per-offer cost improves as the graph degrades
+(§2.6), and so do `named` and `kept` here: the baseline's 22.9%/60.3% are the best
+numbers in the option table and they belong to the 5,927-group pile. Three of the four
+metrics a reasonable person would reach for get *better* as this fails.
+
+### Two things this contradicts
+
+- **`storyline-link.ts` says `storylineProfile` "must agree with" storage's
+  `refreshProfileTokens`. It does not.** Storage counts a group as carrying a token if
+  **any** of its articles does; the replay's `groupProfile` requires a **majority** of
+  its articles. Measured over the 722 live single-group storylines whose group holds
+  two or more articles: stored profiles average **21.9** tokens, the union rule gives
+  **21.9** and the majority rule **20.2**, and 104 of the 722 differ. So production's
+  storyline profiles are systematically **wider** than the replay's — which widens
+  overlap, qualifiers and pairs, in the same direction as everything above. Small on
+  this corpus, load-bearing in principle, and the comment claiming agreement should
+  not be trusted. Not fixed here: fixing it would change the birth-only calibration
+  and belongs with its own measurement.
+- **§2.6's "the replay says the largest arc should be 50" is true only of the harness
+  as it stood.** The replay says 50 because it does not model the merge. Once it does,
+  the same bar and the same corpus say 2,591, and the gap between 50 and the sweep's
+  1,347 was never mostly about re-offers.

@@ -333,7 +333,8 @@ idempotent; the driver is qualifier width feeding a quadratic pair generator.
 Hand-reading the results says both things are true at once: the new 151-group FIFA/Infantino arc is
 coherent across all 151 groups, a genuine link the cap was suppressing, while the 201-group arc
 chains Gaza, the Israel-Iran war and Russia-Ukraine through shared diplomatic vocabulary. The replay
-at the pinned bar says the largest arc should be **50**.
+at the pinned bar says the largest arc should be **50** — a figure the note at the end of this
+section withdraws, because the replay reaches it only by not modelling the merge.
 
 **So the fix split in two.** The retrieval narrowing shipped on the birth path — the argument being
 that it repairs that path to match the candidate set the thresholds were certified against, and that
@@ -350,6 +351,19 @@ A changed-set filter was also built and measured against this, and it is worth r
 makes things **worse, not safer**: a merge is what marks an arc dirty, so a filter that offers only
 marked groups selects for the feedback loop. Head to head over four passes, unfiltered ends at 1,347
 and filtered at **1,782**. It is off by default too.
+
+> **The K re-measurement this section blocks on has since been done, and it relocated the problem
+> rather than settling it** — docs/STORYLINE-LINKING.md, "K, re-measured against a replay that
+> re-offers". A replay that re-offers confirms the sweep must stay off: interleaved, one pass a
+> night, the largest arc reaches **5,927 groups (22.79% of the window)** and is still climbing when
+> the corpus runs out. But building that harness exposed why this section's own "the replay says 50"
+> is not a safe baseline: **the replay does not model `mergeStorylines` re-pointing the loser's
+> bridges onto the winner**, which is the mechanism `cascadeMerge` exists to drain. Modelled, the
+> pinned bar builds a **2,591-group arc on the BIRTH path alone** — the path PR #117 corrected
+> unconditionally and which is running in production now. So K is not the binding constraint, the
+> sweep is not the only thing that needed gating, and the residual risk this section names ("a
+> from-scratch replay does not exercise it") turns out to point the other way: the from-scratch
+> replay is the pessimistic case, and the live archive is safe only because the cap built it.
 
 ### 2.7 The hybrid state — the one residual nothing has tested
 

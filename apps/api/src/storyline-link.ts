@@ -362,10 +362,26 @@ export function groupProfile(memberTokens: readonly (readonly string[])[]): stri
  * rule, one level up (ADR-0011).
  *
  * `refreshProfileTokens` in storage is authoritative — it is what candidate
- * retrieval overlaps against — and this must agree with it. It is duplicated
- * rather than shared because the sweep has no database: replaying a month of
- * decisions through SQL would take longer than the corpus it measures, and a
- * threshold nobody can afford to sweep is a threshold that ships unmeasured.
+ * retrieval overlaps against — and this is duplicated rather than shared because
+ * the sweep has no database: replaying a month of decisions through SQL would
+ * take longer than the corpus it measures, and a threshold nobody can afford to
+ * sweep is a threshold that ships unmeasured.
+ *
+ * **The two do NOT agree, and this comment used to claim they must.** Storage
+ * counts a group as carrying a token if ANY of its articles does
+ * (`select distinct mg.group_id, tok`); the input here is `groupProfile`, which
+ * requires a MAJORITY of the group's articles. The two coincide for a group of
+ * one article — most groups — and diverge above that. Measured on the dev
+ * archive: over the 722 live single-group storylines whose group holds two or
+ * more articles, stored profiles average 21.9 tokens against the majority rule's
+ * 20.2, and 104 of the 722 differ. So production's storyline profiles are
+ * systematically WIDER than what any replay predicts, which widens overlap,
+ * qualifiers and `bridgePairs`' cross-product with them.
+ *
+ * Left as it is on purpose, and the direction of the error is why: closing it
+ * changes every number the committed threshold grid was pinned against, so it
+ * needs its own measurement rather than a quiet edit
+ * (docs/STORYLINE-LINKING.md, "Two things this contradicts").
  */
 export function storylineProfile(groupTokens: readonly (readonly string[])[]): string[] {
   return groupProfile(groupTokens);
