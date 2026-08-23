@@ -658,9 +658,21 @@ const EnvSchema = z
      * is `backfill:storylines --restart`, which rewrites every storyline and
      * discards all label history — ~3,934 promoted storylines to relabel at the
      * free tier's 500/day, about eight days of quota, against an ADR-0015 that
-     * calls the arcs and label history "the product". Nothing is on fire today:
-     * all 1,913 standing bridge pairs hold exactly one independent bridge and
-     * none is at K=2, so no merge is pending.
+     * calls the arcs and label history "the product". Nothing is on fire today —
+     * the largest arc is 124 groups and exactly one exceeds 100 — but the
+     * "no merge is pending" this used to say was wrong twice over: seven of the
+     * 1,865 standing pairs are at or above K, and `runBridgeSweepChore` runs
+     * UNFLAGGED every night and merges them (124 → 143, first order). Neither
+     * `countBridges` nor `readBridgedPairs` reads membership, so a bridge written
+     * by a group that is now a member of one side still counts
+     * (VERCEL-PHASE-0-FINDINGS §2.7, "The live archive, re-read").
+     *
+     * And the birth path is now measured from production's own starting state:
+     * a cap-built archive continued with the retrieval corrected, birth-only,
+     * merges at 0.25 per arriving group against the flag-off control's 0.015 —
+     * ~17x, flat over the whole corrected window rather than decaying as a
+     * repaired backlog would — with 97% of those merges fusing two cap-shaped
+     * arcs. That is §2.7 step 1, and it is why this stays off.
      *
      * **What would justify turning it on.** K re-measured against a harness that
      * models the merge — bridge re-pointing included — rather than one that skips

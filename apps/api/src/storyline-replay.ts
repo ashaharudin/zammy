@@ -71,6 +71,21 @@ interface ReplayStoryline {
   lastCoverageMs: number;
   days: Set<string>;
   promoted: boolean;
+  /**
+   * Does this arc carry vocabulary assembled under the pre-#117 cap?
+   *
+   * True for an arc seeded while `cappedRetrievalLimit` was set, and it SPREADS
+   * on merge (`keep || drop`) rather than being decided by the survivor: the
+   * point of the flag is that the arc's `profile_tokens` are the majority
+   * vocabulary of a cap-shaped membership, and absorbing a cap-shaped arc puts
+   * that vocabulary into the survivor's profile too.
+   *
+   * Only `replayHybrid` sets it meaningfully — everywhere else the build phase
+   * either does not exist or is the whole run — and it exists to attribute
+   * merges: §2.7's hybrid is specifically the fusion of arcs the cap created,
+   * and "the merges happened" cannot distinguish that from ordinary linking.
+   */
+  capShaped: boolean;
 }
 
 export interface ReplayResult {
@@ -124,6 +139,35 @@ export interface ReplayResult {
   bridgedPairs: number;
   bridgeObservations: number;
   /**
+   * Merges made AFTER the retrieval switch that fused two arcs both carrying
+   * cap-shaped vocabulary — §2.7's hybrid, counted rather than inferred.
+   *
+   * This is the measurement that separates "the corrected retrieval merges a
+   * lot" from "the corrected retrieval fuses fragments the cap created", which
+   * are the two readings §2.7 could not choose between. A from-scratch replay
+   * cannot produce one of these by construction — nothing in it is cap-shaped —
+   * so a non-zero count here is content no from-scratch run holds, and a zero
+   * count refutes §2.7's mechanism rather than merely failing to find it.
+   *
+   * 0 outside `replayHybrid`, which is the only mode with an "after" to be in.
+   */
+  fusedCapShaped: number;
+  /**
+   * Merges after the switch where exactly one side was cap-shaped, and where
+   * neither was. Together with `fusedCapShaped` they partition the post-switch
+   * merges, so the three can be read as shares.
+   */
+  fusedMixed: number;
+  fusedFresh: number;
+  /**
+   * Groups arriving after the switch that attached to a cap-shaped arc — the
+   * benign half of the same question. An attach is not a merge: it grows one
+   * arc by one group and cannot chain, so a hybrid whose post-switch effect is
+   * mostly attachment is the "repairs" reading, and one whose effect is
+   * `fusedCapShaped` is the "widening past the certified bar" reading.
+   */
+  attachedToCapShaped: number;
+  /**
    * Arc sizes as a histogram, because a largest-arc metric alone is not
    * evidence: it can hold while the count of live storylines collapses, and
    * §2.6's runaway showed up in "four arcs over 100 groups where there was one"
@@ -137,7 +181,7 @@ export interface ReplayResult {
    * some can, and a threshold pinned off counts alone is pinned off half the
    * evidence.
    */
-  built: { profile: string[]; groupIds: string[]; days: number }[];
+  built: { profile: string[]; groupIds: string[]; days: number; capShaped: boolean }[];
 }
 
 /**
@@ -249,6 +293,15 @@ interface World {
    * run, not a property of the configuration.
    */
   cappedRetrievalLimit: number | undefined;
+  /**
+   * Which side of the retrieval switch this offer is on. `build` is the archive
+   * being assembled the way the capped service assembled the live one; `after`
+   * is every offer once the flag has flipped. Only `replayHybrid` ever moves it,
+   * and the attribution counters below are only written in `after` — a merge
+   * during the build phase is the cap's own fragmentation being measured, not
+   * the hybrid's fusion.
+   */
+  phase: "build" | "after";
   storylines: Map<string, ReplayStoryline>;
   /** token → storyline ids carrying it: the in-memory stand-in for the GIN index. */
   byToken: Map<string, Set<string>>;
@@ -268,6 +321,10 @@ interface World {
   merges: number;
   nextId: number;
   cappedGroups: number;
+  fusedCapShaped: number;
+  fusedMixed: number;
+  fusedFresh: number;
+  attachedToCapShaped: number;
 }
 
 const createWorld = (
@@ -282,6 +339,7 @@ const createWorld = (
   narrowRetrieval,
   cascadeMerges: fidelity.cascadeMerges ?? false,
   cappedRetrievalLimit: fidelity.cappedRetrievalLimit,
+  phase: "build",
   variant: {
     independence: variant.independence ?? "groups",
     bridgeOffers: variant.bridgeOffers ?? "all",
@@ -299,6 +357,10 @@ const createWorld = (
   merges: 0,
   nextId: 0,
   cappedGroups: 0,
+  fusedCapShaped: 0,
+  fusedMixed: 0,
+  fusedFresh: 0,
+  attachedToCapShaped: 0,
 });
 
 const pairKey = (a: string, b: string): string => (a < b ? `${a}|${b}` : `${b}|${a}`);
@@ -361,6 +423,16 @@ const mergePair = (world: World, left: string, right: string): string[] => {
   const [keep, drop] =
     one.groupProfiles.length >= two.groupProfiles.length ? [one, two] : [two, one];
 
+  // Attribute the merge before the two become one, and only after the switch —
+  // §2.7's question is not "how many merges" but "how many of them fuse arcs
+  // the cap created", and after the merge there is one arc and no pair to
+  // classify.
+  if (world.phase === "after") {
+    if (keep.capShaped && drop.capShaped) world.fusedCapShaped += 1;
+    else if (keep.capShaped || drop.capShaped) world.fusedMixed += 1;
+    else world.fusedFresh += 1;
+  }
+
   const repointed: string[] = [];
   if (world.cascadeMerges) {
     for (const [key, groups] of [...world.bridges]) {
@@ -406,6 +478,10 @@ const mergePair = (world: World, left: string, right: string): string[] => {
   keep.lastCoverageMs = Math.max(keep.lastCoverageMs, drop.lastCoverageMs);
   for (const day of drop.days) keep.days.add(day);
   keep.promoted = true;
+  // Cap-shaped vocabulary is now in the survivor's profile, so the survivor is
+  // cap-shaped: `storylineProfile` is a majority rule over member group
+  // profiles, and the loser's members are the survivor's members now.
+  keep.capShaped = keep.capShaped || drop.capShaped;
   refresh(world, keep);
   world.bridges.delete(pairKey(left, right));
   world.merges += 1;
@@ -509,6 +585,10 @@ const offerGroup = (world: World, group: ReplayGroup, corpus: Corpus): void => {
       lastCoverageMs: group.publishedMs,
       days: new Set([group.dayKey]),
       promoted: false,
+      // Seeded while the cap was applied, so whatever it goes on to absorb it
+      // absorbed through the truncated candidate set — which is what makes its
+      // eventual profile cap-shaped rather than merely old.
+      capShaped: world.cappedRetrievalLimit !== undefined,
     };
     world.storylines.set(own.id, own);
     index(world, own);
@@ -659,6 +739,7 @@ const offerGroup = (world: World, group: ReplayGroup, corpus: Corpus): void => {
   deindex(world, own);
   world.storylines.delete(own.id);
   world.alias.set(own.id, winner.id);
+  if (world.phase === "after" && winner.capShaped) world.attachedToCapShaped += 1;
   addGroupTo(world, winner, group, profile);
   homes[0] = winner.id;
   world.attached += 1;
@@ -700,6 +781,7 @@ const snapshot = (world: World, totalGroups: number): ReplayResult => {
       profile: storyline.profileTokens,
       groupIds: storyline.groupIds,
       days: storyline.days.size,
+      capShaped: storyline.capShaped,
     }));
   sizes.sort((a, b) => a - b);
   const at = (q: number): number =>
@@ -720,6 +802,10 @@ const snapshot = (world: World, totalGroups: number): ReplayResult => {
     retroAttached: world.retroAttached,
     bridgedPairs: world.bridges.size,
     bridgeObservations,
+    fusedCapShaped: world.fusedCapShaped,
+    fusedMixed: world.fusedMixed,
+    fusedFresh: world.fusedFresh,
+    attachedToCapShaped: world.attachedToCapShaped,
     sizeBuckets: BUCKETS.map((bucket) => ({
       label: bucket.label,
       count: sizes.filter((size) => size >= bucket.min && size <= bucket.max).length,
@@ -905,5 +991,130 @@ export function replayWithReoffers(
     night += 1;
     options.onPass?.(night, `night ${dayKey} (${window.length} offered)`, snapshot(world, groups.length));
   }
+  return snapshot(world, groups.length);
+}
+
+/** A simulated day, as `replayHybrid` reports it. */
+export interface HybridDay {
+  dayKey: string;
+  /**
+   * `build` — offered under the pre-#117 retrieval, assembling the arc
+   * population the capped service assembled. `after` — offered under the
+   * configured retrieval, which is the flag being on.
+   */
+  phase: "build" | "after";
+  /** Groups born on this day. Birth-only, so it is also the offers made. */
+  born: number;
+}
+
+export interface HybridOptions {
+  /**
+   * The row cap the archive is BUILT under — production's 200. Omit it and the
+   * build phase runs the configured retrieval too, which is the from-scratch
+   * CONTROL: same days, same per-day snapshots, the archive assembled by the
+   * decision that will judge it. That control is the whole point of the knob
+   * being optional — §2.7's claim is about the difference between two starting
+   * states, and a difference needs both of them measured on one instrument.
+   */
+  cappedRetrievalLimit?: number;
+  /**
+   * The first day judged by the corrected retrieval — an APP_TIMEZONE day key.
+   * Days before it are the build; this day and after are the flag being on.
+   *
+   * A day key rather than a count of days, because the switch has to be
+   * reproducible across runs whose corpus grew underneath them.
+   */
+  switchOn: string;
+  fidelity?: Omit<ReplayFidelity, "cappedRetrievalLimit">;
+  variant?: ReplayVariant;
+  /**
+   * Called after every simulated day, build days included. The build days are
+   * not padding: they are where the cap's own fragmentation is visible, and a
+   * post-switch climb means nothing without the pre-switch line it departs
+   * from — §2.6's lesson, which is that this class of problem lives in the
+   * trajectory and not in the endpoint.
+   */
+  onDay?: (day: HybridDay, result: ReplayResult) => void;
+}
+
+/**
+ * The hybrid: an archive BUILT under the pre-#117 cap, then new arrivals judged
+ * by the corrected retrieval — birth-only, one offer per group, no sweep.
+ *
+ * This is VERCEL-PHASE-0-FINDINGS §2.7 step 1, and it is the configuration
+ * production would actually walk if `STORYLINE_NARROW_RETRIEVAL` were turned on
+ * today: the live archive was assembled by the capped decision, all three
+ * re-offer flags are off (`STORYLINE_LATE_CANDIDATE_SWEEP`,
+ * `STORYLINE_REOFFER_JOINED_GROUPS`, and the sweep's changed-set filter), so
+ * `linkSeededGroups` is the only path that offers a group and it offers it once.
+ *
+ * What this adds to `--capped-build=200` on `replayWithReoffers`, which prices
+ * the same starting state under sweep RE-OFFERS: the corrected retrieval arrives
+ * at the birth path's rate — a day's new groups, once each — rather than as
+ * ~12,000 re-offers a night, and there are subsequent DAYS to watch it over.
+ * Same `offerGroup`, so it is the same decision at a different rate, which is
+ * the only way the two numbers are comparable at all.
+ *
+ * The cap and the broad probe move together and cannot come apart. With the
+ * configured retrieval BROAD (`STORYLINE_NARROW_RETRIEVAL=false`, today's
+ * default) the cap therefore stays applied across the switch, so that run is the
+ * flag-off control rather than the whole-profile-probe-with-no-bound state §2.5
+ * warns is worse than either mode. There is no argument to this function that
+ * can reach that pair.
+ *
+ * What it does NOT model is everything `replayWithReoffers` lists, and one more
+ * that matters most here: the build phase is the REPLAY's cap-built archive, not
+ * production's. Production's carries label-agreement merges, coherence-gate
+ * withholdings and storage's union-rule profiles, all three of which make its
+ * starting state broader than this one. This measures the mechanism, and it
+ * measures it from the narrower side.
+ */
+export function replayHybrid(
+  groups: readonly ReplayGroup[],
+  corpusAt: (group: ReplayGroup, tokens: readonly string[]) => Corpus,
+  rules: LinkRules,
+  mergeBridges: number,
+  narrowRetrieval: boolean,
+  options: HybridOptions,
+): ReplayResult {
+  const world = createWorld(
+    rules,
+    mergeBridges,
+    narrowRetrieval,
+    {
+      ...(options.fidelity ?? {}),
+      ...(options.cappedRetrievalLimit !== undefined
+        ? { cappedRetrievalLimit: options.cappedRetrievalLimit }
+        : {}),
+    },
+    options.variant ?? {},
+  );
+
+  const ordered = inOrder(groups);
+  const byDay = new Map<string, ReplayGroup[]>();
+  for (const group of ordered) {
+    const day = byDay.get(group.dayKey);
+    if (day) day.push(group);
+    else byDay.set(group.dayKey, [group]);
+  }
+
+  for (const [dayKey, born] of [...byDay].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    if (dayKey >= options.switchOn) {
+      world.phase = "after";
+      // Narrowed, the cut goes: 4,000 binds on 0 of the window's groups by
+      // census, and the replay reports the cap it does not apply. Broad, the cut
+      // STAYS, because whole profile + 4,000 is the pair `candidateRetrieval`
+      // exists to make unreachable.
+      if (narrowRetrieval) world.cappedRetrievalLimit = undefined;
+    }
+    for (const group of born) {
+      offerGroup(world, group, corpusAt(group, groupProfile(group.memberTokens)));
+    }
+    options.onDay?.(
+      { dayKey, phase: world.phase, born: born.length },
+      snapshot(world, groups.length),
+    );
+  }
+
   return snapshot(world, groups.length);
 }

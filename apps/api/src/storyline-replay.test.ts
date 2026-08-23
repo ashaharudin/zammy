@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { replayLinker, replayWithReoffers, type ReplayGroup } from "./storyline-replay.js";
+import {
+  replayHybrid,
+  replayLinker,
+  replayWithReoffers,
+  type ReplayGroup,
+} from "./storyline-replay.js";
 import type { Corpus, LinkRules } from "./storyline-link.js";
 
 /**
@@ -395,6 +400,119 @@ describe("cappedRetrievalLimit — the pre-#117 retrieval, for the drain experim
     const capped = replayLinker(groups, corpusAt, RULES, 2, NARROW, { cappedRetrievalLimit: 1 });
     expect(uncapped.bridgedPairs).toBe(1);
     expect(capped.bridgedPairs).toBe(0);
+  });
+});
+
+describe("replayHybrid — a cap-built archive, then corrected births (§2.7)", () => {
+  /**
+   * Two arcs the CAP created, and the newcomers that can fuse them once it
+   * lifts.
+   *
+   * `left` and `right` share two tokens — 19.36 against a floor of 20 — so
+   * neither ever qualifies for the other, whatever the retrieval. Each newcomer
+   * shares three with each side, so it qualifies for BOTH and writes the pair;
+   * two of them are K. Under a cap of 1 only the freshest candidate is
+   * retrievable, so a newcomer sees one arc, writes no pair, and the two arcs
+   * stay apart — which is the fragmentation §2.7 says the live archive is full
+   * of, in the smallest form that reproduces it.
+   */
+  const shared = ["xi", "omicron"];
+  const fragments = (): ReplayGroup[] => {
+    const left = [...shared, ...some(A)];
+    const right = [...shared, ...some(B)];
+    return [
+      group(left, { day: 1 }),
+      group(left, { day: 1 }),
+      group(right, { day: 2 }),
+      group(right, { day: 2 }),
+      group([...shared, A[0]!, B[0]!], { day: 4 }),
+      group([...shared, A[1]!, B[1]!], { day: 5 }),
+    ];
+  };
+  /** Before the newcomers: they are judged corrected, the arcs were not. */
+  const SWITCH = "2026-08-04";
+  /** After everything, so the whole run is the build — the flag-off control. */
+  const NEVER = "2026-08-09";
+
+  it("holds the cap for the build and lifts it for the days after the switch", () => {
+    const groups = fragments();
+    expect(
+      replayHybrid(groups, corpusAt, RULES, 2, NARROW, {
+        cappedRetrievalLimit: 1,
+        switchOn: NEVER,
+      }).merges,
+    ).toBe(0);
+    expect(
+      replayHybrid(groups, corpusAt, RULES, 2, NARROW, {
+        cappedRetrievalLimit: 1,
+        switchOn: SWITCH,
+      }).merges,
+    ).toBe(1);
+  });
+
+  it("attributes the merge to the arcs the cap created", () => {
+    const groups = fragments();
+    const hybrid = replayHybrid(groups, corpusAt, RULES, 2, NARROW, {
+      cappedRetrievalLimit: 1,
+      switchOn: SWITCH,
+    });
+    // The whole content of §2.7: this merge fused two arcs that only exist
+    // separately because the cap truncated the decision that would have joined
+    // them.
+    expect(hybrid.fusedCapShaped).toBe(1);
+    expect(hybrid.fusedMixed).toBe(0);
+    expect(hybrid.fusedFresh).toBe(0);
+
+    // The from-scratch CONTROL reaches the same merge and cannot attribute it
+    // that way, because nothing in it is cap-shaped. That is the claim "a
+    // from-scratch replay has nothing to fuse", stated as a test.
+    const scratch = replayHybrid(groups, corpusAt, RULES, 2, NARROW, { switchOn: SWITCH });
+    expect(scratch.merges).toBe(1);
+    expect(scratch.fusedCapShaped).toBe(0);
+    expect(scratch.fusedFresh).toBe(1);
+  });
+
+  it("keeps the cap applied across the switch when the retrieval stays BROAD", () => {
+    // `STORYLINE_NARROW_RETRIEVAL=false` is the flag-off control, and the cap
+    // must not lift under it: whole profile + no bound is the pair
+    // `candidateRetrieval` exists to make unreachable (§2.5), and it is more
+    // percolation-prone than either mode.
+    const broad = replayHybrid(fragments(), corpusAt, RULES, 2, false, {
+      cappedRetrievalLimit: 1,
+      switchOn: SWITCH,
+    });
+    expect(broad.merges).toBe(0);
+    expect(broad.bridgedPairs).toBe(0);
+  });
+
+  it("offers every group exactly once, so it models the birth path and nothing else", () => {
+    const hybrid = replayHybrid(fragments(), corpusAt, RULES, 2, NARROW, {
+      cappedRetrievalLimit: 1,
+      switchOn: SWITCH,
+      onDay: (day) => {
+        expect(day.phase).toBe(day.dayKey >= SWITCH ? "after" : "build");
+      },
+    });
+    expect(hybrid.retroAttached).toBe(0);
+  });
+
+  it("counts a group that joins a cap-shaped arc as growth, not fusion", () => {
+    // One arc, built capped, and a later group that simply belongs to it. An
+    // attach cannot chain the way a merge does, so the two are counted apart:
+    // a hybrid whose post-switch effect is attachment is repairing, one whose
+    // effect is `fusedCapShaped` is widening profiles.
+    const family = [...some(A), "xi"];
+    const groups = [
+      group(family, { day: 1 }),
+      group(family, { day: 2 }),
+      group(family, { day: 4 }),
+    ];
+    const hybrid = replayHybrid(groups, corpusAt, RULES, 2, NARROW, {
+      cappedRetrievalLimit: 200,
+      switchOn: SWITCH,
+    });
+    expect(hybrid.attachedToCapShaped).toBe(1);
+    expect(hybrid.fusedCapShaped).toBe(0);
   });
 });
 
