@@ -263,6 +263,9 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
       // The same day rule grouping runs on: a fold moves which day an article
       // belongs to, and the ingest keeps its storylines' slots in step.
       timeZone: deps.config.grouping.timeZone,
+      // That re-derivation is fenced and cannot fail the sample; the warning is
+      // the only place a failed one surfaces.
+      ...(deps.log ? { log: deps.log } : {}),
     });
     deps.metrics?.articlesIngested(ingested.articlesCreated);
     // The sample is a write path into `articles` like any other, so it owes

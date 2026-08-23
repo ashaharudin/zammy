@@ -96,6 +96,8 @@ export interface CreatedArticle {
  *  5. and once per batch, re-derive the storylines holding a group whose
  *     article step 3 moved earlier — a fold changes which day an article
  *     belongs to, and a storyline's day slots are derived from exactly that.
+ *     Step 5 alone is DERIVED, and fenced by a savepoint accordingly: steps
+ *     1–4 commit whether or not it succeeds.
  *
  * The caller must have upserted the topic first (the membership row has a
  * foreign key on it).
@@ -113,6 +115,14 @@ export async function ingestSightings(
      * about what belongs with what stays in the api layer.
      */
     timeZone: string;
+    /**
+     * Where a failed storyline re-derivation goes. The re-derivation is DERIVED
+     * and is fenced so it cannot fail the ingest (see the savepoint below), so
+     * a warning is the only trace it leaves — without one the fence would hide
+     * a broken derivation instead of a broken ingest, which is a worse trade
+     * than the one it exists to make.
+     */
+    log?: { warn: (obj: object, msg: string) => void };
   },
 ): Promise<IngestResult> {
   const fingerprint = hexToBytea(input.fingerprint);
@@ -325,14 +335,67 @@ export async function ingestSightings(
     // move is the arc's coverage, which is the other thing `linkGroup` reads
     // about it; at ~0.68ms against a path this rare, one rule for "re-derived,
     // therefore re-offer" is worth more than the statement it saves.
-    const dirty: string[] = [];
-    for (const groupId of movedGroups) {
-      for (const storylineId of await readGroupStorylines(trx, groupId)) {
-        await refreshStorylineDerivations(trx, storylineId, input.timeZone);
-        dirty.push(storylineId);
+    //
+    // Fenced by a SAVEPOINT, which is what lets it be both in the transaction
+    // and unable to fail it. Every other derived value on this path is allowed
+    // to fail on its own — `recordStoryDfForArticles` catches for the reason it
+    // states, "an ingest triggered by a reader's search must not fail because a
+    // derived counter did", and grouping never throws for the same reason — but
+    // both of those run AFTER this transaction commits, so a plain catch is all
+    // they need. In here a plain catch would be worse than none: Postgres
+    // aborts the whole transaction on the first failed statement, COMMIT on an
+    // aborted transaction is a silent ROLLBACK, and `ingestSightings` would
+    // return a result reporting sightings it had just discarded. MEASURED both
+    // ways on a throwaway clone: unfenced, one raise inside the re-derivation
+    // loses the sighting and fails the reader's search; fenced, the fold
+    // commits and the slots stay as stale as they were before this existed.
+    //
+    // What can fail is not hypothetical. This is the first thing on the ingest
+    // path to take write locks on `storyline_days` and `storylines`, tables the
+    // merge and attach paths also write under their own lock order, so a
+    // deadlock (40P01) or a serialization failure is exactly the shape of error
+    // to expect — and losing a paid upstream page to one is strictly worse than
+    // the stale day slot this fix exists to prevent. A stale slot is repaired
+    // by the next merge or a `backfill:storylines --restart`; a dropped
+    // emission is repaired by nothing.
+    //
+    // Only when there is work: the guard's whole point is that the common
+    // sighting spends nothing here, and two unconditional round trips for
+    // SAVEPOINT and RELEASE would undo that.
+    //
+    // What one moved group costs, MEASURED over 400 real storyline-holding
+    // groups on a clone of the dev archive: mean 2.9ms, p90 3.6, p99 5.8 for
+    // the read plus a refresh per storyline plus the marker. The widest arc
+    // this archive holds — 124 groups, 219 articles — is 7ms. The N is bounded
+    // by the batch, and a batch is ONE upstream page (`CURRENTS_MAX_PAGE_SIZE`,
+    // 20 by default), so the ceiling is ~54ms against §6.3's 1,200ms even in
+    // the case where every sighting on the page moves a different group — a
+    // case the 33-of-31,308 population above says will not happen. Worth
+    // re-measuring if that page size is ever raised toward its 200 cap.
+    if (movedGroups.size > 0) {
+      await sql`savepoint storyline_derivations`.execute(trx);
+      try {
+        const dirty: string[] = [];
+        for (const groupId of movedGroups) {
+          for (const storylineId of await readGroupStorylines(trx, groupId)) {
+            await refreshStorylineDerivations(trx, storylineId, input.timeZone);
+            dirty.push(storylineId);
+          }
+        }
+        await markStorylinesLinkDirty(trx, dirty);
+        await sql`release savepoint storyline_derivations`.execute(trx);
+      } catch (error) {
+        // ROLLBACK TO leaves the savepoint in place, so it still needs
+        // releasing; and if THIS throws the connection itself is gone, which is
+        // not a derived failure and must not be swallowed.
+        await sql`rollback to savepoint storyline_derivations`.execute(trx);
+        await sql`release savepoint storyline_derivations`.execute(trx);
+        input.log?.warn(
+          { err: error, groups: movedGroups.size },
+          "storyline day slots not re-derived for this batch; a group merge or a --restart backfill repairs them",
+        );
       }
     }
-    await markStorylinesLinkDirty(trx, dirty);
   });
 
   return result;

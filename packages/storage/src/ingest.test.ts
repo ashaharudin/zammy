@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { sql } from "kysely";
 import { deriveDedupKey, type Sighting } from "@zammy/news-client";
 import { hexToBytea } from "./database.js";
 import { ingestSightings, upsertTopic } from "./ingest.js";
@@ -511,5 +512,78 @@ describe("a fold re-derives the day slots of the storylines holding the article"
       { dayKey: "2026-08-14", published: "2026-08-14T09:00:00.000Z", lead: articleId },
     ]);
     expect(await dirtyAt(storylineId)).toBeNull();
+  });
+
+  /**
+   * The re-derivation is DERIVED, so it must not be able to fail the write it
+   * was derived from — the contract `recordStoryDfForArticles` states in its own
+   * words ("an ingest triggered by a reader's search must not fail because a
+   * derived counter did") and grouping keeps by never throwing.
+   *
+   * Those two run after this transaction commits, so a plain catch is all they
+   * need. This runs INSIDE it, where a plain catch is worse than none: Postgres
+   * aborts the transaction on the first failed statement and COMMIT on an
+   * aborted transaction is a silent ROLLBACK, so the catch would return a result
+   * reporting sightings it had just discarded. Hence the savepoint, and hence
+   * this test — the fence is invisible on every path that does not fail.
+   */
+  it("a re-derivation that throws does not take the ingest with it", async () => {
+    const url = "https://example.com/spill-with-a-broken-derivation";
+    const { articleId, storylineId } = await seed({
+      url,
+      published: "2026-08-15T18:00:00.000Z",
+      sightingId: "00000000-0000-4000-8000-00000000f04d",
+    });
+
+    // The shape of failure to expect here: an error raised by the SERVER
+    // mid-transaction, the way a deadlock against the merge path's lock order on
+    // these same tables would arrive. Which statement of the re-derivation
+    // raises it does not matter.
+    await sql`create function zammy_test_boom() returns trigger language plpgsql as $$
+      begin raise exception 'day slot re-derivation exploded'; end $$`.execute(harness.db);
+    await sql`create trigger zammy_test_boom_trg
+      before insert or update or delete on storyline_days
+      for each row execute function zammy_test_boom()`.execute(harness.db);
+
+    const warnings: string[] = [];
+    try {
+      const ingested = await ingestSightings(harness.db, {
+        fingerprint: TOPIC,
+        timeZone: ZONE,
+        log: { warn: (_obj, msg) => warnings.push(msg) },
+        sightings: [
+          emission({
+            id: "00000000-0000-4000-8000-00000000f04e",
+            url,
+            published: "2026-08-15T05:00:00.000Z",
+          }),
+        ],
+      });
+      expect(ingested.sightingsInserted).toBe(1);
+    } finally {
+      await sql`drop trigger zammy_test_boom_trg on storyline_days`.execute(harness.db);
+      await sql`drop function zammy_test_boom()`.execute(harness.db);
+    }
+
+    // The fold committed. That is the whole point: a paid upstream page and a
+    // reader's search must not be lost to a derived value, and unfenced this
+    // same raise takes the entire batch down with it.
+    const article = await harness.db
+      .selectFrom("articles")
+      .select(["published", "sighting_count"])
+      .where("id", "=", articleId)
+      .executeTakeFirstOrThrow();
+    expect(article.published.toISOString()).toBe("2026-08-15T05:00:00.000Z");
+    expect(article.sighting_count).toBe(2);
+
+    // And the slots are left exactly as stale as they were before any of this
+    // existed — 05:00Z on the fifteenth is the FOURTEENTH in Vancouver, so a
+    // slot still on the fifteenth is a slot the fence rolled back. That
+    // staleness is the degradation the fence trades down to, and the next group
+    // merge or a `backfill:storylines --restart` repairs it.
+    expect(await days(storylineId)).toEqual([
+      { dayKey: "2026-08-15", published: "2026-08-15T18:00:00.000Z", lead: articleId },
+    ]);
+    expect(warnings).toHaveLength(1);
   });
 });
