@@ -505,7 +505,15 @@ always self-homed.
    drifts.** `replayHybrid` builds under the cap, flips the retrieval on a day boundary, and continues
    birth-only — one offer per group, no sweep, which is what production runs today with all three
    re-offer flags off. Read-only against `zammy`, no model quota, 26,006 groups over the full window
-   at the pinned bar (share 0.002, mass 20, K=2, cascade+re-pointing modelled):
+   at the pinned bar (share 0.002, mass 20, K=2, cascade+re-pointing modelled).
+
+   One offer per group is not §2.6's single-pass shortcut, and the distinction is worth keeping
+   straight because they look alike. What §2.6 caught was a *measurement* that could not see a feedback
+   loop, not a rule against offering once: the loop is that a merge widens the survivor's profile so
+   the next offer retrieves more, and here it runs across DAYS instead of across sweep passes — each
+   day's arrivals are judged against the archive the previous day's merges left. Six runs, thirty
+   simulated days each, and the trajectory is reported per day for exactly that reason. Bounding it to
+   2,000 groups, or to `--days=31`, is the shortcut — see below, where the second one nearly happened.
 
    | corrected days | archive at the switch | largest at the end | share% | live arcs | post-switch merges | of which fuse two cap-shaped arcs |
    | --- | --- | --- | --- | --- | --- | --- |
