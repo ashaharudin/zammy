@@ -25,6 +25,10 @@ import Fastify from "fastify";
  * The module-scope singleton is the other half of §3.1: build once per instance,
  * not once per request, so the pool and the clients survive a warm invocation.
  */
+/** Module load to `ready()`, stamped once. Null until the boot promise settles. */
+let buildMs: number | null = null;
+let warmSince: number | null = null;
+
 const booted = (async () => {
   const startedAt = Date.now();
   const app = Fastify({ logger: false });
@@ -53,7 +57,10 @@ const booted = (async () => {
     // Wall clock from module evaluation to `ready()`, which is the part of a
     // cold start the application controls. Compare against the ~360 ms measured
     // locally in VERCEL-PHASE-0-FINDINGS §7.
-    buildMs: Date.now() - startedAt,
+    // The BUILD, not the instance's age. This used to be `Date.now() -
+    // startedAt` evaluated inside the handler, which reported how long the
+    // instance had been alive — 22 s on a warm one, a number about nothing.
+    buildMs,
     region: process.env.VERCEL_REGION ?? null,
     // Non-null on a warm instance that has already served a request.
     warm: warmSince !== null,
@@ -64,10 +71,10 @@ const booted = (async () => {
   });
 
   await app.ready();
+  buildMs = Date.now() - startedAt;
   return app;
 })();
 
-let warmSince: number | null = null;
 
 export default async function handler(
   request: IncomingMessage,

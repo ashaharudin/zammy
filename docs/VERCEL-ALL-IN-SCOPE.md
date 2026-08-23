@@ -139,6 +139,42 @@ live outside `/api` so they need two rewrites (`/metrics` also lived outside and
 third — it is deleted instead, §7); and the 4.5 MB response cap is far above any timeline page but
 worth knowing.
 
+**The queue trigger fires.** `POST /api/queues/ingest 200` with `"spike": "consumer fired"` for every
+message published, on a bare `api/` function in a Vite project — the combination no documentation
+shows, and the one this whole plan rested on. Three details from the same log:
+
+- **Push mode is air-gapped and deployment-partitioned, as documented.** Every consumer invocation
+  arrived on the *deployment* host (`…-a7iv80q67-….vercel.app`) while the producer calls came in on
+  the alias. That is §3.2's "queue topics are partitioned by deployment ID" observed rather than read.
+- **A poisoned message is redelivered and then acknowledged away.** Four deliveries at +0 s, +10 s,
+  +70 s, +130 s, then it stopped — the count matches the SDK `retry` handler's
+  `deliveryCount > 3 → acknowledge`, so there is no infinite poison loop and no DLQ needed. The
+  *timing* did not match the handler's `afterSeconds: 5`; treat the retry delay as a hint rather than
+  a contract.
+- **Dedup deduplicates DELIVERY, not publish.** Publishing twice with the same `idempotencyKey`
+  returned two different `messageId`s — so publish is not idempotent and a `DuplicateMessageError` is
+  not what a repeat looks like — but only **one** consumer invocation followed. For §3.2's purpose
+  that is the property that matters, since BullMQ's `jobId` also prevents duplicate *processing*
+  rather than duplicate enqueueing. Worth one more deliberate test before relying on it.
+
+**Three things the spike settled about routing** (2026-08-22, `zammy-vercel-spike`):
+
+- **`api/[...path].ts` is not a catch-all.** Vercel's bare `api/` directory parses the filename as
+  ONE dynamic segment literally named `...path`, so `/api/healthz` and `/api/v1` reached the function
+  while `/api/v1/echo` and anything deeper returned Vercel's own `NOT_FOUND` and never invoked it.
+  Every real route here is `/api/v1/<something>`, so the layout as written would have 404ed all of
+  them. **A `rewrites` rule is the catch-all the filename is not**, and it preserves the property
+  this section depends on: a rewrite leaves the original path visible, measured —
+  `/api/v1/echo/deep/path?q=1` arrives at Fastify as exactly that. §1.1's recommended layout stands;
+  only the mechanism changes.
+- **A *named* rewrite capture is appended to the query string.** `/api/v1/:path*` made Fastify see
+  `...?q=1&path=echo%2Fdeep%2Fpath`. Harmless here, a latent collision in the real app — a route
+  taking its own `path` query parameter would receive two. Use an unnamed group, `/api/v1/(.*)`.
+- **`TRUSTED_PROXY_HOPS=1`.** With `trustProxy` off, Fastify reported `request.ip` as `127.0.0.1`
+  with the real client in `x-forwarded-for` — exactly one hop in front. This is not a detail: §3.5's
+  per-IP limit moves to Redis precisely because Hobby has no WAF, and a limiter keyed on
+  `127.0.0.1` would put every visitor in one bucket.
+
 ### 3.2 The queue: BullMQ → Vercel Queues (push mode) — ~2–3 days
 
 The surface is genuinely narrow, which is why this is days and not weeks — but count it honestly:
