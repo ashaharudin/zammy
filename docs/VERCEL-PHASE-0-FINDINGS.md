@@ -12,9 +12,9 @@ does the bounding ([ADR-0015](adr/0015-all-in-on-vercel-hobby-shaped.md), "Hobby
 label pass turns out to be the *easy* half. The pass that actually blows the ceiling is the
 **late-candidate sweep**, it does so every night, and unlike the label pass it has **no bound to
 set** — `runStorylinePass` never passes `maxGroups`, so the sweep always runs at its 20,000
-default ([chores.ts:181](../apps/api/src/chores.ts), [chores.ts:458](../apps/api/src/chores.ts)),
+default ([chores.ts:181](../apps/api/src/chores.ts), [chores.ts:508](../apps/api/src/chores.ts)),
 and the runner has no flag for it either
-([chores-cli.ts:77](../apps/api/src/chores-cli.ts)).
+([chores-cli.ts:79](../apps/api/src/chores-cli.ts)).
 
 ---
 
@@ -62,9 +62,9 @@ Three properties make this worse than a big number:
   2.5 ms at p10 to 76 ms at p90 (§2.1).
 - **It has no deployment parameter.** `runLateCandidateChore` accepts `maxGroups`
   ([chores.ts:181](../apps/api/src/chores.ts)) but `runStorylinePass` calls it with the bare deps
-  ([chores.ts:458](../apps/api/src/chores.ts)), `StorylinePassDeps` has no field for it, and the
+  ([chores.ts:508](../apps/api/src/chores.ts)), `StorylinePassDeps` has no field for it, and the
   runner's usage line offers only `--label-rate` and `--max-labels`
-  ([chores-cli.ts:77](../apps/api/src/chores-cli.ts)). So the lever ADR-0015 relies on for the
+  ([chores-cli.ts:79](../apps/api/src/chores-cli.ts)). So the lever ADR-0015 relies on for the
   label pass does not exist for the pass that needs it more.
 
 §2.4 is what to do about it, and it is not the obvious thing. **§2.5 is why: the query at the centre
@@ -80,7 +80,7 @@ inferred. 400 groups, per group:
 
 | ms/group | calls | mean ms | statement |
 |---|---|---|---|
-| **33.99** | 400 | 33.99 | **`readCandidateStorylines`** ([storylines.ts:960](../packages/storage/src/storylines.ts)) |
+| **33.99** | 400 | 33.99 | **`readCandidateStorylines`** ([storylines.ts:994](../packages/storage/src/storylines.ts)) |
 | 0.69 | 400 | 0.69 | `readStoryDf` — the trailing corpus |
 | 0.61 | 400 | 0.61 | `readGroupStorylines` |
 | 0.47 | 400 | 0.47 | the `story_corpus_days` size sum |
@@ -100,8 +100,9 @@ That query's cost is not evenly spread. Per call, over the same 400 groups:
 
 **The mean is almost entirely tail.** The driver is profile *width*: `profile_tokens && $1` probes
 one GIN key per token and unions the bitmaps, so a 51-token profile costs 114 ms while a 12-token
-one costs 2.5. `CANDIDATE_LIMIT` ([storyline-linker.ts:97](../apps/api/src/storyline-linker.ts))
-caps the 200 rows returned, not the ~1,200 scanned — the median group's profile overlaps 1,145
+one costs 2.5. `CANDIDATE_LIMIT` ([storyline-linker.ts:128](../apps/api/src/storyline-linker.ts))
+capped the 200 rows returned, not the ~1,200 scanned — that constant reads 4,000 today, raised by
+the fix in §2.5; every number in this section predates it — the median group's profile overlaps 1,145
 storylines (mean 1,194, max 3,681 over a 300-group sample), and `qualifyingStorylines` then
 discards nearly all of them in TypeScript.
 
@@ -118,7 +119,7 @@ a cost that is dominated by one query executing, not by waiting for the network.
 
 Worth recording as a negative result, because the plan shape is suggestive enough that someone will
 try it again. `readCandidateStorylines` ordered by a correlated subquery
-([storylines.ts:983](../packages/storage/src/storylines.ts)):
+([storylines.ts:1015](../packages/storage/src/storylines.ts)):
 
 ```
 Sort  Sort Key: ((SubPlan 1)) DESC NULLS LAST, s.id
@@ -211,14 +212,14 @@ own history were wrong by 4× and 12× from extrapolating a single sample.
 
 **`CANDIDATE_LIMIT` is not a safety valve.** `readCandidateStorylines` retrieves by
 `profile_tokens && $tokens` ordered by last coverage, `limit 200` —
-[storyline-linker.ts:97](../apps/api/src/storyline-linker.ts), whose comment describes it as
+[storyline-linker.ts:128](../apps/api/src/storyline-linker.ts), whose comment describes it as
 protection against a pathological token. Measured, it binds on **399 of 400** groups. §2.1 already
 recorded the input without drawing the conclusion: the median group's profile overlaps 1,145 live
 storylines, so the limit discards ~83% of the candidate set on a typical group, ordered by recency
 rather than by anything the linking rules weigh.
 
 **The harness that pinned the thresholds has no cap.**
-[storyline-replay.ts:148](../apps/api/src/storyline-replay.ts) unions candidates over every profile
+[storyline-replay.ts:149](../apps/api/src/storyline-replay.ts) unions candidates over every profile
 token with no limit, and its comment says the retrieval is "exactly what `profile_tokens &&
 story_tokens` returns" — accurate about the predicate, silent about the `limit 200` the service adds.
 So production has been running a **capped** decision against thresholds certified on an **uncapped**
@@ -226,8 +227,8 @@ one. Both halves of this were read directly.
 
 **The fix is a necessary condition, not a second decision.** `qualifyingStorylines` rejects a
 candidate when `evidence.anchorDf > bar.ceiling`, and `anchorDf` is the df of the *rarest shared*
-token ([storyline-link.ts:167](../apps/api/src/storyline-link.ts),
-[storyline-link.ts:103](../apps/api/src/storyline-link.ts)). So a qualifier must share at least one
+token ([storyline-link.ts:214](../apps/api/src/storyline-link.ts),
+[storyline-link.ts:150](../apps/api/src/storyline-link.ts)). So a qualifier must share at least one
 token whose window df is at or below `anchorCeiling(corpusSize, rules)` —
 `max(anchorDfFloor, corpusSize × anchorMaxShare)`, today `max(10, ~15,000 × 0.002)` ≈ 30
 ([storyline-link.ts:90](../apps/api/src/storyline-link.ts)). The dormant bar only divides that
