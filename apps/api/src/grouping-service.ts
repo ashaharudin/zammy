@@ -2,7 +2,9 @@ import type { Kysely } from "kysely";
 import {
   mergeGroups,
   readGroupCandidates,
+  readGroupStorylines,
   recordGrouping,
+  refreshStoryline,
   type CreatedArticle,
   type Database,
 } from "@zammy/storage";
@@ -230,10 +232,14 @@ export async function groupCreatedArticles(
 
   // The linker (ADR-0011), on the seeded groups only — an article that
   // JOINED a group inherited that group's storylines, so only the ones that
-  // SEEDED a group have a decision left to make. It runs after the df
-  // maintenance above deliberately: the arriving group's own tokens belong in
-  // the corpus its rarity is measured against, or a story breaking across a
-  // dozen simultaneous groups would read each of them as unprecedented.
+  // SEEDED a group have a decision left to make. A DECISION, note: a joining
+  // article still leaves its group's storylines' DERIVATIONS stale, which
+  // `groupArticle` re-derives on the spot rather than deferring to here.
+  //
+  // It runs after the df maintenance above deliberately: the arriving group's
+  // own tokens belong in the corpus its rarity is measured against, or a story
+  // breaking across a dozen simultaneous groups would read each of them as
+  // unprecedented.
   //
   // MEASURED, and it is charged to the §6.3 sync-fill deadline: linking one
   // upstream page's worth of seeded groups costs ~190ms — a birth, a corpus
@@ -391,7 +397,35 @@ export async function groupArticle(
     groupId: chosen?.groupId ?? null,
   });
 
-  if (chosen) await mergeBridgedGroups(deps, chosen.groupId, matches);
+  if (chosen) {
+    await mergeBridgedGroups(deps, chosen.groupId, matches);
+
+    // Both storyline derivations are over member ARTICLES, and this arrival
+    // changed which articles a member group holds without changing which
+    // GROUPS any storyline holds — so nothing keyed on `storyline_groups` can
+    // see it. There is no attach, no merge and no formation on this path: the
+    // linker is offered SEEDED groups only, because a joining article
+    // inherited its group's storylines and has no decision left to make. It
+    // does have a derivation left to make, and that is what this is.
+    //
+    // Reader-visible, not bookkeeping. A day slot IS its day's earliest
+    // article, so a piece published earlier than the day's lead joining the
+    // group has to move both the lead and the slot's position on the §7.3
+    // keyset axis; without this the slot kept yesterday's lead and sat at the
+    // wrong place in the page. `refreshProfileTokens` goes stale the same way,
+    // which quietly changes which groups the storyline can attract next.
+    //
+    // After `mergeBridgedGroups`, so a loser's storylines are read as the
+    // winner's — `absorbMergedGroup` has already re-pointed them, and
+    // re-deriving twice is idempotent. Not the whole of `refreshStoryline`'s
+    // case: the two neighbouring gaps are named on that function.
+    for (const storylineId of await readGroupStorylines(deps.db, chosen.groupId)) {
+      await refreshStoryline(deps.db, {
+        storylineId,
+        timeZone: deps.config.timeZone,
+      });
+    }
+  }
 
   // The group joined, so a caller re-running this over stored rows can tell a
   // real move from a verdict that merely confirmed where the article already

@@ -429,11 +429,24 @@ export interface StorylinePassReport {
  * The storyline lifecycle pass: everything the night does to `storylines`, in
  * the one order that makes it converge.
  *
- * The order is the order of what each pass READS, and every step of it is
- * load-bearing:
+ * The order is mostly the order of what each pass READS. Steps 2–5 are
+ * load-bearing in that sense; step 1 is the exception, and it is written out
+ * because the obvious reason for it is wrong and reads as true:
  *
- *   1. **Dormancy** first, so the late sweep judges candidates at the bar their
- *      quiet earns rather than at yesterday's.
+ *   1. **Dormancy** first — but NOT so the late sweep judges at the bar tonight's
+ *      quiet earns. It could not: the linking decision never reads
+ *      `storylines.status`. `barFor` re-derives dormancy from the candidate's
+ *      last coverage on every call, and `LinkCandidate` carries no status at
+ *      all, so nothing this pass writes to that column can move the sweep's
+ *      threshold. What DOES read it here is `mergeStorylines`, which asks
+ *      whether the LOSER was dormant before deciding to wake the winner —
+ *      stamping first is what makes that question about the storyline's silence
+ *      today rather than about yesterday's column. That is the whole of it. The
+ *      stamp is derived from the day slots and idempotent, so the column itself
+ *      converges wherever in the night it runs; the backfill deliberately puts
+ *      its own stamp LAST, and the one case this order is worse at is a
+ *      storyline the sweep below promotes tonight whose coverage is already
+ *      months old — it reads `active` until tomorrow's stamp.
  *   2. **The bridge sweep** before the late-candidate sweep: a pair that should
  *      be one storyline should be one BEFORE old groups are offered to it, or
  *      the offer is made against a profile that is about to change.
@@ -447,8 +460,8 @@ export interface StorylinePassReport {
  *      the whole thing converge — each night's new labels are the next night's
  *      candidates.
  *
- * Sequential on purpose, and awaited: 3am has no reader waiting, and every step
- * here is one whose input the previous step just changed.
+ * Sequential on purpose, and awaited: 3am has no reader waiting, and from step 2
+ * down every step's input is something the previous step just changed.
  */
 export async function runStorylinePass(
   deps: StorylinePassDeps,

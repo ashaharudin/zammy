@@ -9,6 +9,7 @@ import {
   ingestSightings,
   mergeStorylines,
   promoteStoryline,
+  readStorylineDays,
   recordCoverage,
   setStorylineLabel,
   setStorylineStatus,
@@ -207,6 +208,66 @@ describe("paging over storyline-days", () => {
     expect(result.items.map((item) => 1 + item.related.length + item.moreCoverage.length)).toEqual([
       1, 1,
     ]);
+  });
+
+  it("re-derives the day slot when a later arrival joins a member group", async () => {
+    // Monday's group is seeded by the 10:00 piece and Tuesday's makes the
+    // storyline real. After this the storyline's GROUP set never changes again
+    // — which is exactly the case `refreshStoryline` exists for, and the case
+    // nothing was calling it on.
+    const query = await seed([
+      sighting({
+        domain: "a.example",
+        title: "Hurricane Fausto nears Hawaii",
+        published: "2026-08-10T10:00:00.000Z",
+      }),
+      sighting({
+        domain: "b.example",
+        title: "Fausto weakens as surf pounds the islands",
+        published: TUESDAY,
+      }),
+    ]);
+    const storyline = await storylineOf(await groupIds(), "Hurricane Fausto");
+    const mondayGroup = (await groupIds())[0]!;
+
+    // A third outlet ran Monday's piece EARLIER in the day and arrives on a
+    // later upstream page. It JOINS the existing group: same group id, no
+    // membership change, so no `attachGroup`, no `mergeGroups`, no merge.
+    const late = await ingestSightings(db, {
+      fingerprint: query.fingerprint,
+      sightings: [
+        sighting({
+          domain: "c.example",
+          title: "Hurricane Fausto nears Hawaii",
+          published: "2026-08-10T06:00:00.000Z",
+        }),
+      ],
+    });
+    await groupCreatedArticles(
+      { db, config: harness.deps.config.grouping },
+      late.createdArticles,
+    );
+    const joined = late.createdArticles[0]!.id;
+    const home = await db
+      .selectFrom("articles")
+      .select("group_id")
+      .where("id", "=", joined)
+      .executeTakeFirst();
+    expect(home?.group_id).toBe(mondayGroup);
+
+    // A day slot IS its day's earliest article, so Monday's lead and Monday's
+    // position on the §7.3 keyset axis both moved. Nothing keyed on
+    // `storyline_groups` can notice, because nothing about the group set moved.
+    const monday = (await readStorylineDays(db, storyline)).find(
+      (day) => day.dayKey === "2026-08-10",
+    );
+    expect(monday?.leadArticleId).toBe(joined);
+    expect(monday?.daySlotPublished.toISOString()).toBe("2026-08-10T06:00:00.000Z");
+
+    await dropCachedPages(query.fingerprint);
+    const result = await readTimeline(harness.deps, query, { limit: 25 });
+    const slot = result.items.find((item) => item.published.startsWith("2026-08-10"));
+    expect(slot?.published).toBe("2026-08-10T06:00:00.000Z");
   });
 
   it("carries the label and span for a promoted storyline", async () => {

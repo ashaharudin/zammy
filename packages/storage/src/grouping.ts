@@ -107,8 +107,12 @@ export async function readGroupCandidates(
  * Nothing here touches storylines. A group's storyline membership lives in
  * `storyline_groups` now, and a group that MOVES does not change it — the
  * group is the unit a storyline holds, so moving an article between groups is
- * invisible one layer up (ADR-0011). What does change is the group's day
- * slots, which the caller refreshes.
+ * invisible one layer up (ADR-0011). What does change is the day slots and the
+ * profile of every storyline holding the group, both being derivations over
+ * member ARTICLES — and the caller is what refreshes them. `groupArticle` does
+ * that for the group an arrival joined; it went unrefreshed for months on the
+ * strength of this sentence, so if you are adding a caller, it is a real debt
+ * and not a formality.
  */
 export async function recordGrouping(
   db: Kysely<Database>,
@@ -242,9 +246,16 @@ async function refreshGroupPosition(
  * the overwhelmingly common case (a sighting no earlier than the position)
  * into a no-op.
  *
- * The storyline's own position moves the same way and is maintained the same
- * way, one layer up: `refreshDaySlots` re-derives the day slot this article's
- * group belongs to (ADR-0011).
+ * The storyline's own position does NOT move with it, and that is a known gap
+ * rather than a design. This said `refreshDaySlots` re-derives the day slot
+ * one layer up; nothing on this path calls it. Its only caller is
+ * `ingestSightings`, inside the transaction that folded the sighting, and a
+ * fold that drags `published` back across an APP_TIMEZONE midnight puts the
+ * article on a day the storyline has no `storyline_days` row for — a timeline
+ * day that is simply missing until a group merge or a `backfill:storylines
+ * --restart` rebuilds it. The sibling case, a new article JOINING a member
+ * group, is fixed in `groupArticle`; this one is not, because the refresh would
+ * have to run inside ingest's transaction on the hot path.
  */
 export async function lowerGroupPosition(
   db: Kysely<Database>,

@@ -135,9 +135,23 @@ export async function attachGroup(
 
 /**
  * Membership changed underneath a storyline without its group set changing —
- * a new article landed in a member group, or grouping moved one. Both
- * derivations are over member ARTICLES, so both go stale; the ingest and
- * grouping paths call this to keep the day slots and the profile honest.
+ * a new article landed in a member group. Both derivations are over member
+ * ARTICLES, so both go stale, and nothing keyed on `storyline_groups` can see
+ * it: no attach, no merge, no formation.
+ *
+ * `groupArticle` in the api calls this for every storyline holding the group an
+ * arrival JOINED, which is the whole of its wiring. It said "the ingest and
+ * grouping paths call this" for months while having no caller at all, and the
+ * day slots it was written to keep honest were led by the wrong article
+ * whenever a piece published earlier than the day's lead joined the group.
+ *
+ * Two neighbouring cases are NOT covered here, and neither is a refresh:
+ *  - a singleton MOVING out of its own group (regroup's pass 2) leaves any
+ *    storyline holding that now-empty group with no articles behind it, and
+ *    re-deriving it to zero slots is not obviously better than dissolving it;
+ *  - `ingestSightings` folding a sighting with an earlier `published` can drag
+ *    an article across a day boundary (`lowerGroupPosition`), which needs a day
+ *    slot the storyline has no row for, inside the ingest transaction.
  */
 export async function refreshStoryline(
   db: Kysely<Database>,
