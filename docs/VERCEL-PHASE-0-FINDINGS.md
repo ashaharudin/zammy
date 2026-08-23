@@ -515,11 +515,42 @@ the order `server.ts` loads them:
 | `@fastify/cors` | 4 | |
 
 **§3.2 and §7 take ~72 ms off a ~360 ms cold start** — a fifth of it, as a side effect of work
-already priced. On a Fluid instance with a slower CPU and a cold filesystem, expect 2–3× these
-figures, so ~0.8–1.1 s today and ~0.6–0.9 s after the deletions. Both are comfortably inside
-`pg_net`'s configurable timeout for the chore route (§3.3's 2-second default concern is real but the
-margin is not thin), and both are irrelevant to the sweep's deadline problem, which is 500 s of
-round trips.
+already priced.
+
+### 7.1 On the platform: the estimate was right and the reasoning was wrong
+
+This section used to predict "2–3× these figures, so ~0.8–1.1 s" by scaling our own boot for a
+slower CPU. Measured on `zammy-vercel-spike` (`iad1`, after 7.5 minutes idle so the instance was
+genuinely reclaimed):
+
+| | end to end | app boot (`buildMs`) |
+|---|---|---|
+| cold | **947 ms** | 71 ms |
+| the next request, same instance | 330 ms | 71 ms |
+
+The ~0.8–1.1 s prediction landed, and it landed for the wrong reason. **A ~620 ms cold penalty
+containing only 71 ms of application boot means ~550 ms is Vercel's own container start, before any
+of our code runs.** Cold start is therefore a platform floor our imports sit *on top of*, not a
+figure that scales with them — so for the real `buildApp`, whose import graph is ~195 ms of its
+~360 ms locally, the platform number will be **higher** than this section predicted rather than
+proportional to it. The spike is a six-route Fastify app with no `pg`, no `ioredis`, no BullMQ and no
+news client; 947 ms is the floor plus almost nothing, and must not be quoted as zammy's.
+
+Two consequences:
+
+- **§3.3's `pg_net` concern is real, and now has a number.** Its default timeout is 2 s. A cold chore
+  route is already ~1 s empty; the real one is more. `timeout_milliseconds ≥ 10000` was already the
+  recommendation and this is why — at the default the margin is thin, which is the opposite of what
+  this section said before it had platform data.
+- **The 330 ms warm figure is mostly geography**, Calgary to `iad1`, not compute. It is a note about
+  where to put the deployment, not about the read path.
+
+Both remain irrelevant to the sweep's deadline problem, which was never compute either.
+
+Two caveats, since one measurement is not a distribution: this is a single cold start in one region,
+and `warm` in that JSON is broken — the handler stamps it before Fastify sees the request, so it
+always reads `true`. The two `buildMs` values agreeing at 71 is what identifies the second request as
+the same instance.
 
 ---
 
