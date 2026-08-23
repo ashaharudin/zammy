@@ -252,6 +252,52 @@ the same write as the tokens — but that is corpus luck plus a gap `recordStory
 explicitly tolerates, and the failure mode is a silently missed link on the rarest vocabulary there
 is.
 
+**Gated as of 2026-08-23, and this section used to say it shipped unconditionally.**
+`STORYLINE_NARROW_RETRIEVAL`, **default off**; off is the pre-#117 behaviour exactly.
+
+The reason is §2.7 step 1, run — and then run again, correctly. The harness that measured the
+birth-only trajectory reported a largest arc of **72** groups, and it **did not model
+`mergeStorylines`**: the service re-points a merge loser's bridges onto the winner
+([storylines.ts:434](../packages/storage/src/storylines.ts), *"it re-points rather than dying with the
+alias"*), which is the mechanism that makes merging self-reinforcing, and the harness modelled
+neither the re-pointing nor the drop. With both modelled, **birth-only** at the pinned bar leaves a
+largest arc of **2,591 groups — 9.96%**. So the evidence that the birth path was safe came from a
+simulator that skips the merge, which is §2.5's own mistake one level up: a decision certified against
+a model of itself that omits the part doing the damage. (Both figures are recorded from that
+re-measurement; **this change did not re-run them**, and the harness for it is the one §2.6's K
+re-measurement needs.)
+
+The archive is **not** damaged, which is why this is a gate and not a repair. Re-verified on
+2026-08-23, grouping `storyline_bridges` by pair and counting distinct groups: **1,913 pairs, one
+bucket, one bridge each — nothing at K=2**, so no merge is pending and nothing has to be undone. What makes the precaution worth taking anyway is that a bad merge is unrecoverable —
+ADR-0011 refuses to build a split, and the only repair is `backfill:storylines --restart`, which
+costs the whole label history (§2.7 step 2 prices it at about eight days of free-tier quota).
+
+**The flag switches a PAIR, and getting that wrong would be worse than not gating at all.** #117
+changed two things: the probe tokens, *and* `CANDIDATE_LIMIT` from 200 to 4,000 — a value censused
+against the *narrowed* probe. Gate only the narrowing and production runs whole profile + 4,000: the
+broad probe, whose p50 overlap is 1,903 storylines and max 8,054, with its only bound effectively
+removed, feeding the O(n²) `bridgePairs` cross-product §2.6 describes. That is more percolation-prone
+than the old behaviour *and* than the new one. So both halves come out of one function —
+`candidateRetrieval` in `storyline-link.ts`, one object literal per mode — and `LinkerConfig` carries
+no other retrieval input; the pair is unreachable rather than merely discouraged.
+
+`storyline-replay.ts` reads the same flag, so the harness models whichever mode is configured; #117's
+proven property was that the two narrow identically, and letting that lapse is the root cause of
+everything in this section. Verified on the 2026-08-23 corpus (29,658 articles in 24,655 groups,
+read-only against `zammy`): the **pre-#117 replay**, the gated replay **off**, and the gated replay
+**on** produce a byte-identical 30-row threshold grid, storyline-for-storyline — so the off path is
+genuinely the pre-#117 grid, and the on path is the no-op #117 claimed. The row cap is the half the
+replay still does not apply; it now **reports** it as `cappedGroups`, and the report is this section
+in one number: **12,734 of 24,655** groups exceed the off mode's 200 rows, **0** exceed the on mode's
+4,000 — 0 at the pinned bar and every row near it, rising to 1–3 groups only at anchor shares of
+0.01–0.02, five to ten times the pinned value and already refused for building beat storylines. The
+census behind 4,000 is a census at the bar that ships, and that is where it holds.
+
+The recommended real fix — a top-2-qualifiers bound on what may bridge — is deliberately **not** in
+this change. It is a different decision with its own evidence, and the flag is what buys the time to
+gather it.
+
 ### 2.6 The drain, and why the sweep is switched off
 
 The outstanding question in §2.5 was whether the unblocked backlog is safe. It is not, and the way
@@ -289,10 +335,13 @@ coherent across all 151 groups, a genuine link the cap was suppressing, while th
 chains Gaza, the Israel-Iran war and Russia-Ukraine through shared diplomatic vocabulary. The replay
 at the pinned bar says the largest arc should be **50**.
 
-**So the fix split in two.** The retrieval narrowing ships unconditionally, because it repairs the
-*birth* path to match the candidate set the thresholds were certified against — and the replay is a
-faithful proxy for that path, a single pass in publication order with no re-offer, which is exactly
-why it says 50 where the sweep says 1,347. The sweep is gated off behind
+**So the fix split in two.** The retrieval narrowing shipped on the birth path — the argument being
+that it repairs that path to match the candidate set the thresholds were certified against, and that
+the replay is a faithful proxy for it: a single pass in publication order with no re-offer, which is
+exactly why it says 50 where the sweep says 1,347. **That argument did not survive re-measurement, and
+the narrowing is now gated too** (`STORYLINE_NARROW_RETRIEVAL`, default off — §2.5): the replay
+behind it was not modelling the merge, and birth-only with the merge modelled is 2,591 groups, not 72.
+The sweep is gated off behind
 `STORYLINE_LATE_CANDIDATE_SWEEP=false`, blocked on re-measuring K against a replay that re-offers,
 with `--late-candidates` to run it deliberately and a gated night reporting `skipped: true` rather
 than `offered: 0`.
@@ -304,9 +353,11 @@ and filtered at **1,782**. It is off by default too.
 
 ### 2.7 The hybrid state — the one residual nothing has tested
 
-The retrieval fix ships on the birth path on the strength of the replay, and the replay builds the
-archive **from scratch**: every storyline in it was formed by the narrowed decision. Production's was
-formed by the capped one. Those are different populations.
+The retrieval fix went to the birth path on the strength of the replay — it is behind
+`STORYLINE_NARROW_RETRIEVAL` and off by default as of 2026-08-23 (§2.5), so what follows is the
+question that turning it on re-opens, and step 1 below is the measurement that gated it. The replay
+builds the archive **from scratch**: every storyline in it was formed by the narrowed decision.
+Production's was formed by the capped one. Those are different populations.
 
 Under the cap, a group that should have joined an existing arc was often truncated out of its own
 candidate list, so it seeded a **new arc instead**. Production therefore holds more arcs, each

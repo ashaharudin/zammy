@@ -48,6 +48,7 @@ const LINKER_OFF: LinkerConfig = {
   },
   mergeBridges: 2,
   coherenceGate: false,
+  narrowRetrieval: false,
   storyDf: { windowDays: 14, timeZone: "UTC" },
   timeZone: "UTC",
 };
@@ -226,6 +227,7 @@ describe("grouping, end to end", () => {
           },
           mergeBridges: 2,
           coherenceGate: false, // the pre-gate path these tests already took (§12)
+          narrowRetrieval: false,
           storyDf: { windowDays: 14, timeZone: "UTC" },
           timeZone: "UTC",
         },
@@ -467,6 +469,7 @@ describe("labels arrive without an operator (ADR-0011)", () => {
     },
     mergeBridges: 2,
     coherenceGate: false, // the pre-gate path these tests already took (§12)
+    narrowRetrieval: false,
     storyDf: { windowDays: 14, timeZone: "UTC" },
     timeZone: "UTC",
   };

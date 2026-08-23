@@ -590,6 +590,7 @@ describe("the sample waits for the names it started (§10.1)", () => {
     },
     mergeBridges: 2,
     coherenceGate: false,
+    narrowRetrieval: false,
     storyDf: { windowDays: 14, timeZone: "UTC" },
     timeZone: "UTC",
   };

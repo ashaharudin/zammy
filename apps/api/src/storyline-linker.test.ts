@@ -6,6 +6,7 @@ import {
   recordFormationRefusal,
   createProvisionalStoryline,
   promoteStoryline,
+  readCandidateStorylines,
   readGroupStorylines,
   recordBridge,
   setStorylineStatus,
@@ -65,6 +66,7 @@ const CONFIG: LinkerConfig = {
   // Off, so everything below describes the pre-gate path: the merge happens
   // inside `linkGroup`. The gate has its own describe block at the bottom.
   coherenceGate: false,
+  narrowRetrieval: false,
   storyDf: { windowDays: 14, timeZone: "UTC" },
   timeZone: "UTC",
 };
@@ -838,5 +840,141 @@ describe("the coherence gate (ADR-0011's amendment)", () => {
         storylineB: linkedB.storylineId,
       }),
     ).toBeGreaterThan(0);
+  });
+});
+
+describe("STORYLINE_NARROW_RETRIEVAL", () => {
+  /** The narrowed mode: anchor-eligible probe, cap 4,000. `CONFIG` is the off one. */
+  const NARROWED: LinkerConfig = { ...CONFIG, narrowRetrieval: true };
+
+  /**
+   * The whole point of the flag, in one fixture: a real qualifier that the BROAD
+   * probe's 200-row cut throws away.
+   *
+   * 204 decoy storylines share only a COMMON token with the arrival — above the
+   * anchor ceiling, so none of them can ever qualify — and every one of them has
+   * fresher coverage than the single storyline that CAN. `readCandidateStorylines`
+   * cuts at `last_coverage desc`, which is not what the decision reads, so the
+   * broad probe spends its 200 rows on the decoys and never sees the qualifier.
+   * The narrowed probe cannot retrieve the decoys at all: a token 12.5% of the
+   * corpus carries is not anchor-eligible, so it never enters the probe array.
+   *
+   * This is the dev archive's measured shape in miniature — the cut bound on
+   * 12,266 of 12,366 window groups and discarded ~90% of candidates, and the
+   * narrowed probe found 1,147 more qualifiers while losing none.
+   */
+  async function seedRecencyDecoys(): Promise<{ qualifierId: string }> {
+    await seedCorpus({ rare: STORY, common: ["trump"] });
+
+    // One article to lead every decoy's day slot: `storyline_days` needs a hero,
+    // and which article it is has no bearing on retrieval.
+    const lead = await group({ tokens: ["trump"] });
+    const decoys = await db
+      .insertInto("storylines")
+      .values(
+        Array.from({ length: 204 }, () => ({
+          profile_tokens: ["trump", "president"],
+          status: "active" as const,
+        })),
+      )
+      .returning("id")
+      .execute();
+    await db
+      .insertInto("storyline_days")
+      .values(
+        decoys.map((decoy) => ({
+          storyline_id: decoy.id,
+          day_key: DAY,
+          day_slot_published: new Date(`${DAY}T08:00:00Z`),
+          lead_article_id: lead.groupId,
+        })),
+      )
+      .execute();
+
+    // The one storyline the arrival genuinely belongs to: two groups, the five
+    // rare tokens, and coverage 40 days old — inside dormancy (90) and therefore
+    // judged at the normal bar, but last in the recency order the cut uses.
+    const members = [await group({ tokens: STORY }), await group({ tokens: STORY })];
+    const qualifier = await db
+      .insertInto("storylines")
+      .values({ profile_tokens: STORY, status: "active" })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    await db
+      .insertInto("storyline_groups")
+      .values(members.map((member) => ({ storyline_id: qualifier.id, group_id: member.groupId })))
+      .execute();
+    await db
+      .insertInto("storyline_days")
+      .values({
+        storyline_id: qualifier.id,
+        day_key: "2026-07-02",
+        day_slot_published: new Date("2026-07-02T08:00:00Z"),
+        lead_article_id: members[0]!.groupId,
+      })
+      .execute();
+
+    return { qualifierId: qualifier.id };
+  }
+
+  it("OFF: the whole profile, and the 200-row cut loses the real link", async () => {
+    // Not a hypothetical about the flag — this is what production has done since
+    // the linker shipped, and why narrowing is a repair rather than a widening.
+    const { qualifierId } = await seedRecencyDecoys();
+    const arrival = await group({ tokens: [...STORY, "trump"] });
+
+    const outcome = await linkGroup(deps(), arrival);
+
+    expect(outcome.attached).toBe(false);
+    expect(outcome.storylineId).not.toBe(qualifierId);
+    expect(await readGroupStorylines(db, arrival.groupId)).toEqual([outcome.storylineId]);
+  });
+
+  it("ON: the anchor-eligible probe finds it, because the decoys cannot enter", async () => {
+    const { qualifierId } = await seedRecencyDecoys();
+    const arrival = await group({ tokens: [...STORY, "trump"] });
+
+    const outcome = await linkGroup({ db, config: NARROWED }, arrival);
+
+    expect(outcome.attached).toBe(true);
+    expect(outcome.storylineId).toBe(qualifierId);
+  });
+
+  it("the coupling: it is the 200 CAP that loses it, not the broad probe", async () => {
+    // Why the flag must switch both halves at once. Run the broad probe's own
+    // token array at each mode's limit against the same fixture: at 200 the
+    // qualifier is cut, at 4,000 it is not. So "whole profile + 4,000" is a THIRD
+    // behaviour — the broad probe with its only bound effectively removed, which
+    // is more percolation-prone than either mode, since every extra qualifier
+    // multiplies into `bridgePairs`' O(n^2) cross-product. `candidateRetrieval`
+    // is the reason that pair is unreachable from `LinkerConfig`.
+    const { qualifierId } = await seedRecencyDecoys();
+    const broadTokens = [...STORY, "trump"];
+
+    const capped = await readCandidateStorylines(db, { tokens: broadTokens, limit: 200 });
+    const uncapped = await readCandidateStorylines(db, { tokens: broadTokens, limit: 4_000 });
+
+    expect(capped).toHaveLength(200);
+    expect(capped.map((row) => row.id)).not.toContain(qualifierId);
+    expect(uncapped.map((row) => row.id)).toContain(qualifierId);
+  });
+
+  it("agrees with the broad probe whenever the cap does not bind", async () => {
+    // The necessary-condition property, end to end: narrowing is not a narrower
+    // DECISION, so with nothing truncated both modes reach the same verdict.
+    // That is what makes the off path a pure rollback rather than a third
+    // behaviour, and what `storyline-link.test.ts` proves at the rule level.
+    await seedCorpus({ rare: STORY });
+    const first = await group({ tokens: STORY });
+    const second = await group({ tokens: STORY });
+    const third = await group({ tokens: STORY });
+
+    const born = await linkGroup(deps(), first);
+    const broad = await linkGroup(deps(), second);
+    const narrowed = await linkGroup({ db, config: NARROWED }, third);
+
+    expect(broad.storylineId).toBe(born.storylineId);
+    expect(narrowed.storylineId).toBe(born.storylineId);
+    expect(narrowed.attached).toBe(true);
   });
 });

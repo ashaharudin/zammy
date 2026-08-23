@@ -81,7 +81,7 @@ export interface LabelMergeRules {
   graceDays: number;
   /**
    * Safety valve on one component, in storylines — not a tuning knob, the same
-   * argument the linker's `CANDIDATE_LIMIT` makes. A model label that turned out
+   * argument the linker's candidate-row caps make (`candidateRetrieval`). A model label that turned out
    * both generic and grounded would otherwise collapse an unbounded number of
    * arcs in one pass, and the failure this design exists to prevent is exactly
    * that shape. A refused component is LOGGED and left alone, so the operator

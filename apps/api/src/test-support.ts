@@ -130,6 +130,9 @@ export async function createTestHarness(
           // Off by default: the gate needs a model, and a test that wants it
           // says so (see storyline-linker.test.ts).
           coherenceGate: false,
+          // The shipped default. A test that wants the narrowed retrieval says
+          // so, the same way it would say so about the gate.
+          narrowRetrieval: false,
           storyDf: { windowDays: 14, timeZone: "UTC" },
           timeZone: "UTC",
         },

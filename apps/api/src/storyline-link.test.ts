@@ -3,6 +3,7 @@ import {
   anchorCeiling,
   anchorEligibleTokens,
   barFor,
+  candidateRetrieval,
   bridgePairs,
   groupProfile,
   linkEvidence,
@@ -369,5 +370,62 @@ describe("bridgePairs", () => {
   it("has nothing to say about a single qualifier", () => {
     // One storyline is not a bridge; a bridge is a claim about a PAIR.
     expect(bridgePairs([q("a")])).toEqual([]);
+  });
+});
+
+describe("candidateRetrieval", () => {
+  // Ceiling is 32 at this corpus size: `rare` anchors, `common` cannot.
+  const CORPUS = corpus({ rare: 3, other: 7, common: 9_000 });
+  const PROFILE = ["rare", "other", "common"];
+
+  it("narrowed: the anchor-eligible subset, capped at 4,000", () => {
+    expect(candidateRetrieval(PROFILE, CORPUS, RULES, true)).toEqual({
+      tokens: ["rare", "other"],
+      limit: 4_000,
+    });
+  });
+
+  it("broad: the whole profile, capped at 200 — pre-2026-08-22 behaviour exactly", () => {
+    expect(candidateRetrieval(PROFILE, CORPUS, RULES, false)).toEqual({
+      tokens: ["rare", "other", "common"],
+      limit: 200,
+    });
+  });
+
+  it("COUPLES the two halves: no mode gives the whole profile a 4,000 cap", () => {
+    // The trap this function exists for. The subset is safe because it is a
+    // necessary condition; 4,000 is safe because it was censused against THAT
+    // subset (0 of 12,366 window groups exceed it, where 200 binds on 1,131).
+    // Whole profile at 4,000 is neither behaviour — it is the broad probe (p50
+    // 1,903 rows, max 8,054) with its only bound effectively removed, feeding an
+    // O(n^2) bridge cross-product. If a later change can produce that pair, the
+    // gate has made things worse than either state it switches between.
+    for (const narrowed of [true, false]) {
+      const { tokens, limit } = candidateRetrieval(PROFILE, CORPUS, RULES, narrowed);
+      const isWholeProfile = tokens.length === PROFILE.length;
+      expect(limit === 200).toBe(isWholeProfile);
+      expect(limit === 4_000).toBe(!isWholeProfile);
+    }
+  });
+
+  it("narrows by the same rule as `anchorEligibleTokens`, absent tokens included", () => {
+    // Not a second implementation: the whole no-qualifier-lost proof is about
+    // that function, and an absent token is eligible because `linkEvidence`
+    // scores it df 1. A filter written over the df map's entries would drop
+    // brand-new vocabulary here and nowhere else.
+    const profile = ["unseen", "rare", "common"];
+    expect(candidateRetrieval(profile, CORPUS, RULES, true).tokens).toEqual(
+      anchorEligibleTokens(profile, CORPUS, RULES),
+    );
+    expect(candidateRetrieval(profile, CORPUS, RULES, true).tokens).toContain("unseen");
+  });
+
+  it("narrowed, can come back EMPTY — broad never can", () => {
+    // Empty means no token this group carries can anchor anything, so there is
+    // nothing to retrieve and `linkGroup` skips the round trip. The broad probe
+    // has no such shortcut: it always probes with what it was given, which is
+    // why the early return in `linkGroup` is a narrowed-mode path only.
+    expect(candidateRetrieval(["common"], CORPUS, RULES, true).tokens).toEqual([]);
+    expect(candidateRetrieval(["common"], CORPUS, RULES, false).tokens).toEqual(["common"]);
   });
 });

@@ -54,6 +54,7 @@ const CONFIG: LinkerConfig = {
   },
   mergeBridges: 2,
   coherenceGate: false, // the pre-gate path these tests already took (§12)
+  narrowRetrieval: false,
   storyDf: { windowDays: 14, timeZone: "UTC" },
   timeZone: "UTC",
 };
