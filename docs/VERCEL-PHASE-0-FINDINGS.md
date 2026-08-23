@@ -297,15 +297,66 @@ why it says 50 where the sweep says 1,347. The sweep is gated off behind
 with `--late-candidates` to run it deliberately and a gated night reporting `skipped: true` rather
 than `offered: 0`.
 
-**One residual risk, named because nothing has tested it.** The replay validates the birth path by
-building from scratch. Production's archive was built *under* the cap, so its arcs carry cap-shaped
-profiles, and new arrivals will now qualify against that hybrid state. A from-scratch replay does not
-exercise it.
-
 A changed-set filter was also built and measured against this, and it is worth recording that it
 makes things **worse, not safer**: a merge is what marks an arc dirty, so a filter that offers only
 marked groups selects for the feedback loop. Head to head over four passes, unfiltered ends at 1,347
 and filtered at **1,782**. It is off by default too.
+
+### 2.7 The hybrid state — the one residual nothing has tested
+
+The retrieval fix ships on the birth path on the strength of the replay, and the replay builds the
+archive **from scratch**: every storyline in it was formed by the narrowed decision. Production's was
+formed by the capped one. Those are different populations.
+
+Under the cap, a group that should have joined an existing arc was often truncated out of its own
+candidate list, so it seeded a **new arc instead**. Production therefore holds more arcs, each
+narrower, and each one's `profile_tokens` is the majority vocabulary of a membership the correct
+decision would never have assembled. From now on, new arrivals are judged by the narrowed retrieval
+against those cap-shaped profiles. Neither measurement covers the mixture: the replay is
+all-narrowed, and pre-fix production was all-capped.
+
+**The replay cannot be made to see this by running it longer.** A from-scratch replay contains no
+cap-created fragments, so it has nothing to fuse — and fragments that should be one arc, suddenly
+able to see each other, is the whole content of the hybrid. Seeing each other is precisely the bridge
+condition: `bridgePairs` records a pair per combination of a group's qualifiers, K merges a pair, each
+merge unions two profiles, and a wider profile overlaps more next time.
+
+Which means **the sweep was never the cause of §2.6's runaway, only the accelerant.** The same loop
+runs on the birth path — at roughly a tenth the rate, ~1,300 new groups a day against the sweep's
+~12,000 re-offers a night — and it starts from a state deliberately rich in fragments to fuse. So
+§2.6's "50 versus 1,347" is not apples to apples: **50 is the steady state of a correctly built
+archive**, and production is a cap-built archive having correct decisions applied forward. That
+trajectory is unmeasured.
+
+The likely outcome is benign, and worth stating so the risk is not overdrawn: these merges are
+*repairs*, undoing fragmentation the cap caused, converging toward the replay's 50. The failure mode
+is that fusing fragments widens profiles past the point the thresholds certify. Nobody knows which,
+and the uncertainty points the same way that has already been wrong twice in this section.
+
+**What to do, in order.**
+
+1. **Measure it.** Entirely in memory, no database: replay from scratch *with the cap in place* to
+   reproduce production's arc population, then switch to narrowed retrieval and continue with
+   subsequent days, birth-only. Watch largest arc, arc count and merges per simulated day. It is the
+   one configuration nobody has run, and it is a small extension of the re-offering harness the K
+   re-measurement builds — the same instrument minus the re-offer, plus a cap-built starting state.
+   **Held deliberately until that harness exists**, rather than building a second simulator; a forked
+   simulator drifting from the service is how §2.5's bug survived.
+2. **Then choose: repair, or converge.** `backfill:storylines --restart` calls `resetStorylines` and
+   rewrites every storyline, eliminating the hybrid by construction — and discards all label history,
+   ~3,934 promoted storylines to relabel at the free tier's 500/day, so about **eight days of quota**,
+   against an ADR-0015 that calls the arcs and label history "the product". Letting it converge is
+   free and probably right, but it is the option step 1 exists to justify. Choosing it before
+   measuring would be the same mistake as the 2,000-group bound.
+3. **Instrument it either way, and this one need not wait.** `largestStoryline` is reported in exactly
+   one place — [storyline-backfill-cli.ts:246](../apps/api/src/storyline-backfill-cli.ts) — during a
+   backfill. The nightly pass reports `dormant`, `bridges`, `lateCandidates`, `labels` and
+   `labelMerge`; merges from the *birth* path appear in no report at all. So ADR-0011's percolation
+   alarm exists only as a number a human reads after manually running a backfill or the replay
+   harness, which is why §2.6 took four sessions and two wrong projections to find. Three numbers on
+   the nightly report — largest arc, arc count, merges per night — turn this class of problem from
+   "discovered by accident later" into "visible the week it starts". With `/metrics` deleted (§7) the
+   home is the pass's structured log and the `chore_runs` row Phase 4 adds.
 
 ## 3. The label pass: a backlog, not a nightly cost
 
