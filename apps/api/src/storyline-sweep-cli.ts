@@ -2,6 +2,7 @@ import { loadConfig } from "@zammy/config";
 import { zonedDayKey } from "./app-day.js";
 import { storyTokens } from "./storyline.js";
 import {
+  replayHybrid,
   replayLinker,
   replayWithReoffers,
   type ReplayGroup,
@@ -237,7 +238,8 @@ try {
   const readArcs = (result: ReplayResult, count: number, headlines: number): void => {
     for (const storyline of result.built.slice(0, count)) {
       console.log(
-        `\n[${storyline.groupIds.length} groups, ${storyline.days} days] ` +
+        `\n[${storyline.groupIds.length} groups, ${storyline.days} days` +
+          `${storyline.capShaped ? ", CAP-SHAPED" : ""}] ` +
           `profile: ${storyline.profile.slice(0, 16).join(", ")}`,
       );
       for (const groupId of storyline.groupIds.slice(0, headlines)) {
@@ -245,6 +247,46 @@ try {
       }
     }
   };
+
+  // ---- the variant under test, for every branch below ----
+  //
+  // Comma-separated, because the answer may well be a combination and pricing
+  // one requires running one — `cap:2,days,birth-bridges`. Parsed ONCE, above
+  // the branches, so `--reoffer` and `--hybrid` cannot come to mean different
+  // things by the same flag: the two are the same decision at different offer
+  // rates, and a variant that applied to only one of them would make them
+  // incomparable exactly where the comparison is the point.
+  const variantName = flag("variant") ?? "base";
+  const parts = variantName.split(",");
+  const cap = parts.find((part) => part.startsWith("cap:"));
+  const independence = parts.find((part) => part === "days" || part === "domains");
+  // `cap:N` overrides the configured bound; with no `cap:` part the run models
+  // whatever `STORYLINE_MAX_BRIDGING_QUALIFIERS` is set to, so an unqualified
+  // `--variant=base` describes the deployed mode rather than a hypothetical.
+  // `cap:0` is how a run asks for UNBOUNDED against a configured bound, which
+  // is what reproducing the committed option table needs once the flag is on.
+  if (cap !== undefined && !/^cap:\d+$/.test(cap)) {
+    console.error(`--variant cap must be a non-negative integer, got \`${cap}\``);
+    process.exit(1);
+  }
+  const configuredCap = cap === undefined ? CONFIGURED_BOUND : Number(cap.slice(4)) || undefined;
+  const variant: ReplayVariant = {
+    ...(configuredCap !== undefined ? { maxBridgingQualifiers: configuredCap } : {}),
+    ...(independence !== undefined ? { independence: independence as "days" | "domains" } : {}),
+    ...(parts.includes("birth-bridges") ? { bridgeOffers: "first" as const } : {}),
+  };
+  const unknown = parts.filter(
+    (part) =>
+      part !== "base" &&
+      part !== "birth-bridges" &&
+      part !== "days" &&
+      part !== "domains" &&
+      !part.startsWith("cap:"),
+  );
+  if (unknown.length > 0) {
+    console.error(`unknown --variant part(s): ${unknown.join(", ")}`);
+    process.exit(1);
+  }
 
   // ---- K, re-measured against a replay that RE-OFFERS ----
   //
@@ -271,42 +313,6 @@ try {
       cascadeMerges: cascade,
       ...(cappedBuild !== undefined ? { cappedRetrievalLimit: Number(cappedBuild) } : {}),
     };
-    // Comma-separated, because the answer may well be a combination and
-    // pricing one requires running one — `cap:2,days,birth-bridges`.
-    const variantName = flag("variant") ?? "base";
-    const parts = variantName.split(",");
-    const cap = parts.find((part) => part.startsWith("cap:"));
-    const independence = parts.find((part) => part === "days" || part === "domains");
-    // `cap:N` overrides the configured bound; with no `cap:` part the run models
-    // whatever `STORYLINE_MAX_BRIDGING_QUALIFIERS` is set to, so an unqualified
-    // `--variant=base` describes the deployed mode rather than a hypothetical.
-    // `cap:0` is how a run asks for UNBOUNDED against a configured bound, which
-    // is what reproducing the committed option table needs once the flag is on.
-    if (cap !== undefined && !/^cap:\d+$/.test(cap)) {
-      console.error(`--variant cap must be a non-negative integer, got \`${cap}\``);
-      process.exit(1);
-    }
-    const configuredCap = cap === undefined ? CONFIGURED_BOUND : Number(cap.slice(4)) || undefined;
-    const variant: ReplayVariant = {
-      ...(configuredCap !== undefined ? { maxBridgingQualifiers: configuredCap } : {}),
-      ...(independence !== undefined
-        ? { independence: independence as "days" | "domains" }
-        : {}),
-      ...(parts.includes("birth-bridges") ? { bridgeOffers: "first" as const } : {}),
-    };
-    const unknown = parts.filter(
-      (part) =>
-        part !== "base" &&
-        part !== "birth-bridges" &&
-        part !== "days" &&
-        part !== "domains" &&
-        !part.startsWith("cap:"),
-    );
-    if (unknown.length > 0) {
-      console.error(`unknown --variant part(s): ${unknown.join(", ")}`);
-      process.exit(1);
-    }
-
     console.log(
       `\n=== K against a re-offering replay: ${reoffer}, variant ${variantName}` +
         `${cascade ? ", cascade+repoint" : ""}` +
@@ -393,6 +399,123 @@ try {
     }
     // Explicit, because `process.exit` below would skip the `finally` that
     // closes the pool.
+    await db.destroy();
+    process.exit(0);
+  }
+
+  // ---- the hybrid: a cap-built archive, then corrected BIRTHS ----
+  //
+  // §2.7 step 1. `--reoffer=posthoc --capped-build=200` prices the same starting
+  // state under sweep re-offers and converges at 4,668; this offers the
+  // corrected retrieval at the BIRTH path's rate instead — a day's new groups,
+  // once each, no sweep — which is what production would walk if the flag were
+  // turned on, since all three re-offer flags are off.
+  if (args.includes("--hybrid")) {
+    const cappedBuild = flag("capped-build");
+    const k = Number(flag("k") ?? config.STORYLINE_MERGE_BRIDGES);
+    const cascade = !args.includes("--no-cascade");
+
+    // The day keys the corpus actually holds, so the switch lands on a day that
+    // exists rather than on a date that happens to be N days back.
+    const dayKeys = [...new Set(groups.map((group) => group.dayKey))].sort();
+    const switchAfter = Number(flag("switch-after") ?? 7);
+    const switchOn =
+      flag("switch-on") ?? dayKeys[Math.max(0, dayKeys.length - switchAfter)] ?? "";
+    const corrected = dayKeys.filter((day) => day >= switchOn);
+    if (corrected.length === 0) {
+      console.error(`--switch-on=${switchOn} is after the last day in the corpus`);
+      process.exit(1);
+    }
+
+    console.log(
+      `\n=== §2.7 the hybrid: cap-built archive, then corrected BIRTHS ===\n` +
+        `build: ${
+          cappedBuild === undefined
+            ? "NO CAP — the from-scratch control, same days on one instrument"
+            : `whole-profile probe, ${cappedBuild}-row cut APPLIED (pre-#117)`
+        }\n` +
+        `after ${switchOn} (${corrected.length} of ${dayKeys.length} days): ` +
+        `${NARROW ? "anchor-eligible probe, cap 4,000 reported not applied" : "UNCHANGED — the flag-off control, cap stays applied"}\n` +
+        `birth-only: every group offered exactly ONCE, no sweep — ` +
+        `K=${k}${cascade ? ", cascade+repoint modelled" : ", cascade NOT modelled"}, ` +
+        `variant ${variantName}` +
+        `${
+          configuredCap === undefined
+            ? " (bridge cross-product UNBOUNDED)"
+            : ` (at most ${configuredCap} qualifiers may bridge)`
+        }\n` +
+        // Named in the header because `--share`/`--mass` default to the
+        // operator's exploration focus (0.01/16) and NOT to the shipped bar
+        // (0.002/20) — a trajectory read against the wrong bar is off by an
+        // order of magnitude, which is a mistake this measurement made once.
+        `bar: share=${focus.anchorMaxShare}, mass=${focus.massThreshold}` +
+        `${
+          focus.anchorMaxShare === config.STORYLINE_ANCHOR_MAX_SHARE &&
+          focus.massThreshold === config.STORYLINE_MASS_THRESHOLD_V2
+            ? " — the PINNED bar"
+            : ` — NOT the pinned bar (${config.STORYLINE_ANCHOR_MAX_SHARE}/${config.STORYLINE_MASS_THRESHOLD_V2})`
+        }`,
+    );
+    if (!NARROW && cappedBuild !== undefined) {
+      console.log(
+        "STORYLINE_NARROW_RETRIEVAL=false, so this run is the CONTROL: the cap " +
+          "and the broad probe are a pair and do not come apart at the switch.",
+      );
+    }
+    console.log(
+      "\nday        phase  born  live-sl  promoted  LARGEST  share%  merges(+new)  " +
+        "fused cap/mix/new  →cap   pairs  bridges   p50 p90 p99   2-4   5-9 10-19 20-49 50-99  100+",
+    );
+
+    let previousMerges = 0;
+    const final = replayHybrid(groups, corpusAt, { ...BASE, ...focus }, k, NARROW, {
+      ...(cappedBuild !== undefined ? { cappedRetrievalLimit: Number(cappedBuild) } : {}),
+      switchOn,
+      fidelity: { cascadeMerges: cascade },
+      variant,
+      onDay: (day, result) => {
+        const delta = result.merges - previousMerges;
+        previousMerges = result.merges;
+        const buckets = result.sizeBuckets
+          .map((bucket) => String(bucket.count).padStart(5))
+          .join(" ");
+        console.log(
+          `${day.dayKey}  ${day.phase.padEnd(5)} ${String(day.born).padStart(5)}  ` +
+            `${String(result.storylines).padStart(7)}  ${String(result.promoted).padStart(8)}  ` +
+            `${String(result.largestStoryline).padStart(7)}  ` +
+            `${(result.largestShare * 100).toFixed(2).padStart(6)}  ` +
+            `${String(result.merges).padStart(6)}(+${String(delta).padStart(4)})  ` +
+            `${String(result.fusedCapShaped).padStart(6)}/${String(result.fusedMixed).padStart(4)}/` +
+            `${String(result.fusedFresh).padStart(4)}  ` +
+            `${String(result.attachedToCapShaped).padStart(5)}  ` +
+            `${String(result.bridgedPairs).padStart(5)}  ${String(result.bridgeObservations).padStart(7)}  ` +
+            `${String(result.p50).padStart(4)}${String(result.p90).padStart(4)}${String(result.p99).padStart(4)}  ` +
+            buckets,
+        );
+      },
+    });
+
+    // The attribution, spelled out — §2.7's mechanism is that the corrected
+    // retrieval FUSES arcs the cap created, and "merges happened" cannot tell
+    // that from ordinary linking. A from-scratch run cannot produce a
+    // cap/cap merge at all, so that column is the hybrid's own content.
+    const postSwitch = final.fusedCapShaped + final.fusedMixed + final.fusedFresh;
+    console.log(
+      `\npost-switch merges: ${postSwitch} — ${final.fusedCapShaped} fused two ` +
+        `cap-shaped arcs, ${final.fusedMixed} one, ${final.fusedFresh} neither. ` +
+        `${final.attachedToCapShaped} groups ATTACHED to a cap-shaped arc (growth, not fusion).`,
+    );
+    console.log(
+      `candidate cap: ${final.cappedGroups} of ${groups.length} groups exceeded the ` +
+        `configured row limit at the offer they were judged on`,
+    );
+    console.log(`     judged: ${judgedColumns(final)}   (${JUDGED_HEADER.trim()})`);
+
+    const toRead = Number(flag("read") ?? 0);
+    if (toRead > 0) {
+      console.log(`\n=== the ${Math.min(toRead, final.built.length)} largest arcs ===`);
+      readArcs(final, toRead, Number(flag("headlines") ?? 8));
+    }
     await db.destroy();
     process.exit(0);
   }

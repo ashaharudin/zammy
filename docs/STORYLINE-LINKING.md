@@ -1464,6 +1464,20 @@ Two controls worth recording, both on this instrument:
   still-climbing 4,540. The two now bracket each other and neither bounds the other,
   which is a better reason to insist on the faithful shape than the one the first
   version gave.
+- **Cap-built archive, continued with corrected BIRTHS** (`--hybrid --capped-build=200`) is the same
+  starting state at the birth path's rate instead of the sweep's, and it is the one configuration
+  production would actually walk — `replayHybrid`, one offer per group, no sweep. It does not converge:
+  the corrected retrieval merges at **0.25 per arriving group**, invariant across four switch points
+  and flat over the corrected window, against the flag-off control's **0.015**. Seven corrected days
+  take the largest arc 24 → 71; eleven take it to 818; fourteen to 1,699, against the from-scratch
+  2,591 those days would have produced. **645 of 667** post-switch merges fuse two cap-shaped arcs,
+  which a from-scratch replay cannot produce at all.
+
+  **Bounded at the top 2, the drift goes and the hybrid question dissolves**: 0.034 per arrival, and
+  the cap-built and from-scratch archives both end at **22** where unbounded they end at 71 and 2,591.
+  The two starting states stop being distinguishable in the outcome, because the cross-product was the
+  mechanism that made them differ. Full write-up, distributions and the hand-read arcs:
+  VERCEL-PHASE-0-FINDINGS §2.7 step 1.
 
 ### The four options, priced against the same instrument
 

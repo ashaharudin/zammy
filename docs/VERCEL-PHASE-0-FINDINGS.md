@@ -280,7 +280,11 @@ re-measurement needs.)
 
 The archive is **not** damaged, which is why this is a gate and not a repair. Re-verified on
 2026-08-23, grouping `storyline_bridges` by pair and counting distinct groups: **1,913 pairs, one
-bucket, one bridge each — nothing at K=2**, so no merge is pending and nothing has to be undone. What makes the precaution worth taking anyway is that a bad merge is unrecoverable —
+bucket, one bridge each — nothing at K=2**, so no merge is pending and nothing has to be undone.
+(**Superseded the same day**: a later pass left seven pairs at or above K, and the unflagged nightly
+bridge sweep merges them — 124 → 143. The archive is still not damaged, but "nothing at K=2" is a
+snapshot, and it was never the same claim as "no merge is pending" — §2.7, "The live archive,
+re-read".) What makes the precaution worth taking anyway is that a bad merge is unrecoverable —
 ADR-0011 refuses to build a split, and the only repair is `backfill:storylines --restart`, which
 costs the whole label history (§2.7 step 2 prices it at about eight days of free-tier quota).
 
@@ -435,6 +439,45 @@ the retrieval corrected does not converge toward 50; it converges at 4,668, whic
 from-scratch run ends up too. The benign reading is refuted — the second failure mode is the one that
 happens.
 
+**The live archive, re-read 2026-08-23, and it says something §2.5 above has wrong.** §2.5 records
+"1,913 pairs, one bucket, one bridge each — nothing at K=2, so no merge is pending". That is no longer
+true and the second clause would not follow from the first anyway. Counted with exactly
+`readBridgedPairs`' own predicate: **1,865 live pairs, 1,858 at K=1, five at K=2 and two at K=3** —
+sixteen observations across seven pairs. The archive is still quiet by the percolation alarm (largest
+arc **124**, exactly one arc over 100, and 997 of 26,006 groups doubly homed with none triply), but
+those seven pairs are **pending merges, not stranded evidence**. Three facts, each verified against the
+code rather than inferred:
+
+- `countBridges` and `readBridgedPairs` count rows. Neither looks at membership at all, so an
+  observation by a group that is now a member of one side still counts toward K.
+- `runBridgeSweepChore` is called **unconditionally** in `runStorylinePass` — unlike the late-candidate
+  sweep it has no flag — and it merges every live pair at or above K. The next `chores storylines` run
+  merges all seven. First-order, no cascade, that takes the largest arc from **124 to 143**, and
+  several of the pairs' own labels agree they should be one (`Hayden Panettiere` with
+  `Hayden Panettiere`, two spellings of the FedEx St Jude Championship).
+- The home-exclusion rule — "bridge evidence only from arcs the group is NOT a member of" — is
+  enforced on the **retroactive** branch only, and there only against memberships that existed before
+  the call. On the fresh path `recordBridgesAmong` runs over the FULL qualifier cross-product
+  *including* `qualified[0]`, the arc the group has just joined.
+
+So the mechanism that looked like it might make the benign reading true is real, structural, and does
+not do what it was hoped to do. Self-homed bridge evidence is the **default, not the exception**: a
+group with *m* qualifiers writes `m(m-1)/2` pairs of which `m-1` touch its new home, so the predicted
+self-homed share is exactly `2/m` — and the archive lands on that closed form in four independent
+buckets (m=2: 99.9% observed against 100%; m=3: 68.0% against 66.7%; m=4: 53.0% against 50%; m=5:
+40.0% against 40%). **85.4% of all K=1 observations are self-homed**, 1,494 of them written in the same
+`linkGroup` call as the membership. It is not an artifact of a young archive — the same-call mechanism
+needs no elapsed time and was already at 86% within the first hour of the first backfill — but it is
+also not *stranding*, because nothing downstream reads membership. Retroactive attachment explains only
+6 of the 16. The replay models this faithfully (`independentEnough` counts marks, `offerGroup`'s fresh
+path bridges among all qualifiers including the winner), so the trajectory in step 1 already contains
+it.
+
+Worth stating plainly, because it bears on what K means: if a bridge is supposed to be evidence from a
+group with no stake in either arc, then 85% of the archive's evidence does not qualify — and the
+recommended top-2-qualifiers bound would not fix that, since at m=2 the single surviving pair is
+always self-homed.
+
 **What to do, in order.**
 
 1. **Measure it.** Entirely in memory, no database: replay from scratch *with the cap in place* to
@@ -442,8 +485,9 @@ happens.
    subsequent days, birth-only. Watch largest arc, arc count and merges per simulated day. It is the
    one configuration nobody has run, and it is a small extension of the re-offering harness the K
    re-measurement builds — the same instrument minus the re-offer, plus a cap-built starting state.
-   **Held deliberately until that harness exists**, rather than building a second simulator; a forked
-   simulator drifting from the service is how §2.5's bug survived.
+   Not a second simulator — a forked simulator drifting from the service is how §2.5's bug survived.
+   It is `replayHybrid` in `storyline-replay.ts`, on the same `offerGroup` as everything else, behind
+   `measure:storylines-v2 --hybrid`.
 
    **That harness now exists, and its `--capped-build=200` control answers the half of this that
    decides the choice in step 2.** `ReplayFidelity.cappedRetrievalLimit` builds the archive under the
@@ -457,43 +501,168 @@ happens.
    puts them both there. Fusing cap-created fragments does widen profiles past the point the
    thresholds certify, which was the failure mode this section named and could not choose between.
 
-   **What it does not answer, and step 1 is not closed.** Three gaps, in order of how much they
-   matter:
+   **What that control did not answer was the BIRTH path, and that is now measured — 2026-08-23. It
+   drifts.** `replayHybrid` builds under the cap, flips the retrieval on a day boundary, and continues
+   birth-only — one offer per group, no sweep, which is what production runs today with all three
+   re-offer flags off. Read-only against `zammy`, no model quota, 26,006 groups over the full window
+   at the pinned bar (share 0.002, mass 20, K=2, cascade+re-pointing modelled).
 
-   - **It applies the corrected retrieval as sweep RE-OFFERS, not as birth-only arrivals on
-     subsequent days.** That is the ~12,000-a-night rate this section contrasts with the birth path's
-     ~1,300 a day, so it prices the accelerated version of the trajectory rather than the one
-     production would walk. The endpoint is likely right and the *timescale* is not measured.
-   - **There are no "subsequent days".** The control sweeps the archive it built, so there is no
-     per-day series of new arrivals judged against a cap-built base — which is the shape step 1 asked
-     for and the shape a rollout would want to watch against.
-   - **The cap-built archive is the replay's, not production's.** It carries no label-agreement
-     merges, no coherence-gate withholdings, and profiles derived by the replay's majority rule
-     rather than storage's union rule — which is measurably wider (STORYLINE-LINKING.md, "Three
-     things this contradicts"). All three point the same way: production's starting state is
-     *broader* than the one this control builds.
+   One offer per group is not §2.6's single-pass shortcut, and the distinction is worth keeping
+   straight because they look alike. What §2.6 caught was a *measurement* that could not see a feedback
+   loop, not a rule against offering once: the loop is that a merge widens the survivor's profile so
+   the next offer retrieves more, and here it runs across DAYS instead of across sweep passes — each
+   day's arrivals are judged against the archive the previous day's merges left. Ten runs, thirty
+   simulated days each, and the trajectory is reported per day for exactly that reason. Bounding it to
+   2,000 groups, or to `--days=31`, is the shortcut — see below, where the second one nearly happened.
 
-   With `STORYLINE_NARROW_RETRIEVAL` now defaulting to **off** (§2.5), none of this is running, which
-   is what buys the time to close the remaining gaps rather than guess them.
+   Every row of the next table is at the **unbounded** bridge cross-product, which is
+   `STORYLINE_MAX_BRIDGING_QUALIFIERS`' default; the bound is priced against the same instrument two
+   tables down, and it changes the answer.
 
-   **And the hybrid question is now bounded from the other end, which changes what step 1 has to
-   settle.** The bound below exists (`STORYLINE_MAX_BRIDGING_QUALIFIERS`, default unbounded), and at
-   the top 2 the same `--capped-build=200` control that ran away to 4,668 goes
-   24 → 67 → 103 → 123 → **161 and is flat from pass 4** (0.62%). Fusing cap-created fragments is
-   what widens profiles past the thresholds, and the pair count is what turns a widened profile into
-   a merge — so the trajectory step 1 could not choose between is a trajectory of the *unbounded*
-   cross-product. Step 1's three gaps are all about TIMESCALE and starting breadth, and none of them
-   is load-bearing once the endpoint is 161 rather than 4,668. What it still cannot answer is whether
-   the arcs at that endpoint are the right ones: the bound's cost is measured in arcs, not in the
-   alarm (see the hand-reading). Note also that this control's judged columns are the BEST in the
-   whole exercise — 81.4% piles, 38.0% named, 64.3% kept — which is the same warning §2.6 records
-   about reading `named` and `kept` while a graph degrades, arriving from the opposite direction.
+   | corrected days | archive at the switch | largest at the end | share% | live arcs | post-switch merges | of which fuse two cap-shaped arcs |
+   | --- | --- | --- | --- | --- | --- | --- |
+   | **0** — flag stays off | 24 | **31** | 0.12 | 21,755 | 38 | — |
+   | 3 (from 08-19) | 25 | **78** | 0.30 | 21,148 | 317 | 308 |
+   | 7 (from 08-15) | 24 | **71** | 0.27 | 20,408 | 667 | 645 |
+   | 11 (from 08-11) | 20 | **818** | 3.15 | 16,595 | 2,500 | 2,322 |
+   | 14 (from 08-08) | 7 | **1,699** | 6.53 | 15,674 | 3,161 | 2,926 |
+   | all — from scratch | — | **2,591** | 9.96 | 15,430 | 420† | 0 |
+
+   Row 0 is `STORYLINE_NARROW_RETRIEVAL=false` — the cap and the broad probe are a PAIR, so the cut
+   stays applied across the switch and that run is the flag never being turned on. Its 38 merges are
+   the capped birth path's own over the last seven days, which is the number every row above compares
+   against. † the from-scratch row's 420 is likewise its last seven days, for that comparison; over the
+   whole window it makes 3,408, and it is the committed grid's own figure reproduced exactly.
+
+   **The rate is invariant and it does not decay, which is what makes this a drift rather than a
+   drain.** Normalise by arrivals rather than days — this corpus's days hold between 108 and 3,265
+   groups, so days are the wrong denominator — and the corrected retrieval produces **0.26, 0.256,
+   0.234, 0.252 merges per group born** across those four switch points. A backlog being repaired
+   would show a rate that starts high and decays as the fragments run out; a constant rate, invariant
+   to how much of the archive was cap-built, is the corrected retrieval's steady-state output on the
+   birth path. The flag-off control over the same seven days and the same arrivals is **0.015** — so
+   turning the flag on multiplies the birth path's merge rate **~17×** and keeps it there. Day by day
+   over the seven corrected days: +25, +36, +153, +143, +88, +101, +121. Nothing is tapering.
+
+   **So the hopeful reading is refuted a second time, and by a different route than the sweep
+   control's.** It does not converge toward the from-scratch figure from above; it climbs toward it
+   from below, and the from-scratch figure is itself still climbing when the corpus runs out (+98
+   merges and +146 groups on the last night of a 2,591-group arc). There is no measured ceiling for
+   the birth path either. At production's ~1,300 groups a day the seven corrected days above are
+   about **two** production days, and the 11-day column about **eight** — so the shape to expect is a
+   largest arc in the tens after a couple of nights and in the high hundreds within a fortnight, which
+   is precisely the interval §2.6's "a fortnight of nightly graph rows" was going to watch.
+
+   **§2.7's own reasoning survives contact, and it is now a number rather than an argument.** The
+   claim was that a from-scratch replay cannot see this by running longer, because it holds no
+   cap-created fragments to fuse. Measured: **645 of the 667** post-switch merges (96.7%) fuse two
+   arcs that both carry cap-shaped vocabulary, against **0 of 420** in the from-scratch control over
+   the same days — where it is 0 by construction, which is the point. Fusing cap-created fragments is
+   not a side effect of the hybrid, it is 97% of what the hybrid does.
+
+   **What it is NOT is a percolation collapse, and the distribution is where that shows.** Over the
+   seven corrected days the arc-size buckets (2–4 / 5–9 / 10–19 / 20–49 / 50–99 / 100+) go
+   1,293 / 192 / 26 / 3 / 0 / 0 → 1,945 / 269 / 59 / 18 / 1 / 0. The merges are spread across the
+   distribution rather than
+   feeding one arc: 1,341 groups also simply *attached* to a cap-shaped arc, which cannot chain the
+   way a merge does. The 100+ bucket stays empty for a week and the maximum is jumpy — 3 corrected
+   days ends at 78 and 7 ends at 71, which is one arc's worth of noise and the reason the maximum is
+   not reported alone here.
+
+   **Hand-read, the merges are about half repairs.** Of the ten largest arcs the 7-day hybrid builds,
+   three are one story and would be a genuine repair of the cap's fragmentation: the **SpaceX Falcon 9
+   lunar impact** (27 groups — the crater images, Danuri's before-and-after, the NASA LRO capture, all
+   one event), the **Wisconsin Democratic gubernatorial primary** (24 groups, 4 days, Hong v Crowley
+   from the previews to the result), and the **Canada–U.S. tariff talks** (36 groups, LeBlanc and Greer
+   meeting by meeting). One more is defensible as a running story: **Europe's wildfire season** (40
+   groups, France/Spain/Greece/Balkans), with a West Bank fire leaking in. The other six are not
+   stories. The largest arc the hybrid builds — **71 groups, profile `doug, ford, ontario, premier` —
+   is an entity magnet**, chaining Ford's wildfire remarks, data-centre policy, tariff reprisals and a
+   hotel-expense scandal because they share a name; `kinew, manitoba, premier` (33) is the same defect
+   with an obituary attached, and `jong, kim, korea` (25) spans several separate stories. Two are pure
+   **boilerplate**: 39 groups of unrelated HKEX filings joined by disclaimer vocabulary
+   (`accuracy, arising, disclaim, expressly, howsoever, liability`) and 26 GlobeNewswire press
+   releases joined by `globe, newswire, vancouver` — the mechanism the "| Globalnews.ca" suffix
+   already demonstrated, at scale. One is a **genre** pile: 44 WNBA box scores on `beat, night, point,
+   scored`. The judged columns say the same thing without the reading: declined piles formed goes
+   **76.9% → 81.3%** turning the flag on, and the boilerplate piles exist at flag-off too (HK filings
+   at 17 groups) — the flag does not create them, it merges them with each other.
+
+   **Two shortcuts this measurement nearly took, both of which have their own history in §2.6.**
+   `--days=31` is the CLI's default and it silently cuts **1,446 groups** off the front of a 39-day
+   archive; the full window is `--days=41`, and the from-scratch reference reproduces at
+   **exactly 2,591 / 9.96% / 3,408 merges** only on the full window. And `--share`/`--mass` default to
+   an exploration focus of 0.01/16, **not** the pinned 0.002/20 — at that bar the from-scratch birth
+   path reads **13,799 (56% of the window)** on the 31-day slice where the pinned bar reads 2,034, so a
+   trajectory read against it is an order of magnitude of nothing. The `--hybrid` header now
+   prints the bar and says whether it is the pinned one. The calibration check that matters: with no
+   cap and the retrieval narrowed, `replayHybrid` reproduces the committed birth-only grid exactly, so
+   the new instrument is the old decision plus a switch.
+
+   **What is still not measured.** The cap-built archive is the replay's, not production's: it carries
+   no label-agreement merges, no coherence-gate withholdings, and profiles derived by the replay's
+   majority rule rather than storage's union rule, which is measurably wider (STORYLINE-LINKING.md,
+   "Three things this contradicts"). All three point the same way — production's starting state is
+   *broader* than the one this builds — so **0.25 merges per arrival is a floor**. And the corrected
+   phase can be at most ~14 simulated days before the corpus runs out, which is why the endpoint above
+   is a trajectory and not a ceiling.
+
+   **The recommendation, and it is a recommendation rather than a change.** Nothing here justifies
+   turning `STORYLINE_NARROW_RETRIEVAL` on *by itself*: the birth path alone, from production's own
+   starting state, merges 17× more and shows no sign of stopping, and the largest thing it builds in
+   the first week is a pile rather than a story. All flags stay at their defaults. What *would* change
+   the answer is the lever §2.6 names and PR #130 has since built — a bound on how many qualifiers one
+   group may bridge — because the drift is 97% cap/cap fusion driven by `bridgePairs`' cross-product.
+
+   **It landed while this was being measured, so the interaction is measured rather than recommended.**
+   `STORYLINE_MAX_BRIDGING_QUALIFIERS` (PR #130, default 0 — unbounded — so today's behaviour exactly)
+   caps how many of a group's qualifiers may pair. On the SWEEP control it already turns 4,668 into
+   24 → 67 → 103 → 123 → **161, flat from pass 4** (0.62%). On the birth path, at the top 2 and
+   everything else held:
+
+   | 7 corrected days | cross-product | largest at end | post-switch merges | per arrival | cap/cap | piles | named | kept |
+   | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+   | flag off | unbounded | 31 | 38 | 0.015 | — | 76.9% | 38.2% | 64.3% |
+   | flag off | top 2 | 24 | 24 | 0.009 | — | 76.3% | 37.3% | 63.5% |
+   | **hybrid** | unbounded | **71** | 667 | **0.256** | 645 | 81.3% | 38.7% | 66.1% |
+   | **hybrid** | **top 2** | **22** | 89 | **0.034** | 75 | 80.7% | 37.2% | 62.9% |
+   | from scratch | unbounded | 2,591 | 420 | — | 0 | 74.1% | 31.1% | 62.0% |
+   | from scratch | top 2 | **22** | 117 | — | 0 | 69.8% | 26.8% | 57.5% |
+
+   **The bound removes the drift on the birth path, and it is not close.** 0.034 merges per arrival
+   against 0.256 — a **7.5× reduction** — and the largest arc ends at **22**, *below* where leaving the
+   flag off leaves it (31 unbounded, 24 bounded). Fourteen corrected days bounded reach 39, against
+   1,699 unbounded. Piles formed barely moves (80.7% against 81.3%), so the bound is not buying the
+   alarm at the cost of the pile count; `named` and `kept` do fall, which is what §2.6 warns to expect
+   when percolation stops inflating them rather than a cost to weigh against it.
+
+   **And the hybrid question DISSOLVES under the bound, which is the strongest thing here.** Bounded,
+   the cap-built archive and the from-scratch one both end at **22** — the same number, where unbounded
+   they end at 71 and 2,591. §2.7 exists because those two starting states are different populations;
+   with the pair count bounded they are no longer distinguishable in the outcome, because the mechanism
+   that made them differ was the cross-product. So the two flags are **not independent decisions**:
+   narrowed retrieval on the birth path is a 17× drift unbounded and a smaller archive than today's
+   bounded. Which to enable, and in what order, is still a decision for someone with a fortnight of the
+   nightly graph rows in front of them — this measurement says only that enabling the retrieval WITHOUT
+   the bound is the one combination the evidence refuses.
+
+   With `STORYLINE_NARROW_RETRIEVAL` and `STORYLINE_MAX_BRIDGING_QUALIFIERS` both at their defaults,
+   none of this is running, which is what buys the time to watch a fortnight of the nightly graph rows
+   rather than guess at them.
 2. **Then choose: repair, or converge.** `backfill:storylines --restart` calls `resetStorylines` and
    rewrites every storyline, eliminating the hybrid by construction — and discards all label history,
    ~3,934 promoted storylines to relabel at the free tier's 500/day, so about **eight days of quota**,
    against an ADR-0015 that calls the arcs and label history "the product". Letting it converge is
    free and probably right, but it is the option step 1 exists to justify. Choosing it before
    measuring would be the same mistake as the 2,000-group bound.
+
+   **Step 1 now justifies it, on one condition.** Bounded at the top 2 the cap-built archive and a
+   from-scratch one end in the same place (22 groups in the largest arc, both), so the hybrid state is
+   not something a rebuild would improve — there is nothing left for eight days of quota to buy.
+   Unbounded it is the opposite: the hybrid drifts and a rebuild would only re-enter the same drift
+   from a cleaner start, which is not a repair either. Either way **`--restart` is the wrong tool** and
+   the reason is the same one both times: the retrieval and the pair count decide the archive's shape,
+   not the archive's history. Converge, with the bound on.
 3. **Instrument it either way, and this one need not wait.** `largestStoryline` is reported in exactly
    one place — [storyline-backfill-cli.ts:246](../apps/api/src/storyline-backfill-cli.ts) — during a
    backfill. The nightly pass reports `dormant`, `bridges`, `lateCandidates`, `labels` and
@@ -719,6 +888,16 @@ the same instance.
   `EXPLAIN (ANALYZE)` at a p10-width and a median-width profile — the second because the first
   measurement was taken at p10 and read as typical, which is the error §2.2 exists to record.
 - **Cold start**: five fresh processes per mode, `performance.now()` deltas around each `import`.
+- **The hybrid trajectory (§2.7 step 1)**: `measure:storylines-v2 --days=41 --hybrid
+  --capped-build=200 --switch-after=N --share=0.002 --mass=20`, read-only against `zammy`, one run per
+  switch point at N ∈ {3, 7, 11, 14} plus the two controls (`STORYLINE_NARROW_RETRIEVAL=false` for
+  flag-off, `--capped-build` omitted for from-scratch). No `labeler` is reachable from this CLI, so no
+  model quota was spent. Row counts on `articles`, `storylines`, `storyline_groups` and
+  `storyline_bridges` were compared before and after and are unchanged.
+- **The live archive's bridges (§2.7)**: `storyline_bridges` grouped by pair under
+  `readBridgedPairs`' own join, cross-referenced against `storyline_groups` per observation for
+  membership and against `attached_at` / `observed_at` for the ordering. The `2/m` prediction was
+  tested by bucketing observations on pairs-per-group rather than fitted.
 
 Distrust these:
 
@@ -736,6 +915,14 @@ Distrust these:
   database by construction, and 6× is what contention cost here.
 - **The corpus is 9 ingest-days old with two backfill days in it.** §4's articles/day input is the
   weakest number in this document, which is why §4 states a tripwire rather than a projection.
+- **A faster replay is not a healthier one.** §2.6 records per-offer cost *improving* from 17 to 4 ms
+  as the graph collapsed, because a collapsing graph has fewer distinct arcs to retrieve. No wall-clock
+  figure is quoted for the §2.7 runs and none should be: the run that percolates hardest is the one
+  that finishes first.
+- **The archive has had only two linker passes.** Every write in `storyline_bridges` came from a
+  backfill on 2026-08-21 and a second run on 2026-08-22, which bounds how much retroactive attachment
+  could have accumulated — 6 of the 16 K≥2 observations. It does not soften §2.7's `2/m` finding, which
+  needs no elapsed time, but any claim there about how self-homing *accumulates* is 48 hours deep.
 - **The dev corpus has had these passes run against it nightly**, so phases 1, 2 and 5 measured
   near-empty work. Their cost on a night with real work to do is unmeasured — but all three are
   sub-second on a full window, so the ceiling question does not turn on them.
