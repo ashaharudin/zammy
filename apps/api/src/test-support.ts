@@ -133,6 +133,9 @@ export async function createTestHarness(
           // The shipped default. A test that wants the narrowed retrieval says
           // so, the same way it would say so about the gate.
           narrowRetrieval: false,
+          // Likewise unbounded, the shipped default: `bridgePairs` takes the
+          // full cross-product. A test that wants the bound says so.
+          maxBridgingQualifiers: undefined,
           storyDf: { windowDays: 14, timeZone: "UTC" },
           timeZone: "UTC",
         },

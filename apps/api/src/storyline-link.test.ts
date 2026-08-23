@@ -5,6 +5,7 @@ import {
   barFor,
   candidateRetrieval,
   bridgePairs,
+  bridgingQualifiers,
   groupProfile,
   linkEvidence,
   qualifyingStorylines,
@@ -370,6 +371,118 @@ describe("bridgePairs", () => {
   it("has nothing to say about a single qualifier", () => {
     // One storyline is not a bridge; a bridge is a claim about a PAIR.
     expect(bridgePairs([q("a")])).toEqual([]);
+  });
+
+  // ---- the bound on the cross-product (STORYLINE_MAX_BRIDGING_QUALIFIERS) ----
+  //
+  // The knob is the pair COUNT, not the bar: `bridgePairs` is quadratic in the
+  // qualifier count, so a wide qualifier set is what walks pairs up to K, and
+  // each merge widens a profile for the next arrival. These pin the rule; the
+  // numbers are in docs/STORYLINE-LINKING.md.
+
+  it("takes the full cross-product when unbounded, which is the default", () => {
+    // `undefined` and an omitted argument must be the same thing, or the
+    // shipped default would depend on which call site you read.
+    const qualified = [q("a"), q("b"), q("c"), q("d")];
+    expect(bridgePairs(qualified, undefined)).toEqual(bridgePairs(qualified));
+    expect(bridgePairs(qualified)).toHaveLength(6);
+  });
+
+  it("bounds the pair count at the source: top-2 is exactly one pair", () => {
+    // The whole argument for this lever over a higher K. Two qualifiers is one
+    // pair, so the quadratic term is GONE rather than smaller — 40 qualifiers
+    // would otherwise write 780 pairs.
+    expect(bridgePairs([q("a"), q("b"), q("c"), q("d")], 2)).toEqual([["a", "b"]]);
+    expect(bridgePairs([q("a"), q("b"), q("c"), q("d")], 3)).toEqual([
+      ["a", "b"],
+      ["a", "c"],
+      ["b", "c"],
+    ]);
+  });
+
+  it("is inert when the bound is at or above the qualifier count", () => {
+    // 26% of the live archive's bridging groups exceed 2 qualifiers narrowed
+    // and 0.5% broad — so most offers must be untouched, or the bound would be
+    // a change to everything rather than to the tail that generates the pairs.
+    const qualified = [q("a"), q("b")];
+    expect(bridgePairs(qualified, 2)).toEqual(bridgePairs(qualified));
+    expect(bridgePairs(qualified, 9)).toEqual(bridgePairs(qualified));
+  });
+
+  it("refuses all bridging at 1, and at 0, rather than throwing", () => {
+    // One qualifier is no pair, so a bound of 1 turns bridge evidence off
+    // entirely. That is a legitimate setting and it must not read as "unset" —
+    // which is why 0 rather than an absent value is the flag's off position.
+    expect(bridgePairs([q("a"), q("b"), q("c")], 1)).toEqual([]);
+    expect(bridgePairs([q("a"), q("b"), q("c")], 0)).toEqual([]);
+    // A negative bound is a misconfiguration, not a licence to slice from the
+    // end of the array — which is what a bare `slice(0, -1)` would do.
+    expect(bridgePairs([q("a"), q("b"), q("c")], -1)).toEqual([]);
+  });
+
+  it("takes the PREFIX, so it inherits qualifyingStorylines' tiebreak", () => {
+    // The load-bearing property, and the reason nothing here re-sorts: the
+    // order is already mass desc, then the OLDER storyline, then the id
+    // (`qualifyingStorylines`). A second ordering invented at the bound would
+    // be a second decision to keep in step with the attach.
+    //
+    // Two candidates tied on mass, distinguished only by the tiebreak, plus a
+    // third that must fall outside a bound of 2.
+    const CORPUS = corpus({ rare: 3, other: 5, extra: 7, more: 9 });
+    const GROUP = ["rare", "other", "extra", "more"];
+    const older = candidate({
+      id: "zzz-older",
+      profileTokens: GROUP,
+      lastCoverageMs: NOW - 5 * DAY,
+    });
+    const newer = candidate({
+      id: "aaa-newer",
+      profileTokens: GROUP,
+      lastCoverageMs: NOW - DAY,
+    });
+    // Clears the mass floor too, just by less — so it is ranked out by the
+    // bound rather than refused by the bar.
+    const weaker = candidate({ id: "weaker", profileTokens: ["rare", "other", "extra"] });
+
+    const qualified = qualifyingStorylines(GROUP, [newer, weaker, older], CORPUS, RULES, NOW);
+    // The tie broke on coverage age, not on the id — `zzz-older` sorts last
+    // alphabetically and first here, which is what makes this a real check.
+    expect(qualified.map((entry) => entry.candidate.id)).toEqual([
+      "zzz-older",
+      "aaa-newer",
+      "weaker",
+    ]);
+    // …and the bound keeps that order's first two, canonically ordered as a
+    // pair. `weaker` is out because it ranks third, not because of its id.
+    expect(bridgePairs(qualified, 2)).toEqual([["aaa-newer", "zzz-older"]]);
+  });
+});
+
+describe("bridgingQualifiers", () => {
+  // Exported so the linker's REPORT of what it bridged comes off the same
+  // prefix the write does. A report contradicting the row beside it is the
+  // cheapest version of the drift this file's history is about.
+  it("is the identity when unbounded", () => {
+    const list = [1, 2, 3];
+    expect(bridgingQualifiers(list, undefined)).toBe(list);
+  });
+
+  it("is the prefix otherwise, clamped at zero", () => {
+    expect(bridgingQualifiers([1, 2, 3], 2)).toEqual([1, 2]);
+    expect(bridgingQualifiers([1, 2, 3], 0)).toEqual([]);
+    expect(bridgingQualifiers([1, 2, 3], -4)).toEqual([]);
+    expect(bridgingQualifiers([1, 2, 3], 99)).toEqual([1, 2, 3]);
+  });
+
+  it("agrees with bridgePairs about which qualifiers may bridge", () => {
+    // The property that keeps the two call sites honest: pairs are exactly the
+    // combinations of this list, at every bound.
+    const q = (id: string) => ({ candidate: candidate({ id }) });
+    const qualified = [q("a"), q("b"), q("c"), q("d"), q("e")];
+    for (const bound of [undefined, 0, 1, 2, 3, 5, 9]) {
+      const kept = bridgingQualifiers(qualified, bound).length;
+      expect(bridgePairs(qualified, bound)).toHaveLength((kept * (kept - 1)) / 2);
+    }
   });
 });
 

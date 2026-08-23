@@ -388,6 +388,29 @@ export function storylineProfile(groupTokens: readonly (readonly string[])[]): s
 }
 
 /**
+ * The prefix of a group's qualifiers that may BRIDGE — `undefined` is all of
+ * them, which is what shipped.
+ *
+ * One function rather than a `slice` at each call site, because there are two:
+ * `bridgePairs` below, and the linker's report of what it bridged. Those two
+ * disagreeing would be a report that lies about the write beside it, which is
+ * the cheapest possible version of the bug this whole file's history is about.
+ *
+ * **The input must already be in `qualifyingStorylines`' order** — mass
+ * descending, then the older storyline, then the id. That is a defined total
+ * order with a defined tiebreak, picked so a replay reproduces the run it
+ * replays; taking a prefix inherits it, and re-sorting here would invent a
+ * second one to keep in step.
+ */
+export function bridgingQualifiers<T>(
+  qualified: readonly T[],
+  maxQualifiers: number | undefined,
+): readonly T[] {
+  if (maxQualifiers === undefined) return qualified;
+  return qualified.slice(0, Math.max(0, maxQualifiers));
+}
+
+/**
  * Bridges: which pair of storylines a group qualified for, canonically ordered
  * so (a,b) and (b,a) are one pair however the qualifiers happened to sort.
  *
@@ -396,14 +419,40 @@ export function storylineProfile(groupTokens: readonly (readonly string[])[]): s
  * evidence. K INDEPENDENT bridges (distinct groups) merge a pair; a single one
  * is refused, since one ambiguous roundup chaining three storylines together is
  * the 1,179-group swallow delivered more slowly (ADR-0011).
+ *
+ * **`maxQualifiers` is the bound on the cross-product, and this is the only
+ * place it may be applied.** Unbounded this is O(n²) in the qualifier count —
+ * a 40-qualifier group writes 780 pairs — and the pair count is what feeds the
+ * feedback loop: more pairs reach K, each merge unions two profiles,
+ * `mergeStorylines` re-points the loser's bridges onto the winner rather than
+ * dropping them, and a wider profile overlaps more on the next arrival. Bounding
+ * here removes the quadratic term at source; raising K instead raises the bar
+ * every merge must clear, including the repairs ADR-0011 refuses to build a
+ * split for. `undefined` is unbounded, which is the behaviour that shipped.
+ *
+ * **The bound is applied to the pairing, NOT to `qualifyingStorylines`.** That
+ * function returns every qualifier deliberately — the ATTACH picks the best of
+ * them, and the retroactive path picks the best the group is not already in — so
+ * narrowing it there would cost linking as well as evidence. Bounded here, the
+ * group still joins exactly the arc it would have joined; all it loses is the
+ * right to testify about pairs it ranks low for.
+ *
+ * The bound is a prefix of `qualifyingStorylines`' order and inherits its
+ * tiebreak — see `bridgingQualifiers`, which is where the prefix is taken so
+ * this and the linker's report of it cannot disagree. Any `maxQualifiers` at or
+ * above the qualifier count is the unbounded result, so the bound is inert until
+ * it binds: on the live archive that is 26% of bridging groups with the
+ * retrieval narrowed and 0.5% without it.
  */
 export function bridgePairs(
   // Only the ids are read: the caller may hold full qualifications or the
   // thinner record a replay keeps, and neither should have to be widened to
-  // satisfy the other.
+  // satisfy the other. Ordered as `qualifyingStorylines` returns them — see
+  // above; `maxQualifiers` takes a prefix and therefore inherits that tiebreak.
   qualified: readonly { candidate: { id: string } }[],
+  maxQualifiers?: number,
 ): [string, string][] {
-  const ids = qualified.map((q) => q.candidate.id);
+  const ids = bridgingQualifiers(qualified, maxQualifiers).map((q) => q.candidate.id);
   const pairs: [string, string][] = [];
   for (let i = 0; i < ids.length; i += 1) {
     for (let j = i + 1; j < ids.length; j += 1) {

@@ -532,6 +532,62 @@ const EnvSchema = z
      */
     STORYLINE_MERGE_BRIDGES: z.coerce.number().int().min(1).default(2),
     /**
+     * At most this many of a group's qualifiers may BRIDGE, taken best mass
+     * first. **0 is unbounded, and unbounded is the default** — today's
+     * behaviour exactly, so this knob changes nothing until it is set.
+     *
+     * `bridgePairs` is the full O(n^2) cross-product over a group's qualifiers,
+     * so a 40-qualifier group writes 780 pairs. That pair count, not K, is what
+     * feeds the loop: more pairs reach K, each merge unions two profiles,
+     * `mergeStorylines` re-points the loser's bridges onto the winner rather than
+     * dropping them, and a wider profile overlaps more on the next arrival. This
+     * bounds the quadratic term at source. It bounds the PAIRING only — the
+     * attach still picks the group's best qualifier, and the retroactive path
+     * still picks the best arc the group is not already in — so it costs
+     * evidence, never linking.
+     *
+     * MEASURED against the re-offering replay (docs/STORYLINE-LINKING.md, "The
+     * four options"), retrieval NARROWED, K=2, cascade modelled: on the BIRTH
+     * path — the one that is live — the top 2 takes the largest arc from 2,591
+     * groups to 22, where K would have to reach 6 for 85. On the sweep-on
+     * numbers a higher K is the better lever (299 against K=6's 205), which is
+     * not an argument for K=6 because the sweep is off.
+     *
+     * **There is no gentle version, and that is a finding rather than an
+     * inconvenience.** 2 is decisive because two qualifiers is exactly one pair,
+     * so the cross-product is gone rather than smaller. At 3 the largest arc is
+     * 2,760 and at 5 it is 4,145 — a tenth to a sixth of the window either way.
+     * Anything above 2 is close to doing nothing, so this is a switch wearing a
+     * number's clothes.
+     *
+     * **And it is not free.** It removes most of the merge, which ADR-0011 makes
+     * the only repair err-narrow formation has (4,608 merges to 2,106 sweep-on).
+     * Read rather than counted: at the top 2 the FedEx/PGA tournament run comes
+     * out as a 23-group arc where the sweep built the 151-group FIFA/Infantino
+     * arc this document judged coherent end to end, and Canada tariff coverage
+     * splits into ten narrow arcs. That is err-narrow, which ADR-0011 prefers,
+     * and it is a real cost rather than a rounding error.
+     *
+     * **Its own knob rather than a property of `STORYLINE_NARROW_RETRIEVAL`, and
+     * the reason is the opposite of that flag's.** There the two halves are
+     * coupled because the split state — broad probe, 4,000-row cap — is worse
+     * than either mode, so it must be unreachable. Here no combination is worse
+     * than both: narrowed-and-bounded is the recommended state, narrowed-and-
+     * unbounded is today's measured baseline, and broad-and-bounded is merely
+     * stricter than today rather than dangerous. What coupling would cost is
+     * measurement: every number in the option table was taken at narrowed and
+     * unbounded, and folding the bound into that flag would make the baseline
+     * unreproducible. A configuration nothing can reach is also a configuration
+     * nothing can re-measure, which is the mistake §2.5 records one level up.
+     *
+     * Turn it on WITH `STORYLINE_NARROW_RETRIEVAL`, not instead of it: narrowing
+     * is what widens the qualifier set, and this is what makes that safe.
+     * `storyline-replay.ts` reads the same value through the same
+     * `bridgePairs`, so the sweep models whichever bound is configured — do not
+     * let the two diverge (§2.5 is what that costs).
+     */
+    STORYLINE_MAX_BRIDGING_QUALIFIERS: z.coerce.number().int().min(0).default(0),
+    /**
      * Withhold a FORMATION — two singleton groups becoming a real storyline —
      * until a model has been asked whether they cover one story (ADR-0011's
      * amendment). Off restores the pre-gate behaviour exactly: the linker merges

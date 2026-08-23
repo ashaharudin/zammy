@@ -15,7 +15,9 @@ import {
   recordStoryDf,
   resolveStoryline,
 } from "@zammy/storage";
+import { loadConfig } from "@zammy/config";
 import { createTestHarness, type TestHarness } from "./test-support.js";
+import { createLinkerConfig, maxBridgingQualifiers } from "./wiring.js";
 import {
   linkGroup,
   linkSeededGroups,
@@ -67,11 +69,12 @@ const CONFIG: LinkerConfig = {
   // inside `linkGroup`. The gate has its own describe block at the bottom.
   coherenceGate: false,
   narrowRetrieval: false,
+  maxBridgingQualifiers: undefined,
   storyDf: { windowDays: 14, timeZone: "UTC" },
   timeZone: "UTC",
 };
 
-const deps = () => ({ db: db, config: CONFIG });
+const deps = (config: LinkerConfig = CONFIG) => ({ db: db, config });
 
 let nextArticle = 0;
 
@@ -976,5 +979,172 @@ describe("STORYLINE_NARROW_RETRIEVAL", () => {
     expect(broad.storylineId).toBe(born.storylineId);
     expect(narrowed.storylineId).toBe(born.storylineId);
     expect(narrowed.attached).toBe(true);
+  });
+});
+
+describe("STORYLINE_MAX_BRIDGING_QUALIFIERS", () => {
+  /**
+   * The bound, at the service. `CONFIG` is unbounded — the shipped default —
+   * so these two configs are the whole difference the flag makes.
+   *
+   * Three arcs with nothing in common and one group that qualifies for all
+   * three: unbounded that is three pairs, and it is the shape the whole
+   * measurement is about, because pairs grow as the square of the qualifier
+   * count while the group that generates them is one article.
+   */
+  const BOUND_2: LinkerConfig = { ...CONFIG, maxBridgingQualifiers: 2 };
+
+  it("reads 0 from the environment as UNBOUNDED", () => {
+    // The translation `bridgePairs` wants, in one place, because "0 means
+    // unbounded" written twice is one place for the two to disagree — and the
+    // sweep CLI needs the same translation to describe the deployed mode.
+    const env = {
+      DATABASE_URL: "postgres://zammy:secret@localhost:5432/zammy",
+      REDIS_URL: "redis://localhost:6379",
+      CURRENTS_USER_AGENT: "zammy/0.1 (+test)",
+    };
+    expect(maxBridgingQualifiers(loadConfig(env as NodeJS.ProcessEnv))).toBeUndefined();
+    expect(
+      maxBridgingQualifiers(
+        loadConfig({
+          ...env,
+          STORYLINE_MAX_BRIDGING_QUALIFIERS: "2",
+        } as NodeJS.ProcessEnv),
+      ),
+    ).toBe(2);
+    // And it is what `createLinkerConfig` puts on the live write path.
+    expect(
+      createLinkerConfig(loadConfig(env as NodeJS.ProcessEnv)).maxBridgingQualifiers,
+    ).toBeUndefined();
+  });
+
+  const FIRST = ["fausto", "hawaii", "surf", "swell", "genevieve"];
+  const SECOND = ["ontario", "premier", "hotel", "expense", "scandal"];
+  const THIRD = ["tanker", "hormuz", "strait", "seizure", "shipping"];
+  const ALL = [...FIRST, ...SECOND, ...THIRD];
+
+  /**
+   * Three real arcs, ordered so the straddler's qualifier RANKING is known
+   * rather than incidental: mass rises with the number of tokens shared, so an
+   * arc profiled by more of the straddler's vocabulary outranks one profiled by
+   * less. `first` shares five tokens, `second` four, `third` three.
+   */
+  async function threeArcs(): Promise<{ first: string; second: string; third: string }> {
+    await seedCorpus({ rare: ALL });
+    const seed = async (tokens: string[]): Promise<string> => {
+      const born = await linkGroup(deps(), await group({ tokens }));
+      await linkGroup(deps(), await group({ tokens }));
+      return born.storylineId;
+    };
+    return {
+      first: await seed(FIRST),
+      second: await seed(SECOND.slice(0, 4)),
+      third: await seed(THIRD.slice(0, 3)),
+    };
+  }
+
+  it("writes the full cross-product unbounded, which is today's behaviour", async () => {
+    const { first, second, third } = await threeArcs();
+    const straddler = await group({ tokens: ALL });
+
+    const outcome = await linkGroup(deps(), straddler);
+
+    // Three qualifiers, so three pairs — and `bridged` names the two the
+    // winner was paired with.
+    expect(outcome.bridged).toHaveLength(2);
+    expect(await countBridges(db, { storylineA: first, storylineB: second })).toBe(1);
+    expect(await countBridges(db, { storylineA: first, storylineB: third })).toBe(1);
+    expect(await countBridges(db, { storylineA: second, storylineB: third })).toBe(1);
+  });
+
+  it("writes ONE pair at the top 2 — the quadratic term, gone", async () => {
+    const { first, second, third } = await threeArcs();
+    const straddler = await group({ tokens: ALL });
+
+    const outcome = await linkGroup(deps(BOUND_2), straddler);
+
+    expect(outcome.bridged).toEqual([second]);
+    expect(await countBridges(db, { storylineA: first, storylineB: second })).toBe(1);
+    // The third-ranked arc testifies about nothing. This is the cost as much as
+    // the point: (first, third) and (second, third) are evidence the archive
+    // will not hold, and ADR-0011 makes the merge the only repair err-narrow
+    // formation has.
+    expect(await countBridges(db, { storylineA: first, storylineB: third })).toBe(0);
+    expect(await countBridges(db, { storylineA: second, storylineB: third })).toBe(0);
+  });
+
+  it("leaves the ATTACH alone: the group still joins its best qualifier", async () => {
+    // The reason the bound is on `bridgePairs` and not on
+    // `qualifyingStorylines`. Bounding the qualifier list would change where
+    // the group LIVES; bounding the pairing changes only what it testifies to.
+    const { first } = await threeArcs();
+    const straddler = await group({ tokens: ALL });
+
+    const outcome = await linkGroup(deps(BOUND_2), straddler);
+
+    expect(outcome.attached).toBe(true);
+    expect(await resolveStoryline(db, outcome.storylineId)).toBe(
+      await resolveStoryline(db, first),
+    );
+  });
+
+  it("still merges the pair K independent groups bridge — a bound is not a K", async () => {
+    // Suppressing the low-ranked pairs must not suppress the high-ranked one:
+    // what the archive loses is breadth of evidence, not the merge itself.
+    const { first, second } = await threeArcs();
+
+    await linkGroup(deps(BOUND_2), await group({ tokens: ALL }));
+    const outcome = await linkGroup(deps(BOUND_2), await group({ tokens: ALL }));
+
+    expect(outcome.merged).toHaveLength(1);
+    expect(await resolveStoryline(db, second)).toBe(await resolveStoryline(db, first));
+  });
+
+  it("is inert when the group has no more qualifiers than the bound", async () => {
+    // Most offers, and the reason this bounds a tail rather than changing
+    // everything: two qualifiers is already exactly one pair.
+    await seedCorpus({ rare: [...FIRST, ...SECOND] });
+    const seed = async (tokens: string[]): Promise<string> => {
+      const born = await linkGroup(deps(), await group({ tokens }));
+      await linkGroup(deps(), await group({ tokens }));
+      return born.storylineId;
+    };
+    const left = await seed(FIRST);
+    const right = await seed(SECOND);
+    const straddler = await group({ tokens: [...FIRST, ...SECOND] });
+
+    const outcome = await linkGroup(deps(BOUND_2), straddler);
+
+    expect(outcome.bridged).toHaveLength(1);
+    expect(await countBridges(db, { storylineA: left, storylineB: right })).toBe(1);
+  });
+
+  it("bounds the RE-OFFER path AFTER the group's own homes are removed", async () => {
+    // The one place two orderings were available and the choice matters. A
+    // re-offered group's homes are excluded from its bridge evidence (they are
+    // the trivial fit `own` is excluded for at birth), and the bound applies to
+    // what is LEFT — so a doubly-homed group does not spend its slots on itself
+    // and testify about nothing, which is not a decision anyone made.
+    const { first, second, third } = await threeArcs();
+    const straddler = await group({ tokens: ALL });
+
+    // Birth: lands in `first`, its best qualifier, and bridges (first, second).
+    await linkGroup(deps(BOUND_2), straddler);
+    expect(await countBridges(db, { storylineA: first, storylineB: second })).toBe(1);
+
+    // Re-offer. `first` is the group's home, so it is excluded from the
+    // evidence, and the bound's two slots then go to `second` and `third` —
+    // which are ranked SECOND and THIRD overall. Applied before the filter
+    // instead, the top 2 would be `first` and `second`, the filter would take
+    // `first` back out, and one qualifier is no pair: the group would testify
+    // about nothing at all.
+    const reoffer = await linkGroup(deps(BOUND_2), straddler);
+
+    expect(await readGroupStorylines(db, straddler.groupId)).toHaveLength(2);
+    expect(reoffer.bridged).toEqual([second, third]);
+    expect(await countBridges(db, { storylineA: second, storylineB: third })).toBe(1);
+    // And still nothing about `first`, whatever the bound: a pair the group is
+    // a MEMBER of one side of is the trivial fit, not independent evidence.
+    expect(await countBridges(db, { storylineA: first, storylineB: third })).toBe(0);
   });
 });

@@ -18,6 +18,7 @@ import { mayRefuseFormation } from "./storyline-coherence.js";
 import { readTrailingCorpus, type StoryDfConfig } from "./story-df.js";
 import {
   bridgePairs,
+  bridgingQualifiers,
   candidateRetrieval,
   groupProfile,
   qualifyingStorylines,
@@ -88,6 +89,20 @@ export interface LinkerConfig {
    * `candidateRetrieval` has the argument, and it is not a small one.
    */
   narrowRetrieval: boolean;
+  /**
+   * At most this many of a group's qualifiers may BRIDGE, best mass first;
+   * `undefined` is unbounded, which is what shipped
+   * (`STORYLINE_MAX_BRIDGING_QUALIFIERS`, default 0 → unbounded).
+   *
+   * Required rather than optional, and `number | undefined` rather than `?:`, so
+   * every construction site has to say which it wants. A silently-omitted bound
+   * is the same class of drift as a replay narrowing while the service does not
+   * (§2.5), and it is cheaper to write `undefined` than to find that out later.
+   *
+   * It reaches `bridgePairs` and nothing else — never `qualifyingStorylines`,
+   * whose full list the attach and the retroactive path both read.
+   */
+  maxBridgingQualifiers: number | undefined;
 }
 
 export interface LinkerDeps {
@@ -383,8 +398,15 @@ export async function linkGroup(
     // the fresh path — its tokens are already in that profile — and counting it
     // would let one multi-homed group manufacture K "independent" bridges by
     // re-qualifying for itself night after night.
+    //
+    // The bound applies AFTER this filter, so the group's own homes do not spend
+    // slots the evidence could have used: a doubly-homed group whose two homes
+    // outrank everything would otherwise bridge nothing at all under a bound of
+    // 2, which is not a decision anyone made.
     const evidence = qualified.filter((q) => !already.has(q.candidate.id));
-    outcome.bridged = evidence.map((q) => q.candidate.id);
+    outcome.bridged = bridgingQualifiers(evidence, deps.config.maxBridgingQualifiers).map(
+      (q) => q.candidate.id,
+    );
     await recordBridgesAmong(deps, evidence, group.groupId, outcome);
     return outcome;
   }
@@ -422,7 +444,9 @@ export async function linkGroup(
         groupId: group.groupId,
         partnerGroupId,
       };
-      outcome.bridged = qualified.slice(1).map((q) => q.candidate.id);
+      outcome.bridged = bridgingQualifiers(qualified, deps.config.maxBridgingQualifiers)
+        .slice(1)
+        .map((q) => q.candidate.id);
       await recordBridgesAmong(deps, qualified, group.groupId, outcome);
       return outcome;
     }
@@ -452,7 +476,13 @@ export async function linkGroup(
   // own birth storyline takes no part: it is not something the group
   // qualified FOR, and a pair no second group can ever repeat is not
   // independent evidence of anything.
-  outcome.bridged = qualified.slice(1).map((q) => q.candidate.id);
+  //
+  // Reported through `bridgingQualifiers` for the same reason it is written
+  // through it: a bound that suppressed a pair while `bridged` still named it
+  // would be a report contradicting the row it describes.
+  outcome.bridged = bridgingQualifiers(qualified, deps.config.maxBridgingQualifiers)
+    .slice(1)
+    .map((q) => q.candidate.id);
   await recordBridgesAmong(deps, qualified, group.groupId, outcome);
 
   return outcome;
@@ -472,7 +502,13 @@ async function recordBridgesAmong(
   groupId: string,
   outcome: LinkOutcome,
 ): Promise<void> {
-  for (const [a, b] of bridgePairs(qualified)) {
+  // The bound lands HERE and only here: `qualified` arrives in
+  // `qualifyingStorylines`' order (mass desc, then the older storyline, then the
+  // id), and `bridgePairs` takes a prefix of it. The caller has already removed
+  // the arcs this group is a member of on the re-offer path, so the bound is over
+  // what may actually testify rather than over a list that still contains the
+  // group's own homes — the two differ, and this is the one the evidence is.
+  for (const [a, b] of bridgePairs(qualified, deps.config.maxBridgingQualifiers)) {
     const { recorded, pair } = await recordBridge(deps.db, {
       storylineA: a,
       storylineB: b,

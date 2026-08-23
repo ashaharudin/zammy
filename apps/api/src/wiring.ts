@@ -63,6 +63,22 @@ export function createConfiguredDb(
 }
 
 /**
+ * `STORYLINE_MAX_BRIDGING_QUALIFIERS` as `bridgePairs` wants it: 0 is unbounded,
+ * expressed as `undefined`.
+ *
+ * A function, and exported, because the sweep CLI needs the same translation and
+ * "0 means unbounded" written twice is one place for the two to disagree. 0
+ * rather than an absent variable so the knob has a value in `.env` either way —
+ * a bound of 1 is a legitimate setting (one qualifier is no pair, so it turns
+ * bridging off entirely) and must not collide with "not set".
+ */
+export function maxBridgingQualifiers(config: Config): number | undefined {
+  return config.STORYLINE_MAX_BRIDGING_QUALIFIERS === 0
+    ? undefined
+    : config.STORYLINE_MAX_BRIDGING_QUALIFIERS;
+}
+
+/**
  * The linker config the LIVE write path uses, and therefore the one the nightly
  * sweeps must use: they exist to offer the linker what it already declined or
  * never saw, at the bar it would have applied.
@@ -84,6 +100,11 @@ export function createLinkerConfig(config: Config): LinkerConfig {
     coherenceGate: config.STORYLINE_COHERENCE_GATE && Boolean(config.GEMINI_API_KEY),
     // Both halves of the retrieval, from one flag (`candidateRetrieval`).
     narrowRetrieval: config.STORYLINE_NARROW_RETRIEVAL,
+    // 0 is unbounded, which is the default and today's behaviour. A separate
+    // knob from the retrieval above on purpose — see the flag's own note; the
+    // short version is that no combination of the two is worse than both, so
+    // nothing here has to be made unreachable.
+    maxBridgingQualifiers: maxBridgingQualifiers(config),
     storyDf: {
       windowDays: config.STORYLINE_DF_WINDOW_DAYS,
       timeZone: config.APP_TIMEZONE,

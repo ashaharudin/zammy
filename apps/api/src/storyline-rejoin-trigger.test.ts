@@ -56,6 +56,7 @@ const CONFIG: LinkerConfig = {
   mergeBridges: 2,
   coherenceGate: false,
   narrowRetrieval: false,
+  maxBridgingQualifiers: undefined,
   storyDf: { windowDays: 14, timeZone: "UTC" },
   timeZone: "UTC",
 };
