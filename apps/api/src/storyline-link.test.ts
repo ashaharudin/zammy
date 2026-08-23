@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   anchorCeiling,
+  anchorEligibleTokens,
   barFor,
   bridgePairs,
   groupProfile,
@@ -56,6 +57,93 @@ describe("anchorCeiling", () => {
     // 0.2% of 900 articles is under two — every anchor would be refused in a
     // window that has only just started filling.
     expect(anchorCeiling(900, RULES)).toBe(10);
+  });
+});
+
+describe("anchorEligibleTokens", () => {
+  it("keeps tokens at or below the ceiling and drops the common ones", () => {
+    // Ceiling is 32 at this corpus size. The boundary is inclusive, because
+    // `qualifyingStorylines` rejects on `anchorDf > ceiling`, not `>=`.
+    const eligible = anchorEligibleTokens(
+      ["rare", "atceiling", "justover", "common"],
+      corpus({ rare: 3, atceiling: 32, justover: 33, common: 9_000 }),
+      RULES,
+    );
+    expect(eligible).toEqual(["rare", "atceiling"]);
+  });
+
+  it("keeps a token ABSENT from the df map — `linkEvidence` scores it df 1", () => {
+    // The load-bearing case, and the one a filter written over the map's
+    // entries would get backwards. A token the corpus has not seen is the
+    // rarest thing there is, so it always anchors; dropping it here would
+    // silently lose links on brand-new vocabulary — the exact tokens a
+    // breaking story is named by. Measured 0 absent of 237,944 on the dev
+    // corpus, which is why only a test can hold this line.
+    expect(anchorEligibleTokens(["unseen"], corpus({ other: 5 }), RULES)).toEqual(["unseen"]);
+    expect(linkEvidence(["unseen"], ["unseen"], corpus({ other: 5 })).anchorDf).toBe(1);
+  });
+
+  it("is a necessary condition: nothing the full profile qualifies is lost", () => {
+    // The property the whole change rests on. A candidate sharing only
+    // above-ceiling tokens is rejected by `qualifyingStorylines` anyway, so
+    // retrieving on the narrowed array cannot change the verdict — while a
+    // candidate reachable ONLY through an eligible token is still reached.
+    // 40 common tokens carry mass 27.7 between them — over the floor — so the
+    // `no-anchor` candidate below fails on the anchor and NOTHING else. That is
+    // the only case where narrowing could lose something, and it does not.
+    const common = Array.from({ length: 40 }, (_, i) => `common${i}`);
+    const c = corpus({
+      anchor: 5,
+      ...Object.fromEntries(common.map((t) => [t, 8_000])),
+    });
+    const profile = ["anchor", ...common];
+    const narrowed = anchorEligibleTokens(profile, c, RULES);
+    expect(narrowed).toEqual(["anchor"]);
+    // Mass over the commons alone clears the floor: the anchor is the only bar.
+    expect(linkEvidence(profile, common, c).mass).toBeGreaterThan(RULES.massThreshold);
+
+    const candidates = [
+      // Shares the anchor plus mass: qualifies, and the narrowed probe finds it.
+      candidate({ id: "qualifies", profileTokens: profile }),
+      // Enough mass, no eligible token: rejected by the decision anyway, and the
+      // narrowed probe never retrieves it — the same verdict, without the row.
+      candidate({ id: "no-anchor", profileTokens: common }),
+    ];
+    const full = qualifyingStorylines(profile, candidates, c, RULES, NOW);
+    const reachable = candidates.filter((x) =>
+      x.profileTokens.some((t) => narrowed.includes(t)),
+    );
+    const narrow = qualifyingStorylines(profile, reachable, c, RULES, NOW);
+    expect(full.map((q) => q.candidate.id)).toEqual(["qualifies"]);
+    expect(narrow.map((q) => q.candidate.id)).toEqual(full.map((q) => q.candidate.id));
+  });
+
+  it("returns empty when nothing can anchor — the group has no qualifier to find", () => {
+    // Not degenerate: an empty array is a proof that retrieval is pointless,
+    // and `linkGroup` skips the round trip on it. 123 of 12,366 dev-corpus
+    // groups in the trailing window are this case.
+    const c = corpus({ wide: 9_000, alsowide: 8_000 });
+    expect(anchorEligibleTokens(["wide", "alsowide"], c, RULES)).toEqual([]);
+    expect(
+      qualifyingStorylines(
+        ["wide", "alsowide"],
+        [candidate({ profileTokens: ["wide", "alsowide"] })],
+        c,
+        RULES,
+        NOW,
+      ),
+    ).toEqual([]);
+  });
+
+  it("uses the NON-dormant ceiling, the loosest bar any candidate faces", () => {
+    // `barFor` only ever divides the ceiling, so filtering at the undivided one
+    // is a superset of what any candidate — dormant or not — could anchor on.
+    // A token eligible here may still be refused by a dormant candidate's
+    // tighter bar; that is the decision's business, not retrieval's.
+    const c = corpus({ mid: 25 });
+    expect(anchorEligibleTokens(["mid"], c, RULES)).toEqual(["mid"]);
+    const dormant = candidate({ lastCoverageMs: NOW - 200 * DAY, profileTokens: ["mid"] });
+    expect(barFor(dormant, NOW, RULES, c.size).ceiling).toBeLessThan(25);
   });
 });
 

@@ -17,6 +17,7 @@ import {
 import { mayRefuseFormation } from "./storyline-coherence.js";
 import { readTrailingCorpus, type StoryDfConfig } from "./story-df.js";
 import {
+  anchorEligibleTokens,
   bridgePairs,
   groupProfile,
   qualifyingStorylines,
@@ -89,12 +90,42 @@ export interface LinkerDeps {
 }
 
 /**
- * Safety valve for a pathological token, not a tuning knob — the same argument
- * grouping's `CANDIDATE_LIMIT` makes. A group carrying a word half the archive
- * shares would otherwise make one decision an unbounded scan; taking the most
- * recently-covered N yields a worse link, never a wrong row.
+ * Safety valve, and this time measured to be one. It was 200, and 200 was not:
+ * probing with the whole group profile, it bound on **99% of groups** (12,266 of
+ * 12,366 in the dev corpus's trailing window, whose median profile overlaps
+ * ~1,900 live storylines), so the cut was the normal operating point rather than
+ * the exception — silently discarding ~90% of the candidate set on a typical
+ * group, ordered by recency rather than by anything the decision reads. The
+ * thresholds it truncated below were pinned by a replay that has no cap at all
+ * (`storyline-replay.ts`), so production ran a capped decision against bars
+ * certified on an uncapped one. That is the bug this constant used to be.
+ *
+ * Two things changed. The retrieval now probes with the ANCHOR-ELIGIBLE subset
+ * (`anchorEligibleTokens`), which removes the pathology this valve was invented
+ * for *structurally*: a word half the archive shares has a df far above the
+ * ceiling, so it can no longer enter the probe array at all. And the value is
+ * now set from the census rather than by feel — over those same 12,366 groups
+ * the narrowed retrieval returns p50 78 rows, p99 684, max 2,625:
+ *
+ *   | cap   | binds on      | qualifiers it discards |
+ *   |-------|---------------|------------------------|
+ *   | 200   | 1,131/12,366  | ~10% of them           |
+ *   | 1,000 | 39/12,366     | 0 of 1,181 sampled     |
+ *   | 4,000 | 0/12,366      | 0                      |
+ *
+ * 4,000 because it is the first round value the whole window clears, at ~1.5×
+ * the observed max and ~24% of the 17,008 live storylines — a bound on the
+ * query, not a participant in the decision.
+ *
+ * What it still guards is narrower than "a pathological token" and worth naming,
+ * because narrowing does not make the fan-out structurally small: a token can be
+ * rare in the 14-day df window and still sit in many long-lived storyline
+ * profiles, since storylines outlive the window that measures them. `openai` on
+ * this corpus has a window df of 27 — comfortably anchor-eligible — and appears
+ * in 73 live profiles. A group carrying a dozen tokens like that legitimately
+ * probes into ~2,600 storylines, and a corpus ten times deeper could do worse.
  */
-const CANDIDATE_LIMIT = 200;
+const CANDIDATE_LIMIT = 4_000;
 
 /**
  * Merges one arrival's cascade may perform before it gives up and leaves the
@@ -241,8 +272,19 @@ export async function linkGroup(
   // with a corpus behind it, gets the real decision.
   if (corpus.size === 0) return outcome;
 
+  // Probe with the tokens that could ANCHOR a link, not the whole profile —
+  // a necessary condition, proved at `anchorEligibleTokens`, and free because
+  // the df map it needs is the corpus `readTrailingCorpus` just returned. This
+  // is not a narrower decision, it is the same decision asked of a candidate
+  // set that is no longer being truncated out from under it (`CANDIDATE_LIMIT`).
+  //
+  // No eligible token means no candidate can clear the anchor bar, so there is
+  // nothing to retrieve. Skipping the round trip is the same verdict, sooner.
+  const anchorTokens = anchorEligibleTokens(profile, corpus, deps.config.rules);
+  if (anchorTokens.length === 0) return outcome;
+
   let candidates = (
-    await readCandidateStorylines(deps.db, { tokens: profile, limit: CANDIDATE_LIMIT })
+    await readCandidateStorylines(deps.db, { tokens: anchorTokens, limit: CANDIDATE_LIMIT })
   ).filter((candidate) => candidate.id !== own);
 
   // A formation a coherence verdict already refused is not offered again. Read

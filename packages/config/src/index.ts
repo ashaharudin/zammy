@@ -542,6 +542,32 @@ const EnvSchema = z
       .default("true")
       .transform((value) => value === "true"),
     /**
+     * Run the nightly late-candidate sweep (`runLateCandidateChore`).
+     *
+     * **Off by default, and the default is the measurement.** The sweep re-offers
+     * every group in the trailing window, and it used to do so against a
+     * candidate set silently truncated to 200 rows — so how much its bridges
+     * could merge was bounded by a bug rather than by a rule. With candidate
+     * retrieval fixed (`anchorEligibleTokens`), four passes over 2,000 groups on
+     * a clone of the dev archive took the largest storyline from 124 groups to
+     * 201 and built four arcs over 100 groups where there was one, and the
+     * biggest of them chains Gaza, the Israel-Iran war and Russia-Ukraine
+     * together. The replay that pinned these thresholds says the largest arc
+     * should be 50 groups, and cannot see the difference because it models
+     * birth-time offers only, never a re-offer.
+     *
+     * Turning this on is therefore blocked on re-measuring K
+     * (`STORYLINE_MERGE_BRIDGES`) against a replay that re-offers groups. The
+     * flag rather than a deletion because the sweep is still the only thing that
+     * covers the classes no storyline-change trigger can see — a withheld
+     * formation leaves no state, and trailing-corpus drift moves a verdict with
+     * no storyline in the causal chain at all.
+     */
+    STORYLINE_LATE_CANDIDATE_SWEEP: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+    /**
      * Days without coverage after which a storyline leaves the normal candidate
      * set. UNMEASURED, and honestly so: the dev archive is 31 days, so 30, 90
      * and 365 replay identically — nothing in it is ever dormant. ADR-0011's

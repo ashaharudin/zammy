@@ -13,6 +13,7 @@ import {
   runDormancyChore,
   runLateCandidateChore,
   runStorylineLabelChore,
+  runStorylinePass,
   type ChoreDeps,
 } from "./chores.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
@@ -374,5 +375,82 @@ describe("the nightly late-candidate sweep", () => {
     // The arc the sweep grew was labelled in the same night's pass.
     const labels = await Promise.all([readStoryline(db, early), readStoryline(db, later)]);
     expect(labels.some((row) => row?.label === "Hurricane Fausto")).toBe(true);
+  });
+});
+
+describe("the late-candidate sweep is gated out of the nightly pass", () => {
+  /**
+   * The flag is a measurement, not a preference (`STORYLINE_LATE_CANDIDATE_SWEEP`,
+   * and `lateCandidateSweep` on `StorylinePassDeps`). Fixing candidate retrieval
+   * un-truncated the candidate set the sweep re-offers against, and four passes
+   * over a clone took the largest storyline from 124 groups to 201 — a pile
+   * chaining three unrelated wars. So the pass must default to skipping it, and
+   * a skipped night must be distinguishable from a night that found nothing.
+   */
+  const LINKER = {
+    enabled: true,
+    rules: {
+      anchorMaxShare: 0.5,
+      anchorDfFloor: 4,
+      massThreshold: 1,
+      dormancyDays: 90,
+      dormantStrictness: 1.5,
+    },
+    mergeBridges: 2,
+    coherenceGate: false,
+    storyDf: { windowDays: 14, timeZone: "UTC" },
+    timeZone: "UTC",
+  };
+  const PASS = {
+    linker: LINKER,
+    // No generator: the label pass runs its bigram path and makes no model
+    // call, which is what these two tests want — the sweep is the subject.
+    labeler: { generator: null, sampleSize: 10, driftFactor: 2, now: () => NOW },
+    rules: { graceDays: 14, maxComponent: 25 },
+  };
+
+  async function seedCorpus(day: string): Promise<void> {
+    await db
+      .insertInto("story_corpus_days")
+      .values({ day, language: "en", articles: 100 })
+      .execute();
+    await db
+      .insertInto("story_token_days")
+      .values(["fausto", "hawaii"].map((token) => ({ day, language: "en", token, df: 4 })))
+      .execute();
+  }
+
+  it("skips the sweep by default, and says so rather than reporting a quiet night", async () => {
+    await seedCorpus("2026-08-13");
+    await storyline([YESTERDAY, YESTERDAY]);
+    await storyline([YESTERDAY, YESTERDAY]);
+    const before = await db
+      .selectFrom("storyline_groups")
+      .select((eb) => eb.fn.countAll<string>().as("n"))
+      .executeTakeFirst();
+
+    const report = await runStorylinePass({ ...deps(), ...PASS });
+
+    // `skipped` is the load-bearing assertion: `offered: 0` alone is exactly
+    // what a sweep that ran and found nothing reports, and a flag left off by
+    // accident would then be invisible in a month of clean nightly logs.
+    expect(report.lateCandidates).toMatchObject({ offered: 0, skipped: true });
+    const after = await db
+      .selectFrom("storyline_groups")
+      .select((eb) => eb.fn.countAll<string>().as("n"))
+      .executeTakeFirst();
+    expect(after?.n).toBe(before?.n);
+  });
+
+  it("runs it when asked, and then it is an ordinary sweep with no `skipped` mark", async () => {
+    await seedCorpus("2026-08-13");
+    await storyline([YESTERDAY, YESTERDAY]);
+    await storyline([YESTERDAY, YESTERDAY]);
+
+    const report = await runStorylinePass({ ...deps(), ...PASS, lateCandidateSweep: true });
+
+    expect(report.lateCandidates.offered).toBe(4);
+    expect(report.lateCandidates.attachedTo).toBeGreaterThan(0);
+    expect("skipped" in report.lateCandidates).toBe(false);
   });
 });

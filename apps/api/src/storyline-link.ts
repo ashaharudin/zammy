@@ -92,6 +92,53 @@ export function anchorCeiling(corpusSize: number, rules: LinkRules): number {
 }
 
 /**
+ * The tokens of a group's profile that could ANCHOR a link — the subset
+ * candidate retrieval should probe with, rather than the whole profile.
+ *
+ * This is a restatement of `qualifyingStorylines`, not a second decision, and
+ * the proof is short enough to keep here. A candidate is rejected when
+ * `evidence.anchorDf > bar.ceiling`, and `anchorDf` is the df of the RAREST
+ * token the two share. `barFor` only ever DIVIDES the ceiling (dormancy), so
+ * `anchorCeiling` is the loosest bar any candidate faces. Therefore a candidate
+ * that qualifies must share at least one token whose window df is at or below
+ * that ceiling — and a storyline sharing none of them cannot qualify, whatever
+ * else it shares. Retrieving on this subset is a NECESSARY CONDITION, the same
+ * kind of retrieval bound `profile_tokens &&` already is.
+ *
+ * Measured over all 12,366 groups in the dev corpus's trailing window: the
+ * median profile is 19 tokens and the median eligible subset is 7, the
+ * retrieval goes from 34.9 ms to 2.2 ms at the mean, and it finds 35× the
+ * qualifiers while losing NONE — because the whole-profile retrieval was being
+ * truncated by `CANDIDATE_LIMIT` on 99% of groups (see the linker's note there).
+ *
+ * **An absent token is eligible, and that is the load-bearing line.**
+ * `linkEvidence` scores a token the corpus has not seen as df 1 — "genuinely
+ * the rarest thing there is" — so it always anchors. The filter is therefore
+ * "df at or below the ceiling OR not in the map", never a filter over the map's
+ * entries: the df counters are written on the same write as the tokens, but
+ * `recordStoryDfForArticles` explicitly tolerates losing a batch, so the map
+ * having every token is corpus luck rather than an invariant. Written the wrong
+ * way round, the failure mode is a silently missed link on the rarest
+ * vocabulary there is. (Measured 0 absent of 237,944 profile tokens on the dev
+ * corpus, which is why this cannot be left to a test of the happy path alone.)
+ *
+ * An EMPTY result is meaningful rather than degenerate: it means no token this
+ * group carries can anchor anything, so the group has no qualifier to find and
+ * the retrieval can be skipped outright. 123 of those 12,366 groups.
+ */
+export function anchorEligibleTokens(
+  groupTokens: readonly string[],
+  corpus: Corpus,
+  rules: LinkRules,
+): string[] {
+  const ceiling = anchorCeiling(corpus.size, rules);
+  return groupTokens.filter((token) => {
+    const df = corpus.df.get(token);
+    return df === undefined || df <= ceiling;
+  });
+}
+
+/**
  * What one group and one storyline share, weighted by how rare it is.
  *
  * Mass, not weighted Jaccard, for ADR-0009's reason and it is stronger here: a

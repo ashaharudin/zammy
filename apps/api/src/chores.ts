@@ -415,12 +415,41 @@ export interface StorylinePassDeps extends ChoreDeps {
   labelRatePerMinute?: number;
   /** Ceiling on storylines one night will relabel. */
   maxLabels?: number;
+  /**
+   * Run the late-candidate sweep as part of the night. False skips step 3.
+   *
+   * It exists because of what fixing candidate retrieval revealed. The sweep
+   * re-offers old groups, and until the retrieval was narrowed to the
+   * anchor-eligible subset it was re-offering them against a candidate set
+   * truncated to 200 rows by `last_coverage` — so the merges its bridges could
+   * accumulate were bounded by an accident. Given the true candidate set, four
+   * passes over 2,000 groups on a clone of the dev archive drove the largest
+   * storyline from 124 groups to **201**, built four storylines over 100 groups
+   * where there had been one, and the 201 is not a story: it chains Gaza, the
+   * Israel-Iran war and Russia-Ukraine through shared diplomatic vocabulary.
+   *
+   * That is percolation, and it is NOT what the thresholds certify. The replay
+   * harness at the pinned bar (share 0.002, mass 20) builds a largest storyline
+   * of **50** groups. The replay cannot see the difference because it models
+   * only birth-time offers — each group attaches once — while the sweep offers
+   * the same group every night and `bridgePairs` records the full cross-product
+   * of its qualifiers each time. Bridges went 1,913 → 10,282 on 2,000 groups.
+   *
+   * So the retrieval fix is unconditional — it makes the BIRTH path match the
+   * replay that certified it, which is strictly a repair — and this pass is
+   * off by default, because it is the path the replay never modelled. Turning it
+   * on wants K (`STORYLINE_MERGE_BRIDGES`) re-measured against a replay that
+   * re-offers, which does not exist yet. Until then the sweep is an operator
+   * command run against a clone, not a thing that happens at 3am unattended.
+   */
+  lateCandidateSweep?: boolean;
 }
 
 export interface StorylinePassReport {
   dormant: number;
   bridges: BridgeSweepReport;
-  lateCandidates: Awaited<ReturnType<typeof runLateCandidateChore>>;
+  /** `skipped` marks a night the sweep was gated off, not a night it found nothing. */
+  lateCandidates: Awaited<ReturnType<typeof runLateCandidateChore>> & { skipped?: true };
   labels: Awaited<ReturnType<typeof runStorylineLabelChore>>;
   labelMerge: LabelMergeReport;
 }
@@ -452,7 +481,11 @@ export interface StorylinePassReport {
  *      the offer is made against a profile that is about to change.
  *   3. **The late-candidate sweep**, so the storylines it grows are the ones the
  *      label pass then looks at — a membership change and its label in one
- *      night, rather than a label describing yesterday's membership.
+ *      night, rather than a label describing yesterday's membership. OFF by
+ *      default since candidate retrieval was fixed: see `lateCandidateSweep`
+ *      for the 124→201-group percolation that measured its way into being a
+ *      flag. When it is off, steps 1, 2, 4 and 5 still run — dormancy and the
+ *      bridge sweep are not its dependents, they are its inputs.
  *   4. **The label pass** (the drift trigger).
  *   5. **The label-agreement merge** LAST, because it is the only pass whose
  *      input is a label: a storyline named tonight should be a merge candidate
@@ -468,7 +501,14 @@ export async function runStorylinePass(
 ): Promise<StorylinePassReport> {
   const { dormant } = await runDormancyChore(deps);
   const bridges = await runBridgeSweepChore(deps);
-  const lateCandidates = await runLateCandidateChore(deps);
+  // A skipped sweep reports a zero tally rather than being absent from the
+  // report: "it ran and changed nothing" and "it did not run" are different
+  // facts, and a report that cannot tell them apart is how a flag left off by
+  // accident survives a month of clean-looking nightly logs.
+  const lateCandidates =
+    deps.lateCandidateSweep === true
+      ? await runLateCandidateChore(deps)
+      : { offered: 0, attachedTo: 0, merges: 0, failures: 0, skipped: true as const };
   const labels = await runStorylineLabelChore(deps);
   const labelMerge = await runLabelMergeChore(deps);
 

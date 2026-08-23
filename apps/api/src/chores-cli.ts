@@ -14,8 +14,9 @@ import {
 } from "./wiring.js";
 
 /**
- * `pnpm chores <retention|storylines> [--label-rate=N] [--max-labels=N]` — the
- * nightly chores as a one-shot process (ARCHITECTURE 9.1).
+ * `pnpm chores <retention|storylines> [--label-rate=N] [--max-labels=N]
+ * [--late-candidates]` — the nightly chores as a one-shot process
+ * (ARCHITECTURE 9.1).
  *
  * A chore, not a command: unlike `regroup` or `backfill:storylines` this is not
  * something an operator decides to do, it is what happens every night. What
@@ -74,10 +75,22 @@ const num = (name: string): number | undefined => {
 
 const named = args.filter((arg) => !arg.startsWith("--"));
 if (named.length !== 1 || !PASSES.includes(named[0] as Pass)) {
-  console.error(`usage: chores <${PASSES.join("|")}> [--label-rate=N] [--max-labels=N]`);
+  console.error(
+    `usage: chores <${PASSES.join("|")}> [--label-rate=N] [--max-labels=N] [--late-candidates]`,
+  );
   console.error("");
   console.error("  retention   the retention report, and the trailing-corpus prune");
-  console.error("  storylines  dormancy, bridge sweep, late candidates, labels, label merge");
+  console.error("  storylines  dormancy, bridge sweep, labels, label merge");
+  console.error("");
+  console.error(
+    "  --late-candidates  also run the late-candidate sweep. Off by default: it",
+  );
+  console.error(
+    "                     percolates against the fixed candidate retrieval until",
+  );
+  console.error(
+    "                     K is re-measured (docs/STORYLINE-LINKING.md).",
+  );
   process.exit(64);
 }
 const pass = named[0] as Pass;
@@ -168,6 +181,12 @@ try {
           // two processes have separate pacers on one shared key.
           labelRatePerMinute: num("label-rate") ?? config.GEMINI_MAX_RPM,
           ...(num("max-labels") !== undefined ? { maxLabels: num("max-labels") } : {}),
+          // `--late-candidates` runs it for one night without editing the
+          // environment, because the honest way to drain the backlog fixing
+          // candidate retrieval exposed is an operator watching the graph shape,
+          // not a flag flipped once and forgotten. The config default is off.
+          lateCandidateSweep:
+            args.includes("--late-candidates") || config.STORYLINE_LATE_CANDIDATE_SWEEP,
         };
         const report = await runStorylinePass(storylineDeps);
         log.info({ report }, "storyline pass complete");
