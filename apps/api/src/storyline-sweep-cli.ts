@@ -1,7 +1,13 @@
 import { loadConfig } from "@zammy/config";
 import { zonedDayKey } from "./app-day.js";
 import { storyTokens } from "./storyline.js";
-import { replayLinker, type ReplayGroup } from "./storyline-replay.js";
+import {
+  replayLinker,
+  replayWithReoffers,
+  type ReplayGroup,
+  type ReplayResult,
+  type ReplayVariant,
+} from "./storyline-replay.js";
 import type { Corpus, LinkRules } from "./storyline-link.js";
 import { readJudgedStorylines, scoreJudged, type JudgedStoryline } from "./storyline-judged.js";
 import { createConfiguredDb } from "./wiring.js";
@@ -51,7 +57,15 @@ try {
   // ---- the corpus, as groups ----
   const rows = await db
     .selectFrom("articles")
-    .select(["id", "group_id", "title", "description", "language", "published"])
+    .select([
+      "id",
+      "group_id",
+      "title",
+      "description",
+      "language",
+      "published",
+      "source_domain",
+    ])
     .where("published", ">=", from)
     .orderBy("published", "asc")
     .orderBy("id", "asc")
@@ -61,8 +75,14 @@ try {
   for (const row of rows) {
     const existing = byGroup.get(row.group_id);
     const tokens = storyTokens(row.title, row.description);
+    // The group's domain is the first alphabetically, so a group with several
+    // counts as ONE source rather than as several — see `ReplayGroup`.
+    const domain = row.source_domain ?? "";
     if (existing) {
       existing.memberTokens.push(tokens);
+      if (domain !== "" && (existing.sourceDomain === "" || domain < existing.sourceDomain)) {
+        existing.sourceDomain = domain;
+      }
       if (row.published.getTime() < existing.publishedMs) {
         existing.publishedMs = row.published.getTime();
         existing.dayKey = zonedDayKey(row.published, TZ);
@@ -75,6 +95,7 @@ try {
       language: row.language,
       publishedMs: row.published.getTime(),
       dayKey: zonedDayKey(row.published, TZ),
+      sourceDomain: domain,
     });
   }
   const groups = [...byGroup.values()];
@@ -179,11 +200,162 @@ try {
   };
   const JUDGED_HEADER = " PILES-FORMED       NAMED-INTACT       kept";
 
-  // ---- the sweep ----
+  // ---- the grid, and the bar every focused run below is measured at ----
   const SHARES = [0.001, 0.002, 0.003, 0.005, 0.01, 0.02];
   const MASSES = [8, 12, 16, 20, 25];
   const BASE = { anchorDfFloor: 10, dormancyDays: 90, dormantStrictness: 1.5 };
+  const focus = {
+    anchorMaxShare: Number(flag("share") ?? 0.01),
+    massThreshold: Number(flag("mass") ?? 16),
+  };
 
+  const headline = new Map<string, string>();
+  for (const row of rows) if (!headline.has(row.group_id)) headline.set(row.group_id, row.title);
+
+  /** The largest arcs, printed to be READ. A table cannot judge coherence. */
+  const readArcs = (result: ReplayResult, count: number, headlines: number): void => {
+    for (const storyline of result.built.slice(0, count)) {
+      console.log(
+        `\n[${storyline.groupIds.length} groups, ${storyline.days} days] ` +
+          `profile: ${storyline.profile.slice(0, 16).join(", ")}`,
+      );
+      for (const groupId of storyline.groupIds.slice(0, headlines)) {
+        console.log(`    ${(headline.get(groupId) ?? "?").slice(0, 100)}`);
+      }
+    }
+  };
+
+  // ---- K, re-measured against a replay that RE-OFFERS ----
+  //
+  // The measurement `STORYLINE_LATE_CANDIDATE_SWEEP`,
+  // `STORYLINE_REOFFER_JOINED_GROUPS` and
+  // `STORYLINE_LATE_CANDIDATE_CHANGED_ONLY` are all gated on. Everything below
+  // this line reports a TRAJECTORY rather than an endpoint, because a converged
+  // number cannot tell "settled" from "still climbing when the run stopped" —
+  // which is the mistake VERCEL-PHASE-0-FINDINGS §2.6 records being made twice.
+  const reoffer = flag("reoffer");
+  if (reoffer !== undefined) {
+    if (reoffer !== "interleaved" && reoffer !== "posthoc") {
+      console.error("--reoffer must be `interleaved` or `posthoc`");
+      process.exit(1);
+    }
+    const passes = Number(flag("passes") ?? 8);
+    const ks = (flag("k") ?? "2").split(",").map(Number);
+    const cascade = args.includes("--cascade");
+    // `--capped-build=200` builds the archive under the pre-#117 retrieval and
+    // then sweeps it corrected — §2.6's experiment, and the only way to tell a
+    // threshold problem from a backlog drain.
+    const cappedBuild = flag("capped-build");
+    const fidelity = {
+      cascadeMerges: cascade,
+      ...(cappedBuild !== undefined ? { cappedRetrievalLimit: Number(cappedBuild) } : {}),
+    };
+    // Comma-separated, because the answer may well be a combination and
+    // pricing one requires running one — `cap:2,days,birth-bridges`.
+    const variantName = flag("variant") ?? "base";
+    const parts = variantName.split(",");
+    const cap = parts.find((part) => part.startsWith("cap:"));
+    const independence = parts.find((part) => part === "days" || part === "domains");
+    const variant: ReplayVariant = {
+      ...(cap !== undefined ? { maxBridgingQualifiers: Number(cap.slice(4)) } : {}),
+      ...(independence !== undefined
+        ? { independence: independence as "days" | "domains" }
+        : {}),
+      ...(parts.includes("birth-bridges") ? { bridgeOffers: "first" as const } : {}),
+    };
+    const unknown = parts.filter(
+      (part) =>
+        part !== "base" &&
+        part !== "birth-bridges" &&
+        part !== "days" &&
+        part !== "domains" &&
+        !part.startsWith("cap:"),
+    );
+    if (unknown.length > 0) {
+      console.error(`unknown --variant part(s): ${unknown.join(", ")}`);
+      process.exit(1);
+    }
+
+    console.log(
+      `\n=== K against a re-offering replay: ${reoffer}, variant ${variantName}` +
+        `${cascade ? ", cascade+repoint" : ""}` +
+        `${cappedBuild !== undefined ? `, archive built at cap ${cappedBuild}` : ""} ` +
+        `(share=${focus.anchorMaxShare}, mass=${focus.massThreshold}, retrieval ` +
+        `${NARROW ? "NARROWED" : "BROAD"}) ===`,
+    );
+    console.log(
+      "The birth-only replay at this bar is the calibration; every row below " +
+        "is the SAME decision offered more than once.",
+    );
+    // Named in the header AND here, because `STORYLINE_NARROW_RETRIEVAL` now
+    // defaults to FALSE (PR #128) and these numbers were taken with it ON. A
+    // reader who assumes today's default reads the whole table backwards.
+    console.log(
+      `retrieval: ${
+        NARROW
+          ? "anchor-eligible probe, cap 4,000 — STORYLINE_NARROW_RETRIEVAL=true, NOT the default"
+          : "whole-profile probe, cap 200 — STORYLINE_NARROW_RETRIEVAL=false, today's default"
+      }`,
+    );
+
+    for (const k of ks) {
+      console.log(`\n--- K=${k} ---`);
+      // `offered` rides in the label, so it is not a column here.
+      console.log(
+        "pass                           live-sl  promoted  LARGEST  share%  " +
+          "merges(+new)  retro  pairs  bridges   p50 p90 p99   2-4   5-9 10-19 20-49 50-99  100+",
+      );
+      let previousMerges = 0;
+      const line = (label: string, result: ReplayResult): void => {
+        const delta = result.merges - previousMerges;
+        previousMerges = result.merges;
+        const buckets = result.sizeBuckets
+          .map((bucket) => String(bucket.count).padStart(5))
+          .join(" ");
+        console.log(
+          `${label.padEnd(30)} ${String(result.storylines).padStart(7)}  ` +
+            `${String(result.promoted).padStart(8)}  ${String(result.largestStoryline).padStart(7)}  ` +
+            `${(result.largestShare * 100).toFixed(2).padStart(6)}  ` +
+            `${String(result.merges).padStart(6)}(+${String(delta).padStart(4)})  ` +
+            `${String(result.retroAttached).padStart(5)}  ` +
+            `${String(result.bridgedPairs).padStart(5)}  ${String(result.bridgeObservations).padStart(7)}  ` +
+            `${String(result.p50).padStart(4)}${String(result.p90).padStart(4)}${String(result.p99).padStart(4)}  ` +
+            buckets,
+        );
+      };
+
+      // The birth-only state first, so every trajectory below has the pass-0
+      // it departs from — and so the calibration is on the same page as the
+      // number it calibrates.
+      line(
+        `0 birth-only${cappedBuild !== undefined ? ` (cap ${cappedBuild})` : ""}`,
+        replayLinker(groups, corpusAt, { ...BASE, ...focus }, k, NARROW, fidelity, variant),
+      );
+      previousMerges = 0;
+
+      const final = replayWithReoffers(groups, corpusAt, { ...BASE, ...focus }, k, NARROW, {
+        mode: reoffer,
+        windowDays: WINDOW,
+        passes,
+        fidelity,
+        variant,
+        onPass: (pass, label, result) => line(`${pass} ${label}`, result),
+      });
+      console.log(`     judged: ${judgedColumns(final)}   (${JUDGED_HEADER.trim()})`);
+
+      const toRead = Number(flag("read") ?? 0);
+      if (toRead > 0) {
+        console.log(`\n=== the ${Math.min(toRead, final.built.length)} largest arcs at K=${k} ===`);
+        readArcs(final, toRead, Number(flag("headlines") ?? 8));
+      }
+    }
+    // Explicit, because `process.exit` below would skip the `finally` that
+    // closes the pool.
+    await db.destroy();
+    process.exit(0);
+  }
+
+  // ---- the sweep ----
   // `--focus-only` skips the grid: once the operator is comparing two
   // candidate settings by READING what they build, re-running 25 replays to
   // reprint a table they already have is minutes per look.
@@ -214,10 +386,6 @@ try {
   }
 
   // ---- K, at the anchor+mass the operator is looking at ----
-  const focus = {
-    anchorMaxShare: Number(flag("share") ?? 0.01),
-    massThreshold: Number(flag("mass") ?? 16),
-  };
   if (!focusOnly) {
   console.log(`\nbridge count K (share=${focus.anchorMaxShare}, mass=${focus.massThreshold}):`);
   console.log("K   storylines  promoted  merges  LARGEST  share%");
@@ -276,19 +444,9 @@ try {
       `${NARROW ? "4,000" : "200"}-row limit the service would apply` +
       `${focused.cappedGroups > 0 ? " — the grid above is NOT what production judges" : ""}`,
   );
-  const headline = new Map<string, string>();
-  for (const row of rows) if (!headline.has(row.group_id)) headline.set(row.group_id, row.title);
 
   console.log(`\n=== the ${Math.min(8, focused.built.length)} largest storylines at the focus ===`);
-  for (const storyline of focused.built.slice(0, 8)) {
-    console.log(
-      `\n[${storyline.groupIds.length} groups, ${storyline.days} days] ` +
-        `profile: ${storyline.profile.slice(0, 14).join(", ")}`,
-    );
-    for (const groupId of storyline.groupIds.slice(0, 6)) {
-      console.log(`    ${(headline.get(groupId) ?? "?").slice(0, 96)}`);
-    }
-  }
+  readArcs(focused, 8, 6);
 
   // The median promoted storyline is the one a reader meets most often, so a
   // sample of ordinary ones matters as much as the head of the distribution.
