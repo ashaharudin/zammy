@@ -63,7 +63,7 @@ the how). One naming rule up front: **"queue topic" means Vercel Queues' topic**
 | Unit | Today (Compose) | All-in on Vercel |
 | --- | --- | --- |
 | `web` | Vite dev server | static build, same project, same origin |
-| `api` HTTP surface | Fastify in a container | `api/[...path].ts` → the Fastify app as one Function |
+| `api` HTTP surface | Fastify in a container | `api/index.ts` → the Fastify app as one Function, reached by rewrite (below) |
 | §9.1 consumer | in-process BullMQ worker | `api/queues/ingest.ts`, a **push-mode Vercel Queues consumer** (no public URL) |
 | Nightly chores | `pnpm chores` on a timer | `api/chores.ts`, 202 + `waitUntil`, driven by Vercel Cron or Supabase Cron |
 | Postgres | container | Supabase — transaction pooler for requests, session pooler for migrations/chores (landed) |
@@ -129,10 +129,12 @@ structured as a separable unit"):
   is not only about `startConsumer` — the request entrypoint must still construct the
   `IngestQueue` for its publish side, because the read path enqueues (§3.2's call sites) and the
   trending service scopes Redis keys by the queue's `name`.
-- `api/[...path].ts`: a module-scope `let app: Promise<App>` singleton, `await app.ready()`, then
-  hand the request to `app.server.emit("request", req, res)` — the standard Fastify-on-serverless
-  pattern. Module scope is what makes the pool, the Redis client and the fixture store survive
-  across invocations on a warm instance.
+- `api/index.ts`: a module-scope singleton, `await app.ready()`, then hand the request to
+  `app.server.emit("request", req, res)` — the standard Fastify-on-serverless pattern. Module scope
+  is what makes the pool, the Redis client and the fixture store survive across invocations on a
+  warm instance. (Scoped as `api/[...path].ts`; the spike found that filename is not a catch-all —
+  the routing findings at the end of this section. The real file is `apps/api/src/vercel.ts`, with
+  `api/index.ts` a three-line re-export, because nothing typechecks the repository root.)
 - `apps/api/src/index.ts` stays exactly as it is. It is the Compose and Plan-B entrypoint, and
   `listen()` plus the SIGTERM drain remain correct there. Nothing about local development changes.
 

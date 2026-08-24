@@ -5,7 +5,7 @@
  * where the workspace typechecks and tests it. This file is the only source in
  * the repository no `tsc` covers, so it must stay small enough to read.
  *
- * Routing to it is `vercel.json`'s two rewrites, not this filename. The scope
+ * Routing to it is `vercel.json`'s three rewrites, not this filename. The scope
  * doc originally specified `api/[...path].ts`; the spike found Vercel parses
  * that as ONE dynamic segment literally named `...path`, which 404ed every
  * `/api/v1/<something>/<more>` before the function ever ran.
