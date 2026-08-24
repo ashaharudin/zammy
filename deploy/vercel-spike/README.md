@@ -1,5 +1,12 @@
 # The Plan A shape spike — throwaway
 
+> **Answered, 2026-08-23. Every question in the table below came back, and the results are recorded
+> in [VERCEL-PHASE-0-FINDINGS §8](../../docs/VERCEL-PHASE-0-FINDINGS.md) and
+> [VERCEL-ALL-IN-SCOPE §3.1](../../docs/VERCEL-ALL-IN-SCOPE.md).** Phase 0 is complete and Phase 1's
+> code has landed against these answers. This directory and the `zammy-vercel-spike` project are
+> now deletable — see the last section — and the only reason to keep either is to re-test Queues
+> dedup deliberately before Phase 2 leans on it.
+
 Phase 0, item 1 of [VERCEL-ALL-IN-SCOPE.md](../../docs/VERCEL-ALL-IN-SCOPE.md) §9. **Not part of the
 build, not in the pnpm workspace, delete it when the questions are answered.** Everything here
 exists to settle what no amount of reading settles, because the documentation never shows this
