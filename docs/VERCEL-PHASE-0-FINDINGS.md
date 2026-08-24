@@ -649,6 +649,39 @@ always self-homed.
    With `STORYLINE_NARROW_RETRIEVAL` and `STORYLINE_MAX_BRIDGING_QUALIFIERS` both at their defaults,
    none of this is running, which is what buys the time to watch a fortnight of the nightly graph rows
    rather than guess at them.
+
+   **And the thing the flags were the prerequisite FOR turns out not to be worth building —
+   2026-08-23.** Enabling `STORYLINE_NARROW_RETRIEVAL`, `STORYLINE_MAX_BRIDGING_QUALIFIERS=2` and
+   `STORYLINE_LATE_CANDIDATE_SWEEP` and building an ingest-tail trigger deliver the same retroactive
+   attachments and differ only in when — nightly against minutes
+   (RESEARCH-BIRTH-TRIGGERED-LATE-CANDIDATES §9). That freshness is now measured against content
+   rather than left open, and it is worth nothing to a reader, which removes the ~3–4 days §10 step 5
+   priced. The measurement is `pnpm measure:storylines-v2 --reader-latency` on the same
+   `replayWithReoffers` and the same `offerGroup` — a read-only `ReplayEvent` observer, not a second
+   simulator — with the birth-only calibration still reproducing this section's own largest arc of 22.
+   At the pinned bar, narrowed, bounded at the top 2, cascade modelled, interleaved, over the eight
+   nights whose trailing 14-day window is full: **69% of the sweep's 2,055 attachments add a day slot**
+   (a card) and 31% only lengthen an existing slot's member list, but the attached coverage is a
+   **median 3 nights old** (p90 9, max 13) and only **40.5%** of it is even one night old — so for
+   three fifths of them the arc has been missing that day for days and a few more hours is a rounding
+   error. Half the new cards land at rank 2 or lower in the arc's own timeline. On the surfaces that
+   *offer* an arc rather than fill it, the trigger loses outright: the cloud reads a rolling 24-hour
+   ARTICLE window and never `storyline_days` at all, so only 33.5% of attachments could move it; it is
+   cached 15 minutes and invalidated only at the end of `processSampleJob`, elected at most hourly; the
+   topic timeline response caches 60 s to 24 h with **no** invalidation on a membership change; and a
+   promoted arc cannot be surfaced until it is named, against a live backlog of **2,083 of 3,850**
+   promoted arcs carrying no label and a further 706 carrying a bigram label the cloud refuses — days
+   of quota queue against a 24-hour attachment delay. Reader *behaviour* is not measurable at all and
+   no proxy was invented for it: no analytics in `apps/web`, no requests or page-views table, no read
+   counter on any storyline, `/metrics` pipeline-only and slated for deletion by ADR-0015, one hour of
+   platform log retention. **So: enable the flags if the fortnight of graph rows says to, and do not
+   build the trigger either way.** What this does *not* settle is the flag decision itself — the same
+   run has the bounded sweep interleaved taking the largest arc from birth-only bounded's 22 to
+   **318 (1.22%)**, with judged columns at 68.0% piles-formed / 29.7% named-intact / 58.8% kept, which
+   is a cost even bounded and still wants a human in front of the nightly rows. One correction it makes
+   to every replay figure in this document: `pruneStoryDf` keeps only `windowDays + 1` df buckets, so a
+   `--days=41` run loads 26,045 groups and *judges* the 12,891 inside the retained window —
+   `corpus.size === 0` returns before any decision for the rest, while they stay in every denominator.
 2. **Then choose: repair, or converge.** `backfill:storylines --restart` calls `resetStorylines` and
    rewrites every storyline, eliminating the hybrid by construction — and discards all label history,
    ~3,934 promoted storylines to relabel at the free tier's 500/day, so about **eight days of quota**,
