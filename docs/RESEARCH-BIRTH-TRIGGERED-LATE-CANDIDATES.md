@@ -617,6 +617,132 @@ faster and finds 11.9× more qualifiers, losing none**; and the inverse retrieva
 groups**, which is cheap enough that *where* you run it — 3am or the tail — is a preference rather
 than a constraint.
 
+> **Settled 2026-08-23. The freshness the trigger buys is worth nothing to a reader, so step 5 is
+> not "for now" — it is the answer.** §7's last line said *"there is no measured reader-visible cost
+> to the 24-hour delay"* and §9's table left `freshness` as the trigger's one live column. It is
+> measured now, and the column is empty: the coverage a re-offer attaches is a **median 3 nights
+> old** when the sweep finds it, only **40.5%** of attachments concern coverage even one night old,
+> and the surfaces that would OFFER the changed arc to a reader are gated behind a label backlog of
+> **2,083 unlabelled promoted arcs** against a 500/day quota. Accelerating an attachment from 3am to
+> minutes accelerates nothing a reader can reach.
+>
+> Measured with `pnpm measure:storylines-v2 --reader-latency`, a report on the existing
+> `replayWithReoffers` rather than a second instrument: `ReplayEvent` is a read-only observer on
+> `addGroupTo` and `mergePair`, `undefined` by default, and the birth-only calibration still
+> reproduces the committed grid's largest arc of **22** exactly. Read-only against `zammy`, no model
+> call, no flag or default changed — the retrieval and the bound were passed as environment to the
+> measurement process only.
+>
+> **Every figure below**: pinned bar (share 0.002, mass 20), K=2, retrieval **narrowed** (cap 4,000),
+> bridge cross-product bounded at the **top 2**, cascade + bridge re-pointing modelled, `--days=41`
+> (the full 40-day archive; the CLI's 31 truncates), interleaved — one sweep pass a night, which is
+> what the chore runs. Nights from **2026-08-15** (`--from-night`), because a night's sweep reads a
+> trailing 14 days and until the corpus has run that long every attachment is fresh by arithmetic
+> rather than by promptness. 8 nights, 2,055 sweep attachments, 489 sweep merges.
+>
+> **Day-add versus day-fill: 69/31, and the 69 is smaller than it looks.** A storyline pages over
+> `storyline_days`, so an attachment that adds a day the arc did not cover is a new card, and one that
+> joins a day it already covers only lengthens an existing slot's member list.
+>
+> | re-offer event | events | day-ADD | day-FILL | add% | onto an arc already real |
+> | --- | --- | --- | --- | --- | --- |
+> | retroactive attach (ADR-0011's own path) | 1,945 | 1,316 | 629 | 67.7% | 72% |
+> | late fresh attach (a group that found nothing at birth) | 110 | 94 | 16 | 85.5% | 93% |
+> | merge | 489 | 337 | 152 | 68.9% | 98% |
+>
+> The 69% is not 69% of a reader's attention, because **half of those new cards do not land at the top
+> of the arc**: 49.1% at rank 1, 49.8% at rank 2–3, 1.1% at rank 4–7. A retroactive card at rank 2 is
+> a card a reader reaches by scrolling a page they had to be offered first.
+>
+> **The age distribution is the argument, and it settles it cheaply.** Nights between the attached
+> coverage's own day and the sweep that attached it — a distribution, because the mean of this is
+> nobody's experience:
+>
+> ```
+> 0d:689  1d:143  2d:141  3d:149  4d:201  5d:129  6d:122  7d:147  8d:118  9d:69  10d:64  11d:36  12d:24  13d:23
+> p10 0d   p50 3d   p90 9d   max 13d
+> ```
+>
+> **59.5% of attachments are of coverage at least two nights old** — the arc has been missing that day
+> since that day, and a few more hours against a two-to-nine-night delay is a rounding error on
+> staleness that already exists. Per night, the median lands between 1 and 4 nights on the ordinary
+> nights and at 10 on the last, and the per-night table is reported because the pooled figure is
+> confounded: this corpus's days hold between 108 and 3,265 groups, and a night whose window is
+> dominated by one 3,265-group day reads as all-fresh by arithmetic.
+>
+> **The first night the flags go on is the extreme case of the same point.** The cap-built archive's
+> backlog, priced on the same instrument (`--reoffer-mode=posthoc --capped-build=200 --passes=1`):
+> 7,067 attachments in one night, median age **11 nights**, **0.2%** of them one night old or less.
+> A backlog is by definition a population for which latency cannot matter.
+>
+> **What else surfaces off these arcs — and this is where the trigger loses outright.** Three gates,
+> each read from the code rather than inferred:
+>
+> - **The cloud never reads `storyline_days`.** `findTrendingStorylines`
+>   ([trending-storylines.ts:124-180](../packages/storage/src/trending-storylines.ts)) counts articles
+>   published inside `TREND_WINDOW_HOURS` (24) and orders on that count times `0.5 ^ (age / 8h)`, then
+>   on `max(a.published)`. Coverage older than the window cannot move the cloud however promptly it is
+>   attached — and only **33.5%** of attachments are still inside that window at the moment of the
+>   sweep. It also gates on `count(distinct source_domain) >= 2` **within** the window.
+> - **A promoted arc is not offerable until it is named.** `findSurfacedStorylines` requires
+>   `label is not null` and `status <> 'provisional'`
+>   ([storyline-timeline.ts:265-299](../packages/storage/src/storyline-timeline.ts)); the cloud
+>   additionally refuses `coalesce(label_source,'') <> 'bigram'`. Counted on the live archive:
+>   **2,083 of 3,850** live promoted arcs carry no label at all, 706 carry a bigram label the cloud
+>   refuses, and **1,061 (27.6%)** are cloud-eligible. **27.3%** of the sweep's attachments land on a
+>   provisional arc and promote it, which puts it behind those 2,083 at the free tier's 500/day — days
+>   of queue against a 24-hour attachment delay.
+> - **`label_words` does not move on an attachment.** A retroactive attach fires the weakest trigger,
+>   `drift`, and `needsLabel` spends a call only once membership has doubled
+>   (`STORYLINE_LABEL_DRIFT_FACTOR`, 2). `profile_tokens` is re-derived on every attach, and moves on
+>   **92.2%** of them; the arc's newest day moves on **33.7%**; **5.9%** move neither and are invisible
+>   to every offer surface.
+>
+> **`meta.ingest` and the cache: §7's trending precedent applies, and it applies AGAINST the
+> trigger.** The cloud is cached 15 minutes in Redis and invalidated in exactly one place — the end of
+> `processSampleJob` ([trending-service.ts:357](../apps/api/src/trending-service.ts)) — which is
+> elected at most once per `SAMPLE_REFRESH_MINUTES` (60). The topic timeline response caches on
+> `state === "complete"` with a 60 s / 10 min / 24 h TTL by window end
+> ([page-cache.ts:15-20](../apps/api/src/page-cache.ts)) and **nothing invalidates it on a membership
+> change**. The storyline view is not server-cached at all
+> ([timeline-service.ts:465-518](../apps/api/src/timeline-service.ts)); the browser holds it 30 s.
+> So the offer surfaces carry 15–60 minutes of uninvalidated staleness of their own, which swallows
+> most of what a minutes-latency trigger could deliver — and a 3am write has the rest of the night for
+> every tier to expire before a morning reader arrives, while a 14:00 write lands in a cache a reader
+> may be holding. The invisible-tail cost §7 lists is real and it is the trigger's alone.
+>
+> **Reader behaviour is not measurable, and no proxy was invented for it.** There is no analytics
+> dependency in `apps/web` and no client instrumentation of any kind; the schema
+> ([database.ts:304-318](../packages/storage/src/database.ts)) has no requests, page-views or sessions
+> table, and no storyline carries a read count or a last-read timestamp. The only reader-demand signal
+> in the system is `topics.hit_count` / `last_hit_at`, and it is bumped *after* the page-cache check
+> ([timeline-service.ts:187-201](../apps/api/src/timeline-service.ts)) so cached reads are invisible,
+> keyed per query fingerprint rather than per storyline — a storyline view has no fingerprint and never
+> reaches it — and monotonic with no time series to recover. `/metrics` is pipeline-only, in-process
+> and unscraped, and ADR-0015 deletes it (it is still wired at
+> [server.ts:146-147](../apps/api/src/server.ts), so that is a decision not yet executed). Vercel Hobby
+> retains runtime logs for one hour. **Whether readers notice cannot be measured; what the content says
+> about whether they could is above, and that is the whole of the answer available.**
+>
+> **The one reader-visible freshness case already has its own trigger, and it is ON.** PR #114 earned
+> its keep on six live arcs all named "Canada US Trade Talks" standing until an operator ran the CLI —
+> a *label* collision, which `STORYLINE_LABEL_MERGE_TRIGGER` (default 2) already inverts to the
+> collision. The late-candidate sweep's merges are not that case: 98% land on an arc that is already
+> real, and the duplicate-name symptom the reader could see is handled by a trigger that ships on.
+>
+> **Recommendation: enable the flags, do not build the trigger.** Step 5's "don't, for now" becomes
+> "don't". Nothing in §9's table changes except the last row, which is now measured rather than open,
+> and the ~3–4 days step 5 costs buys latency on a population that is median-3-nights stale, behind
+> caches that are 15–60 minutes stale, on arcs that cannot be offered until a label pass days deep in
+> quota names them.
+>
+> **What this does NOT say, and the flag decision still needs a human.** "Enable the flags" is the
+> right arm of *this* comparison, not a verdict on the flags. Measured on the same run: the bounded
+> sweep interleaved takes the largest arc from birth-only bounded's **22** to **318 (1.22%)** over the
+> window, and the judged columns come out at 68.0% piles-formed / 29.7% named-intact / 58.8% kept. So
+> the sweep costs something even bounded, and §2.7's "a fortnight of the nightly graph rows" is still
+> the gate. This measurement says only that whichever way that goes, the *trigger* adds nothing to it.
+
 ---
 
 ## Method, and what to distrust
@@ -670,6 +796,35 @@ Distrust these:
   looks decorative. And `storyline-replay.ts:148-150`'s *"which is exactly what `profile_tokens &&
   story_tokens` returns"* is accurate about the predicate and silent about the `limit 200`. Both are
   reasoned from reading, not from a failing test.
+- **A replay over "the full window" judges only the trailing fortnight, and this applies to every
+  replay figure in this repo.** `pruneStoryDf` keeps `windowDays + 1` buckets
+  ([chores.ts:101-110](../apps/api/src/chores.ts)), so `story_token_days` and `story_corpus_days` held
+  `2026-08-07..08-24` — 16 days — when the 2026-08-23 measurement ran. `corpusFor` sums a 14-day
+  window ending on the group's own day, and `offerGroup` returns before any decision when
+  `corpus.size === 0`. So of the 26,045 groups a `--days=41` run loads, only the **12,891** published
+  inside the retained window are ever judged; the other 13,154 are loaded, counted in every
+  denominator, and silently skipped. `largestShare` is therefore a share of the loaded corpus and not
+  of the judged one, which flatters it by about 2×. Nothing above depends on the share, and the
+  per-night tables are inside the retained window by construction, but a figure read off this harness
+  as "over the whole archive" is not that.
+- **The pooled age distribution is confounded by arrival density and must be read per night.** This
+  corpus's days hold 108 to 3,265 groups, so a night whose trailing window is dominated by one
+  backfill day reads as all-fresh by arithmetic. Pooled over all 18 nights the "one night old or
+  less" share is 72.1%; over the eight nights with a full trailing window it is **40.5%**. The second
+  is the one reported, and `--from-night` exists so it is a flag rather than a hand-aggregation.
+- **The harness cannot model the sweep with the flags OFF.** It applies the 200-row cut only in a
+  build phase (`ReplayFidelity.cappedRetrievalLimit`, and `interleaved` refuses it outright), so
+  there is no flags-off sweep control here. None is needed for this question — both arms of
+  sweep-versus-trigger require the narrowed retrieval (§10 step 1 is a hard prerequisite for the
+  trigger) — but it does mean this measurement cannot price the sweep against today's defaults.
+- **`zammy` was being written to while this ran, by something else.** A dev API server on the main
+  checkout was up in fixture mode and the archive grew from 31,308 to 31,348 articles across the
+  session (26,006 to 26,045 groups, ~0.15%), memberships from 27,003 to 27,042 and live storylines
+  from 16,924 to 16,961. Read-only from this side — neither `storyline-sweep-cli.ts` nor
+  `storyline-judged.ts` holds an `insertInto`, `updateTable` or `deleteFrom`, and `max(attached_at)`
+  tracks the newest ingested article rather than anything this session ran — but "verified unmutated
+  afterwards" is a claim the 2026-08-22 pass could make and this one cannot. Two tables here were
+  taken minutes apart and their group counts differ.
 
 ## Corrections to VERCEL-PHASE-0-FINDINGS.md §2
 

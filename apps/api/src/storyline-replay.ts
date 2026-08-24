@@ -267,6 +267,53 @@ export interface ReplayVariant {
   bridgeOffers?: "all" | "first";
 }
 
+/**
+ * One membership change the replay made, for measurements whose question is
+ * about the EVENT rather than the endpoint.
+ *
+ * Every number this harness reports is a snapshot: arc sizes, day slots,
+ * buckets. That is the right shape for the percolation alarm and the wrong
+ * shape for "would a reader see this happen, and how late is it" — which needs
+ * the arc's state *before* each change, and there is no snapshot between two
+ * snapshots. So this is a read-only observer, `undefined` by default, and
+ * nothing in the decision reads it: turning it on cannot move a single figure
+ * in the committed grid.
+ */
+export interface ReplayEvent {
+  /**
+   * `attach` is `linkGroup`'s fresh path — the group's own singleton is
+   * absorbed into the winner. `retro-attach` is the retroactive path ADR-0011
+   * promises, where a group already living in a real arc joins an ADDITIONAL
+   * one. `merge` is `mergeStorylines`, where the loser's whole membership and
+   * day span move onto the survivor.
+   */
+  kind: "attach" | "retro-attach" | "merge";
+  /** The group offered. Empty for a merge, which no single group performs. */
+  groupId: string;
+  /** Its day slot, and its publication instant — the age of what is landing. */
+  groupDayKey: string;
+  groupPublishedMs: number;
+  /**
+   * Is this the group's FIRST offer? False means a re-offer, which is the only
+   * thing the late-candidate sweep contributes over the birth path.
+   */
+  firstOffer: boolean;
+  /** The arc that grew: the attach target, or the merge survivor. */
+  storylineId: string;
+  /** Its day keys BEFORE the change — what the reader could already page over. */
+  daysBefore: readonly string[];
+  /** Day keys it did NOT have and now does: a new card per entry, or none. */
+  daysAdded: readonly string[];
+  /** Member groups before, and whether it was already a real (>1 group) arc. */
+  sizeBefore: number;
+  promotedBefore: boolean;
+  /** `profile_tokens` before and after — the surfacing vocabulary (ADR-0013). */
+  profileBefore: readonly string[];
+  profileAfter: readonly string[];
+  /** Its newest day slot before the change: `max(day_slot_published)`'s day. */
+  newestDayBefore: string | null;
+}
+
 /** One group's bridge observation, carrying what independence may be read from. */
 interface BridgeMark {
   day: string;
@@ -325,6 +372,8 @@ interface World {
   fusedMixed: number;
   fusedFresh: number;
   attachedToCapShaped: number;
+  /** Read-only observer of every membership change — see `ReplayEvent`. */
+  readonly observer: ((event: ReplayEvent) => void) | undefined;
 }
 
 const createWorld = (
@@ -333,7 +382,9 @@ const createWorld = (
   narrowRetrieval: boolean,
   fidelity: ReplayFidelity,
   variant: ReplayVariant,
+  observer?: (event: ReplayEvent) => void,
 ): World => ({
+  observer,
   rules,
   mergeBridges,
   narrowRetrieval,
@@ -392,19 +443,52 @@ const refresh = (world: World, storyline: ReplayStoryline): void => {
   index(world, storyline);
 };
 
+/** The arc's state an observer needs read BEFORE the change, or nothing. */
+const before = (
+  world: World,
+  storyline: ReplayStoryline,
+): { days: string[]; size: number; profile: string[]; promoted: boolean } | undefined =>
+  world.observer === undefined
+    ? undefined
+    : {
+        days: [...storyline.days],
+        size: storyline.groupIds.length,
+        profile: [...storyline.profileTokens],
+        promoted: storyline.promoted,
+      };
+
 /** One group joins one arc: `attachGroup`, plus the re-derivation it runs. */
 const addGroupTo = (
   world: World,
   storyline: ReplayStoryline,
   group: ReplayGroup,
   profile: string[],
+  kind: "attach" | "retro-attach",
+  firstOffer: boolean,
 ): void => {
+  const prior = before(world, storyline);
   storyline.groupProfiles.push(profile);
   storyline.groupIds.push(group.groupId);
   storyline.lastCoverageMs = Math.max(storyline.lastCoverageMs, group.publishedMs);
   storyline.days.add(group.dayKey);
   storyline.promoted = true;
   refresh(world, storyline);
+  if (world.observer === undefined || prior === undefined) return;
+  world.observer({
+    kind,
+    groupId: group.groupId,
+    groupDayKey: group.dayKey,
+    groupPublishedMs: group.publishedMs,
+    firstOffer,
+    storylineId: storyline.id,
+    daysBefore: prior.days,
+    daysAdded: prior.days.includes(group.dayKey) ? [] : [group.dayKey],
+    sizeBefore: prior.size,
+    promotedBefore: prior.promoted,
+    profileBefore: prior.profile,
+    profileAfter: [...storyline.profileTokens],
+    newestDayBefore: prior.days.length === 0 ? null : prior.days.reduce((a, b) => (a > b ? a : b)),
+  });
 };
 
 /**
@@ -413,7 +497,12 @@ const addGroupTo = (
  * bridges are simply abandoned at a key nothing resolves to again; under
  * `cascadeMerges` they follow the survivor, which is what storage does.
  */
-const mergePair = (world: World, left: string, right: string): string[] => {
+const mergePair = (
+  world: World,
+  left: string,
+  right: string,
+  cause?: { group: ReplayGroup; firstOffer: boolean },
+): string[] => {
   const one = world.storylines.get(left);
   const two = world.storylines.get(right);
   if (!one || !two) return [];
@@ -422,6 +511,7 @@ const mergePair = (world: World, left: string, right: string): string[] => {
   // (`pickWinner`).
   const [keep, drop] =
     one.groupProfiles.length >= two.groupProfiles.length ? [one, two] : [two, one];
+  const prior = before(world, keep);
 
   // Attribute the merge before the two become one, and only after the switch —
   // §2.7's question is not "how many merges" but "how many of them fuse arcs
@@ -485,6 +575,25 @@ const mergePair = (world: World, left: string, right: string): string[] => {
   refresh(world, keep);
   world.bridges.delete(pairKey(left, right));
   world.merges += 1;
+  if (world.observer !== undefined && prior !== undefined) {
+    const held = new Set(prior.days);
+    world.observer({
+      kind: "merge",
+      groupId: cause?.group.groupId ?? "",
+      groupDayKey: cause?.group.dayKey ?? "",
+      groupPublishedMs: cause?.group.publishedMs ?? 0,
+      firstOffer: cause?.firstOffer ?? false,
+      storylineId: keep.id,
+      daysBefore: prior.days,
+      daysAdded: [...drop.days].filter((day) => !held.has(day)),
+      sizeBefore: prior.size,
+      promotedBefore: prior.promoted,
+      profileBefore: prior.profile,
+      profileAfter: [...keep.profileTokens],
+      newestDayBefore:
+        prior.days.length === 0 ? null : prior.days.reduce((a, b) => (a > b ? a : b)),
+    });
+  }
   return repointed;
 };
 
@@ -516,6 +625,7 @@ const recordBridgesAmong = (
   world: World,
   qualified: readonly { candidate: { id: string } }[],
   group: ReplayGroup,
+  firstOffer: boolean,
 ): void => {
   // The bound is `bridgePairs`' own argument now, not a slice here — the service
   // applies it in the same call, so the two cannot drift the way the retrieval
@@ -532,7 +642,7 @@ const recordBridgesAmong = (
     world.bridges.set(key, groupsBridging);
     if (!independentEnough(world, groupsBridging)) continue;
 
-    const repointed = mergePair(world, left, right);
+    const repointed = mergePair(world, left, right, { group, firstOffer });
     if (!world.cascadeMerges) continue;
 
     // Everything whose evidence just moved onto the survivor, re-asked against
@@ -549,7 +659,7 @@ const recordBridgesAmong = (
       if (survivor === other) continue;
       const held = world.bridges.get(pairKey(survivor, other));
       if (!held || !independentEnough(world, held)) continue;
-      for (const moved of mergePair(world, survivor, other)) {
+      for (const moved of mergePair(world, survivor, other, { group, firstOffer })) {
         const pairing = pairKey(resolve(world, survivor), moved);
         if (queued.has(pairing)) continue;
         queued.add(pairing);
@@ -715,7 +825,7 @@ const offerGroup = (world: World, group: ReplayGroup, corpus: Corpus): void => {
       const arc = qualified.find((q) => !already.has(q.candidate.id));
       const target = arc ? world.storylines.get(arc.candidate.id) : undefined;
       if (target) {
-        addGroupTo(world, target, group, profile);
+        addGroupTo(world, target, group, profile, "retro-attach", firstOffer);
         homes.push(target.id);
         world.retroAttached += 1;
       }
@@ -725,6 +835,7 @@ const offerGroup = (world: World, group: ReplayGroup, corpus: Corpus): void => {
         world,
         qualified.filter((q) => !already.has(q.candidate.id)),
         group,
+        firstOffer,
       );
     }
     return;
@@ -740,11 +851,11 @@ const offerGroup = (world: World, group: ReplayGroup, corpus: Corpus): void => {
   world.storylines.delete(own.id);
   world.alias.set(own.id, winner.id);
   if (world.phase === "after" && winner.capShaped) world.attachedToCapShaped += 1;
-  addGroupTo(world, winner, group, profile);
+  addGroupTo(world, winner, group, profile, "attach", firstOffer);
   homes[0] = winner.id;
   world.attached += 1;
 
-  if (mayBridge) recordBridgesAmong(world, qualified, group);
+  if (mayBridge) recordBridgesAmong(world, qualified, group, firstOffer);
 };
 
 const BUCKETS: { label: string; min: number; max: number }[] = [
@@ -845,8 +956,9 @@ export function replayLinker(
   narrowRetrieval: boolean,
   fidelity: ReplayFidelity = {},
   variant: ReplayVariant = {},
+  observer?: (event: ReplayEvent) => void,
 ): ReplayResult {
-  const world = createWorld(rules, mergeBridges, narrowRetrieval, fidelity, variant);
+  const world = createWorld(rules, mergeBridges, narrowRetrieval, fidelity, variant, observer);
   for (const group of inOrder(groups)) {
     offerGroup(world, group, corpusAt(group, groupProfile(group.memberTokens)));
   }
@@ -882,6 +994,12 @@ export interface ReofferOptions {
    * the trajectory rather than in the endpoint.
    */
   onPass?: (pass: number, label: string, result: ReplayResult) => void;
+  /**
+   * Read-only observer of every membership change — see `ReplayEvent`. The
+   * per-pass snapshot above cannot answer a question about one attachment,
+   * which is what "would a reader see this, and how late is it" is.
+   */
+  onEvent?: (event: ReplayEvent) => void;
 }
 
 /**
@@ -923,6 +1041,7 @@ export function replayWithReoffers(
     narrowRetrieval,
     options.fidelity ?? {},
     options.variant ?? {},
+    options.onEvent,
   );
   const ordered = inOrder(groups);
   // A group's profile is re-derived on every read in production, but the
@@ -1035,6 +1154,8 @@ export interface HybridOptions {
    * trajectory and not in the endpoint.
    */
   onDay?: (day: HybridDay, result: ReplayResult) => void;
+  /** Read-only observer of every membership change — see `ReplayEvent`. */
+  onEvent?: (event: ReplayEvent) => void;
 }
 
 /**
@@ -1088,6 +1209,7 @@ export function replayHybrid(
         : {}),
     },
     options.variant ?? {},
+    options.onEvent,
   );
 
   const ordered = inOrder(groups);
