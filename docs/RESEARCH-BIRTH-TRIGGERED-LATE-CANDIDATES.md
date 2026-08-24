@@ -22,34 +22,54 @@ sweep's famous 3.5% yield is substantially an artifact of that cap. So the hones
 **feasible-with-conditions, and deprioritised**: fix the retrieval first, then take the cheap
 nightly filter, and probably never build the ingest-tail trigger.
 
-> **Superseded in part, 2026-08-22 (later the same day).** The retrieval finding below held up and
-> shipped, but three of this document's own numbers did not survive the validation it called for,
-> and the reason is uniform: **every measurement here is a single pass, or bounded to 2,000 groups.**
+> **Status, 2026-08-23. Read this before the body: five of this document's numbers are dead and its
+> ordering is spent.** Everything below was measured in one session on 2026-08-22 and then tested by
+> five more. What follows is what survived, what did not, and what is actually open. §10 carries the
+> current recommendation; the body is kept for its reasoning, not its figures.
 >
-> - **"The percolation alarm does not fire" is wrong.** It fires on the second pass and every pass
->   after. Over the full window: largest arc 124 → 588 → 906 → 1,214 → **1,347**, or 10.7% of the
->   window in one arc. Under `maxGroups: 2000` the same four passes never leave 124, which is what
->   this document saw.
-> - **"41% faster end to end, ~275 s, inside the ceiling" does not reproduce.** The first pass is
->   *slower* — 39.1 → 42.4 ms/group — because the extra qualifiers cost writes. It reaches ~12 ms
->   only once the backlog has drained. And per-offer cost *improves* as the graph degrades, so that
->   metric was the wrong one to read.
-> - **The nightly changed-set filter of §9 makes it worse, not safer.** A merge is what marks an arc
->   dirty, so a filter that offers only marked groups selects for the feedback loop: unfiltered ends
->   at 1,347, filtered at 1,782. §3's inverse retrieval is also unsound as specified — its
->   predicates are functions of which fortnight you stand in, giving 38.9% recall — and the sound
->   form narrows 3.4×, not 24×, returning 105.6 groups per arc rather than 2.05.
+> **What survived, and shipped.** The `CANDIDATE_LIMIT` finding, the uncapped-replay divergence, the
+> necessary-condition argument for the anchor-eligible subset, and the conclusion that **the 200-row
+> cap was doing the bounding K was believed to be doing.** That conclusion turned out to be truer
+> than written: it held on the *birth* path too, not only under re-offers.
 >
-> Two smaller corrections: `maxGroups` already exists on `runLateCandidateChore`, and the mechanism
-> is not bridges being "re-recorded on every re-offer" (`recordBridge` is idempotent per group via
-> `onConflict().doNothing()`) but qualifier *width* feeding `bridgePairs`' O(n²) cross-product.
+> **What did not survive.**
 >
-> What survives is the important part, and it shipped: the cap, the uncapped replay, the
-> necessary-condition argument, and the conclusion that **the 200-row cap was doing the bounding K
-> was believed to be doing**. The sweep, the changed-set filter and the joined-group re-offer are
-> all gated off pending a K re-measurement. See VERCEL-PHASE-0-FINDINGS.md §2.6.
+> - **"The percolation alarm does not fire" is wrong** — it fires from the second pass. Every
+>   measurement here is a single pass or bounded to 2,000 groups, and `maxGroups: 2000` is exactly
+>   what hides it.
+> - **"41% faster end to end, ~275 s" does not reproduce.** The first pass is *slower*. And per-offer
+>   cost *improves* as the graph degrades, so speed was the wrong metric to read throughout.
+> - **§3's inverse retrieval is unsound as specified.** Its predicates are functions of `N` and `df`,
+>   both functions of which fortnight you stand in; it reaches **38.9%** of the pairs the forward
+>   decision qualifies. The sound form reaches 87.4% but names **105.6 groups per arc**, not 2.05 — a
+>   3.4× narrowing, not 24×. **This is the number that changes the design**, not just the estimate.
+> - **§9's changed-set filter makes things worse, not safer.** A merge is what marks an arc dirty, so
+>   a filter that offers only marked arcs selects *for* the feedback loop: 1,782 against the
+>   unfiltered 1,347, larger at every pass.
+> - **The mechanism was misdiagnosed.** Not bridges "re-recorded on every re-offer" — `recordBridge`
+>   is idempotent per group — but qualifier *width* feeding `bridgePairs`' O(n²) cross-product. And
+>   `maxGroups` already existed.
+>
+> **What has been settled since, and matters more than any of the above.** A replay that models
+> `mergeStorylines`' bridge re-pointing — which this document's harness did not — says the **birth
+> path alone** reaches 2,591 groups (9.96%) at the pinned bar. The hybrid (cap-built archive,
+> corrected retrieval, birth-only) **drifts rather than converging**: 0.25 merges per group born,
+> flat, against 0.015 with the retrieval uncorrected — a ~17× standing increase, not a backlog
+> draining. And **bounding the bridge cross-product to a group's top two qualifiers collapses the
+> whole problem**: 0.034 merges per arrival, largest arc 22, and the cap-built and from-scratch
+> archives end at the *same* 22, because the cross-product was the mechanism that made them differ.
+>
+> **Current state of the code:** the retrieval narrowing, the bridging bound, the sweep, the
+> joined-group re-offer and the changed-set filter are all built and all **off by default**. K is
+> unchanged at 2. So ADR-0011's retroactive attachment is not happening at all right now — which is
+> the fact §10 turns on. See VERCEL-PHASE-0-FINDINGS.md §2.5–§2.7.
 
 ---
+
+> **On reading §1–§9.** They are the original session's reasoning and are kept for it — the argument
+> structures are what later sessions built on. But the figures in them predate five rounds of
+> correction, and §3 and §9 in particular reach conclusions the status block above reverses. Treat
+> any number in the body as historical unless §10 or VERCEL-PHASE-0-FINDINGS.md §2.5–§2.7 repeats it.
 
 ## 1. What the sweep is, and the half-truth in why it exists
 
@@ -572,50 +592,75 @@ already renders in its own timeline slot, and gaining a second arc changes a sto
 is unlikely to be looking at. **There is no measured reader-visible cost to the 24-hour delay**, and
 without one the trigger is paying real complexity for freshness nobody asked for.
 
-## 10. Verdict
+## 10. Verdict — rewritten 2026-08-23, after five sessions tested it
 
-**Feasible-with-conditions, and third in line.** The inversion is sound, expressible in one indexed
-statement, 2.9 ms at the mean with a thin tail, and it terminates on a stronger argument than PR
-#114's. It is also, on today's code, the wrong thing to build first — and once the two things ahead of
-it land, the version worth building is the nightly filter, not the tail trigger.
+**The original verdict was "feasible-with-conditions, third in line", and its ordering is now
+spent**: step 1 shipped and was gated, step 2 was built and defaulted off, step 3 was built and
+measured *harmful*, step 4 became moot. What is left is a different question with a different answer.
 
-**Do these in order.**
+### The situation this actually leaves
 
-1. **Narrow the candidate retrieval to the anchor-eligible subset (§2.2). ~0.5 day to write, 2–3 days
-   to validate.** The code is three lines at
-   [storyline-linker.ts:244-246](../apps/api/src/storyline-linker.ts) and needs no query change, no
-   column and no index, because `readTrailingCorpus` already ran. It is 14.5× on the query and 41%
-   end to end, which takes the sweep from 506 s to ~275 s and makes Phase 0 §2's ceiling problem stop
-   being a ceiling problem. The validation is the real cost and it is not optional: this un-suppresses
-   a backlog the pinned thresholds already certified but production has never performed (615 attaches
-   and 324 merges per 2,000 offers, not converging in one pass), so it wants `pnpm
-   measure:storylines-v2` re-run, the largest-storyline share re-checked, and the resulting piles
-   judged — the 15 unjudged declined piles from the last dissolve pass are a warning about doing this
-   without that discipline. The `refuseFormation` path is worth thinking about here too: with the gate
-   inert, more offers means more chance of re-creating dissolved piles.
-2. **Trigger a forward re-offer when a group's own membership changes (§4's sixth event). ~1 day.**
-   No inversion, no new query, no fan-out reasoning: `groupArticle` and `mergeBridgedGroups` already
-   hold the group id, and re-offering one group costs 41 ms (9 ms after step 1) on a tail that
-   already carries 8-second labels. It closes the gap
-   [grouping-service.ts:231-236](../apps/api/src/grouping-service.ts) creates by design, and it is the
-   only class in §8 that a trigger covers *better* than the sweep rather than merely earlier.
-3. **The nightly changed-set filter (§9). ~1.5–2 days**, of which most is the "changed since" marker
-   and the `chore_runs` row. This is where the order of magnitude is: ~12 s a night against ~275 s.
-4. **Bound and resume the backstop.** The unscoped Phase 0 §2 work — `maxGroups` on
-   `StorylinePassDeps`, `--max-groups`, and a persisted cursor — which after steps 1–3 is ~90 s a
-   night covering the window every three nights, with §8's five residual classes as its honest job
-   description.
-5. **The ingest-tail trigger: don't, for now.** It is feasible — ~3–4 days on top of step 1, and step 1
-   is a hard prerequisite because without it the trigger hands correct offers to a decision that
-   cannot see them (§5). But it buys only freshness over step 3, no reader-visible cost of the delay
-   has been measured, and it takes on the cascade-debounce discipline, the invisible-tail caching
-   problem, and the per-event latency that step 3 avoids entirely.
+**Nothing is delivering ADR-0011's retroactive attachment.** The sweep is gated off, the changed-set
+filter is off and discredited as a safety measure, the joined-group re-offer is off. That is the fact
+that reorders everything below: the original verdict deferred the inversion because two cheaper
+options sat in front of it, and both are now switched off — one of them permanently, since it
+provably accelerates the runaway it was meant to bound.
 
-**The three numbers that drove this:** `CANDIDATE_LIMIT` binds on **399 of 400 groups** while the
-replay that pinned the thresholds has **no cap at all**; narrowing the retrieval array is **14.5×
-faster and finds 11.9× more qualifiers, losing none**; and the inverse retrieval is **2.9 ms for 2.05
-groups**, which is cheap enough that *where* you run it — 3am or the tail — is a preference rather
-than a constraint.
+**And the safety question has one answer for all of them.** Every offer, from any trigger, goes
+through the same `bridgePairs` cross-product. Bounded to a group's top two qualifiers, the cap-built
+and from-scratch archives converge on the same largest arc (22) — so the *starting state* stops
+mattering and the *mechanism* is the bound. Unbounded, the birth path alone reaches 2,591 groups and
+the hybrid drifts at a flat 0.25 merges per arrival. **The only combination the evidence refuses is a
+corrected retrieval with an unbounded cross-product**, and that refusal applies identically to the
+sweep, the trigger, and doing nothing but ingesting.
+
+### Can the inversion be implemented? Yes, with two changes to the design
+
+**It cannot go on the ingest tail.** §7 priced the tail at 48–87 ms per event on the strength of a
+retrieval naming 2.05 groups. The sound retrieval names **105.6**, so a realistic night of 250
+changed arcs names 3,698 window groups — 29.4% of the window — in 5.6 s of retrieval alone, before
+any linking. At the measured per-offer cost that is seconds per storyline change, and changes come
+per attachment and per merge. The home is the chores route §3.3 already built as an individually
+addressable endpoint, or the queued consumer: an event-**queued** offer, not an event-**inline** one.
+
+**And it must carry the bound.** Not as a precaution — as the thing that makes it equivalent in
+safety to every other path.
+
+Those two changes cost it most of its case. Queued rather than inline, its advantage over simply
+re-enabling the bounded sweep is hours of freshness, not days.
+
+### What to decide, and what to measure first
+
+**The open question is no longer "is the inversion sound?" — it is "is freshness worth anything to a
+reader?"** That was flagged as unmeasured in the original §7 and it is still unmeasured, and it is now
+the only thing separating the two live options:
+
+- **Re-enable the bounded sweep.** Nothing new to build. `STORYLINE_NARROW_RETRIEVAL=true` plus
+  `STORYLINE_MAX_BRIDGING_QUALIFIERS=2` plus `STORYLINE_LATE_CANDIDATE_SWEEP=true`, watched against
+  the nightly graph-shape row. Delivers ADR-0011's behaviour tonight.
+- **Build the event-queued trigger.** ~3–4 days, and its remaining benefit over the above is latency
+  measured in hours.
+
+**Measure the freshness question before building anything.** If no reader-visible cost of the delay
+exists — and §7 never found one — the honest conclusion is to enable the bounded sweep and not build
+this at all. If one does exist, the trigger is implementable and the design above is the shape it
+should take.
+
+### The cost nobody should discover later
+
+The bound is not free, and its price was hand-read rather than counted: **FIFA/Infantino goes from one
+coherent 152-group arc to roughly forty fragments whose largest is 12.** It also retains only 27% of
+the archive's derivable bridge observations. That is err-narrow, which ADR-0011 prefers — while also
+saying the merge is the only repair it will build. Whoever turns these flags on is accepting that
+trade, and it should be a decision rather than a surprise.
+
+### The numbers that actually drove the final answer
+
+`CANDIDATE_LIMIT` bound the cross-product on **both** paths, not just under re-offers. The birth path
+unbounded reaches **2,591 groups (9.96%)**. The hybrid drifts at **0.25 merges per arrival against
+0.015**, flat — a standing increase, not a backlog. Bounded at the top two: **0.034, largest arc 22,
+cap-built and from-scratch identical.** And the sound inverse retrieval names **105.6 groups per arc**,
+which is what moved the trigger off the tail.
 
 ---
 
