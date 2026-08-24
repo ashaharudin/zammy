@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { loadConfig } from "@zammy/config";
+import { type Config, loadConfig } from "@zammy/config";
 import { createDb, migrateToLatest } from "@zammy/storage";
 import { TimelinePage } from "@zammy/shared";
 import { buildApp, type App } from "./server.js";
@@ -19,6 +19,7 @@ const FIXTURES_DIR = new URL("../../../fixtures/", import.meta.url).pathname;
 describe("buildApp", () => {
   let dbName: string;
   let built: App;
+  let config: Config;
 
   beforeAll(async () => {
     dbName = `zammy_app_test_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
@@ -35,17 +36,16 @@ describe("buildApp", () => {
     await migrateToLatest(migrator);
     await migrator.destroy();
 
-    built = await buildApp(
-      loadConfig({
-        NODE_ENV: "test",
-        LOG_LEVEL: "warn",
-        DATABASE_URL: url.toString(),
-        REDIS_URL: process.env.TEST_REDIS_URL ?? "redis://localhost:6379",
-        CURRENTS_MODE: "fixture",
-        CURRENTS_USER_AGENT: "zammy-tests/0.1",
-        FIXTURES_DIR,
-      }),
-    );
+    config = loadConfig({
+      NODE_ENV: "test",
+      LOG_LEVEL: "warn",
+      DATABASE_URL: url.toString(),
+      REDIS_URL: process.env.TEST_REDIS_URL ?? "redis://localhost:6379",
+      CURRENTS_MODE: "fixture",
+      CURRENTS_USER_AGENT: "zammy-tests/0.1",
+      FIXTURES_DIR,
+    });
+    built = await buildApp(config);
     await built.app.ready();
   });
 
@@ -94,6 +94,27 @@ describe("buildApp", () => {
 
     expect((await built.app.inject({ method: "GET", url: "/healthz" })).statusCode).toBe(200);
     expect((await built.app.inject({ method: "GET", url: "/metrics" })).statusCode).toBe(200);
+  });
+
+  it("starts the §9.1 consumer by default and not at all when told not to", async () => {
+    // The seam the Vercel request function needs (VERCEL-ALL-IN-SCOPE §3.1):
+    // one process that serves AND drains is right for Compose, and wrong for an
+    // instance that suspends between requests. Both halves are asserted here
+    // because the default is the load-bearing one — a `consumer` option that
+    // silently defaulted to false would leave Compose enqueueing into a queue
+    // nothing reads, and every read would still return 200.
+    expect(built.consumer).toBe(true);
+
+    const requestOnly = await buildApp(config, { consumer: false });
+    try {
+      expect(requestOnly.consumer).toBe(false);
+      // Still a whole HTTP surface: the publish side, the pool and the Redis
+      // client are all built. Only the worker is absent.
+      const health = await requestOnly.app.inject({ method: "GET", url: "/readyz" });
+      expect(health.statusCode).toBe(200);
+    } finally {
+      await requestOnly.close();
+    }
   });
 
 });

@@ -52,7 +52,33 @@ export interface App {
   pool: Pool;
   redis: Redis;
   currents: CurrentsClient;
+  /**
+   * Whether THIS instance started the §9.1 consumer. Reported rather than
+   * assumed, because it is the one thing about a built app that differs by
+   * deployment shape, and "did anything start draining the queue?" is
+   * otherwise unanswerable from the outside.
+   */
+  consumer: boolean;
   close: () => Promise<void>;
+}
+
+export interface BuildAppOptions {
+  /**
+   * Run the §9.1 ingest consumer inside this process, alongside the HTTP
+   * surface. True by default, because that is what a persistent process wants:
+   * Compose and the container image run one process that both serves and
+   * drains, and ARCHITECTURE §4.1 leans on that (the drain path is exercised
+   * on every `docker compose down`).
+   *
+   * A serverless request instance must pass `false`. It still constructs the
+   * `IngestQueue` — the read path enqueues (timeline-service, trending-service)
+   * and the trending locks are scoped by the queue's `name` — but a BullMQ
+   * Worker in a function that suspends between requests would poll Redis from a
+   * frozen instance and hold jobs it may never be woken to finish
+   * (VERCEL-ALL-IN-SCOPE §3.1). There the consumer is its own deployable, a
+   * push-mode Vercel Queues function behind the same interface (§3.2).
+   */
+  consumer?: boolean;
 }
 
 /**
@@ -67,7 +93,10 @@ export function trustedProxyOption(hops: number): number | false {
   return hops > 0 ? hops : false;
 }
 
-export async function buildApp(config: Config): Promise<App> {
+export async function buildApp(
+  config: Config,
+  options: BuildAppOptions = {},
+): Promise<App> {
   const app = Fastify({
     logger: {
       level: config.LOG_LEVEL,
@@ -146,9 +175,13 @@ export async function buildApp(config: Config): Promise<App> {
   const metrics = new Metrics({ quota: () => currents.quota() });
   registerMetricsRoute(app, metrics);
 
-  // The query service (§6) and its in-process job consumer (§9.1). The
-  // consumer shares this process — Fargate keeps CPU allocated for the life
-  // of a task, so no separate deployable is needed (§4.1).
+  // The query service (§6) and its job consumer (§9.1). WHERE the consumer runs
+  // is a deployment property, not a code one: a persistent process shares it
+  // with the HTTP surface (a container keeps CPU allocated for the life of the
+  // task, so no separate deployable is needed, §4.1), while a request-scoped
+  // function must not start one at all. Either way the queue itself is built
+  // here, because the read path publishes to it.
+  const consumer = options.consumer ?? true;
   const db = createDb(pool);
   const queue = new IngestQueue(config.REDIS_URL);
 
@@ -210,9 +243,18 @@ export async function buildApp(config: Config): Promise<App> {
     },
   };
 
-  queue.startConsumer((job) =>
-    job.kind === "sample" ? processSampleJob(trendingDeps, job) : processSegmentJob(deps, job),
-  );
+  if (consumer) {
+    queue.startConsumer((job) =>
+      job.kind === "sample" ? processSampleJob(trendingDeps, job) : processSegmentJob(deps, job),
+    );
+  } else {
+    // Worth a line in the log, because the symptom of getting this wrong is
+    // silent: reads still succeed, they just report `degraded: "ingest_timeout"`
+    // forever while the pending set grows and nothing drains it.
+    app.log.info(
+      "consumer disabled for this instance — serving requests only; enqueued ingest waits for whatever drains the queue",
+    );
+  }
   await registerQueryRoutes(app, { deps, defaultLanguage: config.DEFAULT_LANGUAGE });
   registerTrendingRoute(app, { deps: trendingDeps });
 
@@ -228,12 +270,21 @@ export async function buildApp(config: Config): Promise<App> {
   const close = async (): Promise<void> => {
     await app.close();
     // The queue first (it holds Redis connections and may be mid-job), then
-    // the stores. db.destroy() ends the shared pool — nothing ends it twice.
+    // the stores.
     await queue.close().catch(() => {});
     await Promise.allSettled([db.destroy(), redis.quit(), currents.close()]);
+    // db.destroy() ends the shared pool ONLY if Kysely ever initialized its
+    // driver, which it does lazily on the first query — so an instance that
+    // served nothing but `/healthz` and `/readyz` used to finish shutdown with
+    // its pool and that pool's idle connections still open. Measured: one
+    // backend surviving `close()`, last query `SELECT 1`, which is /readyz's.
+    // Ending it here makes shutdown mean the same thing on every path. The
+    // guard rather than a bare call because pg REJECTS a second `end()`, and
+    // the common case is that Kysely already did it.
+    if (!pool.ended) await pool.end();
   };
 
-  return { app, pool, redis, currents, close };
+  return { app, pool, redis, currents, consumer, close };
 }
 
 declare module "fastify" {

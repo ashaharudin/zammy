@@ -1,0 +1,9 @@
+# Uploaded to Vercel on every deploy; none of this is read by the build or by a
+# function. `fixtures/` is deliberately absent from this list — preview
+# deployments run CURRENTS_MODE=fixture and read it at runtime, which is also
+# why vercel.json names it in `includeFiles`.
+docs/
+deploy/
+.github/
+.vscode/
+.claude/

@@ -1468,12 +1468,13 @@ apart see the same cloud.
 | 5c | **Article grouping (§14.3):** `group_id` / `group_published` / `title_tokens` on `articles`, write-time grouping after the collapse, the keyset moved onto the group axis, per-topic representative from the source-authority list, the "related" disclosure. | ✅ |
 | 5e | **Storylines:** day-clustered slots (ADR-0009), then the persistent arc that superseded them (ADR-0011) — `storylines` / `storyline_days`, the linker, bridges and auto-merge, the timeline paged over storyline-days. Migration 0012 dropped the day-bounded model and its flag. | ✅ |
 | 5f | **Storyline labels (ADR-0011, "Labels"):** Gemini-generated names at promotion, merge and drift, bigram fallback when no key is set, plus `label_source` so a relabel campaign can resume. | ✅ |
-| 6 | **Deploy** — no target. AWS superseded by **OCI** on 2026-08-14; OCI then **abandoned 2026-08-21** for lack of free Ampere capacity, [DEPLOYMENT-OCI.md](DEPLOYMENT-OCI.md) now archival. Phase 1 network/vault/LB was applied and is left standing inside Always Free; the staging VM never landed. No application code was reverted. | ⛔ blocked — needs a new target |
+| 6 | **Deploy** — Vercel, all in ([ADR-0015](adr/0015-all-in-on-vercel-hobby-shaped.md), phased in VERCEL-ALL-IN-SCOPE §9). AWS superseded by **OCI** on 2026-08-14; OCI then **abandoned 2026-08-21** for lack of free Ampere capacity, [DEPLOYMENT-OCI.md](DEPLOYMENT-OCI.md) now archival, its Phase 1 network/vault/LB left standing inside Always Free. Vercel Phase 0 (the spikes) and **Phase 1 (the api as one Function: the `buildApp` consumer split, `api/index.ts`, `vercel.json`) are done**; the queue, the Redis quota governor and rate-limit store, the chores route and cutover are Phases 2–5. Operator's half: [deploy/vercel/](../deploy/vercel/). | 🚧 in progress — Phase 1 of 5 |
 | 7a | **Second provider behind the client interface:** `@zammy/news-client` core + per-provider adapters + the composite, GNews added, `provider` column on `articles`/`sightings` (§5.6, ADR-0012). | ✅ |
 | 7b | Topic summaries into `topics.summary`. The schema reserves the columns (§7.2); nothing generates them. | ⬜ not started |
 
 Phases 1–4 were the walking skeleton; Phase 5 added depth and self-repairing freshness. The queue
-runs in-process (§9.1), so no phase introduced a second deployable.
+ran in-process (§9.1) throughout, so no phase introduced a second deployable — Vercel's Phase 2 is
+the first thing that will, and it lands behind the same `IngestQueue` interface.
 
 Phase 2 was the highest-risk phase, not Phase 3, and that held up: deduplication is the difference
 between a usable timeline and an unusable one, cheapest to get right at schema time — the recorded
