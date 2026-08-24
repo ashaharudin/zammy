@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { createServer, type Server, type Socket } from "node:net";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { loadConfig } from "@zammy/config";
+import { type Config, loadConfig } from "@zammy/config";
 import { createDb, migrateToLatest } from "@zammy/storage";
 import { TimelinePage } from "@zammy/shared";
 import { buildApp, type App } from "./server.js";
@@ -19,6 +20,7 @@ const FIXTURES_DIR = new URL("../../../fixtures/", import.meta.url).pathname;
 describe("buildApp", () => {
   let dbName: string;
   let built: App;
+  let config: Config;
 
   beforeAll(async () => {
     dbName = `zammy_app_test_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
@@ -35,17 +37,16 @@ describe("buildApp", () => {
     await migrateToLatest(migrator);
     await migrator.destroy();
 
-    built = await buildApp(
-      loadConfig({
-        NODE_ENV: "test",
-        LOG_LEVEL: "warn",
-        DATABASE_URL: url.toString(),
-        REDIS_URL: process.env.TEST_REDIS_URL ?? "redis://localhost:6379",
-        CURRENTS_MODE: "fixture",
-        CURRENTS_USER_AGENT: "zammy-tests/0.1",
-        FIXTURES_DIR,
-      }),
-    );
+    config = loadConfig({
+      NODE_ENV: "test",
+      LOG_LEVEL: "warn",
+      DATABASE_URL: url.toString(),
+      REDIS_URL: process.env.TEST_REDIS_URL ?? "redis://localhost:6379",
+      CURRENTS_MODE: "fixture",
+      CURRENTS_USER_AGENT: "zammy-tests/0.1",
+      FIXTURES_DIR,
+    });
+    built = await buildApp(config);
     await built.app.ready();
   });
 
@@ -96,4 +97,73 @@ describe("buildApp", () => {
     expect((await built.app.inject({ method: "GET", url: "/metrics" })).statusCode).toBe(200);
   });
 
+  it("starts the §9.1 consumer by default and not at all when told not to", async () => {
+    // The seam the Vercel request function needs (VERCEL-ALL-IN-SCOPE §3.1):
+    // one process that serves AND drains is right for Compose, and wrong for an
+    // instance that suspends between requests. Both halves are asserted here
+    // because the default is the load-bearing one — a `consumer` option that
+    // silently defaulted to false would leave Compose enqueueing into a queue
+    // nothing reads, and every read would still return 200.
+    expect(built.consumer).toBe(true);
+
+    const requestOnly = await buildApp(config, { consumer: false });
+    try {
+      expect(requestOnly.consumer).toBe(false);
+      // Still a whole HTTP surface: the publish side, the pool and the Redis
+      // client are all built. Only the worker is absent.
+      const health = await requestOnly.app.inject({ method: "GET", url: "/readyz" });
+      expect(health.statusCode).toBe(200);
+    } finally {
+      await requestOnly.close();
+    }
+  });
+
+  it("releases the connections it already opened when boot fails", async () => {
+    // A failed boot used to cost nothing, because the only caller was index.ts
+    // and it exits the process. The Vercel entrypoint retries on the NEXT
+    // request instead (vercel.ts), so anything this attempt left open leaks
+    // once per request, for the life of an instance that lives for hours. The
+    // failure reproduced here is the plausible one rather than a contrived one:
+    // fixture mode with `fixtures/` not where the deployment put it, which is
+    // the one Phase 1 unknown only a deploy can settle (VERCEL-ALL-IN-SCOPE §9).
+    //
+    // Redis is what gets asserted because it is the only thing actually dialled
+    // by then — the pg pool is lazy and has yet to open a socket. Standing in
+    // for it with a bare TCP server is what makes "did that connection go away?"
+    // answerable at all; `resume()` is not optional, because a paused socket
+    // never emits `end`, so the server would keep counting a connection the
+    // client had already closed and the assertion would pass without running.
+    const open: Socket[] = [];
+    const sockets = createServer((socket) => {
+      open.push(socket);
+      socket.resume();
+    });
+    await new Promise<void>((resolve) => sockets.listen(0, "127.0.0.1", resolve));
+    const port = (sockets.address() as { port: number }).port;
+
+    try {
+      const doomed = loadConfig({
+        NODE_ENV: "test",
+        LOG_LEVEL: "fatal",
+        DATABASE_URL: config.DATABASE_URL,
+        REDIS_URL: `redis://127.0.0.1:${port}`,
+        CURRENTS_MODE: "fixture",
+        CURRENTS_USER_AGENT: "zammy-tests/0.1",
+        FIXTURES_DIR: `${FIXTURES_DIR}does-not-exist/`,
+      });
+
+      await expect(buildApp(doomed, { consumer: false })).rejects.toThrow(/No fixtures loaded/);
+      await expect.poll(() => connectionCount(sockets), { timeout: 5_000 }).toBe(0);
+    } finally {
+      // Before close(), which otherwise waits out a leak rather than reporting
+      // it — a regression here should fail the assertion, not hang the suite.
+      for (const socket of open) socket.destroy();
+      await new Promise((resolve) => sockets.close(resolve));
+    }
+  }, 20_000);
+
 });
+
+function connectionCount(server: Server): Promise<number> {
+  return new Promise((resolve) => server.getConnections((_error, count) => resolve(count)));
+}

@@ -8,6 +8,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@zammy/api':
+        specifier: workspace:*
+        version: link:apps/api
     devDependencies:
       typescript:
         specifier: ^5.7.2

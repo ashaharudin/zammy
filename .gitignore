@@ -31,3 +31,4 @@ deploy/terraform/terraform.tfvars
 # Written by deploy/terraform/retry-capacity.sh
 deploy/terraform/retry-capacity.log
 deploy/terraform/.retry-capacity.lock/
+.vercel

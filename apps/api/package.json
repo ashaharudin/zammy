@@ -3,6 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "//exports": "An app, not a library — but the Vercel function entrypoints at the repo root (api/) have to import it, and Vercel resolves them as ordinary node specifiers. Only what an entrypoint needs is exposed.",
+  "exports": {
+    "./vercel": { "types": "./dist/vercel.d.ts", "default": "./dist/vercel.js" },
+    "./server": { "types": "./dist/server.d.ts", "default": "./dist/server.js" }
+  },
   "scripts": {
     "build": "tsc -b",
     "dev": "tsc -b && { tsc -b --watch --preserveWatchOutput & node --watch --env-file-if-exists=../../.env dist/index.js; }",

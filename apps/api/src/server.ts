@@ -52,7 +52,33 @@ export interface App {
   pool: Pool;
   redis: Redis;
   currents: CurrentsClient;
+  /**
+   * Whether THIS instance started the §9.1 consumer. Reported rather than
+   * assumed, because it is the one thing about a built app that differs by
+   * deployment shape, and "did anything start draining the queue?" is
+   * otherwise unanswerable from the outside.
+   */
+  consumer: boolean;
   close: () => Promise<void>;
+}
+
+export interface BuildAppOptions {
+  /**
+   * Run the §9.1 ingest consumer inside this process, alongside the HTTP
+   * surface. True by default, because that is what a persistent process wants:
+   * Compose and the container image run one process that both serves and
+   * drains, and ARCHITECTURE §4.1 leans on that (the drain path is exercised
+   * on every `docker compose down`).
+   *
+   * A serverless request instance must pass `false`. It still constructs the
+   * `IngestQueue` — the read path enqueues (timeline-service, trending-service)
+   * and the trending locks are scoped by the queue's `name` — but a BullMQ
+   * Worker in a function that suspends between requests would poll Redis from a
+   * frozen instance and hold jobs it may never be woken to finish
+   * (VERCEL-ALL-IN-SCOPE §3.1). There the consumer is its own deployable, a
+   * push-mode Vercel Queues function behind the same interface (§3.2).
+   */
+  consumer?: boolean;
 }
 
 /**
@@ -67,7 +93,10 @@ export function trustedProxyOption(hops: number): number | false {
   return hops > 0 ? hops : false;
 }
 
-export async function buildApp(config: Config): Promise<App> {
+export async function buildApp(
+  config: Config,
+  options: BuildAppOptions = {},
+): Promise<App> {
   const app = Fastify({
     logger: {
       level: config.LOG_LEVEL,
@@ -106,134 +135,180 @@ export async function buildApp(config: Config): Promise<App> {
     app.log.warn({ err: error }, "redis unavailable at boot; serving degraded");
   });
 
-  await app.register(cors, { origin: config.CORS_ORIGIN.split(",").map((o) => o.trim()) });
+  // Everything below this line can throw — `createNewsClient` reads the fixture
+  // corpus off disk and refuses an empty one — and until now a throw cost
+  // nothing, because the only caller was `index.ts` and it exits the process.
+  // `vercel.ts` instead retries the boot on the NEXT request, so anything this
+  // attempt left open leaks once per request for the life of an instance that
+  // lives for hours. Not hypothetical: the failure in question is `fixtures/`
+  // landing somewhere the function cannot read it, which is the one thing about
+  // Phase 1 that only a deploy can settle (VERCEL-ALL-IN-SCOPE §9).
+  const abandon: Array<() => unknown> = [
+    // Forceful, not `quit()`: a boot that failed is not draining anything, and
+    // `quit()` on a client that never finished connecting can reject or hang.
+    () => redis.disconnect(),
+    () => pool.end(),
+  ];
+  try {
+    await app.register(cors, { origin: config.CORS_ORIGIN.split(",").map((o) => o.trim()) });
 
-  // Per-IP limit on /api/v1/* only (§9.4, §12): novel-fingerprint spam can
-  // mint topics and spend quota, but the ALB health check and the Prometheus
-  // scrape must never 429. Counters are in-process on purpose — per-task
-  // limiting is bounded enough, and a Redis-held counter would add a shared
-  // failure mode to the request path for precision nobody needs.
-  await app.register(rateLimit, {
-    max: config.RATE_LIMIT_PER_MINUTE,
-    timeWindow: 60_000,
-    allowList: (request) => !request.url.startsWith("/api/"),
-  });
+    // Per-IP limit on /api/v1/* only (§9.4, §12): novel-fingerprint spam can
+    // mint topics and spend quota, but the ALB health check and the Prometheus
+    // scrape must never 429. Counters are in-process on purpose — per-task
+    // limiting is bounded enough, and a Redis-held counter would add a shared
+    // failure mode to the request path for precision nobody needs.
+    await app.register(rateLimit, {
+      max: config.RATE_LIMIT_PER_MINUTE,
+      timeWindow: 60_000,
+      allowList: (request) => !request.url.startsWith("/api/"),
+    });
 
-  // One interface for both modes AND for however many providers are configured:
-  // nothing below this line knows or cares whether articles come from the live
-  // API or from recorded payloads, nor which upstream answered
-  // (ARCHITECTURE 4.1 — a code path that branches on environment is a code path
-  // local development stops predicting; ARCHITECTURE 5.6 for the provider seam).
-  const currents = await createNewsClient(config, { logger: app.log });
-  app.decorate("currents", currents);
-  if (config.CURRENTS_MODE === "fixture") {
-    app.log.info(
-      { dir: config.FIXTURES_DIR },
-      "CURRENTS_MODE=fixture — serving recorded payloads, no upstream calls, no quota spend",
-    );
-  }
-  if (config.GNEWS_ENABLED) {
-    app.log.info(
-      { mode: config.GNEWS_MODE, dailyLimit: config.GNEWS_DAILY_CALL_LIMIT },
-      "GNEWS_ENABLED — fanning out to a second provider as best-effort breadth; " +
-        "Currents remains coverage-bearing",
-    );
-  }
+    // One interface for both modes AND for however many providers are configured:
+    // nothing below this line knows or cares whether articles come from the live
+    // API or from recorded payloads, nor which upstream answered
+    // (ARCHITECTURE 4.1 — a code path that branches on environment is a code path
+    // local development stops predicting; ARCHITECTURE 5.6 for the provider seam).
+    const currents = await createNewsClient(config, { logger: app.log });
+    abandon.push(() => currents.close());
+    app.decorate("currents", currents);
+    if (config.CURRENTS_MODE === "fixture") {
+      app.log.info(
+        { dir: config.FIXTURES_DIR },
+        "CURRENTS_MODE=fixture — serving recorded payloads, no upstream calls, no quota spend",
+      );
+    }
+    if (config.GNEWS_ENABLED) {
+      app.log.info(
+        { mode: config.GNEWS_MODE, dailyLimit: config.GNEWS_DAILY_CALL_LIMIT },
+        "GNEWS_ENABLED — fanning out to a second provider as best-effort breadth; " +
+          "Currents remains coverage-bearing",
+      );
+    }
 
-  registerHealthRoutes(app, { pool, redis, currents });
+    registerHealthRoutes(app, { pool, redis, currents });
 
-  // §12 observability: everything the planner counts, scraped from one place.
-  const metrics = new Metrics({ quota: () => currents.quota() });
-  registerMetricsRoute(app, metrics);
+    // §12 observability: everything the planner counts, scraped from one place.
+    const metrics = new Metrics({ quota: () => currents.quota() });
+    registerMetricsRoute(app, metrics);
 
-  // The query service (§6) and its in-process job consumer (§9.1). The
-  // consumer shares this process — Fargate keeps CPU allocated for the life
-  // of a task, so no separate deployable is needed (§4.1).
-  const db = createDb(pool);
-  const queue = new IngestQueue(config.REDIS_URL);
+    // The query service (§6) and its job consumer (§9.1). WHERE the consumer runs
+    // is a deployment property, not a code one: a persistent process shares it
+    // with the HTTP surface (a container keeps CPU allocated for the life of the
+    // task, so no separate deployable is needed, §4.1), while a request-scoped
+    // function must not start one at all. Either way the queue itself is built
+    // here, because the read path publishes to it.
+    const consumer = options.consumer ?? true;
+    const db = createDb(pool);
+    const queue = new IngestQueue(config.REDIS_URL);
+    abandon.push(() => queue.close());
 
-  // The labeler, built once for this process (ADR-0011's Labels). What is NOT
-  // supported is a storyline that gets no label until an operator remembers to
-  // run the CLI, which is what this wiring ends.
-  //
-  // Once shared with the nightly chores; they now run in their own process and
-  // build their own client from the same factory, so one pacer no longer covers
-  // both. See `wiring.ts` for what that costs on a shared key.
-  const labeler = createLabeler(config, app.log);
+    // The labeler, built once for this process (ADR-0011's Labels). What is NOT
+    // supported is a storyline that gets no label until an operator remembers to
+    // run the CLI, which is what this wiring ends.
+    //
+    // Once shared with the nightly chores; they now run in their own process and
+    // build their own client from the same factory, so one pacer no longer covers
+    // both. See `wiring.ts` for what that costs on a shared key.
+    const labeler = createLabeler(config, app.log);
 
-  const deps: TimelineDeps = {
-    db,
-    redis,
-    currents,
-    queue,
-    metrics,
-    labeler,
-    config: {
-      syncFillDeadlineMs: config.SYNC_FILL_DEADLINE_MS,
-      maxSyncUpstreamCalls: config.MAX_SYNC_UPSTREAM_CALLS,
-      lookbackDays: config.CURRENTS_MAX_LOOKBACK_DAYS,
-      minSegmentMs: MIN_SEGMENT_MS,
-      perTopicDailyCallCap: config.PER_TOPIC_DAILY_CALL_CAP,
-      grouping: {
-        enabled: config.GROUPING_ENABLED,
-        threshold: config.GROUPING_SIMILARITY_THRESHOLD,
-        timeZone: config.APP_TIMEZONE,
-        // Shared with the nightly sweeps by construction, not by copying: they
-        // exist to re-offer the linker what it declined, and an offer judged at
-        // a different bar is a different decision (`wiring.ts`).
-        linker: createLinkerConfig(config),
-        // The collision-triggered label merge: the nightly repair, run by the
-        // ingest tail at the moment a label write creates the collision. The
-        // rules are the chore's own knobs — a merge decided at a different
-        // grace or valve than the nightly pass would be a different decision.
-        labelMerge: {
-          rules: createLabelMergeRules(config),
-          threshold: config.STORYLINE_LABEL_MERGE_TRIGGER,
+    const deps: TimelineDeps = {
+      db,
+      redis,
+      currents,
+      queue,
+      metrics,
+      labeler,
+      config: {
+        syncFillDeadlineMs: config.SYNC_FILL_DEADLINE_MS,
+        maxSyncUpstreamCalls: config.MAX_SYNC_UPSTREAM_CALLS,
+        lookbackDays: config.CURRENTS_MAX_LOOKBACK_DAYS,
+        minSegmentMs: MIN_SEGMENT_MS,
+        perTopicDailyCallCap: config.PER_TOPIC_DAILY_CALL_CAP,
+        grouping: {
+          enabled: config.GROUPING_ENABLED,
+          threshold: config.GROUPING_SIMILARITY_THRESHOLD,
+          timeZone: config.APP_TIMEZONE,
+          // Shared with the nightly sweeps by construction, not by copying: they
+          // exist to re-offer the linker what it declined, and an offer judged at
+          // a different bar is a different decision (`wiring.ts`).
+          linker: createLinkerConfig(config),
+          // The collision-triggered label merge: the nightly repair, run by the
+          // ingest tail at the moment a label write creates the collision. The
+          // rules are the chore's own knobs — a merge decided at a different
+          // grace or valve than the nightly pass would be a different decision.
+          labelMerge: {
+            rules: createLabelMergeRules(config),
+            threshold: config.STORYLINE_LABEL_MERGE_TRIGGER,
+          },
+          // The membership-change re-offer (`storyline-rejoin-trigger.ts`), on the
+          // same tail. Off by default — the knob's own note says why, and it is
+          // about the candidate cap rather than about the trigger.
+          reofferJoinedGroups: config.STORYLINE_REOFFER_JOINED_GROUPS,
         },
-        // The membership-change re-offer (`storyline-rejoin-trigger.ts`), on the
-        // same tail. Off by default — the knob's own note says why, and it is
-        // about the candidate cap rather than about the trigger.
-        reofferJoinedGroups: config.STORYLINE_REOFFER_JOINED_GROUPS,
       },
-    },
-    now: () => new Date(),
-    log: app.log,
-  };
-  const trendingDeps: TrendingDeps = {
-    ...deps,
-    trending: {
-      sampleCategories: SAMPLE_CATEGORIES,
-      samplePages: config.SAMPLE_PAGES,
-      sampleRefreshMinutes: config.SAMPLE_REFRESH_MINUTES,
-      windowHours: config.TREND_WINDOW_HOURS,
-      halfLifeHours: config.TREND_HALF_LIFE_HOURS,
-    },
-  };
+      now: () => new Date(),
+      log: app.log,
+    };
+    const trendingDeps: TrendingDeps = {
+      ...deps,
+      trending: {
+        sampleCategories: SAMPLE_CATEGORIES,
+        samplePages: config.SAMPLE_PAGES,
+        sampleRefreshMinutes: config.SAMPLE_REFRESH_MINUTES,
+        windowHours: config.TREND_WINDOW_HOURS,
+        halfLifeHours: config.TREND_HALF_LIFE_HOURS,
+      },
+    };
 
-  queue.startConsumer((job) =>
-    job.kind === "sample" ? processSampleJob(trendingDeps, job) : processSegmentJob(deps, job),
-  );
-  await registerQueryRoutes(app, { deps, defaultLanguage: config.DEFAULT_LANGUAGE });
-  registerTrendingRoute(app, { deps: trendingDeps });
+    if (consumer) {
+      queue.startConsumer((job) =>
+        job.kind === "sample" ? processSampleJob(trendingDeps, job) : processSegmentJob(deps, job),
+      );
+    } else {
+      // Worth a line in the log, because the symptom of getting this wrong is
+      // silent: reads still succeed, they just report `degraded: "ingest_timeout"`
+      // forever while the pending set grows and nothing drains it.
+      app.log.info(
+        "consumer disabled for this instance — serving requests only; enqueued ingest waits for whatever drains the queue",
+      );
+    }
+    await registerQueryRoutes(app, { deps, defaultLanguage: config.DEFAULT_LANGUAGE });
+    registerTrendingRoute(app, { deps: trendingDeps });
 
-  // The nightly chores (§9.1) do NOT run here. They are one-shot invocations of
-  // `chores-cli.ts` on the platform's scheduler — retention at 03:00 UTC, the
-  // storyline pass at 04:00 UTC. This process therefore does not have to be
-  // awake for them, and equally cannot make them happen: if nothing schedules
-  // the runner, the retention report and the storyline lifecycle passes simply
-  // never run, and no log line here will say so. See `chores.ts`.
+    // The nightly chores (§9.1) do NOT run here. They are one-shot invocations of
+    // `chores-cli.ts` on the platform's scheduler — retention at 03:00 UTC, the
+    // storyline pass at 04:00 UTC. This process therefore does not have to be
+    // awake for them, and equally cannot make them happen: if nothing schedules
+    // the runner, the retention report and the storyline lifecycle passes simply
+    // never run, and no log line here will say so. See `chores.ts`.
 
-  app.log.info({ config: redactConfig(config) }, "configuration loaded");
+    app.log.info({ config: redactConfig(config) }, "configuration loaded");
 
-  const close = async (): Promise<void> => {
-    await app.close();
-    // The queue first (it holds Redis connections and may be mid-job), then
-    // the stores. db.destroy() ends the shared pool — nothing ends it twice.
-    await queue.close().catch(() => {});
-    await Promise.allSettled([db.destroy(), redis.quit(), currents.close()]);
-  };
+    const close = async (): Promise<void> => {
+      await app.close();
+      // The queue first (it holds Redis connections and may be mid-job), then
+      // the stores.
+      await queue.close().catch(() => {});
+      await Promise.allSettled([db.destroy(), redis.quit(), currents.close()]);
+      // db.destroy() ends the shared pool ONLY if Kysely ever initialized its
+      // driver, which it does lazily on the first query — so an instance that
+      // served nothing but `/healthz` and `/readyz` used to finish shutdown with
+      // its pool and that pool's idle connections still open. Measured: one
+      // backend surviving `close()`, last query `SELECT 1`, which is /readyz's.
+      // Ending it here makes shutdown mean the same thing on every path. The
+      // guard rather than a bare call because pg REJECTS a second `end()`, and
+      // the common case is that Kysely already did it — and it reads `ending`
+      // rather than `ended` because that is the flag pg's own guard tests:
+      // `ended` only flips once the drain finishes, so a pool still draining
+      // would pass an `ended` check and take the rejection.
+      if (!pool.ending) await pool.end();
+    };
 
-  return { app, pool, redis, currents, close };
+    return { app, pool, redis, currents, consumer, close };
+  } catch (error) {
+    await Promise.allSettled(abandon.reverse().map((release) => release()));
+    throw error;
+  }
 }
 
 declare module "fastify" {

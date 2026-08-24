@@ -3,8 +3,9 @@
 What [VERCEL-ALL-IN-SCOPE.md](VERCEL-ALL-IN-SCOPE.md) §9 Phase 0 asked for, measured on 2026-08-22
 against the dev corpus (31,308 articles, 26,010 storylines, 15 corpus-days, 39 days of published
 span). Every number here is a measurement, not an estimate; where something is arithmetic on top of
-a measurement it says so. Two of the five Phase 0 items are **not** answered here because they need
-a Vercel account — see §6.
+a measurement it says so. Two of the five Phase 0 items needed a Vercel account and were run a day
+later, on 2026-08-22–23 — §6 says what they were and **§8 is what they returned**. With those,
+Phase 0 is complete.
 
 **The headline is not the one the scope doc expected.** It priced the nightly label pass as the
 thing Hobby's 300-second ceiling bounds, and named `--max-labels` as the deployment parameter that
@@ -800,10 +801,12 @@ CONCURRENTLY` recovers it, non-blocking:
 the difference between the tripwire in §4 reading 1,214 articles/day and 1,485. It belongs in the
 retention chore, and it is the second piece of unscoped Phase 4 work this spike turned up.
 
-## 6. What still needs a Vercel account
+## 6. What needed a Vercel account (answered in §8)
 
-Two of the five Phase 0 items cannot be done from here. There is no Vercel CLI installed and no
-authenticated session, and both items are outward-facing actions on the user's account:
+Two of the five Phase 0 items could not be done from here on 2026-08-22. There was no Vercel CLI
+installed and no authenticated session, and both items are outward-facing actions on the user's
+account. **Both have since been run — §8 has the results; this section is what they were asking
+and why, kept because the reasoning is what makes the answers legible:**
 
 1. **Prove the project shape** (§1.1 — Vite preset + an `api/` directory + a `queue/v2beta` trigger
    firing). The trigger syntax is confirmed from the docs and is a `functions` entry keyed by the
@@ -899,6 +902,32 @@ Two caveats, since one measurement is not a distribution: this is a single cold 
 and `warm` in that JSON is broken — the handler stamps it before Fastify sees the request, so it
 always reads `true`. The two `buildMs` values agreeing at 71 is what identifies the second request as
 the same instance.
+
+---
+
+## 8. The deployment half: all four questions, answered on the platform
+
+What §6 could not run, run on `zammy-vercel-spike` (`iad1`) across 2026-08-22 and 2026-08-23. The
+scaffold and the meaning of each answer are in [deploy/vercel-spike/](../deploy/vercel-spike/);
+this is what came back.
+
+| Question | Answer |
+|---|---|
+| Does the Vite preset build the SPA **and** the `api/` directory? | **Yes.** Four functions built alongside the static output: `api/index`, `api/chores`, `api/enqueue`, `api/queues/ingest`. The two-project fallback (§1.1) is not needed. |
+| Does Fastify see the real path? | **Yes — through a rewrite, not the filename.** `api/[...path].ts` is parsed as one segment literally named `...path`, so anything deeper than `/api/v1` returned Vercel's own `NOT_FOUND`. With a rewrite, `/api/v1/echo/deep/path?q=1` arrives at Fastify verbatim. Use an unnamed capture: a named one is appended to the query string. |
+| Do the out-of-`/api` probes work? | **Yes.** `/healthz` rewritten to `/api/index` arrives as `/healthz`, so one registration serves it. |
+| Does a `queue/v2beta` trigger fire on a bare `api/` function? | **Yes** — the load-bearing answer. Every publish produced a `"consumer fired"` line, on the *deployment* host while producer calls came in on the alias (deployment partitioning, observed rather than read). A poisoned message was redelivered at +0, +10, +70, +130 s and then acknowledged away — matching the SDK's `deliveryCount > 3` rule but **not** its `afterSeconds: 5`, so treat retry delay as a hint. |
+| Is Queues available on Hobby? | **Yes.** `/v2/user` reports `billing.plan: "hobby"` for the account the spike ran on, and no `UnauthorizedError` appeared: the topic was created, published to and consumed. The *allowance* remains unpublished (scope §8) — the risk is now metering, not feasibility. |
+| Does dedup work? | **Delivery is deduplicated; publish is not.** Two `send`s with the same `idempotencyKey` returned two different `messageId`s but produced **one** consumer invocation. That is the property §3.2 needs, since BullMQ's `jobId` also prevents duplicate *processing*. Worth one deliberate re-test before Phase 2 relies on it. |
+| Does 202 + `waitUntil` outlive the response? | **Yes**, and the 202 is fast enough to matter: **669 ms cold, 225 ms warm**. The background half logged `"chore finished after the response"` with `actualMs` matching the requested sleep exactly. Against `pg_net`'s 2 s default this is thin once a real `buildApp` is behind it — which is why §3.3 sets `timeout_milliseconds` ≥ 10 000. |
+| Does the cron entry validate? | **Yes.** `vercel crons ls` lists `/api/chores?pass=spike` at `0 4 * * *`. Supabase Cron is still the intended driver on the free tier (minute precision against Hobby's once-a-day ±59 min); this only proves the entry is well-formed. |
+
+Two things this does **not** answer, and neither is a Phase 0 question: whether the spike's numbers
+transfer to a function carrying `pg`, `ioredis` and the news client (§7.1 says explicitly that they
+do not — 947 ms is a floor plus almost nothing), and whether `includeFiles` places `fixtures/` where
+a preview's fixture mode reads it. The second is a Phase 1 deploy-time check: a local `vercel build`
+records the fixtures in the function's `filePathMap` but does not copy them into `.vercel/output`,
+so the placement is only observable on a real deployment.
 
 ---
 

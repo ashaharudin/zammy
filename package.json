@@ -30,6 +30,10 @@
     "infra:down": "docker compose down",
     "infra:reset": "docker compose down -v"
   },
+  "//dependencies": "The Vercel functions in api/ live at the repo root because that is where Vercel looks for them, so the api app has to be resolvable from here. Nothing else at the root imports anything.",
+  "dependencies": {
+    "@zammy/api": "workspace:*"
+  },
   "devDependencies": {
     "typescript": "^5.7.2",
     "vitest": "^3.0.5"

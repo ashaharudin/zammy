@@ -8,7 +8,10 @@ decisions from the adoption review are folded in below. Every codebase claim car
 from a sweep of `apps/api`, `packages/news-client` and the web client (re-verified 2026-08-22);
 every platform claim carries a source at the bottom. Scoped 2026-08-21. **Phase 0 ran on
 2026-08-22 and moved three of the numbers below — see
-[VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md), and §3.3 and §9 for what it changed.**
+[VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md), and §3.3 and §9 for what it changed.
+Its deployment half finished on 2026-08-23 (findings §8), which closed the last two open questions,
+and **Phase 1's code has landed** — [deploy/vercel/](../deploy/vercel/) is the operator's half of
+it.**
 
 **Bottom line: 7–12 focused days, and one piece of it no delivery phase carried.** Two things
 changed the shape of this since the research doc was written:
@@ -60,7 +63,7 @@ the how). One naming rule up front: **"queue topic" means Vercel Queues' topic**
 | Unit | Today (Compose) | All-in on Vercel |
 | --- | --- | --- |
 | `web` | Vite dev server | static build, same project, same origin |
-| `api` HTTP surface | Fastify in a container | `api/[...path].ts` → the Fastify app as one Function |
+| `api` HTTP surface | Fastify in a container | `api/index.ts` → the Fastify app as one Function, reached by rewrite (below) |
 | §9.1 consumer | in-process BullMQ worker | `api/queues/ingest.ts`, a **push-mode Vercel Queues consumer** (no public URL) |
 | Nightly chores | `pnpm chores` on a timer | `api/chores.ts`, 202 + `waitUntil`, driven by Vercel Cron or Supabase Cron |
 | Postgres | container | Supabase — transaction pooler for requests, session pooler for migrations/chores (landed) |
@@ -126,10 +129,12 @@ structured as a separable unit"):
   is not only about `startConsumer` — the request entrypoint must still construct the
   `IngestQueue` for its publish side, because the read path enqueues (§3.2's call sites) and the
   trending service scopes Redis keys by the queue's `name`.
-- `api/[...path].ts`: a module-scope `let app: Promise<App>` singleton, `await app.ready()`, then
-  hand the request to `app.server.emit("request", req, res)` — the standard Fastify-on-serverless
-  pattern. Module scope is what makes the pool, the Redis client and the fixture store survive
-  across invocations on a warm instance.
+- `api/index.ts`: a module-scope singleton, `await app.ready()`, then hand the request to
+  `app.server.emit("request", req, res)` — the standard Fastify-on-serverless pattern. Module scope
+  is what makes the pool, the Redis client and the fixture store survive across invocations on a
+  warm instance. (Scoped as `api/[...path].ts`; the spike found that filename is not a catch-all —
+  the routing findings at the end of this section. The real file is `apps/api/src/vercel.ts`, with
+  `api/index.ts` a three-line re-export, because nothing typechecks the repository root.)
 - `apps/api/src/index.ts` stays exactly as it is. It is the Compose and Plan-B entrypoint, and
   `listen()` plus the SIGTERM drain remain correct there. Nothing about local development changes.
 
@@ -237,7 +242,9 @@ wrapper plus one new table:
   own timeout irrelevant to the *pass* — but not to the *request*: `pg_net`'s default timeout is
   **2 seconds**, plausibly shorter than a cold `buildApp` plus TLS, so the cron job sets
   `timeout_milliseconds` ≥ 10 000 explicitly, and "202 returned from cold within pg_net's timeout"
-  is a Phase 4 exit criterion.
+  is a Phase 4 exit criterion. **Measured on the spike: 669 ms cold, 225 ms warm**, for a route with
+  no `buildApp` behind it — so the default 2 s is not comfortably clear of the real one, which
+  carries a ~360 ms local boot on top of a ~550 ms platform floor (findings §7.1, §8).
 - **Every run writes a `chore_runs` row** (pass, started/finished, report summary, quota spend) at
   pass end. This is not optional on Hobby: the route always answers 202, the scheduler never sees
   failure, and logs retain for 1 hour — without a durable record, "did last night's chores run?"
@@ -462,12 +469,14 @@ Two things Phase 0 pinned down about that column:
   around 3 CPU-minutes a night against Hobby's 4 CPU-hours/month, and provisioned memory is
   similarly slack. **Wall clock is the only Hobby ceiling that binds**, which is worth knowing for
   certain before designing around the wrong one (findings §2, §6).
-- **The Queues line is worse than unconfirmed — it is undocumented.** The docs' pricing/limits page
-  lists the five operation types, 4 KiB metering and every service limit, then defers included
-  usage to the plan pages; the Hobby plan's included-usage table has **no Queues row**, while
-  listing Workflows (which is built on Queues) at 50,000 events/month. The Queues docs also carry a
-  "Permissions Required" marker. So whether a Hobby project can create a topic at all is open, and
-  this whole column rests on it (§10, question 2).
+- **The Queues line is available but still unpublished.** Availability is now measured rather than
+  read: the spike account is on the `hobby` plan (`/v2/user` reports `billing.plan: "hobby"`), and
+  on it a topic was created, published to, and consumed — so a Hobby project can do the thing §8's
+  $0 column needs. What remains undocumented is the *allowance*: the pricing page lists the five
+  operation types and 4 KiB metering, then defers included usage to the plan pages, and the Hobby
+  included-usage table still has no Queues row while listing Workflows (built on Queues) at 50,000
+  events/month. So the risk moved from "this may be impossible" to "this may start billing", which
+  is a much smaller one and is watched rather than resolved (§10, question 2).
 
 ---
 
@@ -477,8 +486,8 @@ Each phase ends with something demonstrable; none of them is "and then we cut ov
 
 | Phase | Work | Exit criterion |
 |---|---|---|
-| **0. Spikes** (0.5–1 d) | Prove the project shape (§1.1) on a throwaway deployment: Vite preset + `api/` function + a `queue/v2beta` trigger firing. Measure `buildApp` cold start. Measure `chores storylines` wall-clock at 90 days of corpus, bounded and unbounded. Measure the corpus against Supabase's 500 MB — a **now**-question, since production is seeded from it (Phase 5). Confirm Queues' Hobby allowance in the dashboard (§8). | **The three numbers are measured** ([VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md)): cold start ~360 ms (a fifth of it deleted by §3.2 + §7); `chores storylines` ~3.5 h unbounded, with the **late-candidate sweep at ~506 s the phase that breaks the ceiling**, not the label pass; corpus 190 MB with the 500 MB tripwire at ~1,485 articles/day after a reindex. The deployment half — the queue trigger on a bare `api/` function, and whether Hobby can create a topic at all — is scaffolded and **still to run**: [deploy/vercel-spike/](../deploy/vercel-spike/) |
-| **1. The api as a Function** (1–2 d) | §3.1. Consumer disabled, chores still manual. Preview in fixture mode against the preview data plane (§4). | `/readyz` green, a timeline read served from Supabase through the pooler, `degraded: "ingest_timeout"` on cold topics — the known, temporary gap |
+| **0. Spikes** (0.5–1 d) ✅ | Prove the project shape (§1.1) on a throwaway deployment: Vite preset + `api/` function + a `queue/v2beta` trigger firing. Measure `buildApp` cold start. Measure `chores storylines` wall-clock at 90 days of corpus, bounded and unbounded. Measure the corpus against Supabase's 500 MB — a **now**-question, since production is seeded from it (Phase 5). Confirm Queues' Hobby allowance in the dashboard (§8). | **Done, both halves.** The three numbers ([VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md)): cold start ~360 ms local, 947 ms on the platform of which ~550 ms is container start (§7.1); `chores storylines` ~3.5 h unbounded, with the **late-candidate sweep at ~506 s the phase that breaks the ceiling** — since found to be a linking bug and gated off; corpus 190 MB with the 500 MB tripwire at ~1,485 articles/day after a reindex. The deployment half (findings §8): the Vite preset builds the SPA and the `api/` directory together, the `queue/v2beta` trigger fires on a bare `api/` function **on a Hobby account**, `waitUntil` outlives the 202, and the cron entry validates. The rewrite correction (§3.1) is the one thing it changed structurally. |
+| **1. The api as a Function** (1–2 d) — *code landed 2026-08-23, deploy pending* | §3.1. Consumer disabled, chores still manual. Preview in fixture mode against the preview data plane (§4). | `/readyz` green, a timeline read served from Supabase through the pooler, `degraded: "ingest_timeout"` on cold topics — the known, temporary gap. **Locally proven against the real build output**: `vercel build` traces the pnpm workspace into an 11 MB function, and that bundle serves `/healthz`, `/readyz` (postgres + redis both ok) and a `/api/v1/timeline` read. What is left is the halves only a deploy exercises — Supabase through the pooler, Upstash, and `includeFiles` actually placing `fixtures/` |
 | **2. The queue** (2–3 d) | §3.2 — new `IngestQueue` implementation (all seven members), `api/queues/ingest.ts`, 5-min message TTL, rewritten tests. | A cold topic fills behind the reader; `meta.ingest` drains to zero; a killed consumer redelivers |
 | **3. Quota + limits** (1–2 d) | §3.4 (burst-only, fail-open) and §3.5 (Redis store, fail-open). | The burst ceiling holds with the consumer and the request path both running; the per-IP guard is real; both degrade to in-process when Redis is down |
 | **4. Chores** (1–1.5 d) | §3.3 + Supabase Cron + `chore_runs` + the keep-alive ping, **plus what Phase 0 added**: the `REINDEX CONCURRENTLY` sweep in the retention chore. The late-candidate sweep is gated off (findings §2.6), so this phase no longer carries a deadline problem; if it is ever switched back on, the bound and persisted cursor come back with it. | All scheduled passes run on schedule and write `chore_runs` rows, any pass runs on demand by query param, twice-triggered runs skip on the lock, the 202 arrives from cold within pg_net's configured timeout, **and a gated night reports `skipped: true` rather than a clean `offered: 0`** |
@@ -493,19 +502,20 @@ exposed a runaway, and the pass is now gated off (findings §2.6). The remaining
 
 ## 10. Open questions
 
-Two were settled by the adoption review (§0, ADR-0015) and two by the Phase 0 measurements
-(2026-08-22, [VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md)). Three remain, and only one
-of them is still a question about the plan rather than about a dashboard.
+Two were settled by the adoption review (§0, ADR-0015), two by the Phase 0 measurements
+(2026-08-22) and two more by its deployment half (2026-08-23), all in
+[VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md). **One remains**, and it needs Phase 2
+before it can be asked.
 
-1. **Does the recommended project shape actually work?** (§1.1.) Everything else assumes it. **Still
-   open** — it needs a deployment, and the throwaway is scaffolded at
-   [deploy/vercel-spike/](../deploy/vercel-spike/) with each answer's meaning written down. Be
-   willing to take the two-project layout.
-2. **Is Queues available on Hobby, and at what allowance?** Promoted from a line item in Phase 0 to
-   an open question, because it turns out to be **undocumented rather than merely unchecked**: the
-   Queues pricing page defers included usage to the plan pages, and the Hobby table has no Queues
-   row while listing Workflows (built on Queues) at 50,000 events/month. §8's $0 column rests on
-   this. One curl from the spike answers it.
+1. ~~Does the recommended project shape actually work?~~ **Settled: yes, with one correction.** The
+   Vite preset builds the SPA and the `api/` directory together, the function serves, and the
+   `queue/v2beta` trigger fires on it. The correction is that `api/[...path].ts` is not a catch-all
+   — routing is three rewrites in `vercel.json` (§3.1) — and the two-project fallback was not
+   needed. `TRUSTED_PROXY_HOPS=1`.
+2. ~~Is Queues available on Hobby, and at what allowance?~~ **Available: settled by measurement**
+   on a `hobby`-plan account. **The allowance is still unpublished** (§8), so the residual risk is
+   metering rather than feasibility — worth watching on the first bill after Phase 2, not worth
+   blocking on.
 3. **Does the breadth sample still paint?** §10.1's first-visitor lock elects one enqueuer per stale
    window; with the sample now a queue message, the landing page's first visitor waits for a
    consumer round trip rather than an in-process job. Check against `SAMPLE_REFRESH_MINUTES` before
