@@ -188,24 +188,46 @@ export function parseIngestJob(payload: unknown): IngestJob | null {
 /**
  * Entries older than this are presumed lost to a crashed consumer.
  *
- * **It USED to be the message TTL the Vercel driver publishes with (§0), and is
- * not any more.** Keeping the dedup window and the pending window on the same
- * five minutes was the intent, and it made the two numbers agree — but it also
- * pinned the TTL to 300 s, which is the redelivery lease, so a failed job was
- * deleted before it could come back and no hosted retry ever happened
- * (VERCEL-ALL-IN-SCOPE §10 question 0). The driver now derives its own TTL from
- * the measured lease; see `INGEST_RETENTION_SECONDS` in
- * `ingest-queue-vercel.ts`.
+ * **It is no longer the message TTL the Vercel driver publishes with (§0) — it
+ * is the same fifteen minutes as that TTL, arrived at from the other end.** §0
+ * derived the TTL from this window, which was backwards: this window knows
+ * nothing about the platform, so pinning the TTL to it pinned the TTL to 300 s,
+ * which is exactly the redelivery lease. A failed job was deleted five seconds
+ * before it could come back and no hosted retry ever happened
+ * (VERCEL-ALL-IN-SCOPE §10 question 0). Both numbers now descend from the
+ * platform's measured retry budget instead: the driver derives
+ * `INGEST_RETENTION_SECONDS` from the observed lease (`ingest-queue-vercel.ts`),
+ * and this window is held at that value.
  *
- * The consequence to hold onto is that **this window is now SHORTER than the
- * retry budget it used to bound.** The stale prune fires at 5 minutes and the
- * second delivery does not arrive until 5 minutes and 5 seconds, so a pending
- * entry can age out while the queue still intends to retry the job. That
- * under-reports `meta.ingest` rather than over-reporting it — the client stops
- * polling early and the fill still lands — but the two clocks are no longer the
- * same clock, and aligning them is unbuilt.
+ * **The invariant is that the ledger outlives the message:**
+ * `STALE_PENDING_MS >= INGEST_RETENTION_SECONDS * 1000`. It cannot be written as
+ * that expression — the driver imports this file, not the reverse — so
+ * `ingest-queue-vercel.test.ts` is what holds the two together.
+ *
+ * At five minutes the invariant was violated, and the cost was not the one the
+ * fail-open story would suggest. The prune fired at 300 s with the second
+ * delivery still 5 s away, and the web client had stopped polling 240 s earlier
+ * (`INGEST_POLL_MAX`, ~60 s), so no spinner was ever cut short. What saw it was
+ * `timeline-service`'s cache gate, which writes only a `complete` page: a pruned
+ * count reads complete, so an incomplete page was cached as settled — for up to
+ * 24 hours on the historical freshness tier.
+ *
+ * So this constant errs in the OPPOSITE direction to the rest of the Redis
+ * degradation story (§3.4's quota governor, §3.5's rate limit, and
+ * `VercelIngestQueue.ledger`, which all fail open), and deliberately.
+ * Over-reporting can only suppress a cache write and hold `in_progress` longer;
+ * under-reporting persists a page with a hole in it. The price is that a
+ * genuinely crashed consumer holds a topic at `in_progress` for fifteen minutes
+ * rather than five — latency and quota spent on never caching a lie.
+ *
+ * Shared with the BullMQ driver, whose retry budget is ~600 ms (`attempts: 3`,
+ * exponential from 200 ms), so fifteen minutes is far past anything it needs.
+ * Left shared anyway: under that driver this window is pure crashed-consumer GC,
+ * and what a crashed consumer costs is a function of deploy-recycle time, the
+ * same wall clock under both transports. A per-driver window is the alternative,
+ * and it buys a faster local-dev recovery and nothing else.
  */
-export const STALE_PENDING_MS = 5 * 60 * 1000;
+export const STALE_PENDING_MS = 15 * 60 * 1000;
 
 /**
  * The transport-independent surface the read path and the consumer share.
@@ -314,8 +336,11 @@ export class PendingSet {
 
   /**
    * Entries older than STALE_PENDING_MS are pruned as crashed-consumer residue,
-   * so a lost decrement degrades to "in_progress for five minutes", never to a
-   * topic that reads as perpetually warming.
+   * so a lost decrement degrades to "in_progress for fifteen minutes", never to
+   * a topic that reads as perpetually warming. Fifteen rather than five because
+   * the window has to outlive the hosted retry budget: a prune that beats a
+   * redelivery returns 0 for work that is still owed, and a 0 here is what lets
+   * `timeline-service` cache an unfinished page as settled.
    */
   async count(pendingId: string): Promise<number> {
     const key = this.key(pendingId);
@@ -332,11 +357,18 @@ export class PendingSet {
    * reason it is only possible for some topics, so the asymmetry is worth
    * stating: `count` deletes anything past `STALE_PENDING_MS` as crashed-
    * consumer residue, and it runs on every `meta.ingest` read. A topic with
-   * traffic therefore erases its own ledger within five minutes of a read —
+   * traffic therefore erases its own ledger within fifteen minutes of a read —
    * which is fine, because that is exactly the topic whose next reader re-plans
    * the gap immediately (§6.3). A topic with no traffic never calls `count`, so
    * its entries persist here indefinitely, and that is the topic the drain is
    * for: nothing else is coming to notice.
+   *
+   * Since `STALE_PENDING_MS` was raised to match the message TTL, that prune
+   * boundary and `DRAIN_MIN_AGE_MS` are the same fifteen minutes — so a read
+   * topic erases an entry at the very moment the drain becomes willing to touch
+   * it. That is the existing blindness restated, not a new one: the drain's
+   * floor has always been the TTL, and a topic being read is a topic the drain
+   * was never the recovery for.
    *
    * `SCAN`, not `KEYS`: `purge` uses `KEYS` because it runs in tests against a
    * handful of keys, and this runs in production against however many topics

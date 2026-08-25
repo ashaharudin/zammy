@@ -107,15 +107,17 @@ consequences:
   it in `vercel.json`, which is why there is no auth on it and none is missing. The topic name in
   that trigger (`ingest`) must match the queue's name, because that name also scopes the Redis
   pending set and the trending sample lock.
-- **`experimentalTriggers` is beta, and its timings move under you.** Delivery and redelivery both
-  work, but the redelivery lease grew 30x in three days once already and silently broke retries when
-  it did (see below). The pending set is still the ledger of what is owed (`meta.ingest`), which is
-  what keeps a regression here a recoverable state rather than a data-loss event.
-- **The message TTL is 900 s (`INGEST_RETENTION_SECONDS`), and it deliberately no longer matches the
-  5-minute pending window.** Those two being equal is precisely the bug that stopped redelivery, so
-  do not "tidy" them back together. A deploy mid-flight leaves the old deployment draining its own
-  messages, because push-mode topics are partitioned by deployment id — 15 minutes now bounds how
-  long that lasts.
+- **`experimentalTriggers` is beta, and redelivery depends on a platform number we only measured.**
+  Delivery and redelivery both work as of 2026-08-25, but the retry latency is server-assigned and
+  has already moved once — 30× in three days, which silently broke retries when it did (see below).
+  The pending set is the ledger of what is owed (`meta.ingest`), which is what keeps a regression
+  here a recoverable state rather than a data-loss event.
+- **The message TTL is 900 s, and the pending window matches it.** A deploy mid-flight leaves the
+  old deployment draining its own messages, because push-mode topics are partitioned by deployment
+  id; fifteen minutes bounds how long that lasts. Both numbers descend from the measured 300 s
+  redelivery lease — the TTL is 3× it, the pending window is held at the TTL so the ledger outlives
+  the message. **Do not re-derive either from the other**: the TTL being pinned to the pending
+  window is exactly the bug that stopped redelivery.
 
 Verifying it (done 2026-08-25, current deployment `zammy-k2y801sfm`): read a cold topic and watch
 `meta.ingest.pendingJobs` fall to zero. **Pick a topic that then goes quiet.** A topic you keep
@@ -151,10 +153,11 @@ What that means when you are watching a deploy drain:
   wait out the lease before concluding anything. The 300 s lease is server-assigned and cannot be shortened from our side:
   `retryAfterSeconds` in `vercel.json` is measured inert, and the SDK's `visibilityTimeoutSeconds`
   only governs lease extension.
-- **`meta.ingest` can go quiet while a retry is still owed.** The pending set's stale prune is 5
-  minutes and attempt 2 lands at 5 minutes 5 seconds, so the ledger stops reporting a job the queue
-  is still going to retry. It under-reports rather than over-reports — the client stops polling
-  early, the fill still lands — but do not read an empty `meta.ingest` as "nothing outstanding".
+- **`meta.ingest` stays noisy for the whole retry, on purpose.** The stale prune was 5 minutes
+  against an attempt 2 that lands at 5 minutes 5 seconds, so the ledger used to stop reporting a job
+  the queue still intended to retry — and a topic that reads `complete` is a topic the API caches
+  mid-fill. The prune is now 15 minutes, past the whole ~610 s budget. The visible cost is the other
+  way round: a topic whose consumer genuinely died sits at `in_progress` for 15 minutes.
 - **A failed job cannot be re-enqueued for 15 minutes.** The TTL is also the dedup window, so the
   same content key is deduplicated for the full 900 s. A job that exhausted its three attempts is
   not re-enqueueable until then; the gap it named is re-planned by the next reader after that.
@@ -180,7 +183,7 @@ line as `ingest drain complete`. Operating notes:
 - **`INGEST_QUEUE_DRIVER` must be `vercel`** or the boot refuses with a listed reason. The age floor
   is derived from the hosted driver's retry budget and means nothing under BullMQ.
 - **It will usually report `scanned: 0`, and that is healthy.** It deliberately ignores anything
-  younger than 900 s, and a topic with traffic prunes its own ledger within five minutes of a read.
+  younger than 900 s, and a topic with traffic prunes its own ledger 900 s after a read.
   Work sitting there is work on a topic nobody has read in fifteen minutes.
 - **`truncated: true`** means a bound stopped the pass with entries left; run it again. `?limit=`
   lowers the 50-job cap for a cautious first run.

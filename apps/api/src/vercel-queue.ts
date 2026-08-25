@@ -100,17 +100,18 @@ export function createMessageHandler(
         // when the visibility lease expires; the 500 is for the platform's
         // request log rather than for the retry, which happens either way.
         //
-        // Note the pending entry is deliberately NOT settled here, and that it
-        // now outlives the retry budget rather than bounding it: the five-minute
-        // stale prune fires while attempt 2 is still owed, so `meta.ingest` can
-        // stop reporting a job the queue is still going to retry. That
-        // under-reports progress (the client stops polling early, the fill still
-        // lands) in the same fail-open direction the rest of this driver takes.
+        // Note the pending entry is deliberately NOT settled here, and that the
+        // stale prune can no longer beat the redelivery: `STALE_PENDING_MS` is
+        // fifteen minutes, past the whole ~610 s budget, so the entry survives
+        // and `meta.ingest` keeps reporting the job the queue still intends to
+        // deliver. It was five minutes until 2026-08-25, which pruned the entry
+        // with attempt 2 only 5 s away — and a topic that then read `complete`
+        // is a topic `timeline-service` caches mid-fill.
         throw error;
       }
       // Out of attempts. Settle first: a job nobody will attempt again is not
       // outstanding work, and leaving it in the pending set would hold the
-      // topic at `in_progress` until the five-minute stale prune caught it.
+      // topic at `in_progress` until the fifteen-minute stale prune caught it.
       // The gap it names is re-planned by the next reader who finds it unfilled
       // — the same recovery BullMQ's `removeOnFail: true` left us.
       await drainable.queue.settle(job);
@@ -215,7 +216,7 @@ const drainable = bootOnce(bootFromEnvironment);
  *
  * **This function's history is worth keeping.** Until 2026-08-25 a failed job
  * here was LOST, and the cause was not the callback shape: the driver published
- * with `retentionSeconds` equal to `STALE_PENDING_MS / 1000` (300 s), so a
+ * with `retentionSeconds` equal to the pending window of the day (300 s), so a
  * message was deleted five seconds before its first redelivery was due and the
  * retry window was exactly zero. Raising the retention is what fixed it
  * (`INGEST_RETENTION_SECONDS`), and nothing in this file had to change —

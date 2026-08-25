@@ -54,7 +54,7 @@ the how). One naming rule up front: **"queue topic" means Vercel Queues' topic**
 | `/metrics` | Deleted, story and all; quota spend lands in `chore_runs`, latency in platform observability | §7 |
 | Chores routing | Scheduled as today (Supabase Cron), **plus** all seven passes addressable by query param | §3.3 |
 | Supabase pause guard | A dedicated daily keep-alive ping through the pooler, independent of chore health | §3.3 |
-| Ingest message TTL | ≈ `STALE_PENDING_MS` (5 min), so the dedup window matches the pending-set semantics | §3.2 |
+| Ingest message TTL | `INGEST_RETENTION_SECONDS` (15 min) — 3 × the measured 300 s redelivery lease, with `STALE_PENDING_MS` raised to match so the ledger outlives the message. §0's "≈ `STALE_PENDING_MS` (5 min)" pinned the TTL to the lease and broke redelivery entirely | §3.2 |
 | Cutover data | Production Supabase is **seeded from the dev corpus** (dump/restore, session pooler) | §9 Phase 5 |
 
 ---
@@ -195,7 +195,7 @@ uses to scope the trending/sample-lock Redis keys. Miss it and trending locks si
 
 | What BullMQ gives us | Vercel Queues equivalent | Note |
 |---|---|---|
-| `jobId` content-dedup ([`ingestJobId`](../apps/api/src/ingest-queue.ts)) | `idempotencyKey` on `send` | Dedup window is the message TTL rather than "the pending window" — so **publish with `retentionSeconds: 300`** (≈ `STALE_PENDING_MS`), not the 24h default, or a failed run's segment cannot be re-enqueued for a day. TTL is per-message (60s–7d). Billed at 2× the operation. |
+| `jobId` content-dedup ([`ingestJobId`](../apps/api/src/ingest-queue.ts)) | `idempotencyKey` on `send` | Dedup window is the message TTL rather than "the pending window", and the TTL also bounds redelivery — so **publish with `retentionSeconds: 900`** (`INGEST_RETENTION_SECONDS`, 3 × the measured lease), not the 24h default and *not* the 300 s §0 chose here: 300 s equalled the lease and closed the retry window to zero. TTL is per-message (60s–7d). Billed at 2× the operation. |
 | `attempts: 3`, exponential backoff from 200 ms | the SDK `retry` callback on `deliveryCount` | Forced exponential backoff after 32 attempts. No DLQ; a poisoned message is acknowledged in the handler. **Retry TIMING is not ours to set.** `retryAfterSeconds` *is* a documented `vercel.json` trigger option (default 60 s) — the earlier "Nitro-only" note here was wrong about that — but it is **measured inert**: a topic declared with `retryAfterSeconds: 20` redelivered at +305 s and +305 s, identical to one that omitted it. The `retry` callback's `afterSeconds` is not honoured for the first redelivery either. What governs it is the visibility lease (next row). |
 | At-least-once via BLMOVE + reaper | at-least-once, **delivered by visibility-lease expiry at a measured +305 s** — not by the callback's response code | §4.1 called at-least-once a deployment requirement. It survives, but only if the message TTL outlives the lease: see the redelivery note below, which is what §10 question 0 turned out to be. The SDK's `visibilityTimeoutSeconds` governs lease EXTENSION while the handler runs, not the first lease, which is server-assigned. |
 | Worker concurrency | max concurrency per consumer group | Useful ceiling for a quota-bearing consumer (§3.4). |
@@ -318,13 +318,33 @@ build (2026-08-25), none of which changed the shape above:
     spends its lease being extended rather than expiring, so its attempts are pushed out and the
     budget can be truncated by the TTL instead of by `shouldRetryDelivery`. A job whose every
     attempt burns 300 s gets two, not three.
-  - **`STALE_PENDING_MS` now expires while a retry is still owed.** The stale prune fires at 5
-    minutes and attempt 2 does not arrive until 5 minutes and 5 seconds, so `meta.ingest` can stop
-    reporting a job the queue is still going to retry. The pending set under-reports rather than
-    over-reports — the client stops polling early and the fill still lands — which is the same
-    fail-open direction as the rest of this driver, but it does mean **the ledger and the retry
-    budget are no longer on the same clock.** Aligning them (raising `STALE_PENDING_MS`, or deriving
-    both from one constant) is unbuilt, and is the honest follow-up to this fix.
+  - **`STALE_PENDING_MS` expired while a retry was still owed — resolved the same day by raising it
+    to 900 s.** The stale prune fired at 5 minutes and attempt 2 did not arrive until 5 minutes and
+    5 seconds, so a pending entry was deleted as crashed-consumer residue 5 s before the queue
+    retried the job it named. It is now `INGEST_RETENTION_SECONDS`, so the ledger outlives the
+    message it describes; `ingest-queue-vercel.test.ts` pins the inequality, since `ingest-queue.ts`
+    cannot import the driver to write it as an expression.
+
+    **Two things in the first reading of this were wrong, and both are worth recording**, because
+    together they are what made it look deferrable:
+
+    - *"The client stops polling early."* It does not, and cannot: `INGEST_POLL_MAX` gives the web
+      client 40 polls at 1.5 s, so it stops asking after ~60 s — 240 s before the prune could fire.
+      The poll loop is structurally incapable of observing this race. What observed it was
+      [`timeline-service`](../apps/api/src/timeline-service.ts)'s cache gate, which writes only a
+      `complete` page: a pruned count reads `complete`, so **an incomplete page was cached as
+      settled — up to 24 h on the historical freshness tier.**
+    - *"Under-reporting is the fail-open direction, as in §3.4 and §3.5."* Not here. Those degrade
+      toward *answering with less*. This degrades toward *persisting something untrue*.
+      `pendingJobs > 0` can only suppress a cache write and hold `in_progress` longer — latency and
+      quota, never a wrong answer; `pendingJobs == 0` with work still owed writes the wrong answer
+      into Redis. Over-reporting is the safe side of this particular number, which is why it went up.
+
+    The cost accepted: a genuinely crashed consumer holds a topic at `in_progress` for 15 minutes
+    rather than 5. It stayed one shared constant rather than becoming per-driver — BullMQ's retry
+    budget is ~600 ms, so 15 minutes is far past what that transport needs — because under BullMQ
+    this window is pure crashed-consumer GC, and a crashed consumer costs deploy-recycle time, the
+    same wall clock under both transports.
 
   **What was wrong in the earlier diagnosis, for the record.** The two original measurements were
   right; the inferences drawn from them were not. `changeVisibility` "succeeding" was read as proof
@@ -339,10 +359,29 @@ build (2026-08-25), none of which changed the shape above:
 
 - **The pending set is best-effort under the hosted driver, and could not have been under BullMQ.**
   There, Redis *was* the queue, so a Redis outage failed the enqueue and there was nothing finer to
-  say. Here the message is already durable in the topic and the pending set is a progress hint —
-  so a ledger write that fails is logged and the read still answers. It costs an under-reported
-  `meta.ingest` (the client stops polling early; the fill still lands) instead of a 500, which is
-  the same fail-open direction §3.4 and §3.5 take.
+  say. Here the message is already durable in the topic and the pending set is a progress hint — so
+  a ledger operation that fails is logged and the read still answers, rather than 500ing. That is
+  the same direction §3.4 and §3.5 take.
+
+  **But it applies to reads only, and treating a lost WRITE the same way was a real hazard**
+  (fixed 2026-08-25). An enqueue is two operations that do not fail together: the publish is durable
+  and throws, the ledger `ZADD` is swallowed. A Redis blip lasting one command therefore left work
+  genuinely owed with nothing recording it — and the cost was not the under-reported spinner the
+  comment claimed. `pendingCount` would answer a clean `0` from a **healthy** Redis, so
+  `timeline-service` read `complete` and its cache gate wrote a page missing the segment that job was
+  about to fetch: up to 24 h on the historical freshness tier, with nothing in `degraded` to explain
+  it and the blip long over. Nor did it need a full outage — `server.ts`'s cache client sets
+  `enableOfflineQueue: false` and the queue's client does not, so the two fail independently per
+  command.
+
+  `VercelIngestQueue` now remembers lost ledger writes in memory and adds them back to every count,
+  expiring them on `STALE_PENDING_MS` — the same clock the ZSET member would have been pruned on. It
+  works because the read that caches is usually the read that enqueued (`timeline-service` plans,
+  enqueues, counts and caches in one request), so the instance holding the note is the instance about
+  to make the mistake. **The residual, asserted in the tests rather than left as prose:** a
+  *different* instance serving that read still sees the honest-looking `0`. Nothing local can fix
+  that and there is nowhere durable to put the note, since Redis is what refused it — so that case
+  stays as it was, bounded by `STALE_PENDING_MS`.
 
 **The beta is accepted, and the named fallback is now BUILT (§0, ADR-0015).** The pending set is our
 own at-least-once ledger: if the `queue/v2beta` trigger regresses, `meta.ingest` keeps reporting what
@@ -361,9 +400,12 @@ already past the TTL, so the next `meta.ingest` read would have pruned it as sta
 
 It also turns out to cover exactly the case incidental recovery does not. The stale prune lives
 inside `PendingSet.count` and therefore fires on read, so a topic with traffic erases its own ledger
-within five minutes while a topic with none keeps its entries indefinitely — leaving the drain blind
-to hot topics and sighted for cold ones, which is the right way round, since hot topics are where the
-next reader re-plans the gap immediately. If the trigger is withdrawn entirely, the exits are a cron-driven pull
+within fifteen minutes while a topic with none keeps its entries indefinitely — leaving the drain
+blind to hot topics and sighted for cold ones, which is the right way round, since hot topics are
+where the next reader re-plans the gap immediately. Fifteen, not five: while the prune fired at 5
+minutes it erased a read topic's entries *before* `DRAIN_MIN_AGE_MS` (900 s) would let this route
+touch them, so the drain was blind to hot topics for a second and accidental reason on top of the
+deliberate one. `drain.test.ts` now pins `STALE_PENDING_MS >= DRAIN_MIN_AGE_MS`. If the trigger is withdrawn entirely, the exits are a cron-driven pull
 drain (Pro) or the two-project layout — both worse than what §4.1 asked for, which is the bet the
 ADR records.
 
@@ -372,9 +414,10 @@ evidence rather than as a scare.** The pending set did its job: nothing was lost
 could not re-plan. But the failure was invisible for three days, it was caused by a platform number
 changing rather than by anything in the changelog, and the thing that would have caught it early —
 noticing `deliveryCount` never exceeded 1 — was recorded as a curiosity rather than as an alarm. The
-`STALE_PENDING_MS` misalignment above is the same class of problem: a constant that used to agree
-with a platform behaviour and quietly stopped. That is what moved the manual drain from
-"fallback" to **built** (`POST /api/drain`, §3.2); §10 Q0 records the argument.
+`STALE_PENDING_MS` misalignment above was the same class of problem one layer in: a constant that
+agreed with another constant, which had itself stopped agreeing with the platform. That is what
+moved the manual drain from "fallback" to **built** (`POST /api/drain`, §3.2); §10 Q0 records the
+argument.
 
 ### 3.3 The chores as an HTTP route — ~1–1.5 days
 
@@ -794,12 +837,14 @@ reassigned; new questions take the next free one.
   gave 1 delivery at 300 s and 3 at 900 s — run on the throwaway spike project and then **confirmed
   on a real `zammy` preview deployment**, where arm B delivered at +0 s, +305 s and +610 s and the
   third settled and gave up (§3.2 has both tables). **At-least-once is now met on the primary
-  path**, measured on the deployable rather than inferred from a probe. Three things this leaves
-  open, all recorded in §3.2: the dedup window is now 900 s rather than 300 s; `STALE_PENDING_MS`
-  expires while a retry is still owed, so the pending ledger and the retry budget are no longer on
-  the same clock; and **the fix is a constant chasing a platform number that has already moved
-  once** — which is why the manual drain is now built (`POST /api/drain`, §3.2) rather than held as
-  a fallback.
+  path**, measured on the deployable rather than inferred from a probe.
+
+  Two things this leaves open and one it closed, all recorded in §3.2. Open: the dedup window is now
+  900 s rather than 300 s; and **the fix is a constant chasing a platform number that has already
+  moved once** — which is why the manual drain is now built (`POST /api/drain`, §3.2) rather than
+  held as a fallback. Closed the same day: the TTL change had left `STALE_PENDING_MS` pruning at
+  300 s while attempt 2 landed at 305 s, so the ledger was deleting work the queue still intended to
+  deliver; it was raised to 900 s so the ledger outlives the message.
 
 - **Q1.** ~~Does the recommended project shape actually work?~~ **Settled: yes, with one
   correction.** The Vite preset builds the SPA and the `api/` directory together, the function

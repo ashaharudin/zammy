@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   INGEST_RETENTION_SECONDS,
   MAX_INGEST_DELIVERIES,
@@ -9,6 +9,7 @@ import {
   type PublishMessage,
 } from "./ingest-queue-vercel.js";
 import {
+  PendingSet,
   STALE_PENDING_MS,
   ingestJobId,
   parseIngestJob,
@@ -58,7 +59,12 @@ afterEach(async () => {
 });
 
 function makeQueue(
-  options: { redisUrl?: string; log?: { warn(fields: object, message: string): void } } = {},
+  options: {
+    redisUrl?: string;
+    log?: { warn(fields: object, message: string): void };
+    now?: () => number;
+    queueName?: string;
+  } = {},
 ): { queue: VercelIngestQueue; published: Published[] } {
   const published: Published[] = [];
   const publish: PublishMessage = async (topic, payload, sendOptions) => {
@@ -66,9 +72,10 @@ function makeQueue(
     return { messageId: randomUUID() };
   };
   const queue = new VercelIngestQueue(options.redisUrl ?? REDIS_URL, {
-    queueName: `test-vq-${randomUUID()}`,
+    queueName: options.queueName ?? `test-vq-${randomUUID()}`,
     publish,
     ...(options.log ? { log: options.log } : {}),
+    ...(options.now ? { now: options.now } : {}),
   });
   opened.push(queue);
   return { queue, published };
@@ -213,6 +220,12 @@ describe("VercelIngestQueue", () => {
     // property worth pinning is the INEQUALITY — the TTL must outlive the whole
     // retry budget, or `shouldRetryDelivery` is deciding about deliveries the
     // platform will never make.
+    //
+    // Note the old guard "and it must NOT be the pending window" is gone, not
+    // relaxed: `STALE_PENDING_MS` was raised to this same 900 s, so the two
+    // agree again and no comparison of values can tell them apart. Which way
+    // the derivation runs is what changed, and the two `toBe`s below are what
+    // pin it — retention comes from the measured lease, not from Redis.
     const { queue, published } = makeQueue();
 
     await queue.enqueueSegment(segment());
@@ -222,9 +235,28 @@ describe("VercelIngestQueue", () => {
     expect(published[0]!.options.retentionSeconds).toBeGreaterThan(
       MAX_INGEST_DELIVERIES * OBSERVED_REDELIVERY_LEASE_SECONDS - 1,
     );
-    // And it must NOT be the pending window any more, which is the regression
-    // this test would otherwise let back in.
-    expect(published[0]!.options.retentionSeconds).toBeGreaterThan(STALE_PENDING_MS / 1000);
+  });
+
+  it("holds the pending window at or past the message TTL", () => {
+    // The other half of §10 question 0, and the half that is not about
+    // publishing at all. `STALE_PENDING_MS` prunes on READ, so a window that
+    // expires before the platform has finished retrying makes `pendingCount`
+    // return 0 for work that is still owed — and a 0 is what lets
+    // `timeline-service`'s cache gate write an unfinished page as `complete`,
+    // for up to 24 h on the historical freshness tier. At 300 s against a 305 s
+    // second delivery that is exactly what happened.
+    //
+    // The inequality is asserted here rather than written as an expression
+    // because `ingest-queue.ts` cannot import this file — the dependency runs
+    // the other way. So this test is the ONLY thing holding the two constants
+    // together, and a change to either has to keep it green.
+    expect(STALE_PENDING_MS).toBeGreaterThanOrEqual(INGEST_RETENTION_SECONDS * 1000);
+    expect(STALE_PENDING_MS).toBe(900_000);
+    // Past the retry budget itself and not merely past the retention that
+    // bounds it: the last delivery lands two leases in, at ~610 s.
+    expect(STALE_PENDING_MS).toBeGreaterThan(
+      (MAX_INGEST_DELIVERIES - 1) * OBSERVED_REDELIVERY_LEASE_SECONDS * 1000,
+    );
   });
 
   it("counts pending work per topic and clears it on settle", async () => {
@@ -243,6 +275,139 @@ describe("VercelIngestQueue", () => {
     expect(await queue.pendingCount(segment().fingerprint)).toBe(1);
     await queue.settle(segment({ startPage: 2 }));
     expect(await queue.pendingCount(segment().fingerprint)).toBe(0);
+  });
+
+  it("still reports work whose LEDGER WRITE was lost", async () => {
+    // The hazard this closes, in order: the publish succeeds (it is outside the
+    // best-effort wrapper, deliberately), the `ZADD` is refused by a one-command
+    // Redis blip and swallowed, Redis is fine again by the time anything counts
+    // — so `pendingCount` would answer a truthful-looking 0 for work that is
+    // genuinely owed. `timeline-service` reads that as `complete` and its cache
+    // gate writes a page missing the segment this job is about to fetch, for up
+    // to 24 h on the historical tier, with nothing in `degraded` to explain it.
+    //
+    // Note the failure is injected on ONE call: the point is that the damage
+    // outlives the blip, so a test that kept Redis down would prove less.
+    const warnings: object[] = [];
+    const queueName = `test-vq-${randomUUID()}`;
+    const { queue, published } = makeQueue({
+      queueName,
+      log: { warn: (fields) => void warnings.push(fields) },
+    });
+    const add = vi
+      .spyOn(PendingSet.prototype, "add")
+      .mockRejectedValueOnce(new Error("READONLY: redis blip"));
+
+    await queue.enqueueSegment(segment());
+    add.mockRestore();
+
+    // The work really was scheduled — that half never failed.
+    expect(published).toHaveLength(1);
+    // What the caller sees is the truth anyway.
+    expect(await queue.pendingCount(segment().fingerprint)).toBe(1);
+    expect(warnings).toHaveLength(1);
+    // Scoped to its own topic, like every other pending count.
+    expect(await queue.pendingCount("e".repeat(64))).toBe(0);
+
+    // And the residual, asserted rather than left as prose: the ledger in Redis
+    // really is empty, so a DIFFERENT instance serving that read still sees the
+    // honest-looking 0. Nothing local can fix that, and there is nowhere durable
+    // to put the note — Redis is what refused it. This is the pre-existing
+    // behaviour, bounded by STALE_PENDING_MS, not a hole this change opens.
+    const { queue: other } = makeQueue({ queueName });
+    expect(await other.pendingCount(segment().fingerprint)).toBe(0);
+  });
+
+  it("clears the stand-in when the job settles, rather than holding in_progress", async () => {
+    // A lost `ZADD` followed by a successful run must not leave the topic
+    // reporting forever. `settle` drops the note whether or not Redis takes the
+    // `ZREM`, because a settled job is not owed either way.
+    const { queue } = makeQueue();
+    const add = vi
+      .spyOn(PendingSet.prototype, "add")
+      .mockRejectedValueOnce(new Error("READONLY: redis blip"));
+
+    await queue.enqueueSegment(segment());
+    add.mockRestore();
+    expect(await queue.pendingCount(segment().fingerprint)).toBe(1);
+
+    await queue.settle(segment());
+
+    expect(await queue.pendingCount(segment().fingerprint)).toBe(0);
+  });
+
+  it("does NOT clear the stand-in when the settle happens on another instance", async () => {
+    // The production case, and the reason the test above is not the whole story.
+    // Under this driver `settle` is called from the consumer function and the
+    // drain route — separate deployables from the request path that enqueued —
+    // so the instance holding the note never settles the job. Expiry, not
+    // settlement, is what clears it, and the topic reads busy on that instance
+    // for the full window even though the fill landed seconds after the enqueue.
+    //
+    // Pinned because it is easy to read `settle`'s `forget` as covering this,
+    // and because it is where the fifteen-minute window is actually spent.
+    const queueName = `test-vq-${randomUUID()}`;
+    const { queue: requester } = makeQueue({ queueName });
+    const add = vi
+      .spyOn(PendingSet.prototype, "add")
+      .mockRejectedValueOnce(new Error("READONLY: redis blip"));
+
+    await requester.enqueueSegment(segment());
+    add.mockRestore();
+    expect(await requester.pendingCount(segment().fingerprint)).toBe(1);
+
+    // The consumer drains and settles, on its own instance.
+    const { queue: consumer } = makeQueue({ queueName });
+    await consumer.settle(segment());
+
+    // Redis agrees the work is done...
+    expect(await consumer.pendingCount(segment().fingerprint)).toBe(0);
+    // ...and the instance that lost the write still says otherwise.
+    expect(await requester.pendingCount(segment().fingerprint)).toBe(1);
+  });
+
+  it("expires the stand-in on the ledger entry's own clock", async () => {
+    // The note substitutes for a ZSET member, so it has to age out like one, or
+    // an instance that lost one write reports that topic as busy until it dies —
+    // and in-memory state has no prune-on-read to save it. The clock is injected
+    // rather than faked because ioredis does not survive fake timers.
+    let now = Date.parse("2026-08-25T12:00:00.000Z");
+    const { queue } = makeQueue({ now: () => now });
+    const add = vi
+      .spyOn(PendingSet.prototype, "add")
+      .mockRejectedValueOnce(new Error("READONLY: redis blip"));
+
+    await queue.enqueueSegment(segment());
+    add.mockRestore();
+    expect(await queue.pendingCount(segment().fingerprint)).toBe(1);
+
+    now += STALE_PENDING_MS - 1;
+    expect(await queue.pendingCount(segment().fingerprint)).toBe(1);
+    now += 1;
+    expect(await queue.pendingCount(segment().fingerprint)).toBe(0);
+  });
+
+  it("counts a lost write once, however many times the same job is re-enqueued", async () => {
+    // Same reason `PendingSet.add` uses `ZADD NX`: §6.4 re-enqueues a top-up on
+    // every 1.5s poll, so a note that refreshed its own timestamp would never
+    // age out, and one appended per attempt would inflate `meta.ingest` without
+    // limit. First failure wins; a later success takes over from the ledger.
+    const { queue } = makeQueue();
+    const add = vi
+      .spyOn(PendingSet.prototype, "add")
+      .mockRejectedValue(new Error("READONLY: redis blip"));
+
+    await queue.enqueueSegment(segment());
+    await queue.enqueueSegment(segment());
+    await queue.enqueueSegment(segment());
+    expect(await queue.pendingCount(segment().fingerprint)).toBe(1);
+
+    // The write lands this time, so the ledger is authoritative again and the
+    // note must not be counted alongside it.
+    add.mockRestore();
+    await queue.enqueueSegment(segment());
+
+    expect(await queue.pendingCount(segment().fingerprint)).toBe(1);
   });
 
   it("counts a re-published duplicate once", async () => {
@@ -280,10 +445,16 @@ describe("VercelIngestQueue", () => {
   });
 
   it("does not fail a read when the pending set is unreachable", async () => {
-    // Fail-open, the same direction §3.4 and §3.5 take. Under BullMQ this case
-    // could not arise — Redis WAS the queue — but here the message is already
-    // safe in a hosted topic, so failing the read to be accurate about a
-    // spinner would trade a working page for nothing.
+    // Fail-open on the READ, the same direction §3.4 and §3.5 take. Under BullMQ
+    // this case could not arise — Redis WAS the queue — but here the message is
+    // already safe in a hosted topic, so failing the read to be accurate about a
+    // progress hint would trade a working page for nothing.
+    //
+    // This used to assert `pendingCount === 0` here, and that was the hazard
+    // written down as an expectation: the enqueue's publish had succeeded, so a
+    // 0 claimed a settled topic for work genuinely owed, and `timeline-service`
+    // caches a `complete` page. Fail-open belongs to reads; a lost WRITE is
+    // compensated instead (see the lost-ledger-write tests above).
     const warnings: string[] = [];
     const { queue, published } = makeQueue({
       log: { warn: (_fields, message) => warnings.push(message) },
@@ -291,9 +462,10 @@ describe("VercelIngestQueue", () => {
     await queue.close(); // every command from here rejects
 
     await expect(queue.enqueueSegment(segment())).resolves.toBeUndefined();
-    // The message went out. Only the progress hint was lost.
+    // The message went out, and the read still answers rather than throwing…
     expect(published).toHaveLength(1);
-    expect(await queue.pendingCount(segment().fingerprint)).toBe(0);
+    // …but it answers with the work it knows it failed to write down.
+    expect(await queue.pendingCount(segment().fingerprint)).toBe(1);
     expect(warnings.some((w) => w.includes("under-report"))).toBe(true);
   });
 });

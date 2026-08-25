@@ -329,7 +329,8 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
   // than merely early; it also keeps the job in the pending set while the
   // labeller runs, so a read landing mid-sample sees `in_progress` and declines
   // to cache a half-named cloud — a backstop, not the fix, since `pendingCount`
-  // prunes entries after STALE_PENDING_MS and a long label pass outlives that.
+  // prunes entries after STALE_PENDING_MS and a long label pass can outlive even
+  // the fifteen minutes that now allows (at ~4 s a call, ~225 labels' worth).
   //
   // "Reached", not "named": waiting closes the gap between a promotion and its
   // name, and nothing more. §10.3 also excludes a `label_source` of `bigram`,

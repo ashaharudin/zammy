@@ -10,6 +10,7 @@ import {
 } from "./drain.js";
 import { INGEST_RETENTION_SECONDS } from "./ingest-queue-vercel.js";
 import {
+  STALE_PENDING_MS,
   ingestJobId,
   type IngestJob,
   type PendingEntry,
@@ -111,6 +112,12 @@ describe("runDrain", () => {
     expect(h.askedFor).toEqual([DRAIN_MIN_AGE_MS]);
     expect(DRAIN_MIN_AGE_MS).toBe(INGEST_RETENTION_SECONDS * 1000);
     expect(DRAIN_MIN_AGE_MS).toBe(900_000);
+    // And the stale prune must not fire BELOW the floor. `PendingSet.count`
+    // deletes anything past `STALE_PENDING_MS` on every `meta.ingest` read, so a
+    // prune under this line erases entries before the drain is ever allowed to
+    // look at them — which is what the five-minute window did, leaving this
+    // route able to help only topics nobody reads.
+    expect(STALE_PENDING_MS).toBeGreaterThanOrEqual(DRAIN_MIN_AGE_MS);
   });
 
   it("settles a job whose fill FAILED, so a poisoned segment cannot be retried forever", async () => {

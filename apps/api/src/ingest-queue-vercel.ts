@@ -2,7 +2,9 @@ import { Redis } from "ioredis";
 import { QueueClient } from "@vercel/queue";
 import {
   PendingSet,
+  STALE_PENDING_MS,
   ingestJobId,
+  pendingIdOf,
   type IngestHandler,
   type IngestJob,
   type IngestQueue,
@@ -111,10 +113,16 @@ export const OBSERVED_REDELIVERY_LEASE_SECONDS = 300;
  *
  * The cost of the change is a wider dedup window — 900 s rather than 300 s —
  * so a job that exhausts its budget cannot be re-enqueued under the same
- * content key for up to 15 minutes, where `STALE_PENDING_MS` would have freed
- * it in 5. That is a deliberate trade: it makes the PRIMARY path at-least-once
- * (a §4.1 deployment requirement) at the price of slowing the fallback path,
- * and the fallback is the one the pending set already covers.
+ * content key for up to 15 minutes. That is a deliberate trade: it makes the
+ * PRIMARY path at-least-once (a §4.1 deployment requirement) at the price of
+ * slowing the fallback path, and the fallback is the one the pending set already
+ * covers.
+ *
+ * `STALE_PENDING_MS` was then raised to this same 900 s, so the dedup window and
+ * the pending window agree again — but each derived from the measured platform
+ * budget rather than from the other, which is the direction §0 had backwards.
+ * The ledger now outlives the message it names instead of expiring mid-retry;
+ * that inequality is the invariant, and the test below is what holds it.
  */
 export const INGEST_RETENTION_SECONDS =
   MAX_INGEST_DELIVERIES * OBSERVED_REDELIVERY_LEASE_SECONDS;
@@ -149,6 +157,11 @@ export interface VercelIngestQueueOptions {
   queueName?: string;
   publish?: PublishMessage;
   log?: QueueLogger;
+  /**
+   * Injected only so the unrecorded-enqueue window below is testable without
+   * fake timers, which ioredis does not survive. Same seam `DrainOptions` uses.
+   */
+  now?: () => number;
 }
 
 export class VercelIngestQueue implements IngestQueue {
@@ -157,10 +170,46 @@ export class VercelIngestQueue implements IngestQueue {
   private readonly topic: string;
   private readonly publish: PublishMessage;
   private readonly log: QueueLogger | undefined;
+  private readonly now: () => number;
+  /**
+   * Enqueues whose LEDGER WRITE was lost, per pending id then job id, holding
+   * the time of the attempt. The local stand-in for a `ZADD` that never landed.
+   *
+   * It exists because the two halves of an enqueue do not fail together. The
+   * publish is durable and throws (`enqueueSegment`); the ledger write is
+   * best-effort and is swallowed (`ledger`). A Redis blip lasting one command
+   * therefore leaves work genuinely owed with nothing recording it — and the
+   * damage is not the missing spinner, it is that `pendingCount` then returns a
+   * clean 0 from a HEALTHY Redis, `timeline-service` reads `complete`, and its
+   * cache gate writes a page missing the segment this job is about to fetch.
+   * Up to 24 h on the historical freshness tier, with nothing in `degraded` to
+   * say why. The blip is over long before the page is cached, so there is no
+   * outage left for a reader to notice.
+   *
+   * In-memory, which is exactly as durable as it can be: the reason we are here
+   * is that the durable store refused a write. What makes that worth having
+   * anyway is that the read which caches is USUALLY the read which enqueued —
+   * `timeline-service` plans gaps, enqueues, counts and caches in one request —
+   * so the instance holding this map is the instance about to make the mistake.
+   *
+   * What it cannot cover: another instance serving that read. Nothing local can,
+   * and there is no cheap durable answer, since Redis is the thing that failed.
+   * The residual is one under-reported topic until `STALE_PENDING_MS`, which is
+   * the pre-existing behaviour rather than a new hole.
+   *
+   * What it costs when it DOES fire: the note outlives the job. `settle` runs in
+   * the consumer function, not here (see `settle`), so nothing clears the note
+   * on this instance and the topic reads `in_progress` for the full
+   * `STALE_PENDING_MS` even after the fill lands seconds later. Over-counting is
+   * the direction to be wrong in, but this is where the fifteen-minute window
+   * gets spent for real.
+   */
+  private readonly unrecorded = new Map<string, Map<string, number>>();
 
   constructor(redisUrl: string, options: VercelIngestQueueOptions = {}) {
     this.topic = options.queueName ?? "ingest";
     this.log = options.log;
+    this.now = options.now ?? Date.now;
     // `maxRetriesPerRequest: 2` so a genuinely unreachable Redis fails fast
     // rather than hanging a request behind a reconnect storm — but the OFFLINE
     // QUEUE stays on, unlike `server.ts`'s cache client. A cold instance boots
@@ -188,19 +237,49 @@ export class VercelIngestQueue implements IngestQueue {
     // caller told the enqueue succeeded when it did not would leave a gap
     // nothing is going to fill.
     await this.send(job);
-    await this.ledger(() => this.pending.add(job), undefined, "add");
+    await this.record(job);
   }
 
   async enqueueSample(job: SampleJob): Promise<void> {
     await this.send(job);
-    await this.ledger(() => this.pending.add(job), undefined, "add");
+    await this.record(job);
   }
 
   async pendingCount(pendingId: string): Promise<number> {
-    return this.ledger(() => this.pending.count(pendingId), 0, "count");
+    const counted = await this.ledger(() => this.pending.count(pendingId), 0, "count");
+    // Plus what this instance knows it failed to write down. Added rather than
+    // maxed: two lost enqueues for one topic are two outstanding jobs, and the
+    // ledger cannot be holding either of them.
+    //
+    // It can over-count — a `ZADD` whose reply was lost but whose write landed
+    // is counted twice — and that is the direction to be wrong in. An
+    // over-count suppresses a cache write and holds `in_progress`; an
+    // under-count caches a page with a hole in it. Same asymmetry
+    // `STALE_PENDING_MS` is sized for, and it clears itself either way.
+    return counted + this.unrecordedFor(pendingId);
   }
 
   async settle(job: IngestJob): Promise<void> {
+    // Before the Redis call, and unconditionally: a settled job is not owed, so
+    // a stand-in for its missing ledger entry is not owed either.
+    //
+    // **Under this driver it almost never fires, and that is worth stating
+    // rather than discovering.** `settle` is called from the consumer
+    // (`vercel-queue.ts`) and the drain (`drain.ts`), both of which are separate
+    // FUNCTIONS from the request path that did the enqueueing — separate
+    // instances, each with its own empty `unrecorded`. The note lives on the
+    // instance that failed the `ZADD`, and nothing on that instance settles the
+    // job. So expiry, not settlement, is what actually clears it: a lost `ZADD`
+    // holds its topic at `in_progress` on that one instance for the full
+    // `STALE_PENDING_MS`, even though the job itself finished in seconds.
+    //
+    // That is the safe direction — an over-count suppresses a cache write and
+    // costs re-queries, where an under-count persists a page with a hole in it —
+    // but it is a bigger residual than "cleared by settle" suggests, and it is
+    // the second reason (after the poll loop) that this window's size is a real
+    // cost rather than a formality. The line stays because it is correct for any
+    // same-instance topology, BullMQ's included.
+    this.forget(job);
     await this.ledger(() => this.pending.remove(job), undefined, "remove");
   }
 
@@ -213,13 +292,15 @@ export class VercelIngestQueue implements IngestQueue {
 
   /**
    * The pending set only. A hosted topic's messages are not ours to drop, and
-   * they expire on their own within `INGEST_RETENTION_SECONDS` — which is now
-   * three times `STALE_PENDING_MS` rather than equal to it, so a test that
-   * obliterates and re-enqueues the same content key can still be deduplicated
-   * against the previous run's message. `ingest-queue-vercel.test.ts` fakes the
-   * transport and so never sees this; a real-topic test would have to.
+   * they expire on their own within `INGEST_RETENTION_SECONDS` — fifteen
+   * minutes now, not the five §0's TTL gave. So a test that obliterates the
+   * ledger and re-enqueues the same content key inside that window is
+   * deduplicated against the previous run's message and never sees a delivery.
+   * `ingest-queue-vercel.test.ts` fakes the transport and so never meets this; a
+   * real-topic test would have to vary the fingerprint per run.
    */
   async obliterate(): Promise<void> {
+    this.unrecorded.clear();
     await this.pending.purge();
   }
 
@@ -238,23 +319,108 @@ export class VercelIngestQueue implements IngestQueue {
    * the queue, so a Redis outage failed the enqueue and there was nothing finer
    * to say. Here the message is already safe in a hosted topic and the pending
    * set is a progress hint — so failing a timeline read because the hint could
-   * not be written would trade a working page for an accurate spinner. What it
-   * costs when Redis is down is that `meta.ingest` under-reports and the client
-   * stops polling early; the fill still lands, and the next read sees it.
+   * not be written would trade a working page for an accurate one.
    *
-   * Same fail-open direction §3.4's quota governor and §3.5's rate limit take,
-   * for the same reason: Redis is not on the critical path of answering.
+   * What it costs is `meta.ingest` under-reporting: a swallowed `count` returns
+   * 0, so a topic with work outstanding reads `complete`. What that does NOT do
+   * is cut a poll loop short — `INGEST_POLL_MAX` stops the client after ~60 s
+   * whatever we report. What it reaches is `timeline-service`'s cache gate,
+   * which writes only a `complete` page, and the two failures land differently
+   * there:
+   *
+   *   - **A swallowed `count` is safe, and safe by accident.** The gate's write
+   *     goes to Redis too, and `writeCachedPage` swallows its own failure, so
+   *     while Redis is down nothing is persisted and the next healthy read goes
+   *     back to Postgres. Note it is only the FULL-outage case that is covered
+   *     this way: the cache client sets `enableOfflineQueue: false` and this one
+   *     does not (see the constructor), so the two fail independently per
+   *     command and one can lose a count while the other caches happily.
+   *   - **A swallowed `add` was not safe, and is now compensated rather than
+   *     tolerated.** The publish above it has already succeeded — deliberately
+   *     outside this wrapper, since the message is the durable half — so the
+   *     work is genuinely owed with nothing in the ledger saying so, and a later
+   *     read would get a truthful-looking 0 from a healthy client and cache an
+   *     incomplete page as settled. `unrecorded` is what closes that: the loss
+   *     is remembered in memory and added back to every count, so the read that
+   *     enqueued cannot then conclude the topic is finished. See that field for
+   *     what it deliberately does not cover.
+   *
+   * So the fail-open posture stands for reads and no longer for writes, which is
+   * the distinction that was missing. Reads degrade the way §3.4's quota
+   * governor and §3.5's rate limit do — answer with less, Redis is not on the
+   * critical path of answering. A lost write is different in kind: it would
+   * degrade toward PERSISTING something untrue, which no amount of "the cache is
+   * not correctness" makes recoverable inside the TTL. Same asymmetry
+   * `STALE_PENDING_MS` is sized for.
    */
   private async ledger<T>(op: () => Promise<T>, fallback: T, what: string): Promise<T> {
     try {
       return await op();
     } catch (error) {
-      this.log?.warn(
-        { op: what, err: error instanceof Error ? error.message : String(error) },
-        "ingest pending set unavailable; meta.ingest will under-report",
-      );
+      this.warn(what, error);
       return fallback;
     }
+  }
+
+  /**
+   * The ledger half of an enqueue: write it down, or remember that we could not.
+   *
+   * Split out of `ledger` because its recovery is specific — a fallback value is
+   * the wrong shape for a write, and what a lost write needs is a note, not a
+   * default.
+   */
+  private async record(job: IngestJob): Promise<void> {
+    const pendingId = pendingIdOf(job);
+    try {
+      await this.pending.add(job);
+      // A retry that lands clears the note it left: the ledger is authoritative
+      // again for this job, and leaving the note would double-count it.
+      this.forget(job);
+    } catch (error) {
+      this.warn("add", error);
+      const entries = this.unrecorded.get(pendingId) ?? new Map<string, number>();
+      // NOT overwritten if present, for the same reason `PendingSet.add` uses
+      // `ZADD NX`: a job re-requested on every poll would keep refreshing its
+      // own timestamp and never age out.
+      if (!entries.has(ingestJobId(job))) entries.set(ingestJobId(job), this.now());
+      this.unrecorded.set(pendingId, entries);
+    }
+  }
+
+  /** Drop the stand-in for a job's ledger entry, if this instance holds one. */
+  private forget(job: IngestJob): void {
+    const pendingId = pendingIdOf(job);
+    const entries = this.unrecorded.get(pendingId);
+    if (!entries) return;
+    entries.delete(ingestJobId(job));
+    if (entries.size === 0) this.unrecorded.delete(pendingId);
+  }
+
+  /**
+   * Unrecorded enqueues for one topic, expiring the whole map on the way past.
+   *
+   * The expiry is `STALE_PENDING_MS`, the same clock the ledger entry would have
+   * been pruned on, because that is what these notes stand in for — a note that
+   * outlived the entry it substitutes for would hold a topic at `in_progress`
+   * for the life of the instance. Sweeping every topic rather than the queried
+   * one keeps the map bounded by "topics whose enqueue failed recently" instead
+   * of "topics whose enqueue failed, ever"; it costs nothing, because in the
+   * healthy case there is nothing to sweep.
+   */
+  private unrecordedFor(pendingId: string): number {
+    const cutoff = this.now() - STALE_PENDING_MS;
+    for (const [id, entries] of this.unrecorded) {
+      for (const [jobId, at] of entries) if (at <= cutoff) entries.delete(jobId);
+      if (entries.size === 0) this.unrecorded.delete(id);
+    }
+    return this.unrecorded.get(pendingId)?.size ?? 0;
+  }
+
+  private warn(what: string, error: unknown): void {
+    this.log?.warn(
+      { op: what, err: error instanceof Error ? error.message : String(error) },
+      "ingest pending set unavailable; meta.ingest will under-report",
+    );
   }
 
   private async send(job: IngestJob): Promise<void> {
