@@ -52,6 +52,7 @@ What differs from a Compose `.env`:
 | `DATABASE_POOL_MAX` | `1`–`2` — every instance holds its own pool | ditto |
 | `REDIS_URL` | Upstash | a second, separate Upstash database |
 | `INGEST_QUEUE_DRIVER` | `vercel` — the default is `bullmq`, and leaving it there publishes to a Redis queue nothing drains | `vercel` |
+| `CRON_SECRET` | a long random string — gates `POST /api/drain`; unset disables that route | ditto, and a DIFFERENT string |
 | `CURRENTS_MODE` | `live` (needs `CURRENTS_API_KEY`) | `fixture` — costs no upstream quota |
 | `FIXTURES_DIR` | irrelevant | `fixtures` — the function's cwd is the deployment root, so the `../../fixtures` in the template is wrong here |
 | `TRUSTED_PROXY_HOPS` | `1` — measured on the spike: Fastify sees `127.0.0.1` with the client one hop out in `x-forwarded-for` | `1` |
@@ -97,7 +98,7 @@ first, then apps — the function imports `apps/api/dist`), and the output direc
 
 ## The queue
 
-`INGEST_QUEUE_DRIVER=vercel` swaps the transport under the same seven-member interface the read path
+`INGEST_QUEUE_DRIVER=vercel` swaps the transport under the same eight-member interface the read path
 already used. The request function publishes; `api/queues/ingest.ts` drains. Three operator-visible
 consequences:
 
@@ -105,12 +106,15 @@ consequences:
   it in `vercel.json`, which is why there is no auth on it and none is missing. The topic name in
   that trigger (`ingest`) must match the queue's name, because that name also scopes the Redis
   pending set and the trending sample lock.
-- **`experimentalTriggers` is beta, and one part of it is already not behaving.** Delivery works;
-  REdelivery does not (see the known gap below). The pending set is still the ledger of what is owed
-  (`meta.ingest`), which is what keeps this a recoverable state rather than a data-loss event.
-- **The message TTL is 300 s, matching the pending window.** A deploy mid-flight leaves the old
-  deployment draining its own messages, because push-mode topics are partitioned by deployment id.
-  Five minutes bounds how long that lasts.
+- **`experimentalTriggers` is beta, and its timings move under you.** Delivery and redelivery both
+  work, but the redelivery lease grew 30x in three days once already and silently broke retries when
+  it did (see below). The pending set is still the ledger of what is owed (`meta.ingest`), which is
+  what keeps a regression here a recoverable state rather than a data-loss event.
+- **The message TTL is 900 s (`INGEST_RETENTION_SECONDS`), and it deliberately no longer matches the
+  5-minute pending window.** Those two being equal is precisely the bug that stopped redelivery, so
+  do not "tidy" them back together. A deploy mid-flight leaves the old deployment draining its own
+  messages, because push-mode topics are partitioned by deployment id — 15 minutes now bounds how
+  long that lasts.
 
 Verifying it (done 2026-08-25, current deployment `zammy-k2y801sfm`): read a cold topic and watch
 `meta.ingest.pendingJobs` fall to zero. **Pick a topic that then goes quiet.** A topic you keep
@@ -124,13 +128,63 @@ given up on, so `POST /api/queues/ingest 200` on its own tells you nothing. The 
 `ingest delivery` (with `deliveryCount`) on every delivery and `ingest job settled` on the success
 path; a drain is the pair, for one message id.
 
-**Known gap: a failed job is lost, not retried.** Measured 2026-08-25 against a deliberately
-poisoned message — exactly one delivery, whether the SDK `retry` callback reschedules (200) or the
-error propagates (500), watched past the 300 s retention in both cases. `deliveryCount` has never
-been observed above 1. What contains it is the pending set: a failed job is never settled, so
-`meta.ingest` keeps reporting it owed until the five-minute stale prune and the next reader re-plans
-the gap. Do not treat this queue as at-least-once until VERCEL-ALL-IN-SCOPE §10 question 0 is
-answered.
+**A failed job IS retried, but slowly — and the retry is not free of consequences.** This section
+recorded the opposite until 2026-08-25. A failed delivery returns when its visibility lease expires,
+measured at **+305 s**, and the driver was publishing with a **300 s** TTL, so the message was
+deleted five seconds before it could come back. The TTL is now 900 s
+(`INGEST_RETENTION_SECONDS`) and redelivery works. VERCEL-ALL-IN-SCOPE §3.2 has the measurements and
+§10 question 0 the history.
+
+**Treat the 305 s as a number that moves.** On 2026-08-22 the same probe measured ~10 s; three days
+later, on the same unmodified deployment, 305 s. The 900 s TTL is sized against today's measurement,
+so if it moves again past 300 s redelivery breaks again, silently and identically. **`deliveryCount`
+never exceeding 1 in the logs is the tripwire** — check it after any Queues change rather than
+assuming this stays fixed.
+
+What that means when you are watching a deploy drain:
+
+- **A retry takes five minutes.** Measured on a preview deployment of this project, 2026-08-25: a
+  poisoned job was delivered at +0 s, +305 s and +610 s, the first two answering 500 and the third
+  answering 200 with `ingest job failed every delivery; giving up`. If you enqueue something that
+  fails and go looking 30 seconds later, one delivery is the expected picture, not a broken one —
+  wait out the lease before concluding anything. The 300 s lease is server-assigned and cannot be shortened from our side:
+  `retryAfterSeconds` in `vercel.json` is measured inert, and the SDK's `visibilityTimeoutSeconds`
+  only governs lease extension.
+- **`meta.ingest` can go quiet while a retry is still owed.** The pending set's stale prune is 5
+  minutes and attempt 2 lands at 5 minutes 5 seconds, so the ledger stops reporting a job the queue
+  is still going to retry. It under-reports rather than over-reports — the client stops polling
+  early, the fill still lands — but do not read an empty `meta.ingest` as "nothing outstanding".
+- **A failed job cannot be re-enqueued for 15 minutes.** The TTL is also the dedup window, so the
+  same content key is deduplicated for the full 900 s. A job that exhausted its three attempts is
+  not re-enqueueable until then; the gap it named is re-planned by the next reader after that.
+- **Three attempts are guaranteed only for a job that fails fast.** One that fails slowly spends its
+  lease being extended rather than expiring, so the TTL can truncate the budget to two.
+
+## The manual drain — `POST /api/drain`
+
+The deliberate counterpart to "the next reader re-plans the gap". It reads the pending set, fills
+what has been outstanding longer than the 900 s message TTL, and settles it —
+[docs/chores.md](../../docs/chores.md) has the full behaviour and the reasoning.
+
+```bash
+curl -X POST -H "Authorization: Bearer $CRON_SECRET" "$URL/api/drain"
+```
+
+It answers a JSON tally — `{scanned, filled, failed, unreadable, truncated}` — and logs the same
+line as `ingest drain complete`. Operating notes:
+
+- **`CRON_SECRET` must be set in the environment or the route refuses every request.** Fail-closed
+  is deliberate: this is the only surface that spends upstream quota without a user asking. An unset
+  secret disables the drain, it does not open it.
+- **`INGEST_QUEUE_DRIVER` must be `vercel`** or the boot refuses with a listed reason. The age floor
+  is derived from the hosted driver's retry budget and means nothing under BullMQ.
+- **It will usually report `scanned: 0`, and that is healthy.** It deliberately ignores anything
+  younger than 900 s, and a topic with traffic prunes its own ledger within five minutes of a read.
+  Work sitting there is work on a topic nobody has read in fifteen minutes.
+- **`truncated: true`** means a bound stopped the pass with entries left; run it again. `?limit=`
+  lowers the 50-job cap for a cautious first run.
+- **Schedule it every 5–15 minutes** via Supabase Cron if you want cold topics covered promptly.
+  Hobby's Vercel cron (once a day, ±59 min) is too coarse to be the primary driver.
 
 ## What Phase 2 does not do
 

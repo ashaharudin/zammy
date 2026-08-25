@@ -52,7 +52,12 @@ Two things to try once the happy path is green, because they are the failure mod
 rather than avoids:
 
 - `curl "$URL/api/enqueue?key=poison"` — the handler throws, and the log should show `deliveryCount`
-  climbing to 4 and then stopping (the `retry` callback acknowledges it; there is no DLQ).
+  climbing to 4 and then stopping (the `retry` callback acknowledges it; there is no DLQ). **Note the
+  cadence: the first redelivery is ~305 s, and this producer publishes with `retentionSeconds: 300`,
+  so the message expires before it can come back and you will see exactly ONE delivery.** That is
+  the bug VERCEL-ALL-IN-SCOPE §10 question 0 turned out to be; re-running this poison unchanged on
+  2026-08-25 produced one delivery where 2026-08-22 saw four. Raise the retention to observe the
+  retries.
 - `curl -X POST "$URL/api/chores?sleep=400000"` — work that outlives `maxDuration`. The log should
   show the response already sent and the background half cut off, which is the shape a chore pass
   over the 300 s ceiling will have.
@@ -64,10 +69,13 @@ numbers rather than the SDK's, and we would be on the SDK:
 
 - **The TTL option is `retentionSeconds`**, and the SDK's `visibilityTimeoutSeconds` defaults to
   **300 s with automatic lease extension while the handler runs** — not the 60 s the API defaults to.
-- **`retryAfterSeconds` is Nitro-only.** It is a `nitro.config.ts` trigger option; the `vercel.json`
-  `experimentalTriggers` entry documents only `type` and `topic`. On the bare `api/` layout, retry
-  timing comes from the SDK's `retry` callback and nothing else — which is what
-  `api/queues/ingest.ts` here uses.
+- ~~**`retryAfterSeconds` is Nitro-only.**~~ **Wrong, corrected 2026-08-25.** It *is* a documented
+  `vercel.json` `experimentalTriggers` option (alongside `initialDelaySeconds`), defaulting to 60 s.
+  It is also **measured inert** on this layout — a topic declared with `retryAfterSeconds: 20`
+  redelivered at +305 s, identically to one that omitted it — so the practical conclusion held even
+  though the reason given for it did not. Retry timing comes from the server-assigned visibility
+  lease, not from the trigger option and not from the SDK's `retry` callback; see
+  VERCEL-ALL-IN-SCOPE §3.2.
 
 There is also a shape detail worth carrying into §3.2: the consumer uses **`handleNodeCallback` on a
 `QueueClient`**, not the top-level `handleCallback`. `handleCallback` returns a Web-standard `POST`

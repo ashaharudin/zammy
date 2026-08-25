@@ -195,8 +195,8 @@ uses to scope the trending/sample-lock Redis keys. Miss it and trending locks si
 | What BullMQ gives us | Vercel Queues equivalent | Note |
 |---|---|---|
 | `jobId` content-dedup ([`ingestJobId`](../apps/api/src/ingest-queue.ts)) | `idempotencyKey` on `send` | Dedup window is the message TTL rather than "the pending window" — so **publish with `retentionSeconds: 300`** (≈ `STALE_PENDING_MS`), not the 24h default, or a failed run's segment cannot be re-enqueued for a day. TTL is per-message (60s–7d). Billed at 2× the operation. |
-| `attempts: 3`, exponential backoff from 200 ms | the SDK `retry` callback on `deliveryCount` | Forced exponential backoff after 32 attempts. No DLQ; a poisoned message is acknowledged in the handler. **`retryAfterSeconds` is Nitro-only** — a `nitro.config.ts` trigger option, not a `vercel.json` one, so on the bare `api/` layout the `retry` callback is the whole mechanism. |
-| At-least-once via BLMOVE + reaper | at-least-once by contract; **the SDK's `visibilityTimeoutSeconds` defaults to 300 s and auto-extends the lease while the handler runs** (the raw API's 60 s does neither) | §4.1 called at-least-once a deployment requirement. It survives. |
+| `attempts: 3`, exponential backoff from 200 ms | the SDK `retry` callback on `deliveryCount` | Forced exponential backoff after 32 attempts. No DLQ; a poisoned message is acknowledged in the handler. **Retry TIMING is not ours to set.** `retryAfterSeconds` *is* a documented `vercel.json` trigger option (default 60 s) — the earlier "Nitro-only" note here was wrong about that — but it is **measured inert**: a topic declared with `retryAfterSeconds: 20` redelivered at +305 s and +305 s, identical to one that omitted it. The `retry` callback's `afterSeconds` is not honoured for the first redelivery either. What governs it is the visibility lease (next row). |
+| At-least-once via BLMOVE + reaper | at-least-once, **delivered by visibility-lease expiry at a measured +305 s** — not by the callback's response code | §4.1 called at-least-once a deployment requirement. It survives, but only if the message TTL outlives the lease: see the redelivery note below, which is what §10 question 0 turned out to be. The SDK's `visibilityTimeoutSeconds` governs lease EXTENSION while the handler runs, not the first lease, which is server-assigned. |
 | Worker concurrency | max concurrency per consumer group | Useful ceiling for a quota-bearing consumer (§3.4). |
 | A `Worker` in-process | `api/queues/ingest.ts` with a `queue/v2beta` trigger in `vercel.json` | **Air-gapped: no public URL, no auth code to write.** Better than a signed webhook. Use `QueueClient#handleNodeCallback`, not the top-level `handleCallback` — the latter returns a Web-standard `POST` handler and an `api/` function on the Node runtime is handed `(req, res)`. |
 | `obliterate()` in tests | — | Tests change shape (below). |
@@ -232,36 +232,110 @@ build (2026-08-25), none of which changed the shape above:
 - **An eighth member, `settle`.** BullMQ cleared a pending entry from its own worker events because
   the worker was in this process. A push-mode consumer is a different deployable and has to be told,
   so the counterpart to enqueue is now on the interface rather than hidden inside one driver.
-- **A failed delivery is NOT redelivered, measured. This is the row of the table above that does
-  not hold.** "At-least-once by contract" is what §3.2 assumed and what §4.1 makes a deployment
-  requirement; on the preview project it does not happen. Both callback shapes were deployed against
-  a deliberately poisoned message (2026-08-25) and each was delivered exactly once:
+- **A failed delivery IS redelivered — once the message outlives its lease. Fixed 2026-08-25.** For
+  three days this section recorded that redelivery simply did not happen, on the strength of two
+  measurements against a poisoned message that was each delivered exactly once. Both measurements
+  were real; the explanation was wrong. The cause is a platform timing change interacting with a
+  margin we did not know we were relying on — and the fix is entirely on our side.
 
-  | Shape | Callback answers | Deliveries observed | Watched for |
+  **The mechanism.** A failed delivery comes back when its **visibility lease expires**, and that
+  lease is assigned by the queue service before any of our code runs — it arrives in the
+  `ce-vqsvisibilitydeadline` header at exactly **300 s** past `ce-vqscreatedat`. So the first
+  redelivery lands at **+305 s**, every time. Nothing on our side moves it: the callback's response
+  code does not (500 and 200 behave identically), `retryAfterSeconds` in `vercel.json` does not
+  (measured inert), and the SDK's `visibilityTimeoutSeconds` does not (it governs lease *extension*).
+
+  **The collision.** §0 decided the message TTL should be `≈ STALE_PENDING_MS` so the dedup window
+  would match the pending-set semantics, and the driver published with `retentionSeconds: 300`. The
+  platform "permanently deletes messages when their retention period expires, regardless of
+  processing state". A 300 s TTL against a 305 s first redelivery therefore left a retry window of
+  **exactly zero** — the message was garbage-collected five seconds before it was due back.
+
+  **And the 305 s is new.** This is the half that is not our fault and the half worth watching. On
+  2026-08-22 the spike measured a poisoned message redelivering at +0 s, +10 s, +70 s and +130 s —
+  four deliveries inside the same 300 s TTL, which is only possible if the first-retry latency was
+  then ~10 s. Today, on that same project and that same unmodified deployment, it is 305 s. So
+  §0's TTL was not a mistake when it was made: it had a 30× margin over the redelivery latency of
+  the day. The platform's first-retry latency grew by a factor of ~30 underneath it, the margin went
+  negative, and redelivery stopped. Vercel's docs still say the visibility timeout defaults to 60 s;
+  in push mode on this account it is 300 s, so the number that moved is not one we can cite, only
+  one we can measure.
+
+  **Which makes the shape of the fix matter more than its value.** 900 s is not "300 plus headroom",
+  it is `MAX_INGEST_DELIVERIES` × the *measured* lease — but it is still a constant chasing a
+  platform number that has already moved once. If the lease grows past 300 s again the same failure
+  returns, silently and in exactly the same way. **That is an argument for building §3.2's manual
+  drain rather than holding it as a fallback**, and for treating "`deliveryCount` never exceeds 1"
+  as a tripwire worth checking after any Queues change, not as a settled fact.
+
+  **The controlled measurement (2026-08-25, five topics, two deployments).** Every probe threw on
+  every delivery; only the marked variables differed.
+
+  | Retention | `retryAfterSeconds` | Deliveries | Gaps |
   |---|---|---|---|
-  | `retry: () => ({ afterSeconds: 5 })` | 200 (SDK handles the directive) | 1 | 330 s |
-  | no `retry` callback — error propagates | 500 | 1 | 440 s |
+  | 900 s | default | 3 | 305 s, 305 s |
+  | 900 s | default (+ SDK `retry` callback) | 11 | 305 s, then 60 s × 9 |
+  | 900 s | default (+ SDK `visibilityTimeoutSeconds: 30`) | 11 | 305 s, then 60 s × 9 |
+  | 900 s | **20** | 3 | 305 s, 305 s |
+  | **300 s** | 20 | **1** | never |
 
-  The `changeVisibility` call in the first shape **succeeded** — the SDK logs "Failed to reschedule
-  message for retry" when it does not, and no such line appeared — so the queue service was told to
-  make the message visible again in five seconds and nothing re-invoked the consumer. Retention is
-  300 s, so in both runs the window closed with the work lost. Note this is not what the spike saw
-  (four deliveries at +0 s, +10 s, +70 s, +130 s on `spike-ingest`), which is itself worth recording:
-  the behaviour differs between two projects on the same platform, which is what a public beta in the
-  load-bearing position looks like.
+  The last row is production, reproduced exactly. The row above it is the same wiring with only the
+  TTL changed, and it redelivers. That is the whole finding.
 
-  **The shipped shape is "no `retry` callback", chosen for honesty rather than for function.** Both
-  lose the message; only the 500 puts the failure in the platform's own request log, and only the 500
-  starts working if the beta begins honouring failed callbacks. The `retry` callback's 200 would hide
-  the same loss behind a success.
+  **Confirmed on the `zammy` project itself, 2026-08-25 20:01–20:12 UTC.** The probes above ran on
+  the throwaway spike project, so the A/B was repeated on a real preview deployment of this
+  codebase — the real consumer, the real Supabase and Upstash, a well-formed segment job naming a
+  fingerprint no topic row has (so `parseIngestJob` accepts it and `processSegmentJob` throws
+  "segment job for unknown topic" every time):
 
-  **What contains the damage is the pending set, exactly as ADR-0015 bet it would.** The give-up path
-  is the only one that settles, so a lost job stays *owed* in our ledger: `meta.ingest` holds the
-  topic at `in_progress` until the five-minute stale prune, and the gap it named is re-planned by the
-  next reader who finds it unfilled (§6.3's coverage frontier is what makes that cheap and correct).
-  So the system self-heals on the next read rather than silently under-covering — but "at-least-once"
-  is not what is running, and §3.2's fallback (manual drain) is closer to being needed than the ADR
-  assumed.
+  | Arm | Retention | Deliveries | Log |
+  |---|---|---|---|
+  | A | **300 s** (the old value) | **1** — `dc=1` 20:01:39, HTTP 500, then the message expired | one `ingest delivery` |
+  | B | **900 s** (the fix) | **3** — `dc=1` 20:01:41, `dc=2` 20:06:46 (+305 s), `dc=3` 20:11:51 (+305 s) | three `ingest delivery`, then `ingest job failed every delivery; giving up` at HTTP 200 |
+
+  Arm B is the first time `deliveryCount` has been observed above 1 on this project, and the first
+  time `MAX_INGEST_DELIVERIES` and the give-up-and-settle path have been exercised outside a fake —
+  the third delivery settled the pending entry and acknowledged the message, exactly as
+  [vercel-queue.ts](../apps/api/src/vercel-queue.ts) says it should. Arm A reproduces the reported
+  symptom on the same deployment in the same minute, which is what makes the TTL the cause rather
+  than a correlate.
+
+  **The fix is one constant**, `INGEST_RETENTION_SECONDS` = `MAX_INGEST_DELIVERIES` × the 300 s lease
+  = 900 s ([ingest-queue-vercel.ts](../apps/api/src/ingest-queue-vercel.ts)). No consumer code
+  changed: `shouldRetryDelivery` and the give-up-and-settle path were already correct and are now
+  genuinely exercised, with a poisoned job delivered at +0 s, +305 s and +610 s and the third
+  settling. **At-least-once is being met on the primary path**, which is what §4.1 asked for.
+
+  **Three things this cost, all of which should be read as cost rather than as footnote:**
+
+  - **The dedup window widened from 300 s to 900 s**, because on this platform the TTL *is* the
+    dedup window. A job that exhausts its three attempts cannot be re-enqueued under the same
+    content key for up to 15 minutes, where §0's choice would have freed it in 5. The trade is
+    deliberate — it buys the primary path at the price of slowing the fallback — but it is a real
+    regression in the fallback, and it is the half of §0's reasoning that this change discards.
+  - **The retry budget is only guaranteed for a job that fails FAST.** A job that fails slowly
+    spends its lease being extended rather than expiring, so its attempts are pushed out and the
+    budget can be truncated by the TTL instead of by `shouldRetryDelivery`. A job whose every
+    attempt burns 300 s gets two, not three.
+  - **`STALE_PENDING_MS` now expires while a retry is still owed.** The stale prune fires at 5
+    minutes and attempt 2 does not arrive until 5 minutes and 5 seconds, so `meta.ingest` can stop
+    reporting a job the queue is still going to retry. The pending set under-reports rather than
+    over-reports — the client stops polling early and the fill still lands — which is the same
+    fail-open direction as the rest of this driver, but it does mean **the ledger and the retry
+    budget are no longer on the same clock.** Aligning them (raising `STALE_PENDING_MS`, or deriving
+    both from one constant) is unbuilt, and is the honest follow-up to this fix.
+
+  **What was wrong in the earlier diagnosis, for the record.** The two original measurements were
+  right; the inferences drawn from them were not. `changeVisibility` "succeeding" was read as proof
+  the queue had been told to redeliver — it had, but a lease reduction does not shorten the first
+  window. The spike's contrasting four-delivery run was read as a **per-project** difference; it was
+  a **per-date** one, and re-running that same unmodified deployment on 2026-08-25 produced exactly
+  one delivery. That single re-run is what collapsed the whole question, and it cost one `curl`: the
+  discriminator between "this project is wired wrong" and "the platform moved" was available the
+  whole time and was never run, because the spike was believed to be a control when it was really
+  the only other data point. The lesson worth keeping is that the 300 s in `retentionSeconds` and the
+  300 s in the lease were never compared — one was a decision, the other was never measured.
+
 - **The pending set is best-effort under the hosted driver, and could not have been under BullMQ.**
   There, Redis *was* the queue, so a Redis outage failed the enqueue and there was nothing finer to
   say. Here the message is already durable in the topic and the pending set is a progress hint —
@@ -269,12 +343,38 @@ build (2026-08-25), none of which changed the shape above:
   `meta.ingest` (the client stops polling early; the fill still lands) instead of a 500, which is
   the same fail-open direction §3.4 and §3.5 take.
 
-**The beta is accepted, with a named fallback (§0, ADR-0015).** The pending set is our own
-at-least-once ledger: if the `queue/v2beta` trigger regresses, `meta.ingest` keeps reporting what
-is owed, and the manual drain is an authenticated chores-route pass that reads the pending set and
-performs the fills inline. If the trigger is withdrawn entirely, the exits are a cron-driven pull
+**The beta is accepted, and the named fallback is now BUILT (§0, ADR-0015).** The pending set is our
+own at-least-once ledger: if the `queue/v2beta` trigger regresses, `meta.ingest` keeps reporting what
+is owed, and the drain performs the fills inline. It shipped as `POST /api/drain`
+([drain.ts](../apps/api/src/drain.ts)) — a route **beside** the chores rather than a pass inside
+them, because [chores.ts](../apps/api/src/chores.ts) holds "no pass touches Redis" as a property and
+`ChoreDeps` has no client to give one, while the drain is nothing but a Redis read followed by
+upstream fills. [docs/chores.md](chores.md) is the operator's map of both.
+
+Two properties of it are worth stating here because they are what keep a fallback from being worse
+than no fallback. It only touches entries older than `INGEST_RETENTION_SECONDS`, so it can never
+fill a segment the platform is still retrying and double-spend the quota. And it settles a failed
+fill anyway — one attempt per entry — because there is no dead-letter queue and an entry left in the
+ledger would be re-filled on every pass forever. What that costs is nothing observable: the entry is
+already past the TTL, so the next `meta.ingest` read would have pruned it as stale residue.
+
+It also turns out to cover exactly the case incidental recovery does not. The stale prune lives
+inside `PendingSet.count` and therefore fires on read, so a topic with traffic erases its own ledger
+within five minutes while a topic with none keeps its entries indefinitely — leaving the drain blind
+to hot topics and sighted for cold ones, which is the right way round, since hot topics are where the
+next reader re-plans the gap immediately. If the trigger is withdrawn entirely, the exits are a cron-driven pull
 drain (Pro) or the two-project layout — both worse than what §4.1 asked for, which is the bet the
 ADR records.
+
+**The 2026-08-25 redelivery episode is the first time that bet was called, and it is worth reading as
+evidence rather than as a scare.** The pending set did its job: nothing was lost that a later read
+could not re-plan. But the failure was invisible for three days, it was caused by a platform number
+changing rather than by anything in the changelog, and the thing that would have caught it early —
+noticing `deliveryCount` never exceeded 1 — was recorded as a curiosity rather than as an alarm. The
+`STALE_PENDING_MS` misalignment above is the same class of problem: a constant that used to agree
+with a platform behaviour and quietly stopped. **The open decision this leaves is whether the manual
+drain moves from "fallback" to "built"**, which is a scope call rather than a technical one; §10
+question 0 records the argument for it.
 
 ### 3.3 The chores as an HTTP route — ~1–1.5 days
 
@@ -644,8 +744,8 @@ bypass secret; curl's own flags need a `--` separator or they are swallowed.
 
 Two were settled by the adoption review (§0, ADR-0015), two by the Phase 0 measurements
 (2026-08-22) and two more by its deployment half (2026-08-23), all in
-[VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md). **One remains**, and it needs Phase 2
-before it can be asked.
+[VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md), and question 0 by measurement on
+2026-08-25. **One remains** (question 3), and it needs the queue working — which it now is.
 
 1. ~~Does the recommended project shape actually work?~~ **Settled: yes, with one correction.** The
    Vite preset builds the SPA and the `api/` directory together, the function serves, and the
@@ -656,12 +756,23 @@ before it can be asked.
    on a `hobby`-plan account. **The allowance is still unpublished** (§8), so the residual risk is
    metering rather than feasibility — worth watching on the first bill after Phase 2, not worth
    blocking on.
-0. **Why does a failed delivery never come back?** New, and the most important one: at-least-once is
-   a §4.1 deployment requirement and the platform is not providing it (§3.2). Unresolved whether this
-   is a `queue/v2beta` regression, a per-project difference (the spike's topic DID redeliver), or a
-   push-mode semantic the docs do not state. Until it is answered, treat a failed ingest job as lost
-   and rely on the pending set plus the next reader re-planning the gap. It also makes §3.2's manual
-   drain worth building sooner than "if the trigger regresses" implied.
+0. ~~Why does a failed delivery never come back?~~ **Settled 2026-08-25: a platform timing change
+   ate a margin we did not know we depended on.** Not a per-project difference and not an unstated
+   push-mode semantic. A failed delivery returns when its visibility lease expires, and that latency
+   **grew from ~10 s to 305 s between 2026-08-22 and 2026-08-25** — measured on the spike's own
+   unmodified deployment, which redelivered four times on the first date and once on the second. The
+   driver published with `retentionSeconds: 300` (§0's "TTL ≈ `STALE_PENDING_MS`"), which had a 30×
+   margin when it was chosen and went negative when the latency moved; the platform deletes on TTL
+   regardless of processing state, so the retry window became **exactly zero**. Raising the TTL to
+   900 s restores redelivery with no consumer change — a controlled A/B differing only in the TTL
+   gave 1 delivery at 300 s and 3 at 900 s — run on the throwaway spike project and then **confirmed
+   on a real `zammy` preview deployment**, where arm B delivered at +0 s, +305 s and +610 s and the
+   third settled and gave up (§3.2 has both tables). **At-least-once is now met on the primary
+   path**, measured on the deployable rather than inferred from a probe. Three things this leaves open, all recorded in §3.2: the dedup window is now
+   900 s rather than 300 s; `STALE_PENDING_MS` expires while a retry is still owed, so the pending
+   ledger and the retry budget are no longer on the same clock; and **the fix is a constant chasing
+   a platform number that has already moved once** — which is why the manual drain is now built
+   (`POST /api/drain`, §3.2) rather than held as a fallback.
 3. **Does the breadth sample still paint?** §10.1's first-visitor lock elects one enqueuer per stale
    window; with the sample now a queue message, the landing page's first visitor waits for a
    consumer round trip rather than an in-process job. Check against `SAMPLE_REFRESH_MINUTES` before

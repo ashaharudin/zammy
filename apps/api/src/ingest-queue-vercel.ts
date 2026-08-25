@@ -2,7 +2,6 @@ import { Redis } from "ioredis";
 import { QueueClient } from "@vercel/queue";
 import {
   PendingSet,
-  STALE_PENDING_MS,
   ingestJobId,
   type IngestHandler,
   type IngestJob,
@@ -53,13 +52,81 @@ import {
 export const MAX_INGEST_DELIVERIES = 3;
 
 /**
+ * The push dispatcher's observed latency to a first redelivery, in seconds.
+ *
+ * This is a MEASURED PLATFORM CONSTANT, not a preference, and the retention
+ * below is derived from it. A failed delivery comes back when its visibility
+ * lease expires, and that lease is assigned by the queue service — it arrives
+ * in the `ce-vqsvisibilitydeadline` header before any of our code runs, at
+ * exactly 300 s past `ce-vqscreatedat`. Measured 2026-08-25 across five topics
+ * and two deployments; every first redelivery landed at +305 s.
+ *
+ * Nothing on our side shortens it, which is the point of recording it here:
+ *
+ *   - **`retryAfterSeconds` in `vercel.json` is inert.** It is a documented
+ *     `queue/v2beta` trigger option (default 60 s), but a topic declared with
+ *     `retryAfterSeconds: 20` redelivered at +305 s and +305 s, identically to
+ *     one that omitted it. So the repo's earlier "Nitro-only" note was wrong
+ *     about the option existing and right about its effect here.
+ *   - **The SDK's `visibilityTimeoutSeconds` governs lease EXTENSION**, not the
+ *     first lease, so it cannot shorten the initial window either.
+ *
+ * Vercel's docs still say the visibility timeout defaults to 60 s. It does not,
+ * in push mode, on this account — which is why this is measured and dated
+ * rather than cited.
+ *
+ * **And it moves.** On 2026-08-22 the same probe, on the same project and the
+ * same unmodified deployment, measured a first redelivery at ~10 s. Three days
+ * later it was 305 s. That 30× change is what silently broke redelivery here
+ * (see `INGEST_RETENTION_SECONDS`), and there is nothing stopping it moving
+ * again — so this constant is a snapshot, not a contract, and the retention
+ * derived from it is a margin rather than a guarantee. The tripwire is
+ * `deliveryCount` never exceeding 1 in the consumer's logs; VERCEL-ALL-IN-SCOPE
+ * §3.2 says to check it after any Queues change.
+ */
+export const OBSERVED_REDELIVERY_LEASE_SECONDS = 300;
+
+/**
+ * How long a published message stays alive, in seconds.
+ *
+ * **This must exceed `OBSERVED_REDELIVERY_LEASE_SECONDS`, and that is the whole
+ * reason it is not `STALE_PENDING_MS / 1000` any more.** §0 set the TTL to
+ * `STALE_PENDING_MS` (300 s) so the dedup window would match the pending-set
+ * semantics, and that was a sound choice when it was made: the redelivery
+ * latency of the day was ~10 s, so it had a 30× margin. When the latency grew
+ * to 305 s the margin went negative and the message began being deleted five
+ * seconds before its first redelivery was due — the platform deletes on TTL
+ * "regardless of processing state" — leaving a retry window of exactly zero.
+ * VERCEL-ALL-IN-SCOPE §10 question 0 was that, and nothing more exotic: a
+ * platform number moving under a constant that never re-measured it.
+ *
+ * 900 s is `MAX_INGEST_DELIVERIES` × the lease, which buys the full three-
+ * attempt budget for a job that fails FAST (attempts land at +0, +305, +610,
+ * with ~290 s of slack). A job that fails SLOWLY spends its lease extending
+ * rather than expiring, so its attempts are pushed out and the budget can be
+ * truncated by the TTL instead of by `shouldRetryDelivery`. That is a real
+ * bound, not a rounding error, and what catches the truncated case is the same
+ * thing that caught the whole gap before: the pending entry is not settled, so
+ * `meta.ingest` keeps reporting the work owed and the next reader re-plans it.
+ *
+ * The cost of the change is a wider dedup window — 900 s rather than 300 s —
+ * so a job that exhausts its budget cannot be re-enqueued under the same
+ * content key for up to 15 minutes, where `STALE_PENDING_MS` would have freed
+ * it in 5. That is a deliberate trade: it makes the PRIMARY path at-least-once
+ * (a §4.1 deployment requirement) at the price of slowing the fallback path,
+ * and the fallback is the one the pending set already covers.
+ */
+export const INGEST_RETENTION_SECONDS =
+  MAX_INGEST_DELIVERIES * OBSERVED_REDELIVERY_LEASE_SECONDS;
+
+/**
  * Whether a failed delivery is worth another, as a pure function of the count
  * so the consumer's decision is testable without a platform.
  *
- * The count is the half of the spike's observation that held exactly: a
- * poisoned message redelivered at +0s, +10s, +70s and +130s against a requested
- * `afterSeconds: 5`, so the DELAY is a hint and nothing here depends on it.
- * `deliveryCount` starts at 1 on the first delivery.
+ * `deliveryCount` starts at 1 on the first delivery, and the count is the half
+ * of the spike's observation that always held — the DELAY never did, so nothing
+ * here depends on it. What the delay governs is only whether the retention
+ * above outlives the budget; see `INGEST_RETENTION_SECONDS`.
  */
 export function shouldRetryDelivery(deliveryCount: number): boolean {
   return deliveryCount < MAX_INGEST_DELIVERIES;
@@ -146,8 +213,11 @@ export class VercelIngestQueue implements IngestQueue {
 
   /**
    * The pending set only. A hosted topic's messages are not ours to drop, and
-   * they expire on their own within STALE_PENDING_MS anyway — which is the
-   * other thing the short TTL buys.
+   * they expire on their own within `INGEST_RETENTION_SECONDS` — which is now
+   * three times `STALE_PENDING_MS` rather than equal to it, so a test that
+   * obliterates and re-enqueues the same content key can still be deduplicated
+   * against the previous run's message. `ingest-queue-vercel.test.ts` fakes the
+   * transport and so never sees this; a real-topic test would have to.
    */
   async obliterate(): Promise<void> {
     await this.pending.purge();
@@ -190,9 +260,11 @@ export class VercelIngestQueue implements IngestQueue {
   private async send(job: IngestJob): Promise<void> {
     await this.publish(this.topic, job, {
       idempotencyKey: ingestJobId(job),
-      // Not the 24-hour default (§0). Billed at 2x the operation, which is the
-      // price of dedup.
-      retentionSeconds: STALE_PENDING_MS / 1000,
+      // Not the 24-hour default (§0), and no longer `STALE_PENDING_MS / 1000`
+      // either — that equalled the redelivery lease and closed the retry window
+      // to zero. See `INGEST_RETENTION_SECONDS`. Billed at 2x the operation,
+      // which is the price of dedup.
+      retentionSeconds: INGEST_RETENTION_SECONDS,
     });
   }
 }

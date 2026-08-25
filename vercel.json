@@ -8,6 +8,10 @@
       "maxDuration": 60,
       "includeFiles": "fixtures/**"
     },
+    "api/drain.ts": {
+      "maxDuration": 300,
+      "includeFiles": "fixtures/**"
+    },
     "api/queues/ingest.ts": {
       "maxDuration": 300,
       "includeFiles": "fixtures/**",
