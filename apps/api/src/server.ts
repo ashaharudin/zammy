@@ -381,8 +381,12 @@ export async function buildApp(
       timeWindow: 60_000,
       allowList: (request) => !request.url.startsWith("/api/"),
       redis: services.redis,
-      // §7.1's key convention. The plugin concatenates this with `request.ip`
-      // and nothing else, so the whole deployment shares one bucket per caller.
+      // §7.1's key convention. The plugin appends `normalizeIP(request.ip)` —
+      // the address itself for IPv4, the /64 PREFIX for IPv6 — so the whole
+      // deployment shares one bucket per caller, and a v6 client cannot mint a
+      // fresh bucket by walking its own subnet. Nothing else joins the key here,
+      // because no route sets its own `config.rateLimit` or a `groupId`; either
+      // would add the route's method and URL and split the bucket per endpoint.
       nameSpace: RATE_LIMIT_NAMESPACE,
       skipOnError: true,
     });

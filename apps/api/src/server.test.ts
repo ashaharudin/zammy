@@ -123,6 +123,17 @@ describe("buildApp", () => {
     // fresh allowance.
     const second = await buildApp(config, { consumer: false });
     try {
+      // Wait for the CLIENT, not the clock. `buildServices` fires
+      // `redis.connect()` without awaiting it and the client does not queue
+      // commands offline, so a request that arrives first takes the limiter's
+      // `skipOnError` path and passes with the full allowance — the same
+      // fail-open that a cold Vercel instance shows in production, and here it
+      // would read as "the bucket was not shared" rather than as what it is.
+      for (let i = 0; i < 100 && second.redis.status !== "ready"; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(second.redis.status).toBe("ready");
+
       const response = await second.app.inject({ method: "GET", url: "/api/v1/reference" });
       expect(response.statusCode).toBe(429);
     } finally {

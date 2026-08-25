@@ -596,14 +596,21 @@ Two tiers with distinct jobs: Redis makes repeat reads free; Postgres makes the 
 
 | Key | Contents | TTL |
 | --- | --- | --- |
-| `page:<fingerprint>:<windowHash>:<cursor>:<limit>` | serialized response page | per §6.4 tier |
+| `page:v<shape>:<fingerprint>:<windowHash>:<cursor>:<limit>` | serialized response page | per §6.4 tier |
 | `ref:languages` \| `ref:regions` \| `ref:categories` | reference lists | 24h |
 | `lock:refresh:<fingerprint>:<segment>` | single-flight election | 10s |
-| `budget:currents:*` | quota counters | minute / day |
-| `breaker:currents` | circuit state | cooldown |
+| `<queue>:lock:sample:<language>` | breadth-sample enqueuer election (§10.1) | `SAMPLE_REFRESH_MINUTES` |
+| `budget:topic:<fingerprint>:<utcDay>` | per-topic daily call cap (§9.4) | 48h |
+| `quota:<provider>:burst` | shared sliding burst window, a sorted set of call timestamps (§5.4) | one burst window |
+| `quota:<provider>:observed` | last `x-ratelimit-*` reading, `<observedAtMs>\|<json>` (§5.4) | 24h |
+| `ratelimit:<ip>` | per-IP request counter (§9.4) | `timeWindow` |
+| `ingest:pending:<queue>:<pendingId>` | the ledger `meta.ingest` reads (§6.1) | pruned at `STALE_PENDING_MS` |
 
 Redis is **pure cache**: a total flush costs latency and quota, never correctness. Nothing lives
-only in Redis.
+only in Redis. **That still holds for the two rows that look like exceptions.** The burst window and
+the rate-limit counter are the only shared *enforcement* state here, and both fail OPEN — losing
+them costs the deployment-wide ceiling and degrades to per-instance counting, never a refused call
+(§11). The circuit breaker is in-process, in `@zammy/news-client`, and has never had a key here.
 
 ### 7.2 Postgres (durable)
 
@@ -1492,7 +1499,7 @@ apart see the same cloud.
 | 5c | **Article grouping (§14.3):** `group_id` / `group_published` / `title_tokens` on `articles`, write-time grouping after the collapse, the keyset moved onto the group axis, per-topic representative from the source-authority list, the "related" disclosure. | ✅ |
 | 5e | **Storylines:** day-clustered slots (ADR-0009), then the persistent arc that superseded them (ADR-0011) — `storylines` / `storyline_days`, the linker, bridges and auto-merge, the timeline paged over storyline-days. Migration 0012 dropped the day-bounded model and its flag. | ✅ |
 | 5f | **Storyline labels (ADR-0011, "Labels"):** Gemini-generated names at promotion, merge and drift, bigram fallback when no key is set, plus `label_source` so a relabel campaign can resume. | ✅ |
-| 6 | **Deploy** — Vercel, all in ([ADR-0015](adr/0015-all-in-on-vercel-hobby-shaped.md), phased in VERCEL-ALL-IN-SCOPE §9). AWS superseded by **OCI** on 2026-08-14; OCI then **abandoned 2026-08-21** for lack of free Ampere capacity, [DEPLOYMENT-OCI.md](DEPLOYMENT-OCI.md) now archival, its Phase 1 network/vault/LB left standing inside Always Free. Vercel Phase 0 (the spikes), **Phase 1 (the api as one Function), Phase 2 (the queue on Vercel Queues) and Phase 3 (the Redis quota governor and rate-limit store) are done and on preview** — Phase 3's rate-limit half is verified across six instances, its burst half deployed but unexercised, since a fixture-mode preview never calls the governor; the chores route and cutover are Phases 4–5. Operator's half: [deploy/vercel/](../deploy/vercel/). | 🚧 in progress — Phase 3 of 5 |
+| 6 | **Deploy** — Vercel, all in ([ADR-0015](adr/0015-all-in-on-vercel-hobby-shaped.md), phased in VERCEL-ALL-IN-SCOPE §9). AWS superseded by **OCI** on 2026-08-14; OCI then **abandoned 2026-08-21** for lack of free Ampere capacity, [DEPLOYMENT-OCI.md](DEPLOYMENT-OCI.md) now archival, its Phase 1 network/vault/LB left standing inside Always Free. Vercel Phase 0 (the spikes) and **Phases 1–2 (the api as one Function; the queue on Vercel Queues) are done and verified on preview. Phase 3 (the Redis quota governor and rate-limit store) is deployed but only half verifiable**: its rate-limit half is confirmed across six instances, its burst half is unexercised because a fixture-mode preview never calls the governor at all — VERCEL-ALL-IN-SCOPE §9 keeps it 🚧 for that reason. The chores route and cutover are Phases 4–5. Operator's half: [deploy/vercel/](../deploy/vercel/). | 🚧 in progress — Phase 3 of 5 |
 | 7a | **Second provider behind the client interface:** `@zammy/news-client` core + per-provider adapters + the composite, GNews added, `provider` column on `articles`/`sightings` (§5.6, ADR-0012). | ✅ |
 | 7b | Topic summaries into `topics.summary`. The schema reserves the columns (§7.2); nothing generates them. | ⬜ not started |
 

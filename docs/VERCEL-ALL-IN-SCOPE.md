@@ -536,9 +536,17 @@ whole deployment ONE sliding window, and `quota:<provider>:observed`, the last `
 reading written where a cold instance can read it. Three decisions the build made that the scope
 did not:
 
-- **The shared gate runs before the local one.** A refusal from the window costs nothing, while a
-  refusal from the delegate after the window admitted us over-counts the burst by one for at most
-  one window. The other ordering over-counts the *day*, which does not expire.
+- **The shared gate runs before the local one, and gives the slot back when the delegate refuses.**
+  The first version of this charged the window and left it charged, on the reasoning that it
+  over-counted "by one for at most one window, self-correcting". Review found that false and the
+  failure mode is the interesting part: every refusal writes a *fresh* timestamp, so a stream of
+  them keeps the window permanently full — and `transport.ts` reserves once per ATTEMPT, so past
+  `INTERACTIVE_RESERVE` the consumer's refused background calls would pin `quota:currents:burst` at
+  its ceiling and refuse a live search with 250 daily calls unspent and no upstream call made in the
+  last minute. Precisely inverting the guarantee the reserve exists to give. Delegate-first is not
+  the fix either — it records a DAY's spend for a call the window then refuses, and the day does not
+  expire. Shared-first plus a `ZREM` on refusal is the only arrangement where neither counter
+  charges for a call that never happened.
 - **`peek` reports the shared snapshot; `reserve` never adopts it.** Feeding it back into the
   delegate looks like an improvement — a cold instance inheriting what upstream last said instead
   of starting optimistic — and it is a trap: `observe` only ever raises usage, so a stale snapshot

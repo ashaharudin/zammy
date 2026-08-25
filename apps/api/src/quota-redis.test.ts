@@ -123,6 +123,40 @@ describe("RedisQuotaGovernor — the burst window is shared", () => {
     await expect(a.reserve("interactive")).rejects.toThrow(/across all instances/);
   });
 
+  it("agrees with the in-process window about which side of the boundary a call is on", async () => {
+    // The reserve path expires `score <= cutoff` and the read path counts
+    // `score > cutoff`, and `InProcessQuotaGovernor.expireBurst` keeps
+    // `at > cutoff`. All three must mean the same thing, and only a probe AT
+    // the boundary can tell — 59s and 61s pass whichever way the comparison
+    // goes, which is how an off-by-one would survive a suite that looked
+    // thorough.
+    const first = 1_700_000_000_000;
+    let now = first;
+    const options = {
+      redis,
+      provider: provider(),
+      dailyLimit: 1000,
+      burstLimit: 1,
+      interactiveReserve: 0,
+      now: () => now,
+    };
+    const caller = new RedisQuotaGovernor(options);
+    await caller.reserve("interactive");
+    // A reader with no calls of its own, so the number it reports is the shared
+    // window's alone rather than its own delegate's.
+    const observer = new RedisQuotaGovernor(options);
+
+    // One millisecond short: the call is inside the window on both paths.
+    now = first + 59_999;
+    expect((await observer.peek()).burstRemaining).toBe(0);
+    await expect(caller.reserve("interactive")).rejects.toThrow(/across all instances/);
+
+    // Exactly on it: the call has expired on both paths.
+    now = first + 60_000;
+    expect((await observer.peek()).burstRemaining).toBe(1);
+    await expect(caller.reserve("interactive")).resolves.toBeUndefined();
+  });
+
   it("says when a slot frees up, counting from the oldest call in the window", async () => {
     const now = 1_700_000_000_000;
     const governor = new RedisQuotaGovernor({
@@ -183,6 +217,83 @@ describe("RedisQuotaGovernor — the burst window is shared", () => {
   });
 });
 
+describe("RedisQuotaGovernor — a refused call spends nothing", () => {
+  it("gives the burst slot back when the interactive reserve refuses the call", async () => {
+    // The regression that made this suite worth re-reading. Charging the shared
+    // window for calls that were REFUSED is not a rounding error: every refusal
+    // writes a fresh timestamp, so the window never drains while refusals
+    // continue. And the refusals come in a stream — `transport.ts` reserves
+    // once per ATTEMPT — so the reserve that exists to keep background work
+    // from starving a live search would become the thing that starves it, with
+    // the day's remaining calls unspent and no upstream call made at all.
+    const shared = provider();
+    const options = {
+      redis,
+      provider: shared,
+      dailyLimit: 300,
+      burstLimit: 3,
+      interactiveReserve: 300,
+    };
+    const consumer = new RedisQuotaGovernor(options);
+    const requestPath = new RedisQuotaGovernor(options);
+
+    // Five background calls, all refused by the reserve, none of them made.
+    for (let i = 0; i < 5; i += 1) {
+      await expect(consumer.reserve("background")).rejects.toThrow(/interactive reserve/);
+    }
+
+    // So the whole burst allowance must still be there for a live search.
+    await expect(requestPath.reserve("interactive")).resolves.toBeUndefined();
+    await expect(requestPath.reserve("interactive")).resolves.toBeUndefined();
+    await expect(requestPath.reserve("interactive")).resolves.toBeUndefined();
+    await expect(requestPath.reserve("interactive")).rejects.toThrow(/across all instances/);
+  });
+
+  it("gives the burst slot back when the day's budget refuses the call", async () => {
+    const shared = provider();
+    const options = {
+      redis,
+      provider: shared,
+      dailyLimit: 1,
+      burstLimit: 5,
+      interactiveReserve: 0,
+    };
+    const spender = new RedisQuotaGovernor(options);
+    const observer = new RedisQuotaGovernor(options);
+
+    await spender.reserve("interactive");
+    for (let i = 0; i < 4; i += 1) {
+      await expect(spender.reserve("interactive")).rejects.toThrow(/daily quota exhausted/);
+    }
+
+    // One call was made, so the shared window holds exactly one.
+    expect((await observer.peek()).burstRemaining).toBe(4);
+  });
+
+  it("gives the burst slot back when an upstream observation refuses the call", async () => {
+    // The delegate CAN be the sole refuser, which the ordering argument used to
+    // deny: its `observed` clamp reads a `burstRemaining` upstream reported,
+    // and that number accounts for spend by clients that are not us.
+    const shared = provider();
+    const options = {
+      redis,
+      provider: shared,
+      dailyLimit: 1000,
+      burstLimit: 10,
+      interactiveReserve: 0,
+    };
+    const clamped = new RedisQuotaGovernor(options);
+    const observer = new RedisQuotaGovernor(options);
+
+    await clamped.observe(snapshot({ burstRemaining: 0 }));
+    for (let i = 0; i < 3; i += 1) {
+      await expect(clamped.reserve("interactive")).rejects.toThrow(/burst limit/);
+    }
+
+    expect((await observer.peek()).burstRemaining).toBe(10);
+  });
+});
+
 describe("RedisQuotaGovernor — the daily budget is still the delegate's", () => {
   it("refuses once the day is spent, exactly as the in-process governor does", async () => {
     const governor = new RedisQuotaGovernor({
@@ -228,6 +339,10 @@ describe("RedisQuotaGovernor — fail-open", () => {
       dailyLimit: 1000,
       burstLimit: 2,
       interactiveReserve: 0,
+      // A clock below the warn interval, deliberately: a `lastWarnedAt` held as
+      // a number initialised to 0 reads as "warned at the epoch" and swallows
+      // the first line of the outage, which is the one that matters.
+      now: () => 1_000,
       log: { warn: (_fields, message) => void warnings.push(message) },
     });
 
@@ -437,5 +552,25 @@ describe("decodeObservation", () => {
     expect(decodeObservation("123|null")).toBeNull();
     expect(decodeObservation('123|{"limit":1000}')).toBeNull();
     expect(decodeObservation('123|{"limit":"lots","remaining":1}')).toBeNull();
+  });
+
+  it("rejects a date the Date constructor cannot represent", () => {
+    // Finite, and 24 hours past the maximum a Date can hold. `new Date` answers
+    // an Invalid Date rather than throwing, and an Invalid Date survives every
+    // `typeof` check on its way to `health.ts`'s `resetAt?.toISOString()`,
+    // where it throws a RangeError and takes /readyz down with it.
+    const base = {
+      limit: 1000,
+      remaining: 900,
+      burstLimit: 60,
+      burstRemaining: 55,
+      observedAt: 1_700_000_000_000,
+    };
+    expect(decodeObservation(`123|${JSON.stringify({ ...base, resetTime: 1e16 })}`)).toBeNull();
+    expect(decodeObservation(`123|${JSON.stringify({ ...base, observedAt: 1e16 })}`)).toBeNull();
+    // A null reset is not a bad reset — the provider simply did not say.
+    expect(
+      decodeObservation(`123|${JSON.stringify({ ...base, resetTime: null })}`)?.resetTime,
+    ).toBeNull();
   });
 });

@@ -63,6 +63,18 @@ const OBSERVATION_TTL_MS = 24 * 60 * 60 * 1000;
 const FAILURE_LOG_INTERVAL_MS = 60_000;
 
 /**
+ * The one line an operator is told to grep for.
+ *
+ * `deploy/vercel/README.md` and VERCEL-ALL-IN-SCOPE both name this exact string
+ * as the signal that the burst ceiling is unenforced, which is why the warn
+ * budget below is per-MESSAGE rather than one budget shared by every Redis
+ * fault in this file: an outage makes `peek` and `observe` fail too, and a
+ * single budget would let a `/readyz` scrape consume the minute and leave the
+ * operator running unenforced with only the other message in the log.
+ */
+const BURST_UNAVAILABLE = "shared burst window unavailable; counting in-process";
+
+/**
  * Take a slot in the shared burst window, atomically.
  *
  * Atomic because the whole point is concurrent instances: a read-then-write
@@ -166,7 +178,13 @@ export class RedisQuotaGovernor implements QuotaGovernor {
   private readonly local: QuotaGovernor;
   private readonly burstKey: string;
   private readonly observationKey: string;
-  private lastWarnedAt = 0;
+  /**
+   * Per-message, and absent means "never warned" — not "warned at the epoch".
+   * A numeric field initialised to 0 silently swallows the FIRST line of an
+   * outage under any injected clock below the interval, which is every test
+   * that fakes `now` and would be the one line that mattered.
+   */
+  private readonly lastWarnedAt = new Map<string, number>();
 
   constructor(options: RedisQuotaOptions) {
     this.redis = options.redis;
@@ -190,25 +208,36 @@ export class RedisQuotaGovernor implements QuotaGovernor {
   }
 
   /**
-   * Pre-flight, shared window first and local budget second.
+   * Pre-flight: take a slot in the shared window, ask the delegate, and **give
+   * the slot back if the delegate says no.**
    *
-   * The ORDER is the interesting part, because whichever check runs first is
-   * the one whose refusal costs nothing:
+   * The window must count calls that HAPPEN. Charging it for calls that were
+   * then refused is not a conservative rounding error, it is a feedback loop:
+   * every refusal writes a *fresh* timestamp, so a steady stream of refusals
+   * keeps the window permanently full and the ceiling never drains. The shape
+   * that makes this concrete is the one the interactive reserve exists to
+   * prevent, inverted — past `INTERACTIVE_RESERVE` the consumer's background
+   * calls are all refused, `transport.ts` reserves once per ATTEMPT, and sixty
+   * refusals in a minute would pin `quota:currents:burst` at its ceiling and
+   * refuse a live user search with 250 daily calls unspent and not one upstream
+   * call made. An earlier version of this method did exactly that.
    *
-   *   - Shared burst first, so a refusal leaves no local spend recorded. Its
-   *     verdict is also strictly stronger than the local window's — this
-   *     instance's calls are a subset of the deployment's — so the delegate's
-   *     own burst check can never be the sole refuser and no slot is wasted on
-   *     it.
-   *   - The delegate second, for the daily budget, the interactive reserve, and
-   *     to keep its in-memory window warm so falling open lands on a governor
-   *     that knows what this instance has been doing.
+   * The order is still shared-first, because the alternative — delegate first —
+   * records a DAY's spend for a call the window then refuses, and the day does
+   * not expire. Shared-first plus a release is the only arrangement where
+   * neither counter charges for a call that was never made.
    *
-   * The one case that does waste a shared slot is the delegate refusing on the
-   * daily budget after the window admitted us. That over-counts the burst
-   * window by one for at most one window, which is the conservative direction
-   * and self-correcting; the alternative ordering over-counts the DAY, which is
-   * neither.
+   * Two things the release is not: it is not a lock (nothing waits on it), and
+   * it is not required for correctness of the ceiling — a release that fails
+   * leaves one slot held for at most one window, which is the bounded version
+   * of the bug above rather than the unbounded one.
+   *
+   * The delegate is still asked second and unconditionally, for the daily
+   * budget, the interactive reserve, and to keep its in-memory window warm so
+   * falling open lands on a governor that knows what this instance has done.
+   * Note it CAN be the sole refuser — its `observed` clamp reads a
+   * `burstRemaining` upstream reported, which accounts for spend by clients
+   * that are not us — so this is a real path, not a theoretical one.
    */
   async reserve(priority: CallPriority): Promise<void> {
     const now = this.now();
@@ -217,10 +246,19 @@ export class RedisQuotaGovernor implements QuotaGovernor {
       throw new NewsQuotaError(
         `burst limit of ${this.bounds.burstLimit} calls per ` +
           `${this.burstWindowMs}ms reached across all instances`,
-        new Date(gate.oldest + this.burstWindowMs),
+        // `oldest` is 0 only when the window refused against an empty set,
+        // which needs a burst limit of zero — config forbids it, but this class
+        // is exported and takes the bound directly. Report a full window from
+        // now rather than a date in 1970.
+        new Date((gate.oldest || now) + this.burstWindowMs),
       );
     }
-    await this.local.reserve(priority);
+    try {
+      await this.local.reserve(priority);
+    } catch (error) {
+      if (gate) await this.releaseBurst(gate.member);
+      throw error;
+    }
   }
 
   /**
@@ -293,7 +331,13 @@ export class RedisQuotaGovernor implements QuotaGovernor {
   /** Null means Redis did not answer — the caller falls open. */
   private async gateBurst(
     now: number,
-  ): Promise<{ admitted: boolean; oldest: number } | null> {
+  ): Promise<{ admitted: boolean; oldest: number; member: string } | null> {
+    // Unique per call: two calls in the same millisecond are two calls, and a
+    // ZSET member keyed on the timestamp alone would silently collapse them
+    // into one — under-counting exactly when the burst is worst. It is also
+    // what `releaseBurst` needs to give back the right slot rather than
+    // whichever one happens to share a timestamp.
+    const member = `${now}:${randomUUID()}`;
     try {
       const result = (await this.redis.eval(
         RESERVE_BURST,
@@ -304,16 +348,29 @@ export class RedisQuotaGovernor implements QuotaGovernor {
         String(now - this.burstWindowMs),
         String(this.bounds.burstLimit),
         String(now),
-        // Unique per call: two calls in the same millisecond are two calls, and
-        // a ZSET member keyed on the timestamp alone would silently collapse
-        // them into one — under-counting exactly when the burst is worst.
-        `${now}:${randomUUID()}`,
+        member,
         String(this.burstWindowMs),
       )) as [number, number];
-      return { admitted: result[0] === 1, oldest: result[1] };
+      return { admitted: result[0] === 1, oldest: result[1], member };
     } catch (error) {
-      this.warn(error, "shared burst window unavailable; counting in-process");
+      this.warn(error, BURST_UNAVAILABLE);
       return null;
+    }
+  }
+
+  /**
+   * Give a slot back, because the call it was taken for is not going to happen.
+   *
+   * Unconditional `ZREM` rather than a read-modify-write: the member is unique
+   * to this call, so removing it cannot touch anyone else's slot and there is
+   * nothing to race against. Failure is swallowed for the reason `reserve`
+   * gives — a held slot expires with the window.
+   */
+  private async releaseBurst(member: string): Promise<void> {
+    try {
+      await this.redis.zrem(this.burstKey, member);
+    } catch (error) {
+      this.warn(error, "shared burst slot not released; it expires with the window");
     }
   }
 
@@ -354,8 +411,9 @@ export class RedisQuotaGovernor implements QuotaGovernor {
    */
   private warn(error: unknown, message: string): void {
     const now = this.now();
-    if (now - this.lastWarnedAt < FAILURE_LOG_INTERVAL_MS) return;
-    this.lastWarnedAt = now;
+    const previous = this.lastWarnedAt.get(message);
+    if (previous !== undefined && now - previous < FAILURE_LOG_INTERVAL_MS) return;
+    this.lastWarnedAt.set(message, now);
     this.log?.warn({ err: error, provider: this.provider }, message);
   }
 }
@@ -398,18 +456,39 @@ export function decodeObservation(raw: string): QuotaSnapshot | null {
   }
   if (typeof parsed !== "object" || parsed === null) return null;
   const wire = parsed as Partial<WireSnapshot>;
-  const numbers = [wire.limit, wire.remaining, wire.burstLimit, wire.burstRemaining, wire.observedAt];
-  if (numbers.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
+  const counts = [wire.limit, wire.remaining, wire.burstLimit, wire.burstRemaining];
+  if (counts.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
     return null;
   }
+
+  // Dates are checked for REPRESENTABILITY, not merely for being numbers. A
+  // finite epoch outside the Date range — 1e16 is finite and 24 hours past the
+  // maximum — constructs an Invalid Date rather than throwing, and an Invalid
+  // Date is a live grenade: it survives every `typeof` check, reaches
+  // `health.ts`'s `resetAt?.toISOString()`, and takes `/readyz` down with a
+  // RangeError. Exactly the outcome this function's contract forbids.
+  const observedAt = epochDate(wire.observedAt);
+  if (!observedAt) return null;
+  const resetTime = wire.resetTime === null || wire.resetTime === undefined
+    ? null
+    : epochDate(wire.resetTime);
+  if (wire.resetTime !== null && wire.resetTime !== undefined && !resetTime) return null;
+
   return {
     limit: wire.limit as number,
     remaining: wire.remaining as number,
     burstLimit: wire.burstLimit as number,
     burstRemaining: wire.burstRemaining as number,
-    resetTime: typeof wire.resetTime === "number" ? new Date(wire.resetTime) : null,
-    observedAt: new Date(wire.observedAt as number),
+    resetTime,
+    observedAt,
   };
+}
+
+/** A number the Date constructor can actually represent, or nothing. */
+function epochDate(value: unknown): Date | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 /**
