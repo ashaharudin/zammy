@@ -136,6 +136,29 @@ const EnvSchema = z
 
     REDIS_URL: RedisUrl,
 
+    /**
+     * Which transport carries the §9.1 ingest queue.
+     *
+     *   bullmq  jobs in Redis, drained by a worker inside this process. What a
+     *           persistent process wants, and what `docker compose up` and the
+     *           integration tests run.
+     *   vercel  a hosted Vercel Queues topic in push mode, drained by a separate
+     *           function with no public URL (VERCEL-ALL-IN-SCOPE §3.2).
+     *
+     * A deployment property, not a code one, which is why it is a knob rather
+     * than a build flag: the same image serves both shapes and the read path
+     * cannot tell the difference. What it MUST match is `vercel.json` — the
+     * trigger names the topic, and this driver publishes to it.
+     *
+     * The default is `bullmq` because getting it wrong in that direction is
+     * loud (nothing drains locally, and the boot line says the consumer is off)
+     * while the other direction is silent: a `vercel` driver in a process that
+     * also asked for an in-process consumer throws at boot on purpose, and one
+     * publishing to a topic no trigger points at looks exactly like a working
+     * queue until `meta.ingest` never drains.
+     */
+    INGEST_QUEUE_DRIVER: z.enum(["bullmq", "vercel"]).default("bullmq"),
+
     // --- upstream ---
     CURRENTS_MODE: z.enum(["live", "fixture"]).default("fixture"),
     CURRENTS_API_KEY: z.string().trim().optional(),

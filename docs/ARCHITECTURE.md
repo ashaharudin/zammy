@@ -193,9 +193,10 @@ fork.
 
 **Production requirements that Compose usefully exercises early:**
 
-- **At-least-once queue delivery** (BullMQ, or `BLMOVE` + processing list + reaper). Fargate
-  recycles tasks on every deploy and scaling event; a naive `LPOP` loses whatever the dying task
-  held. `docker compose down` and laptop sleep reproduce exactly that.
+- **At-least-once queue delivery** (BullMQ here; a hosted topic's own contract on Vercel). Instances
+  are recycled on every deploy and scaling event; a naive `LPOP` loses whatever the dying one held.
+  `docker compose down` and laptop sleep reproduce exactly that — and this is the deployment where
+  the semantics are still *asserted* rather than trusted, which is why the driver stays (§9.1).
 - **Graceful SIGTERM handling** — `docker compose down` sends SIGTERM, so the drain path is
   exercised constantly in development.
 - **Redis-backed coordination** — quota governance (§5.4), single-flight locks (§6.3), the
@@ -1030,12 +1031,24 @@ any of this to happen.
 covered, and is served from Postgres with zero upstream calls. Concurrent searches collapse into one
 upstream call via the single-flight lock (§6.3).
 
-The queue is Redis-backed with **at-least-once delivery** (BullMQ, or `BLMOVE` + processing list +
-reaper) — a plain `LPOP` is not sufficient on a platform that recycles instances (§4.1).
+The queue has **at-least-once delivery** on either transport — a plain `LPOP` is not sufficient on a
+platform that recycles instances (§4.1) — and `INGEST_QUEUE_DRIVER` picks which:
 
-The consumer runs **in-process in the API** under Compose, and as a Vercel Queues push consumer in
-production (§4.1, VERCEL-ALL-IN-SCOPE §3.2) — it stays structured as a separable unit, and the
-split is a `buildApp` option, not a fork. Quota honesty: the shared quota snapshot (§5.4) that
+- **`bullmq`** — jobs in Redis, drained by a worker in this process. Compose, local development, and
+  the integration tests, which assert real dedup and real redelivery against a real Redis.
+- **`vercel`** — a hosted Vercel Queues topic in push mode, published to by the request function and
+  drained by `api/queues/ingest.ts`, a function with no public URL (VERCEL-ALL-IN-SCOPE §3.2). Dedup
+  is the `idempotencyKey`, redelivery is the platform's, and both are trusted rather than tested.
+
+**What does not vary is the pending set.** `meta.ingest.pendingJobs` (§6.1, §6.5) is a Redis sorted
+set under both, keyed by the same content address the transport dedups on — so progressive delivery
+is untouched by the swap, and what is owed survives in a ledger of our own whether or not anything
+is draining it. Under `vercel` that ledger is best-effort: the message is already durable in the
+hosted topic, so a Redis blip makes `meta.ingest` under-report rather than failing the read.
+
+The consumer runs **in-process in the API** under Compose and as its own deployable on Vercel — it
+stays structured as a separable unit, and both routes through one `ingestDispatch`, over services
+one `buildServices` assembles. Quota honesty: the shared quota snapshot (§5.4) that
 would let N instances share the 60/60s burst ceiling is **designed and not built** (quota.ts, §13
 "Designed but unbuilt"); today's governor is per-process. One process, one governor is safe; the
 Vercel build carries the Redis burst window (VERCEL-ALL-IN-SCOPE §3.4) precisely because the
