@@ -1487,8 +1487,9 @@ apart see the same cloud.
 | 7b | Topic summaries into `topics.summary`. The schema reserves the columns (§7.2); nothing generates them. | ⬜ not started |
 
 Phases 1–4 were the walking skeleton; Phase 5 added depth and self-repairing freshness. The queue
-ran in-process (§9.1) throughout, so no phase introduced a second deployable — Vercel's Phase 2 is
-the first thing that will, and it lands behind the same `IngestQueue` interface.
+ran in-process (§9.1) throughout, so no phase here introduced a second deployable — Vercel's Phase 2
+was the first thing that did (2026-08-25, preview only), and it landed behind the same `IngestQueue`
+interface, which now has two implementations chosen by `INGEST_QUEUE_DRIVER`.
 
 Phase 2 was the highest-risk phase, not Phase 3, and that held up: deduplication is the difference
 between a usable timeline and an unusable one, cheapest to get right at schema time — the recorded

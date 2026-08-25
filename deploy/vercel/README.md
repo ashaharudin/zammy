@@ -2,10 +2,11 @@
 
 Plan A of [RESEARCH-VERCEL-SUPABASE](../../docs/RESEARCH-VERCEL-SUPABASE.md), adopted in
 [ADR-0015](../../docs/adr/0015-all-in-on-vercel-hobby-shaped.md) and phased in
-[VERCEL-ALL-IN-SCOPE §9](../../docs/VERCEL-ALL-IN-SCOPE.md). **Phase 1 is deployed and Phase 2's
-code has landed**: the api serves as one Function, the ingest queue has a push-mode consumer, and
-the chores are still manual. Phases 3–5 (the Redis quota governor and rate-limit store, the chores
-route, cutover) are scoped and unbuilt.
+[VERCEL-ALL-IN-SCOPE §9](../../docs/VERCEL-ALL-IN-SCOPE.md). **Phases 1 and 2 are deployed to
+preview and verified**: the api serves as one Function, the ingest queue has a push-mode consumer
+that drains and redelivers, and `POST /api/drain` is the manual fallback. The chores are still
+manual. Phases 3–5 (the Redis quota governor and rate-limit store, the chores route, cutover) are
+scoped and unbuilt — so **nothing here is serving production traffic yet**.
 
 The configuration itself lives at the repository root, because that is where Vercel looks:
 [`vercel.json`](../../vercel.json), [`api/index.ts`](../../api/index.ts),
@@ -188,6 +189,11 @@ line as `ingest drain complete`. Operating notes:
 
 ## What Phase 2 does not do
 
+- **Nothing is in production.** Phase 2 is verified on *preview* only. Production has no seeded
+  corpus and no `INGEST_QUEUE_DRIVER`, so leaving it at the `bullmq` default there would publish to
+  a Redis queue nothing drains. Cutover is Phase 5.
+- **The drain has never run against a live deployment.** Its logic is unit-tested; the real Redis
+  `SCAN` and a real fill are not. Use `?limit=1` for the first pass.
 - **The chores do not run.** No route, no schedule, no `chore_runs` table yet (§3.3), and the
   Supabase free-tier pause guard comes with them. Until then a deployed project's database is
   reachable only as long as something else keeps it awake.

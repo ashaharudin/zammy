@@ -9,9 +9,10 @@ from a sweep of `apps/api`, `packages/news-client` and the web client (re-verifi
 every platform claim carries a source at the bottom. Scoped 2026-08-21. **Phase 0 ran on
 2026-08-22 and moved three of the numbers below — see
 [VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md), and §3.3 and §9 for what it changed.
-Its deployment half finished on 2026-08-23 (findings §8), which closed the last two open questions,
-and **Phase 1's code has landed** — [deploy/vercel/](../deploy/vercel/) is the operator's half of
-it.**
+Its deployment half finished on 2026-08-23 (findings §8), which closed the last two open questions.
+**Phases 1 and 2 are now deployed to preview and verified** (2026-08-24 and 2026-08-25); Phase 2's
+one failure and its fix are Q0. Nothing is in production yet — that is Phase 5.
+[deploy/vercel/](../deploy/vercel/) is the operator's half of it.**
 
 **Bottom line: 7–12 focused days, and one piece of it no delivery phase carried.** Two things
 changed the shape of this since the research doc was written:
@@ -651,7 +652,7 @@ Each phase ends with something demonstrable; none of them is "and then we cut ov
 |---|---|---|
 | **0. Spikes** (0.5–1 d) ✅ | Prove the project shape (§1.1) on a throwaway deployment: Vite preset + `api/` function + a `queue/v2beta` trigger firing. Measure `buildApp` cold start. Measure `chores storylines` wall-clock at 90 days of corpus, bounded and unbounded. Measure the corpus against Supabase's 500 MB — a **now**-question, since production is seeded from it (Phase 5). Confirm Queues' Hobby allowance in the dashboard (§8). | **Done, both halves.** The three numbers ([VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md)): cold start ~360 ms local, 947 ms on the platform of which ~550 ms is container start (§7.1); `chores storylines` ~3.5 h unbounded, with the **late-candidate sweep at ~506 s the phase that breaks the ceiling** — since found to be a linking bug and gated off; corpus 190 MB with the 500 MB tripwire at ~1,485 articles/day after a reindex. The deployment half (findings §8): the Vite preset builds the SPA and the `api/` directory together, the `queue/v2beta` trigger fires on a bare `api/` function **on a Hobby account**, `waitUntil` outlives the 202, and the cron entry validates. The rewrite correction (§3.1) is the one thing it changed structurally. |
 | **1. The api as a Function** (1–2 d) ✅ | §3.1. Consumer disabled, chores still manual. Preview in fixture mode against the preview data plane (§4). | **Done, deployed and verified 2026-08-24** (commit `8be3fa9`). `/readyz` returns `{"status":"ready"}` with `postgres.ok` and `redis.ok` both true. The three halves only a deploy could exercise all came back: **Supabase through the transaction pooler** — a `/api/v1/timeline` read whose `servedFrom` moves `upstream` → `store` across polls, so the rows were written and read back through 6543; **Upstash** — reachable, after the scheme fix below; **`includeFiles` does place `fixtures/`** — a fresh topic answers `servedFrom: "upstream"` with recorded fixture content, and an absent directory would have failed the boot into a 503 instead. Cold start **993 ms**, warm 190–298 ms — close to Phase 0's 947 ms on the platform (§7.1). All 17 migrations applied through the session pooler under `verify-full` in 8.2 s. **One third of the criterion as written was unreachable and is struck** — `degraded: "ingest_timeout"`, see below. |
-| **2. The queue** (2–3 d) ⚠️ | §3.2 — new `IngestQueue` implementation (all seven members, plus `settle` — below), `api/queues/ingest.ts`, 5-min message TTL, rewritten tests. | **Two of three hold; the third FAILS.** Deployed 2026-08-25 (`zammy-k2y801sfm`). The queue drains: a delivery logs `ingest delivery` then `ingest job settled` for the same message id, and `meta.ingest` reaches zero. **A killed consumer does NOT redeliver** — a deliberately poisoned message was delivered exactly once under both callback shapes and lost when retention expired (§3.2). The pending set contains the damage, which is the bet ADR-0015 made, but at-least-once is not what is running. |
+| **2. The queue** (2–3 d) ✅ | §3.2 — new `IngestQueue` implementation (eight members counting `settle`), `api/queues/ingest.ts`, a **900 s** message TTL (not the 5 min §0 planned — see Q0), rewritten tests, and `POST /api/drain`. | **All three criteria met, deployed and verified 2026-08-25.** A cold topic fills behind the reader; `meta.ingest` drains to zero — a delivery logs `ingest delivery` then `ingest job settled` for one message id, which is the evidence, not the 200; and **a failed delivery now redelivers** at +0 s, +305 s and +610 s, the third settling and giving up. Getting the third took a day: it failed first, and the cause was a 300 s TTL colliding with a 305 s visibility lease (Q0). Two things this phase added beyond its scope, both because the failure showed they were needed: per-delivery logging, and the manual drain promoted from fallback to built. **The drain has never run against a live deployment** — its logic is unit-tested only. |
 | **3. Quota + limits** (1–2 d) | §3.4 (burst-only, fail-open) and §3.5 (Redis store, fail-open). | The burst ceiling holds with the consumer and the request path both running; the per-IP guard is real; both degrade to in-process when Redis is down |
 | **4. Chores** (1–1.5 d) | §3.3 + Supabase Cron + `chore_runs` + the keep-alive ping, **plus what Phase 0 added**: the `REINDEX CONCURRENTLY` sweep in the retention chore. The late-candidate sweep is gated off (findings §2.6), so this phase no longer carries a deadline problem; if it is ever switched back on, the bound and persisted cursor come back with it. | All scheduled passes run on schedule and write `chore_runs` rows, any pass runs on demand by query param, twice-triggered runs skip on the lock, the 202 arrives from cold within pg_net's configured timeout, **and a gated night reports `skipped: true` rather than a clean `offered: 0`** |
 | **5. Observability + cutover** (1–2 d) | The migration CI jobs (§6, prod + preview), env vars (§4), **seed production from the dev corpus** (a 24 MB `pg_dump -Fc`, measured at 1.9 s out and 1.1 s in — findings §4), DNS. Drain the 2,981-storyline label backlog first (§3.3). | Production traffic against the seeded corpus, and "did last night's chores run?" is answered by a `chore_runs` query |
@@ -660,6 +661,24 @@ Each phase ends with something demonstrable; none of them is "and then we cut ov
 late-candidate sweep's deadline problem out of the plan altogether — it was a linking bug, its fix
 exposed a runaway, and the pass is now gated off (findings §2.6). Phase 0's deployment half and
 Phase 1 have both since run and neither moved the estimate; the remaining spread is Phase 2.
+
+### Phase 2 as it stands
+
+**Done and deployed to preview; not in production.** All three exit criteria are met (§9's table).
+The queue publishes, drains and — after a same-day fix — redelivers. Two things were added beyond
+the phase's scope because the redelivery failure showed they were needed: **per-delivery logging**
+(without it a consumer 200 is unreadable) and **`POST /api/drain`**, promoted from §3.2's named
+fallback to built code.
+
+**What is not verified:** the drain has never run against a live deployment — ten unit tests, no
+real Redis `SCAN` and no real fill. `?limit=1` exists for a cautious first pass. And **production
+carries none of this**: no seeded corpus, no `INGEST_QUEUE_DRIVER` on the production environment,
+no cutover. That is Phase 5.
+
+**The standing tripwire:** the 900 s TTL is sized against a platform latency that has already moved
+30× once (Q0). If the visibility lease passes 900 s, redelivery breaks again, silently and
+identically. The signal is `deliveryCount` never exceeding 1 in the consumer's logs — worth checking
+after any Queues change.
 
 ### What the Phase 2 deploy proved, and what it did not
 
@@ -683,11 +702,17 @@ not finished when the health check probes (Upstash handshakes in ~800 ms). Every
 reads `ready`. **So one `degraded` immediately after a deploy proves nothing**; re-probe before
 concluding the scheme is wrong.
 
-**Redelivery on failure was then tested deliberately, and it does not work** (§3.2's table). A
+**Redelivery on failure was then tested deliberately, failed, and was fixed the same day.** A
 throwaway deployment carrying a publisher for a poisoned segment job — a well-formed payload naming
 a fingerprint nothing had upserted, so `processSegmentJob` fails on every delivery — produced
-exactly one delivery under both callback shapes. **This is the finding of Phase 2 and it is not a
-code bug**; it is the beta risk ADR-0015 accepted, arriving.
+exactly one delivery under both callback shapes. The first reading of that was **wrong in an
+instructive way**: it was recorded here as "the beta risk ADR-0015 accepted, arriving", i.e. a
+platform fault we would have to live behind the pending set. It was a one-constant bug in our own
+driver (Q0). Both experiments had held the TTL fixed at the value that *was* the bug, so neither
+could see it; what exposed it was re-running the **spike's own unmodified deployment**, which
+redelivered four times three days earlier and once that day. The lesson worth keeping is the
+control, not the constant: when two variants of your own code both fail, the next move is the
+untouched baseline, not a third variant.
 
 **A 200 from the consumer never meant "success", and the logging now says which it was.** The SDK
 answers 200 for a success, for a message it rescheduled after a throw, AND for one given up on — so
