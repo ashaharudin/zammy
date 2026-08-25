@@ -8,7 +8,7 @@ import type { IngestJob, SegmentJob } from "./ingest-queue.js";
  *
  * Everything asserted here is a way the queue could go wrong SILENTLY, which is
  * what makes it worth pinning: a job that runs but is never settled leaves the
- * topic reading `in_progress` until the five-minute stale prune; a job that is
+ * topic reading `in_progress` until the fifteen-minute stale prune; a job that is
  * settled before it runs turns at-least-once into at-most-once; and a payload
  * that cannot be parsed spins until retention expires unless something decides
  * to drop it.

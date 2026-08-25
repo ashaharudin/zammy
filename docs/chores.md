@@ -136,13 +136,42 @@ needs a tighter cadence.
 | `chores --pass storylines` | nightly | converges night over night; the label pass costs money |
 | `POST /api/drain` | every 5–15 min | anything slower and only cold topics are ever covered |
 
-## The known misalignment
+## The pending window, and why it is 15 minutes
 
-`STALE_PENDING_MS` is 5 minutes and the hosted retry budget is ~610 s, so **the pending window is
-now shorter than the retry budget it used to bound.** A pending entry can age out while the queue
-still intends to retry the job, which under-reports `meta.ingest` — the client stops polling early
-and the fill still lands. That is the fail-open direction, and it is why this was left rather than
-fixed in passing, but the two clocks are no longer the same clock. Note this does **not** create a
-hole the drain can fall into: the drain's floor is 900 s, well past both numbers. Aligning them is
-unbuilt, and complicated by `PendingSet` being shared with the BullMQ driver, whose budget completes
-in under a second — so honouring both probably means the window becomes per-driver.
+Raising the ingest message TTL to 900 s left `STALE_PENDING_MS` at 5 minutes, **shorter than the
+retry budget it used to bound**: the stale prune fired at 300 s and the second delivery did not land
+until 305 s, so a pending entry was deleted as crashed-consumer residue 5 s before the queue retried
+the job it named. **Resolved 2026-08-25 by raising `STALE_PENDING_MS` to 15 minutes**, matching
+`INGEST_RETENTION_SECONDS`. The reasoning is worth keeping, because the obvious reading of it is
+wrong twice.
+
+**The consequence was not an early-stopping poll loop.** That is what the code comments said, and
+`INGEST_POLL_MAX` disproves it: the web client polls 40 times at 1.5 s and gives up after ~60 s —
+240 s before the prune could ever fire. No spinner was ever cut short. What saw the premature prune
+was [`timeline-service`](../apps/api/src/timeline-service.ts)'s cache gate, which writes only a
+`complete` page. A pruned count reads `complete`, so an incomplete page was **written to the cache as
+settled — for up to 24 hours on the historical freshness tier**, and the retry's fill stayed
+invisible until it expired.
+
+**So under-reporting was not the fail-open direction here.** `pendingJobs > 0` can only suppress a
+cache write and hold `in_progress` longer; it costs latency and quota and cannot serve a wrong
+answer. `pendingJobs == 0` when work is still owed persists one. That inverts the §3.4/§3.5
+comparison the deferral rested on — those fail open toward *answering with less*, not toward
+*writing something untrue* — and it is why the window went up rather than staying put.
+
+The price, paid deliberately: a genuinely crashed consumer now holds a topic at `in_progress` for 15
+minutes rather than 5, suppressing caching for that whole time.
+
+**Why it stayed one shared constant.** `PendingSet` is shared with the BullMQ driver, whose retry
+budget is ~600 ms (`attempts: 3`, exponential from 200 ms), so 15 minutes is far past anything that
+transport needs — a per-driver window is the alternative. It was not taken because under BullMQ this
+window is pure crashed-consumer GC, and what a crashed consumer costs is a function of deploy-recycle
+time, the same wall clock under both transports. Per-driver buys a faster local-dev recovery and
+nothing else.
+
+**What it fixed for this route.** The drain's floor is `INGEST_RETENTION_SECONDS` (900 s), so the
+prune and the floor now coincide. The safety argument is untouched — the floor is against the message
+TTL, and that has not moved — but while the prune fired at 5 minutes it erased every entry on a read
+topic *before* the drain was allowed to look at it, so this route could only ever have helped topics
+nobody reads. `drain.test.ts` now pins `STALE_PENDING_MS >= DRAIN_MIN_AGE_MS` so that cannot come
+back.

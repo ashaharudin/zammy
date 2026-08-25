@@ -46,6 +46,14 @@ import { buildServices, ingestDispatch, type ServiceLogger } from "./server.js";
  * may still be retrying, and a drain that fills there would spend upstream
  * quota on a segment the queue is about to deliver anyway — the one failure
  * mode that would make this route worse than not having it.
+ *
+ * `STALE_PENDING_MS` was raised to this same fifteen minutes on 2026-08-25, so
+ * the floor and the stale prune now coincide. That does not weaken the argument
+ * above — it is a floor against the TTL, and the TTL has not moved — but it does
+ * fix a second-order oddity: while the prune fired at five minutes it erased
+ * every entry on a read topic long BEFORE the drain was allowed to look at it,
+ * so this route could only ever have helped topics nobody reads. The prune must
+ * therefore stay at or above this floor, which `drain.test.ts` pins.
  */
 export const DRAIN_MIN_AGE_MS = INGEST_RETENTION_SECONDS * 1000;
 
