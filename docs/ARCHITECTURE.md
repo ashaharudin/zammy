@@ -575,7 +575,8 @@ re-requests the first page (~1.5s interval) and stops on `complete`. In TanStack
 conditional `refetchInterval`. SSE would be smoother but adds long-lived connections, proxy
 buffering, and reconnect logic for a window typically 2–4 seconds long; the contract (`meta.ingest`)
 doesn't change, so SSE stays a contained upgrade. Bounded: the client gives up after
-`INGEST_POLL_MAX` attempts (default 8) and renders `degraded: "ingest_timeout"` with a manual retry.
+`INGEST_POLL_MAX` attempts (default 8) and simply stops polling — no error, no manual retry
+affordance; the last page just stays at `ingest.state: "in_progress"`.
 
 ---
 
@@ -1375,7 +1376,7 @@ apart see the same cloud.
 | Upstream 5xx / timeout | Retry per §5.3, then circuit-break; serve stale with `meta.degraded = "upstream"`. |
 | Segment returns a full 5 pages | Truncated by the 100-cap, **not** complete: record the fetched frontier as covered, enqueue the remainder (§6.3). Metric on this — a rising rate means dense windows are walking, not sprinting. |
 | First synchronous call fails on a cold topic | Nothing to show: normal error state with retry. The only case with no content to fall back on — why it gets the one guaranteed synchronous call. |
-| Deferred ingest job fails or stalls | Coverage is not extended; the gap remains and the next reader retries it. Client stops polling after `INGEST_POLL_MAX`, shows `degraded: "ingest_timeout"` — never an indefinite spinner. |
+| Deferred ingest job fails or stalls | Coverage is not extended; the gap remains and the next reader retries it. Client stops polling after `INGEST_POLL_MAX` — never an indefinite spinner, but no explicit timeout signal either; `meta.ingest.state` just stays `"in_progress"`. |
 | Ingest still running when user scrolls past loaded rows | `hasMore: false` with `ingest.state: "in_progress"` → "still gathering", **not** "end of results" (§6.1). |
 | Redis down | Skip cache and single-flight; serve from Postgres. Quota falls back to a conservative in-process limiter. Degraded, not down. |
 | Postgres down | `503` from `/readyz`; the API cannot honour its ordering guarantee without it. The one hard dependency. |

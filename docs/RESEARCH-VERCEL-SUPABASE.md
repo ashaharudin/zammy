@@ -88,7 +88,8 @@ billable idle work on a platform that bills for it (§5).
 What breaks, concretely, is **progressive delivery (§6.5)**. The client polls up to 40 times over
 ~60s waiting for background jobs to land ([useTimeline.ts:16](../apps/web/src/useTimeline.ts)); with
 no consumer, every cold topic paints page 1 from the synchronous deadline-bounded fill and then sits
-until the client gives up with `degraded: "ingest_timeout"`. The deferred backfill, the breadth
+— `meta.ingest.state` stuck at `"in_progress"` — until the client gives up polling after
+`INGEST_POLL_MAX` attempts. The deferred backfill, the breadth
 sample that feeds the landing-page wordcloud (§10.1), and refresh-on-read (§6.4) all stop happening.
 Nothing is *corrupted* — §11's design holds, the next reader re-plans the gap — but the product
 degrades to "whatever one synchronous call could fetch."
