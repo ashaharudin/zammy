@@ -19,6 +19,7 @@ import {
   createLinkerConfig,
 } from "./wiring.js";
 import { Metrics, registerMetricsRoute } from "./metrics.js";
+import { createQuotaGovernors } from "./quota-redis.js";
 import { processSegmentJob, type TimelineDeps } from "./timeline-service.js";
 import { processSampleJob, type TrendingDeps } from "./trending-service.js";
 
@@ -28,6 +29,15 @@ import { processSampleJob, type TrendingDeps } from "./trending-service.js";
  * would recurse until it consumed the whole daily quota.
  */
 const MIN_SEGMENT_MS = 60 * 60 * 1000;
+
+/**
+ * Key prefix for the per-IP rate-limit counters (§7.1's convention, §3.5's
+ * move to Redis). Exported because the counter now OUTLIVES the process that
+ * wrote it, which is the whole point in production and a nuisance in a test
+ * suite: a run that deliberately exhausts the limit leaves the bucket full for
+ * whatever runs next inside the window.
+ */
+export const RATE_LIMIT_NAMESPACE = "ratelimit:";
 
 /**
  * The §10.1 breadth-sample scope: curated values from the /v2/latest-news
@@ -176,7 +186,17 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
     // API or from recorded payloads, nor which upstream answered
     // (ARCHITECTURE 4.1 — a code path that branches on environment is a code path
     // local development stops predicting; ARCHITECTURE 5.6 for the provider seam).
-    const currents = await createNewsClient(config, { logger: log });
+    // The quota governors are built from the SAME Redis client the page cache
+    // and the locks use, and handed in here rather than defaulted inside the
+    // adapters: the burst ceiling is a per-KEY limit, so it has to be counted
+    // once across every instance that holds the key, not once per instance
+    // (VERCEL-ALL-IN-SCOPE §3.4). Each falls open to the in-process counting
+    // that was here before, so Redis being down costs exactly today's
+    // behaviour.
+    const currents = await createNewsClient(config, {
+      logger: log,
+      quota: createQuotaGovernors(config, redis, log),
+    });
     abandon.push(() => currents.close());
     if (config.CURRENTS_MODE === "fixture") {
       log.info(
@@ -325,14 +345,46 @@ export async function buildApp(
     await app.register(cors, { origin: config.CORS_ORIGIN.split(",").map((o) => o.trim()) });
 
     // Per-IP limit on /api/v1/* only (§9.4, §12): novel-fingerprint spam can
-    // mint topics and spend quota, but the ALB health check and the Prometheus
-    // scrape must never 429. Counters are in-process on purpose — per-task
-    // limiting is bounded enough, and a Redis-held counter would add a shared
-    // failure mode to the request path for precision nobody needs.
+    // mint topics and spend quota, but the health check and the metrics scrape
+    // must never 429.
+    //
+    // **The counters are Redis-held, and they used to be in-process on purpose.**
+    // The note that stood here said a shared counter "would add a shared failure
+    // mode to the request path for precision nobody needs", and on a fixed
+    // replica count that was right: the effective ceiling was
+    // RATE_LIMIT_PER_MINUTE × a number we chose. Elastic instances make that
+    // number unbounded, and Hobby has no WAF to put the limit anywhere else
+    // (Pro-only), so the choice collapsed to a Redis store or a decorative guard
+    // (VERCEL-ALL-IN-SCOPE §3.5). Decorative is the worse option, because what
+    // this limit protects is the thing that actually runs out — the Currents
+    // daily quota — and one spammer's novel fingerprints would drain a day of it.
+    //
+    // The coupling the old note warned about is answered rather than denied:
+    // `skipOnError` makes a Redis fault read as "not limited", the same
+    // fail-open posture §3.4's governor and the page cache take. Redis down
+    // costs us the ceiling, never the request.
+    //
+    // **That opening is wider than "the first caller through a cold instance",
+    // and it was measured, not reasoned about.** 24 concurrent requests against
+    // the preview fanned out across six instances and SEVEN of them came back
+    // `x-ratelimit-remaining: 60` — a number `INCR` cannot produce, so those
+    // seven took the fail-open path. The function log names the cause:
+    // `connect ETIMEDOUT` on a cold instance's Upstash handshake. A burst big
+    // enough to force scale-out therefore buys the caller a slice of unlimited
+    // requests, which is precisely the shape of traffic this guard is for. It
+    // is still strictly better than the in-process counter it replaced (which
+    // gave every one of those instances a whole fresh allowance, not one
+    // request), and the alternative — failing closed — would 429 real users
+    // over a cache blip. Worth revisiting if the guard ever has to be tight.
     await app.register(rateLimit, {
       max: config.RATE_LIMIT_PER_MINUTE,
       timeWindow: 60_000,
       allowList: (request) => !request.url.startsWith("/api/"),
+      redis: services.redis,
+      // §7.1's key convention. The plugin concatenates this with `request.ip`
+      // and nothing else, so the whole deployment shares one bucket per caller.
+      nameSpace: RATE_LIMIT_NAMESPACE,
+      skipOnError: true,
     });
 
     app.decorate("currents", services.currents);

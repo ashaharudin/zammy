@@ -40,7 +40,8 @@ export interface CreateNewsClientDeps {
    * a single replica that stays up, and wrong in the two ways
    * `InProcessQuotaGovernor` documents — notably worse for GNews, which sends
    * no headers to correct a restart's optimism. ARCHITECTURE 5.4's Redis-backed
-   * snapshot belongs here; it is designed and not yet built.
+   * governor belongs here and `apps/api` supplies one; its burst half is built
+   * and its day-rolling ledger is not, which is exactly why GNews stays off.
    */
   quota?: Record<string, QuotaGovernor>;
 }

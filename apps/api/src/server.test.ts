@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server, type Socket } from "node:net";
 import pg from "pg";
+import { Redis } from "ioredis";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type Config, loadConfig } from "@zammy/config";
 import { createDb, migrateToLatest } from "@zammy/storage";
 import { TimelinePage } from "@zammy/shared";
-import { buildApp, type App } from "./server.js";
+import { RATE_LIMIT_NAMESPACE, buildApp, type App } from "./server.js";
 
 /**
  * The walking skeleton, end to end: real config loading, real Postgres, real
@@ -16,6 +17,23 @@ import { buildApp, type App } from "./server.js";
 const PG_ADMIN_URL =
   process.env.TEST_DATABASE_URL ?? "postgres://zammy:zammy@localhost:5432/zammy";
 const FIXTURES_DIR = new URL("../../../fixtures/", import.meta.url).pathname;
+const REDIS_URL = process.env.TEST_REDIS_URL ?? "redis://localhost:6379";
+
+/**
+ * The per-IP rate-limit bucket, which is Redis-held now (§3.5) and therefore
+ * outlives the process that filled it. That is the point in production and a
+ * nuisance here: the limit test below deliberately exhausts it, and without a
+ * reset every /api/v1/* assertion in this file would 429 for the rest of the
+ * minute — including on the next run.
+ *
+ * Its own client rather than the app's, because `buildServices` connects
+ * lazily with `enableOfflineQueue: false`: the app's client is not writable
+ * yet at the moment `buildApp` returns, which is the same reason a cold
+ * instance's first `/readyz` reads `degraded`.
+ */
+const housekeeping = new Redis(REDIS_URL);
+const clearRateLimitBucket = (): Promise<number> =>
+  housekeeping.del(`${RATE_LIMIT_NAMESPACE}127.0.0.1`);
 
 describe("buildApp", () => {
   let dbName: string;
@@ -41,17 +59,19 @@ describe("buildApp", () => {
       NODE_ENV: "test",
       LOG_LEVEL: "warn",
       DATABASE_URL: url.toString(),
-      REDIS_URL: process.env.TEST_REDIS_URL ?? "redis://localhost:6379",
+      REDIS_URL,
       CURRENTS_MODE: "fixture",
       CURRENTS_USER_AGENT: "zammy-tests/0.1",
       FIXTURES_DIR,
     });
     built = await buildApp(config);
     await built.app.ready();
+    await clearRateLimitBucket();
   });
 
   afterAll(async () => {
     await built.close();
+    await housekeeping.quit();
     const cleanup = new pg.Pool({ connectionString: PG_ADMIN_URL, max: 1 });
     try {
       await cleanup.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
@@ -95,6 +115,20 @@ describe("buildApp", () => {
 
     expect((await built.app.inject({ method: "GET", url: "/healthz" })).statusCode).toBe(200);
     expect((await built.app.inject({ method: "GET", url: "/metrics" })).statusCode).toBe(200);
+
+    // And the counter is SHARED, which is the whole of §3.5: elastic instances
+    // made the in-process ceiling RATE_LIMIT_PER_MINUTE × an unbounded number,
+    // and Hobby has no WAF to put the limit anywhere else. A second app on the
+    // same Redis inherits the exhausted bucket rather than handing the caller a
+    // fresh allowance.
+    const second = await buildApp(config, { consumer: false });
+    try {
+      const response = await second.app.inject({ method: "GET", url: "/api/v1/reference" });
+      expect(response.statusCode).toBe(429);
+    } finally {
+      await second.close();
+      await clearRateLimitBucket();
+    }
   });
 
   it("starts the §9.1 consumer by default and not at all when told not to", async () => {

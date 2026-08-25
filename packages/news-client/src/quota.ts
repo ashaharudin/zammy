@@ -71,8 +71,20 @@ export interface QuotaGovernor {
   peek(): Promise<QuotaView>;
 }
 
+/**
+ * Upstream's burst window. 60s, verified (PROBE-FINDINGS 1).
+ *
+ * Exported because a second governor now has to agree with this one about the
+ * window's LENGTH or the two disagree about what "60 calls" bounds — and a
+ * shared window sized differently from the in-process one it falls open to
+ * would enforce two different ceilings depending on whether Redis was up.
+ * GNews sets its own (`GNEWS_BURST_WINDOW_MS`, a second rather than a minute);
+ * Currents has no knob because there has never been a second value for it.
+ */
+export const DEFAULT_BURST_WINDOW_MS = 60_000;
+
 export interface InProcessQuotaOptions extends QuotaBounds {
-  /** Upstream's burst window. 60s, verified (PROBE-FINDINGS 1). */
+  /** Upstream's burst window. Defaults to `DEFAULT_BURST_WINDOW_MS`. */
   burstWindowMs?: number;
   now?: () => number;
 }
@@ -102,10 +114,15 @@ export interface InProcessQuotaOptions extends QuotaBounds {
  * refusal exists to avoid.
  *
  * ARCHITECTURE 5.4 describes the fix — a Redis-held snapshot shared by the API
- * and worker, keyed per provider. It is designed and NOT built; no delivery
- * phase carries it (§13). The interface is ready for it: three async methods,
- * and `createNewsClient` already accepts per-provider governors through
- * `deps.quota`, so it is a contained change rather than a migration.
+ * and worker, keyed per provider. **Its burst half is now built**, in
+ * `apps/api`'s `RedisQuotaGovernor` (VERCEL-ALL-IN-SCOPE §3.4, Phase 3): a
+ * sliding window in a sorted set that every instance shares, plus the observed
+ * snapshot written where any of them can read it. This class is what that one
+ * FALLS OPEN TO when Redis is unreachable, and what it delegates the daily
+ * budget and the interactive reserve to — so neither of the two consequences
+ * above has gone away, they have been narrowed to the day-rolling ledger. That
+ * ledger stays unbuilt on purpose: its only customer is a headerless provider,
+ * and enabling GNews requires building it first.
  */
 export class InProcessQuotaGovernor implements QuotaGovernor {
   private readonly bounds: QuotaBounds;
@@ -126,7 +143,7 @@ export class InProcessQuotaGovernor implements QuotaGovernor {
 
   constructor(options: InProcessQuotaOptions) {
     this.bounds = options;
-    this.burstWindowMs = options.burstWindowMs ?? 60_000;
+    this.burstWindowMs = options.burstWindowMs ?? DEFAULT_BURST_WINDOW_MS;
     this.now = options.now ?? Date.now;
     this.dayKey = utcDayKey(this.now());
   }
@@ -254,7 +271,13 @@ export class UnmeteredQuotaGovernor implements QuotaGovernor {
   }
 }
 
-function utcDayKey(epochMs: number): string {
+/**
+ * The UTC day a moment falls in. Exported so a shared governor rolls the daily
+ * budget on exactly the same boundary this one does; two implementations
+ * disagreeing about when midnight is would show up as a budget that resets
+ * twice, or not at all, depending on which one was asked.
+ */
+export function utcDayKey(epochMs: number): string {
   return new Date(epochMs).toISOString().slice(0, 10);
 }
 

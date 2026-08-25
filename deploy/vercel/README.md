@@ -5,8 +5,10 @@ Plan A of [RESEARCH-VERCEL-SUPABASE](../../docs/RESEARCH-VERCEL-SUPABASE.md), ad
 [VERCEL-ALL-IN-SCOPE §9](../../docs/VERCEL-ALL-IN-SCOPE.md). **Phases 1 and 2 are deployed to
 preview and verified**: the api serves as one Function, the ingest queue has a push-mode consumer
 that drains and redelivers, and `POST /api/drain` is the manual fallback. The chores are still
-manual. Phases 3–5 (the Redis quota governor and rate-limit store, the chores route, cutover) are
-scoped and unbuilt — so **nothing here is serving production traffic yet**.
+manual. **Phase 3 (the Redis quota governor and rate-limit store) is deployed to preview**: the
+per-IP guard is verified shared across six instances, and the burst ceiling is deployed but
+unexercised, because a fixture-mode preview never calls the governor at all. Phases 4–5 (the chores
+route, cutover) are scoped and unbuilt — so **nothing here is serving production traffic yet**.
 
 The configuration itself lives at the repository root, because that is where Vercel looks:
 [`vercel.json`](../../vercel.json), [`api/index.ts`](../../api/index.ts),
@@ -78,7 +80,13 @@ vercel build && vercel deploy --prebuilt
 returns `readyState: BLOCKED` (`TEAM_ACCESS_REQUIRED`) — rendered as `UNKNOWN` by `vercel ls`, with
 `vercel inspect --logs` printing nothing (VERCEL-ALL-IN-SCOPE, "What the Phase 1 deploy corrected").
 An `rsync -a --exclude .git --exclude node_modules --exclude .vercel` into a scratch directory, plus
-a copy of `.vercel/project.json`, is the whole workaround. Confirm with `vercel inspect <url>`
+a copy of `.vercel/project.json`, is the whole workaround. **Do not add `--exclude dist` to that
+list without also deleting `*.tsbuildinfo`.** The build info files sit beside each `tsconfig.json`,
+not inside `dist`, so a copy that drops the output but keeps them leaves `tsc -b` believing every
+project is up to date: it prints `Done` for all nine, emits nothing, and `vercel build` reports
+`status: ok` having produced functions with no code in them. The only visible symptom before the
+deploy is `apps/web` failing to resolve `@zammy/shared` — the one package whose consumer typechecks
+against `dist`. Confirm with `vercel inspect <url>`
 showing `● Ready`; the CLI's exit code is not a signal.
 
 `vercel build` alone is worth running before any push that touches the layout: it produces
@@ -200,6 +208,18 @@ line as `ingest drain complete`. Operating notes:
 - **The chores do not run.** No route, no schedule, no `chore_runs` table yet (§3.3), and the
   Supabase free-tier pause guard comes with them. Until then a deployed project's database is
   reachable only as long as something else keeps it awake.
-- **The quota governor is still per-instance**, and so is the per-IP rate limit (§3.4, §3.5). Both
-  are Phase 3, and both are the reason not to leave a Phase 1 deployment serving real traffic in
-  `CURRENTS_MODE=live` for long.
+- **The quota governor has never governed anything on a deployment.** Phase 3 ships it and a
+  fixture-mode preview cannot exercise it: `CURRENTS_MODE=fixture` returns `FixtureCurrentsClient`,
+  which builds its own unmetered governor and ignores the injected one. `/readyz` reporting
+  `dailyRemaining: 1000, burstRemaining: 60, observed: false` is that unmetered governor answering,
+  not evidence the shared window works. Closing it needs `CURRENTS_MODE=live` and a key on the
+  preview, with `CURRENTS_BURST_CALL_LIMIT` temporarily lowered to ~3 so the probe costs a handful
+  of calls instead of 61 (VERCEL-ALL-IN-SCOPE, "Phase 3 as it stands"). Until then this stays the
+  reason not to leave a preview serving real traffic in `CURRENTS_MODE=live` for long.
+- **Both guards fail OPEN on a Redis fault, and that is silent by design.** The rate limiter's
+  signal is `x-ratelimit-remaining` coming back at the full limit — a value `INCR` cannot produce —
+  and the governor's is the `shared burst window unavailable; counting in-process` warning in the
+  function log. Measured on the Phase 3 deploy: a 24-request burst that forced scale-out took the
+  fail-open path **7 times**, with `connect ETIMEDOUT` on the cold instances' Upstash handshake. A
+  burst is exactly when the guard matters, so read a clean `x-ratelimit-remaining` sequence as the
+  healthy case and a full-limit one as "Redis was not there for that request".
