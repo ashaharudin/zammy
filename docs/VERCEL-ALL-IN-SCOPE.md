@@ -372,9 +372,8 @@ could not re-plan. But the failure was invisible for three days, it was caused b
 changing rather than by anything in the changelog, and the thing that would have caught it early —
 noticing `deliveryCount` never exceeded 1 — was recorded as a curiosity rather than as an alarm. The
 `STALE_PENDING_MS` misalignment above is the same class of problem: a constant that used to agree
-with a platform behaviour and quietly stopped. **The open decision this leaves is whether the manual
-drain moves from "fallback" to "built"**, which is a scope call rather than a technical one; §10
-question 0 records the argument for it.
+with a platform behaviour and quietly stopped. That is what moved the manual drain from
+"fallback" to **built** (`POST /api/drain`, §3.2); §10 Q0 records the argument.
 
 ### 3.3 The chores as an HTTP route — ~1–1.5 days
 
@@ -697,10 +696,12 @@ now logs one `ingest delivery` line per delivery (with `deliveryCount`) and an `
 line on the success path. On Hobby that log is the only observability the queue has, `/metrics`
 being deleted and `chore_runs` covering only the chores.
 
-**Open question 3 is still open.** The breadth sample could not be exercised: `SAMPLE_REFRESH_MINUTES`
-elects one enqueuer per language with a `SET NX PX` lock whose TTL is 60 minutes, and the lock was
-already held. Answering it needs either an hour's wait or a lock deleted directly in the preview
-Redis — and `vercel env pull` redacts sensitive values, so the URL is not recoverable from the CLI.
+**Q3 could not be exercised on the day**, for two compounding reasons worth separating: nothing
+drained the queue yet, and `SAMPLE_REFRESH_MINUTES` elects one enqueuer per language with a
+`SET NX PX` lock whose TTL is 60 minutes, which was already held. Waiting the lock out is the only
+lever from here — `vercel env pull` redacts sensitive values, so the preview Redis URL is not
+recoverable from the CLI and the lock cannot be cleared directly. Both blockers cleared later the
+same day; **Q3 is now half answered** and §10 carries the measurement.
 
 ### What the Phase 1 deploy corrected
 
@@ -744,53 +745,93 @@ bypass secret; curl's own flags need a `--` separator or they are swallowed.
 
 Two were settled by the adoption review (§0, ADR-0015), two by the Phase 0 measurements
 (2026-08-22) and two more by its deployment half (2026-08-23), all in
-[VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md), and question 0 by measurement on
-2026-08-25. **One remains** (question 3), and it needs the queue working — which it now is.
+[VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md), and Q0 by measurement on 2026-08-25.
+**One remains, and it is now half answered** — Q3, whose queue-shaped half the Phase 2 fix let us
+measure and whose remaining half is blocked on something that is not the queue.
 
-1. ~~Does the recommended project shape actually work?~~ **Settled: yes, with one correction.** The
-   Vite preset builds the SPA and the `api/` directory together, the function serves, and the
-   `queue/v2beta` trigger fires on it. The correction is that `api/[...path].ts` is not a catch-all
-   — routing is three rewrites in `vercel.json` (§3.1) — and the two-project fallback was not
-   needed. `TRUSTED_PROXY_HOPS=1`.
-2. ~~Is Queues available on Hobby, and at what allowance?~~ **Available: settled by measurement**
-   on a `hobby`-plan account. **The allowance is still unpublished** (§8), so the residual risk is
-   metering rather than feasibility — worth watching on the first bill after Phase 2, not worth
-   blocking on.
-0. ~~Why does a failed delivery never come back?~~ **Settled 2026-08-25: a platform timing change
-   ate a margin we did not know we depended on.** Not a per-project difference and not an unstated
-   push-mode semantic. A failed delivery returns when its visibility lease expires, and that latency
-   **grew from ~10 s to 305 s between 2026-08-22 and 2026-08-25** — measured on the spike's own
-   unmodified deployment, which redelivered four times on the first date and once on the second. The
-   driver published with `retentionSeconds: 300` (§0's "TTL ≈ `STALE_PENDING_MS`"), which had a 30×
-   margin when it was chosen and went negative when the latency moved; the platform deletes on TTL
-   regardless of processing state, so the retry window became **exactly zero**. Raising the TTL to
-   900 s restores redelivery with no consumer change — a controlled A/B differing only in the TTL
-   gave 1 delivery at 300 s and 3 at 900 s — run on the throwaway spike project and then **confirmed
-   on a real `zammy` preview deployment**, where arm B delivered at +0 s, +305 s and +610 s and the
-   third settled and gave up (§3.2 has both tables). **At-least-once is now met on the primary
-   path**, measured on the deployable rather than inferred from a probe. Three things this leaves open, all recorded in §3.2: the dedup window is now
-   900 s rather than 300 s; `STALE_PENDING_MS` expires while a retry is still owed, so the pending
-   ledger and the retry budget are no longer on the same clock; and **the fix is a constant chasing
-   a platform number that has already moved once** — which is why the manual drain is now built
-   (`POST /api/drain`, §3.2) rather than held as a fallback.
-3. **Does the breadth sample still paint?** §10.1's first-visitor lock elects one enqueuer per stale
-   window; with the sample now a queue message, the landing page's first visitor waits for a
-   consumer round trip rather than an in-process job. Check against `SAMPLE_REFRESH_MINUTES` before
-   assuming the cloud fills. **Still open** — it needs the queue working first (Phase 2).
-4. ~~How long is `chores storylines` at 90 days of corpus?~~ **Settled, and not as expected.** ~3.5 h
-   unbounded, of which the late-candidate sweep was ~506 s — and that turned out to be a
-   **linking-correctness bug rather than a deployment cost**: `CANDIDATE_LIMIT` discarded ~90% of the
-   candidate set on 99% of groups. Correcting it exposed a runaway in the sweep, so **the sweep is
-   now gated off** and the pass fits 300 s with room to spare (findings §2.6). The label pass fits at
-   `--max-labels` 40–60. Nothing here is Phase 4 work any more.
-5. ~~Is the corpus under 500 MB?~~ **Measured**: 190 MB today at 15 corpus-days, 125 MB restored,
-   and the useful form is a tripwire rather than a number — 500 MB is reached at ~1,485
-   articles/day sustained over 90 days *if* the reindex sweep runs, ~1,214 if it does not, against
-   an observed 742–1,747/day (findings §4, §5).
-6. ~~What replaces `/metrics`?~~ **Settled**: deleted; platform observability plus the `chore_runs`
-   record carry what mattered (§7).
-7. ~~Is a beta queue trigger acceptable in the load-bearing position?~~ **Settled**: accepted, with
-   the pending set as backstop and a manual drain as fallback (§3.2, ADR-0015).
+**The `Qn` labels are stable identifiers, not list positions, and they are written out for a
+reason.** These were an ordered list until 2026-08-25, which Markdown renumbers from 1 regardless of
+the digits in the source — so once Q0 was inserted in the middle, the item *written* `4.` *rendered*
+as the fifth, and "question 4" meant two different things depending on whether you were reading the
+source or the page. That had already caused one stale cross-reference (PHASE-0-FINDINGS §5's
+"question 3" means Q5, the corpus one, under the older numbering). Numbers are never reused or
+reassigned; new questions take the next free one.
+
+- **Q0.** ~~Why does a failed delivery never come back?~~ **Settled 2026-08-25: a platform timing
+  change ate a margin we did not know we depended on.** Not a per-project difference and not an
+  unstated push-mode semantic. A failed delivery returns when its visibility lease expires, and that
+  latency **grew from ~10 s to 305 s between 2026-08-22 and 2026-08-25** — measured on the spike's
+  own unmodified deployment, which redelivered four times on the first date and once on the second.
+  The driver published with `retentionSeconds: 300` (§0's "TTL ≈ `STALE_PENDING_MS`"), which had a
+  30× margin when it was chosen and went negative when the latency moved; the platform deletes on
+  TTL regardless of processing state, so the retry window became **exactly zero**. Raising the TTL
+  to 900 s restores redelivery with no consumer change — a controlled A/B differing only in the TTL
+  gave 1 delivery at 300 s and 3 at 900 s — run on the throwaway spike project and then **confirmed
+  on a real `zammy` preview deployment**, where arm B delivered at +0 s, +305 s and +610 s and the
+  third settled and gave up (§3.2 has both tables). **At-least-once is now met on the primary
+  path**, measured on the deployable rather than inferred from a probe. Three things this leaves
+  open, all recorded in §3.2: the dedup window is now 900 s rather than 300 s; `STALE_PENDING_MS`
+  expires while a retry is still owed, so the pending ledger and the retry budget are no longer on
+  the same clock; and **the fix is a constant chasing a platform number that has already moved
+  once** — which is why the manual drain is now built (`POST /api/drain`, §3.2) rather than held as
+  a fallback.
+
+- **Q1.** ~~Does the recommended project shape actually work?~~ **Settled: yes, with one
+  correction.** The Vite preset builds the SPA and the `api/` directory together, the function
+  serves, and the `queue/v2beta` trigger fires on it. The correction is that `api/[...path].ts` is
+  not a catch-all — routing is three rewrites in `vercel.json` (§3.1) — and the two-project fallback
+  was not needed. `TRUSTED_PROXY_HOPS=1`.
+
+- **Q2.** ~~Is Queues available on Hobby, and at what allowance?~~ **Available: settled by
+  measurement** on a `hobby`-plan account. **The allowance is still unpublished** (§8), so the
+  residual risk is metering rather than feasibility — worth watching on the first bill after Phase
+  2, not worth blocking on.
+
+- **Q3.** **Does the breadth sample still paint? Half answered 2026-08-25; the open half is not
+  about the queue.** §10.1's first-visitor lock elects one enqueuer per stale window, and the worry
+  was that with the sample now a queue message the landing page's first visitor waits for a consumer
+  round trip rather than an in-process job.
+
+  **The round trip is not the problem.** Measured on preview `zammy-jf76lc9bn` once the queue fix
+  landed: a cold `/api/v1/trending` elected the enqueuer and reported `pendingJobs: 1`, and the next
+  poll — under 8 s later — read `complete` / `pendingJobs: 0`. The sample is taken well inside any
+  plausible page-load patience, so the deferral this question was raised about does not bite. It
+  could not be measured before Phase 2 for two compounding reasons: nothing drained the queue, and
+  the `SET NX PX` election lock had to expire first.
+
+  **What is still unanswered is whether the CLOUD fills, and the blocker is the labeller.** `terms`
+  stayed `0` across every poll, and that is upstream of everything here:
+  [trending-storylines.ts](../packages/storage/src/trending-storylines.ts) selects `where s.label is
+  not null`, and the preview corpus holds **61 storylines with 0 labels** (64 articles, 7 topics).
+  Labels come from the Gemini labelling chore, which has never run against preview — so the cloud
+  reads empty however well the sample works, and a test run there would measure the labelling gap
+  rather than this question.
+
+  Closing it therefore needs labelled storylines in preview: run `chores storylines` there (bounded
+  — the free tier is 500/day **per model**), seed them directly, or accept the split answer. The
+  queue-shaped risk this question existed to catch is answered; the remainder is Phase 4's.
+
+  One operational note for anyone re-running it: `SAMPLE_REFRESH_MINUTES` is unset on Preview, so it
+  defaults to 60 and the election is repeatable only once an hour. Setting it to `1` there makes the
+  test repeatable in seconds.
+
+- **Q4.** ~~How long is `chores storylines` at 90 days of corpus?~~ **Settled, and not as
+  expected.** ~3.5 h unbounded, of which the late-candidate sweep was ~506 s — and that turned out
+  to be a **linking-correctness bug rather than a deployment cost**: `CANDIDATE_LIMIT` discarded
+  ~90% of the candidate set on 99% of groups. Correcting it exposed a runaway in the sweep, so **the
+  sweep is now gated off** and the pass fits 300 s with room to spare (findings §2.6). The label
+  pass fits at `--max-labels` 40–60. Nothing here is Phase 4 work any more.
+
+- **Q5.** ~~Is the corpus under 500 MB?~~ **Measured**: 190 MB today at 15 corpus-days, 125 MB
+  restored, and the useful form is a tripwire rather than a number — 500 MB is reached at ~1,485
+  articles/day sustained over 90 days *if* the reindex sweep runs, ~1,214 if it does not, against an
+  observed 742–1,747/day (findings §4, §5).
+
+- **Q6.** ~~What replaces `/metrics`?~~ **Settled**: deleted; platform observability plus the
+  `chore_runs` record carry what mattered (§7).
+
+- **Q7.** ~~Is a beta queue trigger acceptable in the load-bearing position?~~ **Settled**:
+  accepted, with the pending set as backstop and a manual drain as fallback (§3.2, ADR-0015).
 
 ---
 

@@ -771,7 +771,8 @@ fixed, ~30 MB after a reindex) and tables that scale with retention (`articles`,
 
 Observed ingest on the days the machine was actually running: **742–1,747 new articles/day**
 (2026-08-10 → 08-21, excluding two initial backfill days of 11,404 and 10,297). That straddles the
-tripwire. The honest answer to the scope doc's open question 3 is therefore **"yes today, and it
+tripwire. The honest answer to the scope doc's **Q5** (the corpus question — this said "question 3"
+until 2026-08-25, under a numbering that has since drifted) is therefore **"yes today, and it
 depends on one operational habit at 90 days"** — and the habit is §5, not the ingest rate.
 
 **Phase 5's dump/restore is a non-event.** The whole corpus is a **24 MB** custom-format dump,
