@@ -360,10 +360,24 @@ updated to record why the trade reversed.
   is a genuine win regardless: preview deployments cost zero upstream quota against a 1000/day
   budget. It needs `functions.includeFiles` for `fixtures/` (352 KB, 7 files) because
   `FIXTURES_DIR` is read at runtime and nothing traces it. The preview database is migrated by a
-  per-PR CI step (§6).
+  per-PR CI step (§6) — **not yet built**; the first pass was run by hand from a laptop
+  (2026-08-24), all 17 migrations through the session pooler under `verify-full` in 8.2 s.
+- **The preview pair is provisioned** (2026-08-24): a Supabase project in `us-east-2` and an
+  Upstash database, wired to the `zammy` project's Preview environment. Twelve variables, not
+  66 — `@zammy/config` defaults everything except `DATABASE_URL`, `REDIS_URL` and
+  `CURRENTS_USER_AGENT`, and hand-setting the other 55 is 55 chances at the typo that boots
+  green. Two shapes bite here and both cost a deploy cycle: `REDIS_URL` must be `rediss://`
+  (Upstash is TLS-only, and a plaintext URL validates and boots before failing at `/readyz`),
+  and any `?sslmode=` Supabase appends must be stripped, because `@zammy/config` refuses a
+  Postgres URL carrying one — node-postgres silently ignores `DATABASE_SSL` when the URL sets
+  it. Note Vercel Hobby deploys to `iad1` (us-east-1) while the database is us-east-2, so every
+  pooler query takes a cross-region hop. See §9's Phase 1 notes.
 - **`TRUSTED_PROXY_HOPS=1`** for the single-project layout (2 for the two-project one), and
   `CORS_ORIGIN` set to the deployment origin. Both are documented in the template already; the
-  deploy sets them.
+  deploy sets them. `CORS_ORIGIN` is the awkward one on previews: the origin does not exist
+  until the deployment does, and every redeploy mints a new hostname, so a CLI-deployed preview
+  has nothing stable to point at and was left at the template default. Git-linked previews get
+  a branch alias (`zammy-git-<branch>-<scope>.vercel.app`) which is the value to use.
 - **pnpm 11 needs `ENABLE_EXPERIMENTAL_COREPACK=1`**, after which Vercel reads `packageManager` from
   the root manifest and applies it across the workspace. The build command must build the packages
   before the app (`pnpm build` already does exactly that).
@@ -487,7 +501,7 @@ Each phase ends with something demonstrable; none of them is "and then we cut ov
 | Phase | Work | Exit criterion |
 |---|---|---|
 | **0. Spikes** (0.5–1 d) ✅ | Prove the project shape (§1.1) on a throwaway deployment: Vite preset + `api/` function + a `queue/v2beta` trigger firing. Measure `buildApp` cold start. Measure `chores storylines` wall-clock at 90 days of corpus, bounded and unbounded. Measure the corpus against Supabase's 500 MB — a **now**-question, since production is seeded from it (Phase 5). Confirm Queues' Hobby allowance in the dashboard (§8). | **Done, both halves.** The three numbers ([VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md)): cold start ~360 ms local, 947 ms on the platform of which ~550 ms is container start (§7.1); `chores storylines` ~3.5 h unbounded, with the **late-candidate sweep at ~506 s the phase that breaks the ceiling** — since found to be a linking bug and gated off; corpus 190 MB with the 500 MB tripwire at ~1,485 articles/day after a reindex. The deployment half (findings §8): the Vite preset builds the SPA and the `api/` directory together, the `queue/v2beta` trigger fires on a bare `api/` function **on a Hobby account**, `waitUntil` outlives the 202, and the cron entry validates. The rewrite correction (§3.1) is the one thing it changed structurally. |
-| **1. The api as a Function** (1–2 d) — *code landed 2026-08-23, deploy pending* | §3.1. Consumer disabled, chores still manual. Preview in fixture mode against the preview data plane (§4). | `/readyz` green, a timeline read served from Supabase through the pooler, `degraded: "ingest_timeout"` on cold topics — the known, temporary gap. **Locally proven against the real build output**: `vercel build` traces the pnpm workspace into an 11 MB function, and that bundle serves `/healthz`, `/readyz` (postgres + redis both ok) and a `/api/v1/timeline` read. What is left is the halves only a deploy exercises — Supabase through the pooler, Upstash, and `includeFiles` actually placing `fixtures/` |
+| **1. The api as a Function** (1–2 d) ✅ | §3.1. Consumer disabled, chores still manual. Preview in fixture mode against the preview data plane (§4). | **Done, deployed and verified 2026-08-24** (commit `8be3fa9`). `/readyz` returns `{"status":"ready"}` with `postgres.ok` and `redis.ok` both true. The three halves only a deploy could exercise all came back: **Supabase through the transaction pooler** — a `/api/v1/timeline` read whose `servedFrom` moves `upstream` → `store` across polls, so the rows were written and read back through 6543; **Upstash** — reachable, after the scheme fix below; **`includeFiles` does place `fixtures/`** — a fresh topic answers `servedFrom: "upstream"` with recorded fixture content, and an absent directory would have failed the boot into a 503 instead. Cold start **993 ms**, warm 190–298 ms — close to Phase 0's 947 ms on the platform (§7.1). All 17 migrations applied through the session pooler under `verify-full` in 8.2 s. **One third of the criterion as written was unreachable and is struck** — `degraded: "ingest_timeout"`, see below. |
 | **2. The queue** (2–3 d) | §3.2 — new `IngestQueue` implementation (all seven members), `api/queues/ingest.ts`, 5-min message TTL, rewritten tests. | A cold topic fills behind the reader; `meta.ingest` drains to zero; a killed consumer redelivers |
 | **3. Quota + limits** (1–2 d) | §3.4 (burst-only, fail-open) and §3.5 (Redis store, fail-open). | The burst ceiling holds with the consumer and the request path both running; the per-IP guard is real; both degrade to in-process when Redis is down |
 | **4. Chores** (1–1.5 d) | §3.3 + Supabase Cron + `chore_runs` + the keep-alive ping, **plus what Phase 0 added**: the `REINDEX CONCURRENTLY` sweep in the retention chore. The late-candidate sweep is gated off (findings §2.6), so this phase no longer carries a deadline problem; if it is ever switched back on, the bound and persisted cursor come back with it. | All scheduled passes run on schedule and write `chore_runs` rows, any pass runs on demand by query param, twice-triggered runs skip on the lock, the 202 arrives from cold within pg_net's configured timeout, **and a gated night reports `skipped: true` rather than a clean `offered: 0`** |
@@ -495,8 +509,44 @@ Each phase ends with something demonstrable; none of them is "and then we cut ov
 
 **Total: 7–13 days.** Phase 0's measurements added the reindex sweep to Phase 4 and took the
 late-candidate sweep's deadline problem out of the plan altogether — it was a linking bug, its fix
-exposed a runaway, and the pass is now gated off (findings §2.6). The remaining spread is Phase 0's
-*deployment* outcome — still unrun — and Phase 2.
+exposed a runaway, and the pass is now gated off (findings §2.6). Phase 0's deployment half and
+Phase 1 have both since run and neither moved the estimate; the remaining spread is Phase 2.
+
+### What the Phase 1 deploy corrected
+
+**`degraded: "ingest_timeout"` cannot happen, and is no longer this phase's criterion.**
+`DegradedReason` in `packages/shared/src/timeline.ts` lists it, but
+`apps/api/src/timeline-service.ts` narrows its own `meta.degraded` to `"quota" | "upstream" | null`
+and the sole assignment sets only `quota` (on `NewsQuotaError`) or `upstream`. The string survives
+in the shared union and in a comment at `apps/api/src/server.ts`. What it was pointing at is real
+and is observable elsewhere: a cold `?q=climate` sat at
+`meta.ingest = {state: "in_progress", pendingJobs: 1}` across four polls and never drained — which
+is what Phase 2's criterion already measures. The signal needs a topic that **defers** a segment;
+`?q=elections` filled synchronously from fixtures and reported
+`{state: "complete", pendingJobs: 0}`, showing nothing at all. Either this doc or the narrowed
+type should move; until one does, judge the undrained queue on `meta.ingest`.
+
+**`REDIS_URL` must be `rediss://`.** Upstash is TLS-only, and a `redis://` URL is the worst shape of
+wrong: it passes `@zammy/config`'s `RedisUrl` check (a scheme of redis/rediss plus a host is all
+that is verified), boots green, and surfaces only as `/readyz` → `degraded` carrying
+`"Stream isn't writeable and enableOfflineQueue options is false"`. Measured: `rediss://` PINGs in
+797 ms, `redis://` never connects.
+
+**CLI deploys are blocked by the git commit author, and the CLI will not say so.** Every remote
+build from a repository worktree returns `readyState: BLOCKED` with
+`seatBlock.blockCode = TEAM_ACCESS_REQUIRED`, because Vercel stamps the deployment with the commit
+author rather than the account that owns the project. `vercel ls` renders this as `UNKNOWN`,
+`vercel inspect --logs` prints nothing, and `vercel deploy` itself sat on `Building…` for **3 h
+20 m** before exiting **0** with `"reason": "deploy_failed", "message": "fetch failed"`. The cause
+appears only in `GET /v13/deployments/{id}` → `readyStateReason`. Deploying from a copy of the
+tree with `.git` excluded clears it. **This lands on Phase 5**, whose migration CI jobs deploy
+the same way: give that step an explicit timeout and assert `readyState == "READY"` against the
+API, because the CLI's exit code is not a signal.
+
+**Preview URLs are SSO-gated** (`ssoProtection: all_except_custom_domains`), so plain `curl` 302s to
+`vercel.com/sso-api` and never reaches the app — a redirect that reads like an app bug.
+`vercel curl <url>` authenticates through the CLI session and needs neither a settings change nor a
+bypass secret; curl's own flags need a `--` separator or they are swallowed.
 
 ---
 
