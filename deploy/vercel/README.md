@@ -105,21 +105,32 @@ consequences:
   it in `vercel.json`, which is why there is no auth on it and none is missing. The topic name in
   that trigger (`ingest`) must match the queue's name, because that name also scopes the Redis
   pending set and the trending sample lock.
-- **`experimentalTriggers` is beta.** If it regresses, the pending set is still the ledger of what
-  is owed (`meta.ingest`), and the fallback §3.2 names is a manual drain — not a data-loss event.
+- **`experimentalTriggers` is beta, and one part of it is already not behaving.** Delivery works;
+  REdelivery does not (see the known gap below). The pending set is still the ledger of what is owed
+  (`meta.ingest`), which is what keeps this a recoverable state rather than a data-loss event.
 - **The message TTL is 300 s, matching the pending window.** A deploy mid-flight leaves the old
   deployment draining its own messages, because push-mode topics are partitioned by deployment id.
   Five minutes bounds how long that lasts.
 
-Verifying it (done 2026-08-25 on `zammy-dut5xv9j5`): read a cold topic and watch
+Verifying it (done 2026-08-25, current deployment `zammy-k2y801sfm`): read a cold topic and watch
 `meta.ingest.pendingJobs` fall to zero. **Pick a topic that then goes quiet.** A topic you keep
 polling sits at `pendingJobs: 1` forever and that is correct — §6.4 enqueues a fresh top-up whenever
 coverage trails `now`, so the consumer advancing coverage is what makes the next read find a new
 sliver. `?q=wildfire` went 1 → 0 and stayed there; `?q=climate`, polled continuously, never left 1.
 
-The other half of the proof is `vercel logs <deployment>`: `POST /api/queues/ingest 200` per
-message. A 200 with no warning line is a genuine success — the handler also answers 200 when it
-gives up on a job or drops an unreadable payload, and both of those log first.
+The other half of the proof is `vercel logs <deployment>`, and **read the log lines, not the status
+code**. The SDK answers 200 for a success, for a message it rescheduled after a throw, and for one
+given up on, so `POST /api/queues/ingest 200` on its own tells you nothing. The consumer logs
+`ingest delivery` (with `deliveryCount`) on every delivery and `ingest job settled` on the success
+path; a drain is the pair, for one message id.
+
+**Known gap: a failed job is lost, not retried.** Measured 2026-08-25 against a deliberately
+poisoned message — exactly one delivery, whether the SDK `retry` callback reschedules (200) or the
+error propagates (500), watched past the 300 s retention in both cases. `deliveryCount` has never
+been observed above 1. What contains it is the pending set: a failed job is never settled, so
+`meta.ingest` keeps reporting it owed until the five-minute stale prune and the next reader re-plans
+the gap. Do not treat this queue as at-least-once until VERCEL-ALL-IN-SCOPE §10 question 0 is
+answered.
 
 ## What Phase 2 does not do
 

@@ -1,6 +1,11 @@
 import { QueueClient } from "@vercel/queue";
 import { ConfigError, loadConfig } from "@zammy/config";
-import { parseIngestJob, type IngestHandler, type IngestQueue } from "./ingest-queue.js";
+import {
+  ingestJobId,
+  parseIngestJob,
+  type IngestHandler,
+  type IngestQueue,
+} from "./ingest-queue.js";
 import { MAX_INGEST_DELIVERIES, shouldRetryDelivery } from "./ingest-queue-vercel.js";
 import { buildServices, ingestDispatch, type ServiceLogger } from "./server.js";
 
@@ -21,8 +26,7 @@ import { buildServices, ingestDispatch, type ServiceLogger } from "./server.js";
  * And one property that is a deliberate difference from `vercel.ts`: this
  * handler must NOT return before its work finishes. The 202-and-`waitUntil`
  * pattern the chores route uses would acknowledge a message whose segment had
- * not been fetched, turning at-least-once into at-most-once for exactly the
- * jobs that take longest.
+ * not been fetched, losing exactly the jobs that take longest.
  */
 
 /**
@@ -63,6 +67,21 @@ export function createMessageHandler(
 ): (payload: unknown, metadata: DeliveryMetadata) => Promise<void> {
   return async (payload, metadata) => {
     const job = parseIngestJob(payload);
+    // One line per DELIVERY, before any work. This is the only observability the
+    // queue has: `/metrics` is deleted (§7), `chore_runs` covers the chores and
+    // not this, and Hobby keeps an hour of logs. Without it a 200 from this
+    // function is ambiguous — the SDK answers 200 for a success, for a message
+    // it has rescheduled after a throw, AND for one given up on, so the status
+    // code alone cannot tell you whether anything drained. `deliveryCount` is
+    // the field that makes redelivery visible; it starts at 1.
+    logger.info(
+      {
+        messageId: metadata.messageId,
+        deliveryCount: metadata.deliveryCount,
+        job: job ? ingestJobId(job) : null,
+      },
+      "ingest delivery",
+    );
     if (!job) {
       // Returning rather than throwing acknowledges it. A payload this consumer
       // cannot read will not become readable on the fourth delivery, and there
@@ -76,10 +95,15 @@ export function createMessageHandler(
       await drainable.dispatch(job);
     } catch (error) {
       if (shouldRetryDelivery(metadata.deliveryCount)) {
-        // Rethrow: an unacknowledged message is redelivered, which is the whole
-        // of at-least-once here. The SDK's `retry` callback is what makes it
-        // redeliver SOON rather than when the lease runs out — see the default
-        // export.
+        // Rethrow, which answers 500 and leaves the message unacknowledged —
+        // what at-least-once is supposed to be built on. MEASURED CAVEAT: the
+        // platform does not currently redeliver it (see the default export), so
+        // in production this branch is where a failed job is lost rather than
+        // retried. It stays because it is the correct contract and the one the
+        // BullMQ driver honours; what covers the gap meanwhile is that the
+        // pending entry is NOT settled here, so `meta.ingest` keeps reporting
+        // the work as owed until the five-minute stale prune, and the next
+        // reader re-plans the gap it named.
         throw error;
       }
       // Out of attempts. Settle first: a job nobody will attempt again is not
@@ -101,14 +125,24 @@ export function createMessageHandler(
     }
 
     await drainable.queue.settle(job);
+    logger.info(
+      {
+        messageId: metadata.messageId,
+        deliveryCount: metadata.deliveryCount,
+        job: ingestJobId(job),
+      },
+      "ingest job settled",
+    );
   };
 }
 
 /**
  * Config is loaded here rather than at module scope so a bad deploy fails the
- * delivery with a listed reason — and a failed delivery is redelivered, which
- * is the right outcome for a missing environment variable somebody is about to
- * fix.
+ * delivery with a listed reason in the log, rather than as whatever the platform
+ * makes of a module that throws during import. Note this is NOT a recoverable
+ * situation the way it would be on a queue that retried: a delivery lost to a
+ * missing environment variable is lost (see the default export), and what
+ * recovers the work is the next reader re-planning the gap.
  */
 async function bootFromEnvironment(): Promise<Drainable> {
   let config;
@@ -160,23 +194,31 @@ const drainable = bootOnce(bootFromEnvironment);
  * auto-extends the lease while the handler runs — the raw API's 60 s does
  * neither. That default is what makes a long segment fetch safe to await.
  *
- * **And that default is exactly why `retry` cannot be omitted.** Without it a
- * throw simply leaves the message unacknowledged, and it becomes visible again
- * only when the 300 s lease expires — which is also when its 300 s retention
- * expires (§0's TTL decision). The two would cancel out: every failure would be
- * a final failure, and at-least-once would quietly be at-most-once for exactly
- * the jobs that needed the retry. Shortening the lease instead would be the
- * wrong lever, because the lease is what protects a long segment fetch.
+ * **There is no `retry` callback, and the reason is measured rather than
+ * reasoned.** Both shapes were deployed against a deliberately poisoned message
+ * (2026-08-25, preview) and neither produced a second delivery:
  *
- * So the callback exists to say "redeliver soon" and nothing else. It never
- * acknowledges: the handler above already decides when to give up, by returning
- * normally instead of throwing, and it has to be the one to decide because
- * giving up means settling the pending entry — and `retry` is handed the error
- * and the metadata but not the payload, so it could not name the job to settle.
- * The delay is a hint (measured on the spike: +0 s, +10 s, +70 s, +130 s against
- * a requested 5), which is fine — all it has to beat is 300 s.
+ *   - **With** `retry: () => ({ afterSeconds: 5 })`, the SDK catches the throw,
+ *     calls `changeVisibility` — successfully, since it logs
+ *     "Failed to reschedule message for retry" when that call fails and it did
+ *     not — and then returns normally, so the callback answers **200**. No
+ *     redelivery followed, across the message's whole 300 s retention.
+ *   - **Without** it, the error propagates and the callback answers **500**.
+ *     Also exactly one delivery, watched for 440 s.
+ *
+ * So redelivery is not currently happening either way, and between two shapes
+ * that both lose the message the honest one wins: a 500 puts the failure in the
+ * platform's own request log, where it is visible without reading ours, and it
+ * is the shape that starts working if the beta begins honouring failed
+ * callbacks. The `retry` callback's 200 would hide the same failure behind a
+ * success. See VERCEL-ALL-IN-SCOPE §3.2 — this is the beta risk ADR-0015
+ * accepted, and the pending set is the ledger that covers it.
+ *
+ * `shouldRetryDelivery` and the give-up path below are therefore correct but
+ * **unexercised in production**: `deliveryCount` has never been observed above
+ * 1. They are kept because they are what the contract says should happen, and
+ * because the BullMQ driver genuinely does it.
  */
-export default new QueueClient().handleNodeCallback(
-  async (payload, metadata) => createMessageHandler(await drainable())(payload, metadata),
-  { retry: () => ({ afterSeconds: 5 }) },
+export default new QueueClient().handleNodeCallback(async (payload, metadata) =>
+  createMessageHandler(await drainable())(payload, metadata),
 );
