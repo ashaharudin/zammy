@@ -80,8 +80,9 @@ first, then apps — the function imports `apps/api/dist`), and the output direc
 ## What Phase 1 does not do
 
 - **Nothing drains the queue.** `{ consumer: false }` is deliberate and the reads say so: a cold
-  topic returns `degraded: "ingest_timeout"` and `meta.ingest` never falls to zero until Phase 2
-  lands `api/queues/ingest.ts`. The pending set is still written, so nothing is lost meanwhile.
+  topic's `meta.ingest.pendingJobs` never falls to zero until Phase 2 lands `api/queues/ingest.ts`.
+  The client polls until `INGEST_POLL_MAX` and then just stops — no `degraded` value marks the
+  stall. The pending set is still written, so nothing is lost meanwhile.
 - **The chores do not run.** No route, no schedule, no `chore_runs` table yet (§3.3), and the
   Supabase free-tier pause guard comes with them. Until then a deployed project's database is
   reachable only as long as something else keeps it awake.

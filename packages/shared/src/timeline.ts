@@ -63,12 +63,7 @@ export function isStorylineView(query: { storyline?: string | undefined }): bool
 export const ServedFrom = z.enum(["cache", "store", "upstream"]);
 export type ServedFrom = z.infer<typeof ServedFrom>;
 
-export const DegradedReason = z.enum([
-  "quota",
-  "upstream",
-  "ingest_timeout",
-  "cache_unavailable",
-]);
+export const DegradedReason = z.enum(["quota", "upstream"]);
 export type DegradedReason = z.infer<typeof DegradedReason>;
 
 export const IngestState = z.enum(["complete", "in_progress"]);

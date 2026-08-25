@@ -523,8 +523,8 @@ and is observable elsewhere: a cold `?q=climate` sat at
 `meta.ingest = {state: "in_progress", pendingJobs: 1}` across four polls and never drained — which
 is what Phase 2's criterion already measures. The signal needs a topic that **defers** a segment;
 `?q=elections` filled synchronously from fixtures and reported
-`{state: "complete", pendingJobs: 0}`, showing nothing at all. Either this doc or the narrowed
-type should move; until one does, judge the undrained queue on `meta.ingest`.
+`{state: "complete", pendingJobs: 0}`, showing nothing at all. `"ingest_timeout"` was deleted from
+`DegradedReason` on 2026-08-25; judge the undrained queue on `meta.ingest`.
 
 **`REDIS_URL` must be `rediss://`.** Upstash is TLS-only, and a `redis://` URL is the worst shape of
 wrong: it passes `@zammy/config`'s `RedisUrl` check (a scheme of redis/rediss plus a host is all
