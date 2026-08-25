@@ -266,7 +266,7 @@ export async function buildApp(
       );
     } else {
       // Worth a line in the log, because the symptom of getting this wrong is
-      // silent: reads still succeed, they just report `degraded: "ingest_timeout"`
+      // silent: reads still succeed, they just sit at `meta.ingest.pendingJobs > 0`
       // forever while the pending set grows and nothing drains it.
       app.log.info(
         "consumer disabled for this instance — serving requests only; enqueued ingest waits for whatever drains the queue",
