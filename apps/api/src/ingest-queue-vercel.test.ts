@@ -336,6 +336,36 @@ describe("VercelIngestQueue", () => {
     expect(await queue.pendingCount(segment().fingerprint)).toBe(0);
   });
 
+  it("does NOT clear the stand-in when the settle happens on another instance", async () => {
+    // The production case, and the reason the test above is not the whole story.
+    // Under this driver `settle` is called from the consumer function and the
+    // drain route — separate deployables from the request path that enqueued —
+    // so the instance holding the note never settles the job. Expiry, not
+    // settlement, is what clears it, and the topic reads busy on that instance
+    // for the full window even though the fill landed seconds after the enqueue.
+    //
+    // Pinned because it is easy to read `settle`'s `forget` as covering this,
+    // and because it is where the fifteen-minute window is actually spent.
+    const queueName = `test-vq-${randomUUID()}`;
+    const { queue: requester } = makeQueue({ queueName });
+    const add = vi
+      .spyOn(PendingSet.prototype, "add")
+      .mockRejectedValueOnce(new Error("READONLY: redis blip"));
+
+    await requester.enqueueSegment(segment());
+    add.mockRestore();
+    expect(await requester.pendingCount(segment().fingerprint)).toBe(1);
+
+    // The consumer drains and settles, on its own instance.
+    const { queue: consumer } = makeQueue({ queueName });
+    await consumer.settle(segment());
+
+    // Redis agrees the work is done...
+    expect(await consumer.pendingCount(segment().fingerprint)).toBe(0);
+    // ...and the instance that lost the write still says otherwise.
+    expect(await requester.pendingCount(segment().fingerprint)).toBe(1);
+  });
+
   it("expires the stand-in on the ledger entry's own clock", async () => {
     // The note substitutes for a ZSET member, so it has to age out like one, or
     // an instance that lost one write reports that topic as busy until it dies —

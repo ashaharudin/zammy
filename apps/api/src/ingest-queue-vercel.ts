@@ -196,6 +196,13 @@ export class VercelIngestQueue implements IngestQueue {
    * and there is no cheap durable answer, since Redis is the thing that failed.
    * The residual is one under-reported topic until `STALE_PENDING_MS`, which is
    * the pre-existing behaviour rather than a new hole.
+   *
+   * What it costs when it DOES fire: the note outlives the job. `settle` runs in
+   * the consumer function, not here (see `settle`), so nothing clears the note
+   * on this instance and the topic reads `in_progress` for the full
+   * `STALE_PENDING_MS` even after the fill lands seconds later. Over-counting is
+   * the direction to be wrong in, but this is where the fifteen-minute window
+   * gets spent for real.
    */
   private readonly unrecorded = new Map<string, Map<string, number>>();
 
@@ -254,9 +261,24 @@ export class VercelIngestQueue implements IngestQueue {
 
   async settle(job: IngestJob): Promise<void> {
     // Before the Redis call, and unconditionally: a settled job is not owed, so
-    // a stand-in for its missing ledger entry is not owed either. Without this a
-    // lost `ZADD` followed by a successful run would hold the topic at
-    // `in_progress` for the whole stale window on this instance.
+    // a stand-in for its missing ledger entry is not owed either.
+    //
+    // **Under this driver it almost never fires, and that is worth stating
+    // rather than discovering.** `settle` is called from the consumer
+    // (`vercel-queue.ts`) and the drain (`drain.ts`), both of which are separate
+    // FUNCTIONS from the request path that did the enqueueing — separate
+    // instances, each with its own empty `unrecorded`. The note lives on the
+    // instance that failed the `ZADD`, and nothing on that instance settles the
+    // job. So expiry, not settlement, is what actually clears it: a lost `ZADD`
+    // holds its topic at `in_progress` on that one instance for the full
+    // `STALE_PENDING_MS`, even though the job itself finished in seconds.
+    //
+    // That is the safe direction — an over-count suppresses a cache write and
+    // costs re-queries, where an under-count persists a page with a hole in it —
+    // but it is a bigger residual than "cleared by settle" suggests, and it is
+    // the second reason (after the poll loop) that this window's size is a real
+    // cost rather than a formality. The line stays because it is correct for any
+    // same-instance topology, BullMQ's included.
     this.forget(job);
     await this.ledger(() => this.pending.remove(job), undefined, "remove");
   }
