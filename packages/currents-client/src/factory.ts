@@ -40,9 +40,13 @@ export interface CreateClientDeps {
   /**
    * A shared governor, when one exists. Defaults to the in-process counter,
    * which is correct for a single replica that stays up and wrong in the two
-   * ways `InProcessQuotaGovernor` documents. ARCHITECTURE 5.4's Redis-backed
-   * snapshot is the intended occupant of this slot; it is designed and not yet
-   * built, and this parameter is the whole of what wiring it in requires.
+   * ways `InProcessQuotaGovernor` documents.
+   *
+   * ARCHITECTURE 5.4's Redis-backed governor is the intended occupant, and
+   * `apps/api` now passes one (`RedisQuotaGovernor`): the burst window is
+   * shared, the daily ledger is still the in-process delegate's. The default
+   * stays, because a script or a test with no Redis must still be able to build
+   * a client.
    */
   quota?: QuotaGovernor;
 }

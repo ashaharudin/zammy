@@ -11,7 +11,10 @@ every platform claim carries a source at the bottom. Scoped 2026-08-21. **Phase 
 [VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md), and §3.3 and §9 for what it changed.
 Its deployment half finished on 2026-08-23 (findings §8), which closed the last two open questions.
 **Phases 1 and 2 are now deployed to preview and verified** (2026-08-24 and 2026-08-25); Phase 2's
-one failure and its fix are Q0. Nothing is in production yet — that is Phase 5.
+one failure and its fix are Q0. **Phase 3 is deployed to preview (2026-08-25): §3.5's per-IP guard
+is verified across six instances, and §3.4's burst ceiling is deployed but unexercised, because
+fixture mode bypasses the governor entirely** — §9's row and "Phase 3 as it stands" carry both
+halves. Nothing is in production yet — that is Phase 5.
 [deploy/vercel/](../deploy/vercel/) is the operator's half of it.**
 
 **Bottom line: 7–12 focused days, and one piece of it no delivery phase carried.** Two things
@@ -526,6 +529,40 @@ per-provider governors through `deps.quota`" — and the adoption review scoped 
 
 It needs its own tests, and `quota.test.ts` gives the behavioural spec to port for the burst half.
 
+**Built 2026-08-25** as `apps/api/src/quota-redis.ts`'s `RedisQuotaGovernor`, wired through
+`buildServices`'s `createNewsClient(config, { quota: … })` — the seam that was already there. Two
+keys per provider and no more: `quota:<provider>:burst`, a sorted set of call timestamps giving the
+whole deployment ONE sliding window, and `quota:<provider>:observed`, the last `x-ratelimit-*`
+reading written where a cold instance can read it. Three decisions the build made that the scope
+did not:
+
+- **The shared gate runs before the local one, and gives the slot back when the delegate refuses.**
+  The first version of this charged the window and left it charged, on the reasoning that it
+  over-counted "by one for at most one window, self-correcting". Review found that false and the
+  failure mode is the interesting part: every refusal writes a *fresh* timestamp, so a stream of
+  them keeps the window permanently full — and `transport.ts` reserves once per ATTEMPT, so past
+  `INTERACTIVE_RESERVE` the consumer's refused background calls would pin `quota:currents:burst` at
+  its ceiling and refuse a live search with 250 daily calls unspent and no upstream call made in the
+  last minute. Precisely inverting the guarantee the reserve exists to give. Delegate-first is not
+  the fix either — it records a DAY's spend for a call the window then refuses, and the day does not
+  expire. Shared-first plus a `ZREM` on refusal is the only arrangement where neither counter
+  charges for a call that never happened.
+- **`peek` reports the shared snapshot; `reserve` never adopts it.** Feeding it back into the
+  delegate looks like an improvement — a cold instance inheriting what upstream last said instead
+  of starting optimistic — and it is a trap: `observe` only ever raises usage, so a stale snapshot
+  whose `burstRemaining` was 0 would refuse the instance's calls, and refusing calls means never
+  earning the response that would correct it. The instance wedges itself shut. The shared *window*
+  is what enforces the ceiling; the snapshot only has to be readable.
+- **The observation write is guarded, not last-write-wins.** Two instances calling concurrently
+  finish in whatever order the network decides, and a slower response must not loosen the shared
+  number. The compare is on an `<observedAtMs>|<json>` prefix rather than a decoded field, so the
+  Lua needs no `cjson` — Upstash is what this deploys against and is the reason not to assume the
+  full library.
+
+Governors are built for **both** providers, because the class is per-provider by construction and
+the asymmetry would be the surprise. That changes nothing about the deferral: what enabling GNews
+still needs is the daily ledger, not this wiring.
+
 ### 3.5 The per-IP rate limit — ~0.5 day, decided: the counters move to Redis
 
 [server.ts:116](../apps/api/src/server.ts) registers in-process counters, with a comment explaining
@@ -539,6 +576,22 @@ natively, ~2 extra commands per request), **fail-open** on Redis errors to match
 the thing that actually runs out — the Currents daily quota — and leaving it decorative would mean
 one spammer's novel fingerprints drain the day's budget. The comment at server.ts:111–115 should be
 updated to record why the trade reversed.
+
+**Built and deployed 2026-08-25.** `@fastify/rate-limit`'s own `redis` option with
+`skipOnError: true` (its fail-open switch: a store fault leaves the counter at zero, so the request
+passes) and `nameSpace: "ratelimit:"` to match §7.1's key convention. Two consequences worth
+knowing:
+
+- **A cold instance's callers are unlimited, and measured this is 7 requests in 24** rather than the
+  one-per-instance the lazy connect suggested. `enableOfflineQueue: false` plus an Upstash handshake
+  that a fanned-out burst can push to `connect ETIMEDOUT` means a scale-out event hands back
+  `x-ratelimit-remaining: 60` — a value `INCR` cannot produce — for as long as the new instances are
+  connecting. See "Phase 3 as it stands" for the numbers and why the posture still stands.
+- **The bucket now outlives the process**, which is the point in production and a nuisance in the
+  test suite: `server.test.ts` deliberately exhausts `ratelimit:127.0.0.1` and has to clear it, or
+  every `/api/v1/*` assertion in the file 429s for the rest of that minute — including on the next
+  run. It clears it with its own Redis client, since the app's is not writable yet at the moment
+  `buildApp` returns.
 
 ---
 
@@ -696,7 +749,7 @@ Each phase ends with something demonstrable; none of them is "and then we cut ov
 | **0. Spikes** (0.5–1 d) ✅ | Prove the project shape (§1.1) on a throwaway deployment: Vite preset + `api/` function + a `queue/v2beta` trigger firing. Measure `buildApp` cold start. Measure `chores storylines` wall-clock at 90 days of corpus, bounded and unbounded. Measure the corpus against Supabase's 500 MB — a **now**-question, since production is seeded from it (Phase 5). Confirm Queues' Hobby allowance in the dashboard (§8). | **Done, both halves.** The three numbers ([VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md)): cold start ~360 ms local, 947 ms on the platform of which ~550 ms is container start (§7.1); `chores storylines` ~3.5 h unbounded, with the **late-candidate sweep at ~506 s the phase that breaks the ceiling** — since found to be a linking bug and gated off; corpus 190 MB with the 500 MB tripwire at ~1,485 articles/day after a reindex. The deployment half (findings §8): the Vite preset builds the SPA and the `api/` directory together, the `queue/v2beta` trigger fires on a bare `api/` function **on a Hobby account**, `waitUntil` outlives the 202, and the cron entry validates. The rewrite correction (§3.1) is the one thing it changed structurally. |
 | **1. The api as a Function** (1–2 d) ✅ | §3.1. Consumer disabled, chores still manual. Preview in fixture mode against the preview data plane (§4). | **Done, deployed and verified 2026-08-24** (commit `8be3fa9`). `/readyz` returns `{"status":"ready"}` with `postgres.ok` and `redis.ok` both true. The three halves only a deploy could exercise all came back: **Supabase through the transaction pooler** — a `/api/v1/timeline` read whose `servedFrom` moves `upstream` → `store` across polls, so the rows were written and read back through 6543; **Upstash** — reachable, after the scheme fix below; **`includeFiles` does place `fixtures/`** — a fresh topic answers `servedFrom: "upstream"` with recorded fixture content, and an absent directory would have failed the boot into a 503 instead. Cold start **993 ms**, warm 190–298 ms — close to Phase 0's 947 ms on the platform (§7.1). All 17 migrations applied through the session pooler under `verify-full` in 8.2 s. **One third of the criterion as written was unreachable and is struck** — `degraded: "ingest_timeout"`, see below. |
 | **2. The queue** (2–3 d) ✅ | §3.2 — new `IngestQueue` implementation (eight members counting `settle`), `api/queues/ingest.ts`, a **900 s** message TTL (not the 5 min §0 planned — see Q0), rewritten tests, and `POST /api/drain`. | **All three criteria met, deployed and verified 2026-08-25.** A cold topic fills behind the reader; `meta.ingest` drains to zero — a delivery logs `ingest delivery` then `ingest job settled` for one message id, which is the evidence, not the 200; and **a failed delivery now redelivers** at +0 s, +305 s and +610 s, the third settling and giving up. Getting the third took a day: it failed first, and the cause was a 300 s TTL colliding with a 305 s visibility lease (Q0). Two things this phase added beyond its scope, both because the failure showed they were needed: per-delivery logging, and the manual drain promoted from fallback to built. **The drain has never run against a live deployment** — its logic is unit-tested only. |
-| **3. Quota + limits** (1–2 d) | §3.4 (burst-only, fail-open) and §3.5 (Redis store, fail-open). | The burst ceiling holds with the consumer and the request path both running; the per-IP guard is real; both degrade to in-process when Redis is down |
+| **3. Quota + limits** (1–2 d) 🚧 | §3.4 (burst-only, fail-open) and §3.5 (Redis store, fail-open). | **Deployed and verified 2026-08-25 (`zammy-bn5h84rr1`) for §3.5; §3.4 is unverifiable on a fixture preview and stays open.** The per-IP guard is real and genuinely shared: 60 requests admitted and the 61st answered 429 with `retry-after: 50`, **across six distinct instances** — per-instance counters would have admitted 60 × 6 — with `x-ratelimit-remaining` monotonic and gapless across separate invocations, and `/healthz` still 200 throughout. Fail-open is real, and wider than expected (below). **The burst-ceiling criterion cannot be met from here**: fixture mode returns `FixtureCurrentsClient`, which builds its own `UnmeteredQuotaGovernor` and ignores the injected one, so no deployed code path calls `reserve`. See below. |
 | **4. Chores** (1–1.5 d) | §3.3 + Supabase Cron + `chore_runs` + the keep-alive ping, **plus what Phase 0 added**: the `REINDEX CONCURRENTLY` sweep in the retention chore. The late-candidate sweep is gated off (findings §2.6), so this phase no longer carries a deadline problem; if it is ever switched back on, the bound and persisted cursor come back with it. | All scheduled passes run on schedule and write `chore_runs` rows, any pass runs on demand by query param, twice-triggered runs skip on the lock, the 202 arrives from cold within pg_net's configured timeout, **and a gated night reports `skipped: true` rather than a clean `offered: 0`** |
 | **5. Observability + cutover** (1–2 d) | The migration CI jobs (§6, prod + preview), env vars (§4), **seed production from the dev corpus** (a 24 MB `pg_dump -Fc`, measured at 1.9 s out and 1.1 s in — findings §4), DNS. Drain the 2,981-storyline label backlog first (§3.3). | Production traffic against the seeded corpus, and "did last night's chores run?" is answered by a `chore_runs` query |
 
@@ -704,6 +757,57 @@ Each phase ends with something demonstrable; none of them is "and then we cut ov
 late-candidate sweep's deadline problem out of the plan altogether — it was a linking bug, its fix
 exposed a runaway, and the pass is now gated off (findings §2.6). Phase 0's deployment half and
 Phase 1 have both since run and neither moved the estimate; the remaining spread is Phase 2.
+
+### Phase 3 as it stands
+
+**§3.5 is deployed and verified; §3.4 is deployed and unexercised.** `RedisQuotaGovernor`
+(`apps/api/src/quota-redis.ts`, 17 tests) and the `@fastify/rate-limit` Redis store; §3.4 and §3.5
+carry what each one decided. Nothing else moved: the daily budget and the interactive reserve are
+still the in-process delegate's, which is §0's scoping and not an omission.
+
+**What the deploy proved about §3.5.** The bucket is one bucket. 55 concurrent requests took
+`x-ratelimit-remaining` from 59 to 5, five more emptied it, and the next nine answered 429 with
+`retry-after: 50` — exactly `RATE_LIMIT_PER_MINUTE` admitted in the window, while the function log
+shows **six distinct instance hostnames** serving that burst. That is the criterion: an in-process
+counter would have admitted sixty per instance. The count is also continuous across separate
+invocations minutes apart (42 → 41 → 40 → 39), so it is not living in any one process, and
+`/healthz` answered 200 all the way through, so the `allowList` still excludes the operational
+endpoints.
+
+**And fail-open is wider than "the first caller through a cold instance".** In the first burst,
+**7 of 24 requests came back `x-ratelimit-remaining: 60`** — a value `INCR` cannot return, so those
+seven took the `skipOnError` path. The log names the cause: `connect ETIMEDOUT` on a cold instance's
+Upstash handshake, not merely a lazy connect that had not finished. So a burst large enough to force
+scale-out buys the caller a slice of unlimited requests, and that is exactly the traffic shape the
+guard exists for. It is still strictly better than what it replaced — those instances used to get a
+whole fresh allowance each rather than one request — and failing closed would 429 real users over a
+cache blip, so the posture stands. It is worth revisiting if this guard ever has to be tight.
+
+**§3.4 cannot be verified from a fixture-mode preview, and this is structural rather than an
+oversight.** `createCurrentsClient` returns `FixtureCurrentsClient` in fixture mode, which builds its
+own `UnmeteredQuotaGovernor` and never looks at `deps.quota` — correct, since fixture mode makes no
+upstream call and so has no budget to meter. `/readyz` reporting `dailyRemaining: 1000,
+burstRemaining: 60, observed: false` is that governor answering, which is the confirmation that ours
+is not in the path. What the deploy did settle is that the governors construct in all three
+functions without breaking a boot: `quota-redis.js` is traced into all three `.func` bundles, the
+request function serves, and the queue consumer drained and settled two jobs (`ingest delivery` +
+`ingest job settled`, `deliveryCount: 1`), so Phase 2 is not regressed.
+
+**What would close it, and what it costs.** `CURRENTS_MODE=live` plus `CURRENTS_API_KEY` on the
+preview environment, with **`CURRENTS_BURST_CALL_LIMIT` temporarily lowered to ~3** — the ceiling is
+config, so the probe costs a handful of Currents calls rather than the 61 a real 60/60s breach would.
+A cold wide search then makes the request function fill while the consumer drains the deferred
+segments, and the fourth call inside the window is refused by a window the other deployable filled:
+`meta.degraded: "quota"` in the response, `burst limit … across all instances` in the log. The one
+platform unknown left underneath is whether Upstash executes these particular scripts, which is
+narrow — they use string ops only and no `cjson` deliberately — and `single-flight.ts` already runs
+an `EVAL` there on every fill.
+
+**One tripwire, cheap to check.** The burst ceiling failing OPEN is silent by design — that is the
+posture §0 chose — so "Redis unreachable" and "plenty of budget" look identical from outside. The
+signal is the `shared burst window unavailable; counting in-process` warning, rate-limited to one a
+minute so an outage does not drown the only log Hobby gives us (§7). It has never fired, because
+nothing has called `reserve` on a deployment yet.
 
 ### Phase 2 as it stands
 

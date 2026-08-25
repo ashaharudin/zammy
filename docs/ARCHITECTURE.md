@@ -310,12 +310,19 @@ known. Where the budget's numbers come from differs per provider:
 
 An absent observation means "no new information", never "no limit".
 
-> **Status: partly built.** Intended: a Redis-held snapshot shared by API and worker, one key per
-> provider — `quota:<provider> → { limit, remaining, burstLimit, burstRemaining, resetTime,
-> observedAt }` — with a Redis `INCR` covering in-flight calls, so concurrent dispatch cannot
-> overshoot. **That does not exist.** The counter is in-process (`InProcessQuotaGovernor`): replicas
-> do not share a budget and a restart forgets the day's spend. Currents self-corrects from headers
-> one call later; GNews stays wrong until it earns the `403`. See §13, "Designed but unbuilt".
+> **Status: the burst half is built, the daily half is deferred.** `RedisQuotaGovernor`
+> (`apps/api/src/quota-redis.ts`, VERCEL-ALL-IN-SCOPE §3.4) holds two keys per provider:
+> `quota:<provider>:burst`, a sorted set of call timestamps that gives every instance ONE sliding
+> window instead of one each, and `quota:<provider>:observed`, the last `{ limit, remaining,
+> burstLimit, burstRemaining, resetTime, observedAt }` reading, written where a cold instance can
+> read it. Both degrade to `InProcessQuotaGovernor` when Redis is unreachable — a cache outage
+> costs the shared ceiling, never the call.
+>
+> **The day-rolling ledger is not built**, deliberately: its only real customer is a provider that
+> reports no headers, and Currents self-corrects its daily count from headers one call after each
+> cold start. So the daily budget and the interactive reserve are still counted in-process, and
+> **enabling GNews requires building the ledger first** — that deferral and the `GNEWS_ENABLED=false`
+> default are one decision. See §13, "Designed but unbuilt".
 
 Two governors per provider, because the limits have different shapes:
 
@@ -589,14 +596,21 @@ Two tiers with distinct jobs: Redis makes repeat reads free; Postgres makes the 
 
 | Key | Contents | TTL |
 | --- | --- | --- |
-| `page:<fingerprint>:<windowHash>:<cursor>:<limit>` | serialized response page | per §6.4 tier |
+| `page:v<shape>:<fingerprint>:<windowHash>:<cursor>:<limit>` | serialized response page | per §6.4 tier |
 | `ref:languages` \| `ref:regions` \| `ref:categories` | reference lists | 24h |
 | `lock:refresh:<fingerprint>:<segment>` | single-flight election | 10s |
-| `budget:currents:*` | quota counters | minute / day |
-| `breaker:currents` | circuit state | cooldown |
+| `<queue>:lock:sample:<language>` | breadth-sample enqueuer election (§10.1) | `SAMPLE_REFRESH_MINUTES` |
+| `budget:topic:<fingerprint>:<utcDay>` | per-topic daily call cap (§9.4) | 48h |
+| `quota:<provider>:burst` | shared sliding burst window, a sorted set of call timestamps (§5.4) | one burst window |
+| `quota:<provider>:observed` | last `x-ratelimit-*` reading, `<observedAtMs>\|<json>` (§5.4) | 24h |
+| `ratelimit:<ip>` | per-IP request counter (§9.4) | `timeWindow` |
+| `ingest:pending:<queue>:<pendingId>` | the ledger `meta.ingest` reads (§6.1) | pruned at `STALE_PENDING_MS` |
 
 Redis is **pure cache**: a total flush costs latency and quota, never correctness. Nothing lives
-only in Redis.
+only in Redis. **That still holds for the two rows that look like exceptions.** The burst window and
+the rate-limit counter are the only shared *enforcement* state here, and both fail OPEN — losing
+them costs the deployment-wide ceiling and degrades to per-instance counting, never a refused call
+(§11). The circuit breaker is in-process, in `@zammy/news-client`, and has never had a key here.
 
 ### 7.2 Postgres (durable)
 
@@ -1093,6 +1107,9 @@ Making spend user-triggered means users can drive spend:
   where it stopped. (Briefly 50 while halve-and-refetch truncation wasted budget re-buying pages;
   with the frontier there is no waste left for a bigger cap to pay for.)
 - **Per-IP rate limit** on `/api/v1/*` (§11), so novel-fingerprint spam can't mint unbounded topics.
+  The counters are **Redis-held**, because on an elastic-instance platform an in-process counter's
+  effective ceiling is `RATE_LIMIT_PER_MINUTE ×` however many instances exist, and the guard
+  protects the thing that actually runs out — the daily quota (VERCEL-ALL-IN-SCOPE §3.5).
 - **Interactive reserve** (§5.4): queued jobs only run while `remaining > INTERACTIVE_RESERVE`.
 - **Backfill is never automatic on first search.** A full 30-day backfill is ~150 calls (15% of the
   budget), so deep history is opt-in ("load older"), metered, lowest priority.
@@ -1391,7 +1408,7 @@ apart see the same cloud.
 | First synchronous call fails on a cold topic | Nothing to show: normal error state with retry. The only case with no content to fall back on — why it gets the one guaranteed synchronous call. |
 | Deferred ingest job fails or stalls | Coverage is not extended; the gap remains and the next reader retries it. Client stops polling after `INGEST_POLL_MAX` — never an indefinite spinner, but no explicit timeout signal either; `meta.ingest.state` just stays `"in_progress"`. |
 | Ingest still running when user scrolls past loaded rows | `hasMore: false` with `ingest.state: "in_progress"` → "still gathering", **not** "end of results" (§6.1). |
-| Redis down | Skip cache and single-flight; serve from Postgres. Quota falls back to a conservative in-process limiter. Degraded, not down. |
+| Redis down | Skip cache and single-flight; serve from Postgres. The shared burst window (§5.4) and the per-IP rate limit (§9.4) both fall open to in-process counting — the ceilings degrade from once-per-deployment to once-per-instance, and no call is refused for want of a cache. Degraded, not down. |
 | Postgres down | `503` from `/readyz`; the API cannot honour its ordering guarantee without it. The one hard dependency. |
 | Zero upstream results | Record coverage anyway, so we don't re-ask. Empty state distinguishes "nothing published" from "not yet fetched". |
 | Malformed article | Drop it, increment a metric, keep the rest of the batch. |
@@ -1482,7 +1499,7 @@ apart see the same cloud.
 | 5c | **Article grouping (§14.3):** `group_id` / `group_published` / `title_tokens` on `articles`, write-time grouping after the collapse, the keyset moved onto the group axis, per-topic representative from the source-authority list, the "related" disclosure. | ✅ |
 | 5e | **Storylines:** day-clustered slots (ADR-0009), then the persistent arc that superseded them (ADR-0011) — `storylines` / `storyline_days`, the linker, bridges and auto-merge, the timeline paged over storyline-days. Migration 0012 dropped the day-bounded model and its flag. | ✅ |
 | 5f | **Storyline labels (ADR-0011, "Labels"):** Gemini-generated names at promotion, merge and drift, bigram fallback when no key is set, plus `label_source` so a relabel campaign can resume. | ✅ |
-| 6 | **Deploy** — Vercel, all in ([ADR-0015](adr/0015-all-in-on-vercel-hobby-shaped.md), phased in VERCEL-ALL-IN-SCOPE §9). AWS superseded by **OCI** on 2026-08-14; OCI then **abandoned 2026-08-21** for lack of free Ampere capacity, [DEPLOYMENT-OCI.md](DEPLOYMENT-OCI.md) now archival, its Phase 1 network/vault/LB left standing inside Always Free. Vercel Phase 0 (the spikes) and **Phase 1 (the api as one Function: the `buildApp` consumer split, `api/index.ts`, `vercel.json`) are done**; the queue, the Redis quota governor and rate-limit store, the chores route and cutover are Phases 2–5. Operator's half: [deploy/vercel/](../deploy/vercel/). | 🚧 in progress — Phase 1 of 5 |
+| 6 | **Deploy** — Vercel, all in ([ADR-0015](adr/0015-all-in-on-vercel-hobby-shaped.md), phased in VERCEL-ALL-IN-SCOPE §9). AWS superseded by **OCI** on 2026-08-14; OCI then **abandoned 2026-08-21** for lack of free Ampere capacity, [DEPLOYMENT-OCI.md](DEPLOYMENT-OCI.md) now archival, its Phase 1 network/vault/LB left standing inside Always Free. Vercel Phase 0 (the spikes) and **Phases 1–2 (the api as one Function; the queue on Vercel Queues) are done and verified on preview. Phase 3 (the Redis quota governor and rate-limit store) is deployed but only half verifiable**: its rate-limit half is confirmed across six instances, its burst half is unexercised because a fixture-mode preview never calls the governor at all — VERCEL-ALL-IN-SCOPE §9 keeps it 🚧 for that reason. The chores route and cutover are Phases 4–5. Operator's half: [deploy/vercel/](../deploy/vercel/). | 🚧 in progress — Phase 3 of 5 |
 | 7a | **Second provider behind the client interface:** `@zammy/news-client` core + per-provider adapters + the composite, GNews added, `provider` column on `articles`/`sightings` (§5.6, ADR-0012). | ✅ |
 | 7b | Topic summaries into `topics.summary`. The schema reserves the columns (§7.2); nothing generates them. | ⬜ not started |
 
@@ -1498,17 +1515,16 @@ probe payload was a ready-made regression fixture.
 ### Designed but unbuilt
 
 Carried here because these are described elsewhere in the present tense, which reads as though they
-exist. No phase in this table carries them (the quota governor's burst half is carried by the
-Vercel plan's phases instead — see below).
+exist. No phase in this table carries them (the quota governor's burst half was carried by the
+Vercel plan's Phase 3 instead — see below).
 
-- **The shared quota governor (§5.4).** Quota is counted in-process, not in the Redis-held snapshot
-  §5.4 describes: replicas do not share a budget, and a restart forgets the day's spend. Currents
-  self-corrects from `x-ratelimit-*` one call later; GNews sends no headers, so its count stays
-  wrong until a 403 arrives — the exact outcome pre-flight refusal exists to prevent.
-  `createNewsClient` already accepts per-provider governors via `deps.quota`; a contained change.
-  **The burst half is now carried by the Vercel build** (VERCEL-ALL-IN-SCOPE §3.4, Phase 3):
-  sliding burst window plus the Currents observed-snapshot write, fail-open. The day-rolling ledger
-  for headerless providers stays unbuilt, deliberately — enabling GNews requires building it first.
+- **The quota governor's day-rolling ledger (§5.4).** The burst half shipped with Vercel Phase 3
+  (VERCEL-ALL-IN-SCOPE §3.4): `RedisQuotaGovernor` shares the sliding burst window and the observed
+  snapshot across instances, fail-open. What is still in-process is the DAILY count and the
+  interactive reserve, so a restart still forgets the day's spend. Currents self-corrects from
+  `x-ratelimit-*` one call later and that is tolerable; GNews sends no headers, so its count would
+  stay wrong until a 403 arrives — the exact outcome pre-flight refusal exists to prevent.
+  **Enabling GNews requires building the ledger first.**
 - **Per-provider coverage (ADR-0012).** `topic_coverage` is per topic, so a best-effort second
   provider cannot contribute to end-of-results. Cost: a GNews-only article inside an
   already-covered span may never be fetched.
