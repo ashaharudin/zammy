@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  INGEST_RETENTION_SECONDS,
   MAX_INGEST_DELIVERIES,
+  OBSERVED_REDELIVERY_LEASE_SECONDS,
   VercelIngestQueue,
   shouldRetryDelivery,
   type PublishMessage,
@@ -10,6 +12,7 @@ import {
   STALE_PENDING_MS,
   ingestJobId,
   parseIngestJob,
+  parseIngestJobId,
   pendingIdOf,
   type IngestJob,
   type SegmentJob,
@@ -98,6 +101,59 @@ describe("ingestJobId", () => {
   });
 });
 
+describe("parseIngestJobId", () => {
+  const NOW = new Date("2026-08-25T12:00:00.000Z");
+
+  it("round-trips a segment exactly, which is what the manual drain rests on", () => {
+    // The pending set stores IDENTITIES, not payloads, so the drain can only act
+    // on an outstanding entry if this inverse is faithful. It is faithful because
+    // a fingerprint contains no underscore — luck rather than design, which is
+    // precisely why it is pinned here.
+    for (const job of [segment(), segment({ startPage: 7 })]) {
+      expect(parseIngestJobId(ingestJobId(job), NOW)).toEqual(job);
+    }
+  });
+
+  it("round-trips a sample, including a language subtag with an underscore", () => {
+    expect(parseIngestJobId("sample_en", NOW)).toEqual({ kind: "sample", language: "en" });
+    // Not split on "_": the remainder after the prefix is the whole language.
+    const odd: IngestJob = { kind: "sample", language: "zh_Hant" };
+    expect(parseIngestJobId(ingestJobId(odd), NOW)).toEqual(odd);
+  });
+
+  it("restores a top-up's upper bound from the clock, because its identity omits it", () => {
+    // The ONE case that cannot round-trip, and by design: a top-up dedups by its
+    // leading edge alone. `to` is "now" by definition, so it is supplied again.
+    const topup = segment({ kind: "topup", to: "2026-08-09T12:00:00.000Z" });
+    expect(parseIngestJobId(ingestJobId(topup), NOW)).toEqual({
+      fingerprint: "f".repeat(64),
+      from: topup.from,
+      to: NOW.toISOString(),
+      startPage: 1,
+      kind: "topup",
+    });
+  });
+
+  it("returns null for anything it does not recognise", () => {
+    // The drain drops these rather than dispatching them: a member written by a
+    // different version of `ingestJobId` will not become readable later.
+    for (const bad of [
+      "",
+      "sample_",
+      "seg_abc",
+      "seg_abc_notanumber_123_p1",
+      "seg_abc_1_2_3",
+      "seg_abc_1_2_p0",
+      "seg_abc_1_2_pX",
+      "topup_abc",
+      "topup_abc_nope",
+      "written_by_an_older_version",
+    ]) {
+      expect(parseIngestJobId(bad, NOW)).toBeNull();
+    }
+  });
+});
+
 describe("parseIngestJob", () => {
   it("narrows the shapes a hosted queue can hand back", () => {
     expect(parseIngestJob(segment())).toEqual(segment());
@@ -149,16 +205,26 @@ describe("VercelIngestQueue", () => {
     expect(published[1]!.options.idempotencyKey).toBe("sample_en");
   });
 
-  it("publishes with a TTL equal to the pending window, not the 24-hour default", async () => {
-    // §0's decision, and the reason it matters: at the default retention a
-    // failed run's segment could not be re-enqueued until tomorrow, while its
-    // pending entry had long since aged out and the topic read as complete.
+  it("publishes with a TTL that outlives the retry budget, not the 24-hour default", async () => {
+    // This assertion USED to pin the TTL to `STALE_PENDING_MS / 1000` (§0's
+    // decision), and that is exactly the bug it locked in: the redelivery lease
+    // is 300 s, so a 300 s TTL deleted the message five seconds before its first
+    // retry was due and no failed job ever came back (§10 question 0). The
+    // property worth pinning is the INEQUALITY — the TTL must outlive the whole
+    // retry budget, or `shouldRetryDelivery` is deciding about deliveries the
+    // platform will never make.
     const { queue, published } = makeQueue();
 
     await queue.enqueueSegment(segment());
 
-    expect(published[0]!.options.retentionSeconds).toBe(STALE_PENDING_MS / 1000);
-    expect(published[0]!.options.retentionSeconds).toBe(300);
+    expect(published[0]!.options.retentionSeconds).toBe(INGEST_RETENTION_SECONDS);
+    expect(published[0]!.options.retentionSeconds).toBe(900);
+    expect(published[0]!.options.retentionSeconds).toBeGreaterThan(
+      MAX_INGEST_DELIVERIES * OBSERVED_REDELIVERY_LEASE_SECONDS - 1,
+    );
+    // And it must NOT be the pending window any more, which is the regression
+    // this test would otherwise let back in.
+    expect(published[0]!.options.retentionSeconds).toBeGreaterThan(STALE_PENDING_MS / 1000);
   });
 
   it("counts pending work per topic and clears it on settle", async () => {

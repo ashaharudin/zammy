@@ -79,6 +79,65 @@ export function ingestJobId(job: IngestJob): string {
 }
 
 /**
+ * The inverse of `ingestJobId` — a job reconstructed from its content address.
+ *
+ * This exists because the pending set stores job IDENTITIES, not payloads: the
+ * ZSET member is `ingestJobId(job)` and nothing else, so the manual drain
+ * (`drain.ts`) can only act on an outstanding entry if the identity is enough
+ * to rebuild the job. For segments it is, exactly: `ingestJobId` writes the
+ * fingerprint and both epoch-millisecond bounds, and a fingerprint contains no
+ * underscore, so the encoding round-trips. That is luck rather than design, and
+ * pinning it with a round-trip test is what keeps it true.
+ *
+ * `now` is only read for the ONE case that does not round-trip: a top-up's
+ * identity omits its upper bound by design (§6.4 dedups it by the leading edge
+ * alone, because every poll re-reads "now"), so the bound has to be supplied
+ * again. Passing it in rather than calling the clock keeps this pure.
+ *
+ * Returns `null` for anything it does not recognise, which the drain treats the
+ * same way the consumer treats an unparseable payload: drop it loudly. A member
+ * this cannot read was written by a different version of `ingestJobId`, and it
+ * will not become readable later.
+ */
+export function parseIngestJobId(id: string, now: Date): IngestJob | null {
+  if (id.startsWith("sample_")) {
+    // Not split on "_": a language subtag is allowed to contain one, and the
+    // remainder after the prefix is the whole of it.
+    const language = id.slice("sample_".length);
+    return language.length > 0 ? { kind: "sample", language } : null;
+  }
+
+  const parts = id.split("_");
+  const asIso = (ms: string): string | null => {
+    if (!/^\d+$/.test(ms)) return null;
+    const date = new Date(Number(ms));
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  };
+
+  if (parts[0] === "topup" && parts.length === 3) {
+    const [, fingerprint, fromMs] = parts;
+    const from = asIso(fromMs!);
+    if (!fingerprint || !from) return null;
+    // `to` is "now" by the definition of a top-up, which is the whole reason
+    // this identity can afford to omit it.
+    return { fingerprint, from, to: now.toISOString(), startPage: 1, kind: "topup" };
+  }
+
+  if (parts[0] === "seg" && parts.length === 5) {
+    const [, fingerprint, fromMs, toMs, page] = parts;
+    const from = asIso(fromMs!);
+    const to = asIso(toMs!);
+    const startPage = /^p\d+$/.test(page ?? "") ? Number(page!.slice(1)) : NaN;
+    if (!fingerprint || !from || !to || !Number.isInteger(startPage) || startPage < 1) {
+      return null;
+    }
+    return { fingerprint, from, to, startPage };
+  }
+
+  return null;
+}
+
+/**
  * Which pending registry a job belongs to: a topic's fingerprint, or the
  * per-language sample slot. Segments and samples are counted separately because
  * they are polled separately — a timeline read asks about its own fingerprint,
@@ -127,12 +186,24 @@ export function parseIngestJob(payload: unknown): IngestJob | null {
 }
 
 /**
- * Entries older than this are presumed lost to a crashed consumer. It is also
- * the message TTL the Vercel driver publishes with (§0), so the dedup window
- * and the pending window are the same five minutes rather than two numbers that
- * can drift: at the default 24-hour retention a failed run's segment could not
- * be re-enqueued until tomorrow, while its pending entry had long since aged
- * out and the topic read as complete.
+ * Entries older than this are presumed lost to a crashed consumer.
+ *
+ * **It USED to be the message TTL the Vercel driver publishes with (§0), and is
+ * not any more.** Keeping the dedup window and the pending window on the same
+ * five minutes was the intent, and it made the two numbers agree — but it also
+ * pinned the TTL to 300 s, which is the redelivery lease, so a failed job was
+ * deleted before it could come back and no hosted retry ever happened
+ * (VERCEL-ALL-IN-SCOPE §10 question 0). The driver now derives its own TTL from
+ * the measured lease; see `INGEST_RETENTION_SECONDS` in
+ * `ingest-queue-vercel.ts`.
+ *
+ * The consequence to hold onto is that **this window is now SHORTER than the
+ * retry budget it used to bound.** The stale prune fires at 5 minutes and the
+ * second delivery does not arrive until 5 minutes and 5 seconds, so a pending
+ * entry can age out while the queue still intends to retry the job. That
+ * under-reports `meta.ingest` rather than over-reporting it — the client stops
+ * polling early and the fill still lands — but the two clocks are no longer the
+ * same clock, and aligning them is unbuilt.
  */
 export const STALE_PENDING_MS = 5 * 60 * 1000;
 
@@ -192,6 +263,15 @@ export interface IngestQueue {
   close(): Promise<void>;
 }
 
+/** One outstanding ledger entry, as `listOutstanding` reports it. */
+export interface PendingEntry {
+  /** The registry it sits in: a topic fingerprint, or `sample_<language>`. */
+  pendingId: string;
+  /** Its content address — feed it to `parseIngestJobId` to get the job back. */
+  jobId: string;
+  enqueuedAt: Date;
+}
+
 /**
  * The Redis registry behind `meta.ingest.pendingJobs`, shared verbatim by both
  * transports.
@@ -227,6 +307,50 @@ export class PendingSet {
     const key = this.key(pendingId);
     await this.redis.zremrangebyscore(key, 0, Date.now() - STALE_PENDING_MS);
     return this.redis.zcard(key);
+  }
+
+  /**
+   * Every entry across every topic that has been outstanding longer than
+   * `olderThanMs` — what the manual drain reads (`drain.ts`).
+   *
+   * **It deliberately does not prune, which is the opposite of `count`.** The
+   * prune in `count` is the whole reason a drain is possible at all AND the
+   * reason it is only possible for some topics, so the asymmetry is worth
+   * stating: `count` deletes anything past `STALE_PENDING_MS` as crashed-
+   * consumer residue, and it runs on every `meta.ingest` read. A topic with
+   * traffic therefore erases its own ledger within five minutes of a read —
+   * which is fine, because that is exactly the topic whose next reader re-plans
+   * the gap immediately (§6.3). A topic with no traffic never calls `count`, so
+   * its entries persist here indefinitely, and that is the topic the drain is
+   * for: nothing else is coming to notice.
+   *
+   * `SCAN`, not `KEYS`: `purge` uses `KEYS` because it runs in tests against a
+   * handful of keys, and this runs in production against however many topics
+   * have ever been read.
+   */
+  async listOutstanding(olderThanMs: number): Promise<PendingEntry[]> {
+    const cutoff = Date.now() - olderThanMs;
+    const pattern = this.key("*");
+    const prefix = this.key("");
+    const entries: PendingEntry[] = [];
+    let cursor = "0";
+    do {
+      const [next, keys] = await this.redis.scan(cursor, "MATCH", pattern, "COUNT", 100);
+      cursor = next;
+      for (const key of keys) {
+        // Score-bounded, so a topic with thousands of live entries costs one
+        // range read rather than a full fetch we then filter in memory.
+        const flat = await this.redis.zrangebyscore(key, 0, cutoff, "WITHSCORES");
+        for (let i = 0; i < flat.length; i += 2) {
+          entries.push({
+            pendingId: key.slice(prefix.length),
+            jobId: flat[i]!,
+            enqueuedAt: new Date(Number(flat[i + 1]!)),
+          });
+        }
+      }
+    } while (cursor !== "0");
+    return entries;
   }
 
   async purge(): Promise<void> {

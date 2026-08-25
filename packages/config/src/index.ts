@@ -159,6 +159,24 @@ const EnvSchema = z
      */
     INGEST_QUEUE_DRIVER: z.enum(["bullmq", "vercel"]).default("bullmq"),
 
+    /**
+     * The bearer token the manual ingest drain requires (`api/drain.ts`,
+     * VERCEL-ALL-IN-SCOPE §3.2). Named for Vercel's own convention — its cron
+     * invoker sends `Authorization: Bearer $CRON_SECRET` — so the same route
+     * answers to either scheduler without a second secret; Supabase Cron is the
+     * intended driver here because it has the minute precision the drain wants
+     * and Hobby's Vercel cron does not.
+     *
+     * Optional here and MANDATORY at the route, which is deliberate: the drain
+     * is the one surface that can spend upstream quota without a user asking,
+     * so it refuses to run rather than run unauthenticated, and leaving this
+     * unset disables the route instead of opening it. Every other deployment
+     * shape — Compose, tests, local dev — has no drain and needs no token, and
+     * requiring it in the schema would break all three to protect a route they
+     * do not serve.
+     */
+    CRON_SECRET: z.string().trim().optional(),
+
     // --- upstream ---
     CURRENTS_MODE: z.enum(["live", "fixture"]).default("fixture"),
     CURRENTS_API_KEY: z.string().trim().optional(),
@@ -1085,6 +1103,7 @@ export function redactConfig(config: Config): Record<string, unknown> {
     CURRENTS_API_KEY,
     GNEWS_API_KEY,
     GEMINI_API_KEY,
+    CRON_SECRET,
     DATABASE_URL,
     DATABASE_SESSION_URL,
     DATABASE_CA_CERT,
@@ -1096,6 +1115,9 @@ export function redactConfig(config: Config): Record<string, unknown> {
     CURRENTS_API_KEY: CURRENTS_API_KEY ? "[redacted]" : null,
     GNEWS_API_KEY: GNEWS_API_KEY ? "[redacted]" : null,
     GEMINI_API_KEY: GEMINI_API_KEY ? "[redacted]" : null,
+    // A bearer token is a password: it authenticates the one route that can
+    // spend quota unprompted.
+    CRON_SECRET: CRON_SECRET ? "[redacted]" : null,
     DATABASE_URL: redactUrlCredentials(DATABASE_URL),
     // A second URL is a second password (§4.1's session-mode connection).
     DATABASE_SESSION_URL: DATABASE_SESSION_URL

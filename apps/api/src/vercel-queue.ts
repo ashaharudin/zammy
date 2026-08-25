@@ -96,14 +96,16 @@ export function createMessageHandler(
     } catch (error) {
       if (shouldRetryDelivery(metadata.deliveryCount)) {
         // Rethrow, which answers 500 and leaves the message unacknowledged —
-        // what at-least-once is supposed to be built on. MEASURED CAVEAT: the
-        // platform does not currently redeliver it (see the default export), so
-        // in production this branch is where a failed job is lost rather than
-        // retried. It stays because it is the correct contract and the one the
-        // BullMQ driver honours; what covers the gap meanwhile is that the
-        // pending entry is NOT settled here, so `meta.ingest` keeps reporting
-        // the work as owed until the five-minute stale prune, and the next
-        // reader re-plans the gap it named.
+        // what at-least-once is built on. The redelivery arrives ~305 s later,
+        // when the visibility lease expires; the 500 is for the platform's
+        // request log rather than for the retry, which happens either way.
+        //
+        // Note the pending entry is deliberately NOT settled here, and that it
+        // now outlives the retry budget rather than bounding it: the five-minute
+        // stale prune fires while attempt 2 is still owed, so `meta.ingest` can
+        // stop reporting a job the queue is still going to retry. That
+        // under-reports progress (the client stops polling early, the fill still
+        // lands) in the same fail-open direction the rest of this driver takes.
         throw error;
       }
       // Out of attempts. Settle first: a job nobody will attempt again is not
@@ -195,29 +197,33 @@ const drainable = bootOnce(bootFromEnvironment);
  * neither. That default is what makes a long segment fetch safe to await.
  *
  * **There is no `retry` callback, and the reason is measured rather than
- * reasoned.** Both shapes were deployed against a deliberately poisoned message
- * (2026-08-25, preview) and neither produced a second delivery:
+ * reasoned.** Rethrowing answers 500 and leaves the message unacknowledged,
+ * which is what at-least-once is built on; the callback's response code turns
+ * out not to be what triggers redelivery at all. A failed delivery comes back
+ * when its VISIBILITY LEASE EXPIRES — measured at +305 s, server-assigned,
+ * unaffected by the response code, by `retryAfterSeconds` in `vercel.json`, or
+ * by the SDK's `visibilityTimeoutSeconds`. See
+ * `OBSERVED_REDELIVERY_LEASE_SECONDS`.
  *
- *   - **With** `retry: () => ({ afterSeconds: 5 })`, the SDK catches the throw,
- *     calls `changeVisibility` — successfully, since it logs
- *     "Failed to reschedule message for retry" when that call fails and it did
- *     not — and then returns normally, so the callback answers **200**. No
- *     redelivery followed, across the message's whole 300 s retention.
- *   - **Without** it, the error propagates and the callback answers **500**.
- *     Also exactly one delivery, watched for 440 s.
+ * A `retry: () => ({ afterSeconds: n })` callback was measured too, and is not
+ * used, for two reasons that survived the measurement: it makes the SDK answer
+ * **200** and so hides a genuine failure from the platform's own request log,
+ * and its `afterSeconds` is not honoured for the first redelivery either. The
+ * one thing it did change was the cadence AFTER the first retry (60 s rather
+ * than a further 305 s) — an effect we cannot explain from the SDK source, and
+ * not a good enough reason to report failures as successes.
  *
- * So redelivery is not currently happening either way, and between two shapes
- * that both lose the message the honest one wins: a 500 puts the failure in the
- * platform's own request log, where it is visible without reading ours, and it
- * is the shape that starts working if the beta begins honouring failed
- * callbacks. The `retry` callback's 200 would hide the same failure behind a
- * success. See VERCEL-ALL-IN-SCOPE §3.2 — this is the beta risk ADR-0015
- * accepted, and the pending set is the ledger that covers it.
+ * **This function's history is worth keeping.** Until 2026-08-25 a failed job
+ * here was LOST, and the cause was not the callback shape: the driver published
+ * with `retentionSeconds` equal to `STALE_PENDING_MS / 1000` (300 s), so a
+ * message was deleted five seconds before its first redelivery was due and the
+ * retry window was exactly zero. Raising the retention is what fixed it
+ * (`INGEST_RETENTION_SECONDS`), and nothing in this file had to change —
+ * VERCEL-ALL-IN-SCOPE §10 question 0.
  *
- * `shouldRetryDelivery` and the give-up path below are therefore correct but
- * **unexercised in production**: `deliveryCount` has never been observed above
- * 1. They are kept because they are what the contract says should happen, and
- * because the BullMQ driver genuinely does it.
+ * So `shouldRetryDelivery` and the give-up path below are now genuinely
+ * exercised: a poisoned job is delivered at +0 s, +305 s and +610 s, and the
+ * third settles and gives up.
  */
 export default new QueueClient().handleNodeCallback(async (payload, metadata) =>
   createMessageHandler(await drainable())(payload, metadata),
