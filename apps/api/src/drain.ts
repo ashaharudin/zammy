@@ -84,6 +84,8 @@ export interface DrainReport {
 export interface Drainable {
   listOutstanding: (olderThanMs: number) => Promise<PendingEntry[]>;
   settle: IngestQueue["settle"];
+  /** Remove an entry whose job cannot be rebuilt; see `PendingSet.forget`. */
+  forget: (pendingId: string, jobId: string) => Promise<void>;
   dispatch: IngestHandler;
 }
 
@@ -132,13 +134,23 @@ export async function runDrain(
     const job = parseIngestJobId(entry.jobId, now());
     if (!job) {
       // Written by a different version of `ingestJobId`. It will not become
-      // readable, and leaving it makes every future pass scan it again.
+      // readable, so it is removed by its raw coordinates rather than settled —
+      // `settle` derives both the key and the member FROM a job, which is
+      // exactly what this entry cannot give us.
+      //
+      // Dropping it is not optional bookkeeping. The stale prune that collects
+      // this kind of residue lives in `PendingSet.count`, which only runs on a
+      // `meta.ingest` read, and a cold topic never has one — which is the whole
+      // reason this route exists. An entry left here would be re-scanned,
+      // re-warned and re-counted against `limit` by every future pass, forever,
+      // and enough of them would starve the pass of its budget before it
+      // reached any fillable work.
       report.unreadable += 1;
       logger.warn(
         { pendingId: entry.pendingId, jobId: entry.jobId },
         "unreadable pending entry; dropping",
       );
-      await settleQuietly(drainable, entry, logger, job);
+      await forgetQuietly(drainable, entry, logger);
       continue;
     }
 
@@ -181,9 +193,8 @@ async function settleQuietly(
   drainable: Drainable,
   entry: PendingEntry,
   logger: ServiceLogger,
-  job: IngestJob | null,
+  job: IngestJob,
 ): Promise<void> {
-  if (!job) return;
   try {
     await drainable.settle(job);
   } catch (error) {
@@ -194,6 +205,26 @@ async function settleQuietly(
         err: error instanceof Error ? error.message : String(error),
       },
       "drain could not settle entry",
+    );
+  }
+}
+
+/** The same tolerance, for the entry that has no job to settle by. */
+async function forgetQuietly(
+  drainable: Drainable,
+  entry: PendingEntry,
+  logger: ServiceLogger,
+): Promise<void> {
+  try {
+    await drainable.forget(entry.pendingId, entry.jobId);
+  } catch (error) {
+    logger.warn(
+      {
+        pendingId: entry.pendingId,
+        jobId: entry.jobId,
+        err: error instanceof Error ? error.message : String(error),
+      },
+      "drain could not forget unreadable entry",
     );
   }
 }
@@ -218,17 +249,12 @@ export function isAuthorized(header: string | undefined, secret: string | undefi
   return mismatch === 0;
 }
 
-interface Booted {
-  drainable: Drainable;
-  secret: string | undefined;
-}
-
 /**
  * Config is loaded inside the boot, as in `vercel.ts` and `vercel-queue.ts`, so
  * a bad deploy answers with a listed reason rather than a module that throws
  * during import.
  */
-async function bootFromEnvironment(): Promise<Booted> {
+async function bootFromEnvironment(): Promise<Drainable> {
   let config;
   try {
     config = loadConfig();
@@ -255,17 +281,41 @@ async function bootFromEnvironment(): Promise<Booted> {
   // this one route read a registry whose key format `PendingSet` already owns.
   const pending = new PendingSet(services.redis, services.queue.name);
   return {
-    secret: config.CRON_SECRET,
-    drainable: {
-      listOutstanding: (olderThanMs) => pending.listOutstanding(olderThanMs),
-      settle: (job) => services.queue.settle(job),
-      dispatch: ingestDispatch(services),
-    },
+    listOutstanding: (olderThanMs) => pending.listOutstanding(olderThanMs),
+    settle: (job) => services.queue.settle(job),
+    forget: (pendingId, jobId) => pending.forget(pendingId, jobId),
+    dispatch: ingestDispatch(services),
   };
 }
 
-function bootOnce(boot: () => Promise<Booted>): () => Promise<Booted> {
-  let booted: Promise<Booted> | null = null;
+/**
+ * The secret alone, read WITHOUT building any services.
+ *
+ * Split out from the boot so the bearer check can happen before a single
+ * connection is opened. `loadConfig` is pure zod over `process.env` and does no
+ * I/O, where `buildServices` creates a Postgres pool, a Redis client and an
+ * upstream client — so ordering the two this way is the difference between an
+ * unauthenticated POST costing nothing and it costing connections.
+ *
+ * That matters most in the configuration the docs call "disabled": with
+ * `CRON_SECRET` unset this route refuses every request, and it should refuse
+ * them cheaply rather than booting the world to discover it has no secret to
+ * compare against.
+ *
+ * Returns `undefined` when config itself will not load, which reads the same as
+ * an unset secret at the callsite — refuse. The boot below reports the real
+ * reason for anyone holding the token.
+ */
+function secretFromEnvironment(): string | undefined {
+  try {
+    return loadConfig().CRON_SECRET;
+  } catch {
+    return undefined;
+  }
+}
+
+function bootOnce(boot: () => Promise<Drainable>): () => Promise<Drainable> {
+  let booted: Promise<Drainable> | null = null;
   return () => {
     if (booted) return booted;
     const pending = boot();
@@ -284,7 +334,8 @@ const booted = bootOnce(bootFromEnvironment);
  * `GET` is the shape a link preview or a crawler follows by accident.
  */
 export function createHandler(
-  boot: () => Promise<Booted>,
+  boot: () => Promise<Drainable>,
+  readSecret: () => string | undefined = secretFromEnvironment,
 ): (request: IncomingMessage, response: ServerResponse) => Promise<void> {
   return async (request, response) => {
     const json = (status: number, body: object): void => {
@@ -297,20 +348,27 @@ export function createHandler(
       return;
     }
 
-    let ready: Booted;
+    // **Auth first, and before the boot rather than after it.** The boot opens a
+    // Postgres pool and a Redis client; the check needs only `process.env`. Doing
+    // it the other way round let an unauthenticated caller drive real connections
+    // on a route an operator has switched off by leaving `CRON_SECRET` unset —
+    // and, because `bootOnce` forgets a FAILED boot so the next request can retry
+    // it, let them drive a fresh one per request on any deployment where the boot
+    // does not succeed.
+    const header = request.headers.authorization;
+    if (!isAuthorized(Array.isArray(header) ? header[0] : header, readSecret())) {
+      // No detail: an unauthorized caller learns nothing about whether the
+      // secret is unset or merely wrong.
+      json(401, { error: "unauthorized" });
+      return;
+    }
+
+    let ready: Drainable;
     try {
       ready = await boot();
     } catch (error) {
       console.error("drain boot failed:", error instanceof Error ? error.message : String(error));
       json(503, { status: "unavailable" });
-      return;
-    }
-
-    const header = request.headers.authorization;
-    if (!isAuthorized(Array.isArray(header) ? header[0] : header, ready.secret)) {
-      // No detail: an unauthorized caller learns nothing about whether the
-      // secret is unset or merely wrong.
-      json(401, { error: "unauthorized" });
       return;
     }
 
@@ -322,7 +380,7 @@ export function createHandler(
         : DRAIN_MAX_JOBS;
 
     try {
-      const report = await runDrain(ready.drainable, { limit });
+      const report = await runDrain(ready, { limit });
       json(200, report);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

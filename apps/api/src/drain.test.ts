@@ -1,6 +1,8 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it } from "vitest";
 import {
   DRAIN_MIN_AGE_MS,
+  createHandler,
   isAuthorized,
   runDrain,
   type Drainable,
@@ -49,16 +51,19 @@ interface Harness {
   drainable: Drainable;
   dispatched: IngestJob[];
   settled: IngestJob[];
+  forgotten: Array<{ pendingId: string; jobId: string }>;
   askedFor: number[];
 }
 
 function harness(entries: PendingEntry[], fail: (job: IngestJob) => boolean = () => false): Harness {
   const dispatched: IngestJob[] = [];
   const settled: IngestJob[] = [];
+  const forgotten: Array<{ pendingId: string; jobId: string }> = [];
   const askedFor: number[] = [];
   return {
     dispatched,
     settled,
+    forgotten,
     askedFor,
     drainable: {
       listOutstanding: async (olderThanMs) => {
@@ -66,6 +71,7 @@ function harness(entries: PendingEntry[], fail: (job: IngestJob) => boolean = ()
         return entries;
       },
       settle: async (job) => void settled.push(job),
+      forget: async (pendingId, jobId) => void forgotten.push({ pendingId, jobId }),
       dispatch: async (job) => {
         dispatched.push(job);
         if (fail(job)) throw new Error("upstream said no");
@@ -145,10 +151,39 @@ describe("runDrain", () => {
     const report = await runDrain(h.drainable, { now: clock(T0) }, silent);
 
     expect(h.dispatched).toEqual([]);
-    // Nothing to settle: settling needs a job, and this entry has none. The next
-    // `meta.ingest` read prunes it as stale residue.
+    // Removed by its RAW coordinates, because `settle` needs a job and this
+    // entry cannot produce one. It must actually leave the ledger: the stale
+    // prune that would otherwise collect it lives in `PendingSet.count`, and a
+    // cold topic — the only kind this route ever sees — never calls it.
     expect(h.settled).toEqual([]);
+    expect(h.forgotten).toEqual([
+      { pendingId: "whatever", jobId: "written_by_an_older_version" },
+    ]);
     expect(report.unreadable).toBe(1);
+  });
+
+  it("does not re-scan an unreadable entry on the next pass", async () => {
+    // The point of forgetting it. Left in place it would be re-warned and
+    // re-counted against `limit` by every pass forever, and enough of them would
+    // starve a pass before it reached anything fillable.
+    const ledger: PendingEntry[] = [
+      { pendingId: "whatever", jobId: "written_by_an_older_version", enqueuedAt: T0 },
+    ];
+    const h = harness(ledger);
+    const drainable: Drainable = {
+      ...h.drainable,
+      listOutstanding: async () => ledger,
+      forget: async (pendingId, jobId) => {
+        const at = ledger.findIndex((e) => e.pendingId === pendingId && e.jobId === jobId);
+        if (at >= 0) ledger.splice(at, 1);
+      },
+    };
+
+    const first = await runDrain(drainable, { now: clock(T0) }, silent);
+    const second = await runDrain(drainable, { now: clock(T0) }, silent);
+
+    expect(first.unreadable).toBe(1);
+    expect(second).toMatchObject({ scanned: 0, unreadable: 0 });
   });
 
   it("stops at the job limit and says it was truncated", async () => {
@@ -214,5 +249,108 @@ describe("isAuthorized", () => {
     expect(isAuthorized("s3cret", "s3cret")).toBe(false);
     expect(isAuthorized("Basic s3cret", "s3cret")).toBe(false);
     expect(isAuthorized(undefined, "s3cret")).toBe(false);
+  });
+});
+
+describe("createHandler", () => {
+  const request = (method: string, authorization?: string): IncomingMessage =>
+    ({ method, url: "/api/drain", headers: authorization ? { authorization } : {} }) as
+      unknown as IncomingMessage;
+
+  function capture(): { res: ServerResponse; seen: { status: number | null; body: unknown } } {
+    const seen: { status: number | null; body: unknown } = { status: null, body: null };
+    const res = {
+      writeHead(status: number) {
+        seen.status = status;
+        return this;
+      },
+      end(payload: string) {
+        seen.body = JSON.parse(payload);
+        return this;
+      },
+    } as unknown as ServerResponse;
+    return { res, seen };
+  }
+
+  it("rejects an unauthorized caller WITHOUT booting any services", async () => {
+    // The ordering is the assertion. `boot` opens a Postgres pool and a Redis
+    // client; the bearer check reads `process.env`. Booting first let an
+    // unauthenticated POST drive real connections against a route an operator
+    // switched off by leaving CRON_SECRET unset — and `bootOnce` forgets a
+    // FAILED boot, so on a misconfigured deployment that was one fresh boot per
+    // request.
+    let boots = 0;
+    const handler = createHandler(
+      async () => {
+        boots += 1;
+        throw new Error("should never be reached");
+      },
+      () => "s3cret",
+    );
+    const { res, seen } = capture();
+
+    await handler(request("POST", "Bearer wrong"), res);
+
+    expect(seen.status).toBe(401);
+    expect(boots).toBe(0);
+  });
+
+  it("refuses everything, still without booting, when the secret is unset", async () => {
+    // "Unset disables the route" is what .env.example promises. Disabled has to
+    // mean cheap, not "boots the world and then says no".
+    let boots = 0;
+    const handler = createHandler(
+      async () => {
+        boots += 1;
+        throw new Error("should never be reached");
+      },
+      () => undefined,
+    );
+    const { res, seen } = capture();
+
+    await handler(request("POST", "Bearer anything"), res);
+
+    expect(seen.status).toBe(401);
+    expect(boots).toBe(0);
+  });
+
+  it("boots only once the caller is authorized", async () => {
+    let boots = 0;
+    const handler = createHandler(
+      async () => {
+        boots += 1;
+        return {
+          listOutstanding: async () => [],
+          settle: async () => {},
+          forget: async () => {},
+          dispatch: async () => {},
+        };
+      },
+      () => "s3cret",
+    );
+    const { res, seen } = capture();
+
+    await handler(request("POST", "Bearer s3cret"), res);
+
+    expect(boots).toBe(1);
+    expect(seen.status).toBe(200);
+    expect(seen.body).toMatchObject({ scanned: 0, filled: 0 });
+  });
+
+  it("answers 405 to a GET, before auth and before boot", async () => {
+    let boots = 0;
+    const handler = createHandler(
+      async () => {
+        boots += 1;
+        throw new Error("should never be reached");
+      },
+      () => "s3cret",
+    );
+    const { res, seen } = capture();
+
+    await handler(request("GET", "Bearer s3cret"), res);
+
+    expect(seen.status).toBe(405);
+    expect(boots).toBe(0);
   });
 });

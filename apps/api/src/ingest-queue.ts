@@ -299,6 +299,20 @@ export class PendingSet {
   }
 
   /**
+   * Remove by raw coordinates, for the one caller that HAS an entry but cannot
+   * rebuild the job behind it: the drain, facing a member `parseIngestJobId`
+   * does not recognise.
+   *
+   * `remove` cannot serve that case, because it derives both the key and the
+   * member from a job. Without this the unreadable entry is immortal for
+   * exactly the topics the drain exists for — a cold one never calls `count`,
+   * so the stale prune that would otherwise collect it never runs.
+   */
+  async forget(pendingId: string, jobId: string): Promise<void> {
+    await this.redis.zrem(this.key(pendingId), jobId);
+  }
+
+  /**
    * Entries older than STALE_PENDING_MS are pruned as crashed-consumer residue,
    * so a lost decrement degrades to "in_progress for five minutes", never to a
    * topic that reads as perpetually warming.

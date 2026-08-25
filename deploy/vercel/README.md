@@ -98,7 +98,7 @@ first, then apps — the function imports `apps/api/dist`), and the output direc
 
 ## The queue
 
-`INGEST_QUEUE_DRIVER=vercel` swaps the transport under the same seven-member interface the read path
+`INGEST_QUEUE_DRIVER=vercel` swaps the transport under the same eight-member interface the read path
 already used. The request function publishes; `api/queues/ingest.ts` drains. Three operator-visible
 consequences:
 
@@ -106,12 +106,15 @@ consequences:
   it in `vercel.json`, which is why there is no auth on it and none is missing. The topic name in
   that trigger (`ingest`) must match the queue's name, because that name also scopes the Redis
   pending set and the trending sample lock.
-- **`experimentalTriggers` is beta, and one part of it is already not behaving.** Delivery works;
-  REdelivery does not (see the known gap below). The pending set is still the ledger of what is owed
-  (`meta.ingest`), which is what keeps this a recoverable state rather than a data-loss event.
-- **The message TTL is 300 s, matching the pending window.** A deploy mid-flight leaves the old
-  deployment draining its own messages, because push-mode topics are partitioned by deployment id.
-  Five minutes bounds how long that lasts.
+- **`experimentalTriggers` is beta, and its timings move under you.** Delivery and redelivery both
+  work, but the redelivery lease grew 30x in three days once already and silently broke retries when
+  it did (see below). The pending set is still the ledger of what is owed (`meta.ingest`), which is
+  what keeps a regression here a recoverable state rather than a data-loss event.
+- **The message TTL is 900 s (`INGEST_RETENTION_SECONDS`), and it deliberately no longer matches the
+  5-minute pending window.** Those two being equal is precisely the bug that stopped redelivery, so
+  do not "tidy" them back together. A deploy mid-flight leaves the old deployment draining its own
+  messages, because push-mode topics are partitioned by deployment id — 15 minutes now bounds how
+  long that lasts.
 
 Verifying it (done 2026-08-25, current deployment `zammy-k2y801sfm`): read a cold topic and watch
 `meta.ingest.pendingJobs` fall to zero. **Pick a topic that then goes quiet.** A topic you keep
