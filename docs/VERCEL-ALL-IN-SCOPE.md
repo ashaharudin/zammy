@@ -219,6 +219,36 @@ Two consequences to accept explicitly:
   transport, with delivery semantics trusted to the platform. This is a real loss of test power and
   should be recorded as one.
 
+**What the implementation added to the seven members, and what it kept.** Three notes from the
+build (2026-08-25), none of which changed the shape above:
+
+- **`IngestQueue` became an interface with two implementations, not one replacement.** BullMQ stays
+  as the Compose driver, chosen by `INGEST_QUEUE_DRIVER` (default `bullmq`). The reason is the loss
+  of test power this section already records: `ingest-queue-bullmq.test.ts` still asserts real dedup
+  and real redelivery against a real Redis, so the semantics stay pinned on the deployment that can
+  pin them, and local development keeps a queue a single `pnpm dev` can both serve and drain. The
+  hosted driver's suite is what this section predicted — pure parts asserted directly, pending-set
+  arithmetic against Redis, transport faked.
+- **An eighth member, `settle`.** BullMQ cleared a pending entry from its own worker events because
+  the worker was in this process. A push-mode consumer is a different deployable and has to be told,
+  so the counterpart to enqueue is now on the interface rather than hidden inside one driver.
+- **The 300 s TTL and the 300 s visibility timeout collide, and the `retry` callback is what
+  separates them.** The table above treats them independently: the message TTL is §0's decision and
+  the SDK's `visibilityTimeoutSeconds` default is 300 s with auto-extension. Together they cancel
+  out — a throw with no `retry` callback leaves the message unacknowledged, so it becomes visible
+  again only when the lease expires, which is also when the message expires. Every failure would be
+  a *final* failure and at-least-once would quietly be at-most-once for exactly the jobs that needed
+  the retry. Shortening the lease is the wrong lever (it is what protects a long segment fetch), so
+  the `retry` callback ships purely to say "redeliver soon". It never acknowledges: the handler
+  decides when to give up, because giving up means settling the pending entry and `retry` is not
+  handed the payload to name it with.
+- **The pending set is best-effort under the hosted driver, and could not have been under BullMQ.**
+  There, Redis *was* the queue, so a Redis outage failed the enqueue and there was nothing finer to
+  say. Here the message is already durable in the topic and the pending set is a progress hint —
+  so a ledger write that fails is logged and the read still answers. It costs an under-reported
+  `meta.ingest` (the client stops polling early; the fill still lands) instead of a 500, which is
+  the same fail-open direction §3.4 and §3.5 take.
+
 **The beta is accepted, with a named fallback (§0, ADR-0015).** The pending set is our own
 at-least-once ledger: if the `queue/v2beta` trigger regresses, `meta.ingest` keeps reporting what
 is owed, and the manual drain is an authenticated chores-route pass that reads the pending set and
@@ -502,7 +532,7 @@ Each phase ends with something demonstrable; none of them is "and then we cut ov
 |---|---|---|
 | **0. Spikes** (0.5–1 d) ✅ | Prove the project shape (§1.1) on a throwaway deployment: Vite preset + `api/` function + a `queue/v2beta` trigger firing. Measure `buildApp` cold start. Measure `chores storylines` wall-clock at 90 days of corpus, bounded and unbounded. Measure the corpus against Supabase's 500 MB — a **now**-question, since production is seeded from it (Phase 5). Confirm Queues' Hobby allowance in the dashboard (§8). | **Done, both halves.** The three numbers ([VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md)): cold start ~360 ms local, 947 ms on the platform of which ~550 ms is container start (§7.1); `chores storylines` ~3.5 h unbounded, with the **late-candidate sweep at ~506 s the phase that breaks the ceiling** — since found to be a linking bug and gated off; corpus 190 MB with the 500 MB tripwire at ~1,485 articles/day after a reindex. The deployment half (findings §8): the Vite preset builds the SPA and the `api/` directory together, the `queue/v2beta` trigger fires on a bare `api/` function **on a Hobby account**, `waitUntil` outlives the 202, and the cron entry validates. The rewrite correction (§3.1) is the one thing it changed structurally. |
 | **1. The api as a Function** (1–2 d) ✅ | §3.1. Consumer disabled, chores still manual. Preview in fixture mode against the preview data plane (§4). | **Done, deployed and verified 2026-08-24** (commit `8be3fa9`). `/readyz` returns `{"status":"ready"}` with `postgres.ok` and `redis.ok` both true. The three halves only a deploy could exercise all came back: **Supabase through the transaction pooler** — a `/api/v1/timeline` read whose `servedFrom` moves `upstream` → `store` across polls, so the rows were written and read back through 6543; **Upstash** — reachable, after the scheme fix below; **`includeFiles` does place `fixtures/`** — a fresh topic answers `servedFrom: "upstream"` with recorded fixture content, and an absent directory would have failed the boot into a 503 instead. Cold start **993 ms**, warm 190–298 ms — close to Phase 0's 947 ms on the platform (§7.1). All 17 migrations applied through the session pooler under `verify-full` in 8.2 s. **One third of the criterion as written was unreachable and is struck** — `degraded: "ingest_timeout"`, see below. |
-| **2. The queue** (2–3 d) | §3.2 — new `IngestQueue` implementation (all seven members), `api/queues/ingest.ts`, 5-min message TTL, rewritten tests. | A cold topic fills behind the reader; `meta.ingest` drains to zero; a killed consumer redelivers |
+| **2. The queue** (2–3 d) | §3.2 — new `IngestQueue` implementation (all seven members, plus `settle` — below), `api/queues/ingest.ts`, 5-min message TTL, rewritten tests. **Code landed; not yet deployed.** | A cold topic fills behind the reader; `meta.ingest` drains to zero; a killed consumer redelivers |
 | **3. Quota + limits** (1–2 d) | §3.4 (burst-only, fail-open) and §3.5 (Redis store, fail-open). | The burst ceiling holds with the consumer and the request path both running; the per-IP guard is real; both degrade to in-process when Redis is down |
 | **4. Chores** (1–1.5 d) | §3.3 + Supabase Cron + `chore_runs` + the keep-alive ping, **plus what Phase 0 added**: the `REINDEX CONCURRENTLY` sweep in the retention chore. The late-candidate sweep is gated off (findings §2.6), so this phase no longer carries a deadline problem; if it is ever switched back on, the bound and persisted cursor come back with it. | All scheduled passes run on schedule and write `chore_runs` rows, any pass runs on demand by query param, twice-triggered runs skip on the lock, the 202 arrives from cold within pg_net's configured timeout, **and a gated night reports `skipped: true` rather than a clean `offered: 0`** |
 | **5. Observability + cutover** (1–2 d) | The migration CI jobs (§6, prod + preview), env vars (§4), **seed production from the dev corpus** (a 24 MB `pg_dump -Fc`, measured at 1.9 s out and 1.1 s in — findings §4), DNS. Drain the 2,981-storyline label backlog first (§3.3). | Production traffic against the seeded corpus, and "did last night's chores run?" is answered by a `chore_runs` query |

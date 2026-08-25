@@ -11,8 +11,13 @@ import { createNewsClient } from "@zammy/news-providers";
 import { createDb, databaseSsl } from "@zammy/storage";
 import { registerHealthRoutes } from "./health.js";
 import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
-import { IngestQueue } from "./ingest-queue.js";
-import { createLabeler, createLabelMergeRules, createLinkerConfig } from "./wiring.js";
+import type { IngestHandler, IngestQueue } from "./ingest-queue.js";
+import {
+  createIngestQueue,
+  createLabeler,
+  createLabelMergeRules,
+  createLinkerConfig,
+} from "./wiring.js";
 import { Metrics, registerMetricsRoute } from "./metrics.js";
 import { processSegmentJob, type TimelineDeps } from "./timeline-service.js";
 import { processSampleJob, type TrendingDeps } from "./trending-service.js";
@@ -72,13 +77,47 @@ export interface BuildAppOptions {
    *
    * A serverless request instance must pass `false`. It still constructs the
    * `IngestQueue` — the read path enqueues (timeline-service, trending-service)
-   * and the trending locks are scoped by the queue's `name` — but a BullMQ
-   * Worker in a function that suspends between requests would poll Redis from a
-   * frozen instance and hold jobs it may never be woken to finish
-   * (VERCEL-ALL-IN-SCOPE §3.1). There the consumer is its own deployable, a
-   * push-mode Vercel Queues function behind the same interface (§3.2).
+   * and the trending locks are scoped by the queue's `name` — but a worker in a
+   * function that suspends between requests would poll from a frozen instance
+   * and hold jobs it may never be woken to finish (VERCEL-ALL-IN-SCOPE §3.1).
+   * There the consumer is its own deployable, a push-mode Vercel Queues
+   * function behind the same interface (`vercel-queue.ts`).
    */
   consumer?: boolean;
+}
+
+/**
+ * The narrowest logger the wiring below needs. Fastify's own satisfies it, and
+ * so does the JSON-lines logger a function entrypoint or a CLI builds by hand —
+ * which is the point: `buildServices` must be reachable from a process that has
+ * no Fastify instance to borrow one from.
+ */
+export interface ServiceLogger {
+  info(fields: object, message: string): void;
+  warn(fields: object, message: string): void;
+}
+
+/**
+ * Everything behind the HTTP surface: the stores, the upstream client, the
+ * queue, and the two dependency bundles the services take.
+ *
+ * This is the §2 "Split" — one function became two. There are now two processes
+ * that need all of this and only one of them serves HTTP: the request function
+ * builds it and registers routes over it, while the push-mode queue consumer
+ * builds it and drains. They must build it IDENTICALLY, for the reason
+ * `wiring.ts` exists — the linker rules, the labeller's pacing and the queue's
+ * name are all decisions, and a consumer that assembled its own approximation
+ * would make storyline decisions at a bar the read path never used.
+ */
+export interface Services {
+  pool: Pool;
+  redis: Redis;
+  currents: CurrentsClient;
+  queue: IngestQueue;
+  metrics: Metrics;
+  deps: TimelineDeps;
+  trendingDeps: TrendingDeps;
+  close: () => Promise<void>;
 }
 
 /**
@@ -93,26 +132,8 @@ export function trustedProxyOption(hops: number): number | false {
   return hops > 0 ? hops : false;
 }
 
-export async function buildApp(
-  config: Config,
-  options: BuildAppOptions = {},
-): Promise<App> {
-  const app = Fastify({
-    logger: {
-      level: config.LOG_LEVEL,
-      // Never let a key reach the logs (ARCHITECTURE 5.5).
-      redact: ["req.headers.authorization", "req.headers.cookie"],
-    },
-    // A hop COUNT, never `true`. Trusting the whole X-Forwarded-For chain makes
-    // the leftmost entry win, and the leftmost entry is client-supplied — so
-    // `true` lets a forged header defeat the per-IP ceiling that rate limiting
-    // depends on (ARCHITECTURE 12; see TRUSTED_PROXY_HOPS in @zammy/config).
-    // Counting hops trusts only the proxies we run, so `req.ip` is what our own
-    // load balancer observed.
-    trustProxy: trustedProxyOption(config.TRUSTED_PROXY_HOPS),
-  });
-
-  // One pool for the request path, shared with Kysely and with /readyz below.
+export async function buildServices(config: Config, log: ServiceLogger): Promise<Services> {
+  // One pool for the request path, shared with Kysely and with /readyz.
   // Its size is config, not a literal: 10 suits a server whose replica count is
   // known, and an elastic-instance platform where every instance holds its own
   // pool wants 1–2 (RESEARCH-VERCEL-SUPABASE §4.3). TLS is decided here rather
@@ -130,19 +151,19 @@ export async function buildApp(
     lazyConnect: true,
     enableOfflineQueue: false,
   });
-  redis.on("error", (error: unknown) => app.log.warn({ err: error }, "redis error"));
+  redis.on("error", (error: unknown) => log.warn({ err: error }, "redis error"));
   void redis.connect().catch((error: unknown) => {
-    app.log.warn({ err: error }, "redis unavailable at boot; serving degraded");
+    log.warn({ err: error }, "redis unavailable at boot; serving degraded");
   });
 
   // Everything below this line can throw — `createNewsClient` reads the fixture
   // corpus off disk and refuses an empty one — and until now a throw cost
   // nothing, because the only caller was `index.ts` and it exits the process.
-  // `vercel.ts` instead retries the boot on the NEXT request, so anything this
-  // attempt left open leaks once per request for the life of an instance that
-  // lives for hours. Not hypothetical: the failure in question is `fixtures/`
-  // landing somewhere the function cannot read it, which is the one thing about
-  // Phase 1 that only a deploy can settle (VERCEL-ALL-IN-SCOPE §9).
+  // The function entrypoints instead retry the boot on the NEXT invocation, so
+  // anything this attempt left open leaks once per invocation for the life of
+  // an instance that lives for hours. Not hypothetical: the failure in question
+  // is `fixtures/` landing somewhere the function cannot read it, which is the
+  // one thing about Phase 1 that only a deploy could settle.
   const abandon: Array<() => unknown> = [
     // Forceful, not `quit()`: a boot that failed is not draining anything, and
     // `quit()` on a client that never finished connecting can reject or hang.
@@ -150,56 +171,35 @@ export async function buildApp(
     () => pool.end(),
   ];
   try {
-    await app.register(cors, { origin: config.CORS_ORIGIN.split(",").map((o) => o.trim()) });
-
-    // Per-IP limit on /api/v1/* only (§9.4, §12): novel-fingerprint spam can
-    // mint topics and spend quota, but the ALB health check and the Prometheus
-    // scrape must never 429. Counters are in-process on purpose — per-task
-    // limiting is bounded enough, and a Redis-held counter would add a shared
-    // failure mode to the request path for precision nobody needs.
-    await app.register(rateLimit, {
-      max: config.RATE_LIMIT_PER_MINUTE,
-      timeWindow: 60_000,
-      allowList: (request) => !request.url.startsWith("/api/"),
-    });
-
     // One interface for both modes AND for however many providers are configured:
     // nothing below this line knows or cares whether articles come from the live
     // API or from recorded payloads, nor which upstream answered
     // (ARCHITECTURE 4.1 — a code path that branches on environment is a code path
     // local development stops predicting; ARCHITECTURE 5.6 for the provider seam).
-    const currents = await createNewsClient(config, { logger: app.log });
+    const currents = await createNewsClient(config, { logger: log });
     abandon.push(() => currents.close());
-    app.decorate("currents", currents);
     if (config.CURRENTS_MODE === "fixture") {
-      app.log.info(
+      log.info(
         { dir: config.FIXTURES_DIR },
         "CURRENTS_MODE=fixture — serving recorded payloads, no upstream calls, no quota spend",
       );
     }
     if (config.GNEWS_ENABLED) {
-      app.log.info(
+      log.info(
         { mode: config.GNEWS_MODE, dailyLimit: config.GNEWS_DAILY_CALL_LIMIT },
         "GNEWS_ENABLED — fanning out to a second provider as best-effort breadth; " +
           "Currents remains coverage-bearing",
       );
     }
 
-    registerHealthRoutes(app, { pool, redis, currents });
-
     // §12 observability: everything the planner counts, scraped from one place.
     const metrics = new Metrics({ quota: () => currents.quota() });
-    registerMetricsRoute(app, metrics);
 
-    // The query service (§6) and its job consumer (§9.1). WHERE the consumer runs
-    // is a deployment property, not a code one: a persistent process shares it
-    // with the HTTP surface (a container keeps CPU allocated for the life of the
-    // task, so no separate deployable is needed, §4.1), while a request-scoped
-    // function must not start one at all. Either way the queue itself is built
-    // here, because the read path publishes to it.
-    const consumer = options.consumer ?? true;
     const db = createDb(pool);
-    const queue = new IngestQueue(config.REDIS_URL);
+    // WHICH transport this is depends on `INGEST_QUEUE_DRIVER` and nothing else
+    // here knows: the read path publishes and polls the pending set through the
+    // same seven members either way.
+    const queue = createIngestQueue(config, { log });
     abandon.push(() => queue.close());
 
     // The labeler, built once for this process (ADR-0011's Labels). What is NOT
@@ -209,7 +209,7 @@ export async function buildApp(
     // Once shared with the nightly chores; they now run in their own process and
     // build their own client from the same factory, so one pacer no longer covers
     // both. See `wiring.ts` for what that costs on a shared key.
-    const labeler = createLabeler(config, app.log);
+    const labeler = createLabeler(config, log);
 
     const deps: TimelineDeps = {
       db,
@@ -247,7 +247,7 @@ export async function buildApp(
         },
       },
       now: () => new Date(),
-      log: app.log,
+      log,
     };
     const trendingDeps: TrendingDeps = {
       ...deps,
@@ -260,32 +260,7 @@ export async function buildApp(
       },
     };
 
-    if (consumer) {
-      queue.startConsumer((job) =>
-        job.kind === "sample" ? processSampleJob(trendingDeps, job) : processSegmentJob(deps, job),
-      );
-    } else {
-      // Worth a line in the log, because the symptom of getting this wrong is
-      // silent: reads still succeed, they just sit at `meta.ingest.pendingJobs > 0`
-      // forever while the pending set grows and nothing drains it.
-      app.log.info(
-        "consumer disabled for this instance — serving requests only; enqueued ingest waits for whatever drains the queue",
-      );
-    }
-    await registerQueryRoutes(app, { deps, defaultLanguage: config.DEFAULT_LANGUAGE });
-    registerTrendingRoute(app, { deps: trendingDeps });
-
-    // The nightly chores (§9.1) do NOT run here. They are one-shot invocations of
-    // `chores-cli.ts` on the platform's scheduler — retention at 03:00 UTC, the
-    // storyline pass at 04:00 UTC. This process therefore does not have to be
-    // awake for them, and equally cannot make them happen: if nothing schedules
-    // the runner, the retention report and the storyline lifecycle passes simply
-    // never run, and no log line here will say so. See `chores.ts`.
-
-    app.log.info({ config: redactConfig(config) }, "configuration loaded");
-
     const close = async (): Promise<void> => {
-      await app.close();
       // The queue first (it holds Redis connections and may be mid-job), then
       // the stores.
       await queue.close().catch(() => {});
@@ -304,9 +279,117 @@ export async function buildApp(
       if (!pool.ending) await pool.end();
     };
 
-    return { app, pool, redis, currents, consumer, close };
+    return { pool, redis, currents, queue, metrics, deps, trendingDeps, close };
   } catch (error) {
     await Promise.allSettled(abandon.reverse().map((release) => release()));
+    throw error;
+  }
+}
+
+/**
+ * How a delivered job becomes work, and the only place that mapping exists.
+ *
+ * Both consumers route through it — the in-process BullMQ worker and the
+ * push-mode Vercel function — because the discriminant is the job payload, not
+ * the transport, and two copies of this `if` is one place for a sample to start
+ * being processed as a segment on exactly one of them.
+ */
+export function ingestDispatch(services: Services): IngestHandler {
+  return (job) =>
+    job.kind === "sample"
+      ? processSampleJob(services.trendingDeps, job)
+      : processSegmentJob(services.deps, job);
+}
+
+export async function buildApp(
+  config: Config,
+  options: BuildAppOptions = {},
+): Promise<App> {
+  const app = Fastify({
+    logger: {
+      level: config.LOG_LEVEL,
+      // Never let a key reach the logs (ARCHITECTURE 5.5).
+      redact: ["req.headers.authorization", "req.headers.cookie"],
+    },
+    // A hop COUNT, never `true`. Trusting the whole X-Forwarded-For chain makes
+    // the leftmost entry win, and the leftmost entry is client-supplied — so
+    // `true` lets a forged header defeat the per-IP ceiling that rate limiting
+    // depends on (ARCHITECTURE 12; see TRUSTED_PROXY_HOPS in @zammy/config).
+    // Counting hops trusts only the proxies we run, so `req.ip` is what our own
+    // load balancer observed.
+    trustProxy: trustedProxyOption(config.TRUSTED_PROXY_HOPS),
+  });
+
+  const services = await buildServices(config, app.log);
+  try {
+    await app.register(cors, { origin: config.CORS_ORIGIN.split(",").map((o) => o.trim()) });
+
+    // Per-IP limit on /api/v1/* only (§9.4, §12): novel-fingerprint spam can
+    // mint topics and spend quota, but the ALB health check and the Prometheus
+    // scrape must never 429. Counters are in-process on purpose — per-task
+    // limiting is bounded enough, and a Redis-held counter would add a shared
+    // failure mode to the request path for precision nobody needs.
+    await app.register(rateLimit, {
+      max: config.RATE_LIMIT_PER_MINUTE,
+      timeWindow: 60_000,
+      allowList: (request) => !request.url.startsWith("/api/"),
+    });
+
+    app.decorate("currents", services.currents);
+    registerHealthRoutes(app, {
+      pool: services.pool,
+      redis: services.redis,
+      currents: services.currents,
+    });
+    registerMetricsRoute(app, services.metrics);
+
+    // The query service (§6) and its job consumer (§9.1). WHERE the consumer runs
+    // is a deployment property, not a code one: a persistent process shares it
+    // with the HTTP surface (a container keeps CPU allocated for the life of the
+    // task, so no separate deployable is needed, §4.1), while a request-scoped
+    // function must not start one at all. Either way the queue itself is built
+    // above, because the read path publishes to it.
+    const consumer = options.consumer ?? true;
+    if (consumer) {
+      services.queue.startConsumer(ingestDispatch(services));
+    } else {
+      // Worth a line in the log, because the symptom of getting this wrong is
+      // silent: reads still succeed, they just sit at `meta.ingest.pendingJobs > 0`
+      // forever while the pending set grows and nothing drains it.
+      app.log.info(
+        "consumer disabled for this instance — serving requests only; enqueued ingest waits for whatever drains the queue",
+      );
+    }
+    await registerQueryRoutes(app, {
+      deps: services.deps,
+      defaultLanguage: config.DEFAULT_LANGUAGE,
+    });
+    registerTrendingRoute(app, { deps: services.trendingDeps });
+
+    // The nightly chores (§9.1) do NOT run here. They are one-shot invocations of
+    // `chores-cli.ts` on the platform's scheduler — retention at 03:00 UTC, the
+    // storyline pass at 04:00 UTC. This process therefore does not have to be
+    // awake for them, and equally cannot make them happen: if nothing schedules
+    // the runner, the retention report and the storyline lifecycle passes simply
+    // never run, and no log line here will say so. See `chores.ts`.
+
+    app.log.info({ config: redactConfig(config) }, "configuration loaded");
+
+    const close = async (): Promise<void> => {
+      await app.close();
+      await services.close();
+    };
+
+    return {
+      app,
+      pool: services.pool,
+      redis: services.redis,
+      currents: services.currents,
+      consumer,
+      close,
+    };
+  } catch (error) {
+    await services.close().catch(() => {});
     throw error;
   }
 }

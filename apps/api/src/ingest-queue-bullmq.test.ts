@@ -1,12 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { IngestQueue, type SegmentJob } from "./ingest-queue.js";
+import { BullMqIngestQueue } from "./ingest-queue-bullmq.js";
+import type { SegmentJob } from "./ingest-queue.js";
 
 /**
  * The in-process job consumer's queue (ARCHITECTURE 9.1). At-least-once
- * delivery is a deployment requirement, not a nicety: Fargate recycles tasks
- * on every deploy, and a naive LPOP loses whatever the dying task held (§4.1).
+ * delivery is a deployment requirement, not a nicety: instances are recycled
+ * on every deploy, and a naive LPOP loses whatever the dying one held (§4.1).
  * Runs against the compose Redis; every test gets its own queue name.
+ *
+ * These four assert REAL dedup and REAL retry against a real transport, which
+ * is exactly what the hosted driver cannot be asked for — VERCEL-ALL-IN-SCOPE
+ * §3.2 records that as a genuine loss of test power. It is a loss only on the
+ * deployment that takes it: this driver still runs Compose and local
+ * development, so the semantics stay pinned here.
  */
 
 const REDIS_URL = process.env.TEST_REDIS_URL ?? "redis://localhost:6379";
@@ -19,7 +26,7 @@ const segment = (over: Partial<SegmentJob> = {}): SegmentJob => ({
   ...over,
 });
 
-let queue: IngestQueue;
+let queue: BullMqIngestQueue;
 
 afterEach(async () => {
   await queue.obliterate();
@@ -27,10 +34,10 @@ afterEach(async () => {
 });
 
 function makeQueue() {
-  return new IngestQueue(REDIS_URL, { queueName: `test-ingest-${randomUUID()}` });
+  return new BullMqIngestQueue(REDIS_URL, { queueName: `test-ingest-${randomUUID()}` });
 }
 
-describe("IngestQueue", () => {
+describe("BullMqIngestQueue", () => {
   it("delivers an enqueued segment to the consumer", async () => {
     queue = makeQueue();
     const processed: SegmentJob[] = [];

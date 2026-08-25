@@ -2,6 +2,9 @@ import type { Config } from "@zammy/config";
 import { createDb, databaseSsl, type Database } from "@zammy/storage";
 import type { Kysely } from "kysely";
 import { createGeminiClient } from "./gemini.js";
+import { BullMqIngestQueue } from "./ingest-queue-bullmq.js";
+import { VercelIngestQueue, type QueueLogger } from "./ingest-queue-vercel.js";
+import type { IngestQueue } from "./ingest-queue.js";
 import type { LabelerDeps } from "./storyline-label-service.js";
 import type { LabelMergeRules } from "./storyline-label-merge.js";
 import type { LinkerConfig } from "./storyline-linker.js";
@@ -59,6 +62,29 @@ export function createConfiguredDb(
   return createDb(url, {
     ...(options.max !== undefined ? { max: options.max } : {}),
     ssl: databaseSsl({ mode: config.DATABASE_SSL, caCert: config.DATABASE_CA_CERT }),
+  });
+}
+
+/**
+ * The ingest queue `INGEST_QUEUE_DRIVER` asks for.
+ *
+ * It belongs here for the reason everything else does: two entrypoints build
+ * one now — the request path, which only publishes, and the push-mode consumer,
+ * which drains and republishes the halves of a truncated segment. They must
+ * agree on the transport AND on the queue's `name`, because that name scopes
+ * both the pending registry `meta.ingest` reads and the trending sample lock. A
+ * consumer that built a differently-named queue would settle jobs into a
+ * registry nobody polls.
+ */
+export function createIngestQueue(
+  config: Config,
+  options: { queueName?: string; log?: QueueLogger } = {},
+): IngestQueue {
+  if (config.INGEST_QUEUE_DRIVER === "vercel") {
+    return new VercelIngestQueue(config.REDIS_URL, options);
+  }
+  return new BullMqIngestQueue(config.REDIS_URL, {
+    ...(options.queueName ? { queueName: options.queueName } : {}),
   });
 }
 

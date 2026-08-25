@@ -6,6 +6,10 @@
   "//exports": "An app, not a library — but the Vercel function entrypoints at the repo root (api/) have to import it, and Vercel resolves them as ordinary node specifiers. Only what an entrypoint needs is exposed.",
   "exports": {
     "./vercel": { "types": "./dist/vercel.d.ts", "default": "./dist/vercel.js" },
+    "./vercel-queue": {
+      "types": "./dist/vercel-queue.d.ts",
+      "default": "./dist/vercel-queue.js"
+    },
     "./server": { "types": "./dist/server.d.ts", "default": "./dist/server.js" }
   },
   "scripts": {
@@ -28,6 +32,7 @@
   "dependencies": {
     "@fastify/cors": "^10.0.1",
     "@fastify/rate-limit": "^11.2.0",
+    "@vercel/queue": "^0.3.0",
     "@zammy/config": "workspace:*",
     "@zammy/currents-client": "workspace:*",
     "@zammy/shared": "workspace:*",

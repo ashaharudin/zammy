@@ -2,12 +2,14 @@
 
 Plan A of [RESEARCH-VERCEL-SUPABASE](../../docs/RESEARCH-VERCEL-SUPABASE.md), adopted in
 [ADR-0015](../../docs/adr/0015-all-in-on-vercel-hobby-shaped.md) and phased in
-[VERCEL-ALL-IN-SCOPE §9](../../docs/VERCEL-ALL-IN-SCOPE.md). **Phase 1 is what has landed**: the api
-serves as one Function, with the consumer off and the chores still manual. Phases 2–5 (the queue,
-the Redis quota governor and rate-limit store, the chores route, cutover) are scoped and unbuilt.
+[VERCEL-ALL-IN-SCOPE §9](../../docs/VERCEL-ALL-IN-SCOPE.md). **Phase 1 is deployed and Phase 2's
+code has landed**: the api serves as one Function, the ingest queue has a push-mode consumer, and
+the chores are still manual. Phases 3–5 (the Redis quota governor and rate-limit store, the chores
+route, cutover) are scoped and unbuilt.
 
 The configuration itself lives at the repository root, because that is where Vercel looks:
-[`vercel.json`](../../vercel.json), [`api/index.ts`](../../api/index.ts) and
+[`vercel.json`](../../vercel.json), [`api/index.ts`](../../api/index.ts),
+[`api/queues/ingest.ts`](../../api/queues/ingest.ts) and
 [`.vercelignore`](../../.vercelignore). This file is the part that would not fit in JSON.
 
 ## The shape, and why
@@ -20,8 +22,9 @@ build-time API base URL — the property §1.1 picked this layout to protect.
 | --- | --- |
 | The SPA | `pnpm build` → `apps/web/dist`, served as static output |
 | The api | `api/index.ts` → `apps/api/src/vercel.ts` → `buildApp(config, { consumer: false })` |
+| The ingest consumer | `api/queues/ingest.ts` → `apps/api/src/vercel-queue.ts` → `buildServices` + `ingestDispatch` |
 | Routing | three rewrites in `vercel.json`, **not** the function's filename |
-| Fixtures | `functions["api/index.ts"].includeFiles`, read at runtime by fixture mode |
+| Fixtures | `includeFiles` on **both** functions — the consumer ingests, so it reads the corpus too |
 
 **The rewrites are the catch-all, and this is the one thing about the layout that is not obvious.**
 The scope doc originally specified `api/[...path].ts`; the spike found that Vercel's bare `api/`
@@ -48,6 +51,7 @@ What differs from a Compose `.env`:
 | `DATABASE_SSL` | `verify-full`, with Supabase's CA in `DATABASE_CA_CERT` | ditto |
 | `DATABASE_POOL_MAX` | `1`–`2` — every instance holds its own pool | ditto |
 | `REDIS_URL` | Upstash | a second, separate Upstash database |
+| `INGEST_QUEUE_DRIVER` | `vercel` — the default is `bullmq`, and leaving it there publishes to a Redis queue nothing drains | `vercel` |
 | `CURRENTS_MODE` | `live` (needs `CURRENTS_API_KEY`) | `fixture` — costs no upstream quota |
 | `FIXTURES_DIR` | irrelevant | `fixtures` — the function's cwd is the deployment root, so the `../../fixtures` in the template is wrong here |
 | `TRUSTED_PROXY_HOPS` | `1` — measured on the spike: Fastify sees `127.0.0.1` with the client one hop out in `x-forwarded-for` | `1` |
@@ -77,12 +81,28 @@ The deployment root directory is the repository root, the build command is `pnpm
 first, then apps — the function imports `apps/api/dist`), and the output directory is
 `apps/web/dist`.
 
-## What Phase 1 does not do
+## The queue
 
-- **Nothing drains the queue.** `{ consumer: false }` is deliberate and the reads say so: a cold
-  topic's `meta.ingest.pendingJobs` never falls to zero until Phase 2 lands `api/queues/ingest.ts`.
-  The client polls until `INGEST_POLL_MAX` and then just stops — no `degraded` value marks the
-  stall. The pending set is still written, so nothing is lost meanwhile.
+`INGEST_QUEUE_DRIVER=vercel` swaps the transport under the same seven-member interface the read path
+already used. The request function publishes; `api/queues/ingest.ts` drains. Three operator-visible
+consequences:
+
+- **The consumer has no public URL.** It is reached only by the `queue/v2beta` trigger declared on
+  it in `vercel.json`, which is why there is no auth on it and none is missing. The topic name in
+  that trigger (`ingest`) must match the queue's name, because that name also scopes the Redis
+  pending set and the trending sample lock.
+- **`experimentalTriggers` is beta.** If it regresses, the pending set is still the ledger of what
+  is owed (`meta.ingest`), and the fallback §3.2 names is a manual drain — not a data-loss event.
+- **The message TTL is 300 s, matching the pending window.** A deploy mid-flight leaves the old
+  deployment draining its own messages, because push-mode topics are partitioned by deployment id.
+  Five minutes bounds how long that lasts.
+
+Verifying it: read a cold topic and watch `meta.ingest.pendingJobs` fall to zero across polls. It
+staying pinned above zero is the symptom of the trigger not firing, and the log line to look for on
+the consumer is the platform's own invocation record — on Hobby it survives an hour.
+
+## What Phase 2 does not do
+
 - **The chores do not run.** No route, no schedule, no `chore_runs` table yet (§3.3), and the
   Supabase free-tier pause guard comes with them. Until then a deployed project's database is
   reachable only as long as something else keeps it awake.

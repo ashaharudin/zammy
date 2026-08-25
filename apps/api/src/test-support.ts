@@ -11,7 +11,8 @@ import {
   type SearchResult,
 } from "@zammy/currents-client";
 import { createDb, migrateToLatest } from "@zammy/storage";
-import { IngestQueue } from "./ingest-queue.js";
+import { BullMqIngestQueue } from "./ingest-queue-bullmq.js";
+import type { IngestQueue } from "./ingest-queue.js";
 import { Metrics } from "./metrics.js";
 import type { TimelineDeps } from "./timeline-service.js";
 
@@ -90,7 +91,7 @@ export async function createTestHarness(
   const counting = new CountingClient(fixtureClient, clock);
 
   const redis = new Redis(REDIS_URL);
-  const queue = new IngestQueue(REDIS_URL, {
+  const queue = new BullMqIngestQueue(REDIS_URL, {
     queueName: `test-planner-${randomUUID()}`,
   });
 
