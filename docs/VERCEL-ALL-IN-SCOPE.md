@@ -532,7 +532,7 @@ Each phase ends with something demonstrable; none of them is "and then we cut ov
 |---|---|---|
 | **0. Spikes** (0.5–1 d) ✅ | Prove the project shape (§1.1) on a throwaway deployment: Vite preset + `api/` function + a `queue/v2beta` trigger firing. Measure `buildApp` cold start. Measure `chores storylines` wall-clock at 90 days of corpus, bounded and unbounded. Measure the corpus against Supabase's 500 MB — a **now**-question, since production is seeded from it (Phase 5). Confirm Queues' Hobby allowance in the dashboard (§8). | **Done, both halves.** The three numbers ([VERCEL-PHASE-0-FINDINGS.md](VERCEL-PHASE-0-FINDINGS.md)): cold start ~360 ms local, 947 ms on the platform of which ~550 ms is container start (§7.1); `chores storylines` ~3.5 h unbounded, with the **late-candidate sweep at ~506 s the phase that breaks the ceiling** — since found to be a linking bug and gated off; corpus 190 MB with the 500 MB tripwire at ~1,485 articles/day after a reindex. The deployment half (findings §8): the Vite preset builds the SPA and the `api/` directory together, the `queue/v2beta` trigger fires on a bare `api/` function **on a Hobby account**, `waitUntil` outlives the 202, and the cron entry validates. The rewrite correction (§3.1) is the one thing it changed structurally. |
 | **1. The api as a Function** (1–2 d) ✅ | §3.1. Consumer disabled, chores still manual. Preview in fixture mode against the preview data plane (§4). | **Done, deployed and verified 2026-08-24** (commit `8be3fa9`). `/readyz` returns `{"status":"ready"}` with `postgres.ok` and `redis.ok` both true. The three halves only a deploy could exercise all came back: **Supabase through the transaction pooler** — a `/api/v1/timeline` read whose `servedFrom` moves `upstream` → `store` across polls, so the rows were written and read back through 6543; **Upstash** — reachable, after the scheme fix below; **`includeFiles` does place `fixtures/`** — a fresh topic answers `servedFrom: "upstream"` with recorded fixture content, and an absent directory would have failed the boot into a 503 instead. Cold start **993 ms**, warm 190–298 ms — close to Phase 0's 947 ms on the platform (§7.1). All 17 migrations applied through the session pooler under `verify-full` in 8.2 s. **One third of the criterion as written was unreachable and is struck** — `degraded: "ingest_timeout"`, see below. |
-| **2. The queue** (2–3 d) | §3.2 — new `IngestQueue` implementation (all seven members, plus `settle` — below), `api/queues/ingest.ts`, 5-min message TTL, rewritten tests. **Code landed; not yet deployed.** | A cold topic fills behind the reader; `meta.ingest` drains to zero; a killed consumer redelivers |
+| **2. The queue** (2–3 d) ✅ | §3.2 — new `IngestQueue` implementation (all seven members, plus `settle` — below), `api/queues/ingest.ts`, 5-min message TTL, rewritten tests. | **Two of three verified, deployed 2026-08-25** (`zammy-dut5xv9j5`). A cold `?q=wildfire` answered `servedFrom: "upstream"` with `pendingJobs: 1` and drained to `complete` / `pendingJobs: 0` within ~10 s — far inside the 5-minute stale prune, so the consumer really ran rather than the entry ageing out. Six `POST /api/queues/ingest 200`, zero warnings, so all six were genuine successes rather than silent give-ups. **The third clause is not exercised** — see below. |
 | **3. Quota + limits** (1–2 d) | §3.4 (burst-only, fail-open) and §3.5 (Redis store, fail-open). | The burst ceiling holds with the consumer and the request path both running; the per-IP guard is real; both degrade to in-process when Redis is down |
 | **4. Chores** (1–1.5 d) | §3.3 + Supabase Cron + `chore_runs` + the keep-alive ping, **plus what Phase 0 added**: the `REINDEX CONCURRENTLY` sweep in the retention chore. The late-candidate sweep is gated off (findings §2.6), so this phase no longer carries a deadline problem; if it is ever switched back on, the bound and persisted cursor come back with it. | All scheduled passes run on schedule and write `chore_runs` rows, any pass runs on demand by query param, twice-triggered runs skip on the lock, the 202 arrives from cold within pg_net's configured timeout, **and a gated night reports `skipped: true` rather than a clean `offered: 0`** |
 | **5. Observability + cutover** (1–2 d) | The migration CI jobs (§6, prod + preview), env vars (§4), **seed production from the dev corpus** (a 24 MB `pg_dump -Fc`, measured at 1.9 s out and 1.1 s in — findings §4), DNS. Drain the 2,981-storyline label backlog first (§3.3). | Production traffic against the seeded corpus, and "did last night's chores run?" is answered by a `chore_runs` query |
@@ -541,6 +541,40 @@ Each phase ends with something demonstrable; none of them is "and then we cut ov
 late-candidate sweep's deadline problem out of the plan altogether — it was a linking bug, its fix
 exposed a runaway, and the pass is now gated off (findings §2.6). Phase 0's deployment half and
 Phase 1 have both since run and neither moved the estimate; the remaining spread is Phase 2.
+
+### What the Phase 2 deploy proved, and what it did not
+
+**The trigger fires against the real app.** `queue/v2beta` on `api/queues/ingest.ts` was the piece
+the whole plan turned on, and it works outside the spike: the request function publishes, the
+consumer drains, and `meta.ingest` reaches zero. `vercel build` puts the trigger in
+`.vercel/output` with the topic and an auto-derived consumer group
+(`api_Squeues_Singest_Dts`), which is the cheapest place to check the wiring before deploying.
+
+**"Drained" needs a topic that has gone quiet, and this is easy to misread as a stall.** A topic
+being actively polled sits at `pendingJobs: 1` indefinitely, because §6.4's refresh-on-read enqueues
+a fresh top-up whenever `coverage.to` trails `now` — and the consumer advancing coverage is exactly
+what makes the *next* read find a new sliver. That is the design working, not a queue that will not
+empty. The witness has to be a topic whose read is served from cache: `?q=wildfire` went 1 → 0 and
+stayed 0 across five polls, while `?q=climate` oscillated at 1 the whole time.
+
+**`/readyz` reads `degraded` on the first cold request even when `REDIS_URL` is correct.** The
+error is `"Stream isn't writeable and enableOfflineQueue options is false"` — the *same string* the
+Phase 1 notes below record as the symptom of a `redis://` URL, because the lazy connect simply has
+not finished when the health check probes (Upstash handshakes in ~800 ms). Every subsequent request
+reads `ready`. **So one `degraded` immediately after a deploy proves nothing**; re-probe before
+concluding the scheme is wrong.
+
+**Redelivery on failure is NOT verified.** Nothing failed, which is the good outcome but leaves the
+criterion's third clause resting on the spike's measurement (four deliveries at +0 s, +10 s, +70 s,
++130 s) plus the `retry` wiring above rather than on an observation of this app. Inducing it needs a
+deliberately poisoned message, which means either a temporary code path or publishing to the topic
+by hand. Worth doing before production carries real traffic, because the TTL/visibility collision
+found while building this is exactly the class of bug a green drain test cannot see.
+
+**Open question 3 is still open.** The breadth sample could not be exercised: `SAMPLE_REFRESH_MINUTES`
+elects one enqueuer per language with a `SET NX PX` lock whose TTL is 60 minutes, and the lock was
+already held. Answering it needs either an hour's wait or a lock deleted directly in the preview
+Redis — and `vercel env pull` redacts sensitive values, so the URL is not recoverable from the CLI.
 
 ### What the Phase 1 deploy corrected
 

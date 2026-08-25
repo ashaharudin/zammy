@@ -71,11 +71,25 @@ Vercel reads `packageManager` from the root manifest.
 vercel build && vercel deploy --prebuilt
 ```
 
+**Run both from a copy of the tree with `.git` excluded.** Vercel stamps a deployment with the
+*commit author* rather than the account that owns the project, so a deploy from the repository
+returns `readyState: BLOCKED` (`TEAM_ACCESS_REQUIRED`) — rendered as `UNKNOWN` by `vercel ls`, with
+`vercel inspect --logs` printing nothing (VERCEL-ALL-IN-SCOPE, "What the Phase 1 deploy corrected").
+An `rsync -a --exclude .git --exclude node_modules --exclude .vercel` into a scratch directory, plus
+a copy of `.vercel/project.json`, is the whole workaround. Confirm with `vercel inspect <url>`
+showing `● Ready`; the CLI's exit code is not a signal.
+
 `vercel build` alone is worth running before any push that touches the layout: it produces
 `.vercel/output` locally and is the cheapest way to see whether the function's dependency trace
 still resolves through the pnpm workspace. What it will NOT tell you is whether Supabase and Upstash
 are reachable, so the exit criterion for a deploy is `/readyz` returning `ready` — not `degraded`,
 which means Redis is down, and not `unready`, which means Postgres is.
+
+**Probe `/readyz` twice.** The first request after a deploy is a cold start, and the Redis client
+connects lazily — Upstash handshakes in ~800 ms, which the health check can beat. It answers
+`degraded` with `"Stream isn't writeable and enableOfflineQueue options is false"`, which is
+character-for-character the symptom of a `redis://` URL where `rediss://` was needed. Measured
+2026-08-25: cold read `degraded`, every read after it `ready`, on a URL that was correct all along.
 
 The deployment root directory is the repository root, the build command is `pnpm build` (packages
 first, then apps — the function imports `apps/api/dist`), and the output directory is
@@ -97,9 +111,15 @@ consequences:
   deployment draining its own messages, because push-mode topics are partitioned by deployment id.
   Five minutes bounds how long that lasts.
 
-Verifying it: read a cold topic and watch `meta.ingest.pendingJobs` fall to zero across polls. It
-staying pinned above zero is the symptom of the trigger not firing, and the log line to look for on
-the consumer is the platform's own invocation record — on Hobby it survives an hour.
+Verifying it (done 2026-08-25 on `zammy-dut5xv9j5`): read a cold topic and watch
+`meta.ingest.pendingJobs` fall to zero. **Pick a topic that then goes quiet.** A topic you keep
+polling sits at `pendingJobs: 1` forever and that is correct — §6.4 enqueues a fresh top-up whenever
+coverage trails `now`, so the consumer advancing coverage is what makes the next read find a new
+sliver. `?q=wildfire` went 1 → 0 and stayed there; `?q=climate`, polled continuously, never left 1.
+
+The other half of the proof is `vercel logs <deployment>`: `POST /api/queues/ingest 200` per
+message. A 200 with no warning line is a genuine success — the handler also answers 200 when it
+gives up on a job or drops an unreadable payload, and both of those log first.
 
 ## What Phase 2 does not do
 
