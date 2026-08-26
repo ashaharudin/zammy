@@ -50,8 +50,8 @@ the how). One naming rule up front: **"queue topic" means Vercel Queues' topic**
 | Plan posture | Hobby-shaped; Pro is the escape hatch, not the start | §8 |
 | Beta queue in the load-bearing position | Accepted; pending set is the backstop, manual drain is the fallback | §3.2 |
 | Chore-run visibility | A durable `chore_runs` record per pass run — **new code**, non-optional on Hobby | §3.3 |
-| Preview data plane | A second free-tier Supabase + Upstash pair; previews never touch production | §4 |
-| Preview migrations | A per-PR CI step migrates the preview DB (doubles as a pooler rehearsal) | §6 |
+| Preview data plane | ~~A second free-tier Supabase + Upstash pair; previews never touch production~~ **Retired 2026-08-26** — Upstash allows only one Redis database per project; see ADR-0015 | §4 |
+| Preview migrations | ~~A per-PR CI step migrates the preview DB (doubles as a pooler rehearsal)~~ **Removed with the preview data plane, 2026-08-26** | §6 |
 | Quota governor scope | Burst-window-only + Currents observed snapshot; daily ledger deferred with GNews | §3.4 |
 | Governor failure mode | Fail-open to in-process counting when Redis is unreachable | §3.4 |
 | Per-IP rate limit | Moves to Redis (fail-open); WAF is Pro-only and off the table | §3.5 |
@@ -601,6 +601,13 @@ knowing:
 ---
 
 ## 4. Config, secrets, and previews — ~0.5 day
+
+> **Retired 2026-08-26.** The preview pair described below (a second free-tier Supabase project
+> and Upstash database) is decommissioned — Upstash allows only one Redis database per project,
+> and that forced a choice once the project needed one for real. The bullets below stay as a
+> record of what was built and verified; they no longer describe the running system. See
+> [ADR-0015](adr/0015-all-in-on-vercel-hobby-shaped.md) and
+> [deploy/vercel/README.md](../deploy/vercel/README.md).
 
 - **66 environment variables** in [.env.example](../.env.example) become Vercel project env vars
   across Production/Preview/Development. `vercel env pull`/`add` from the CLI, not the dashboard, or

@@ -62,6 +62,12 @@ build rather than the code that exists today:
   pollute the real corpus. A per-PR CI step migrates the preview database —
   doubling as a rehearsal of every migration against a real pooler before it
   touches production.
+  **Retired 2026-08-26**: Upstash's free tier supports only one Redis
+  database per project, which forces a choice once a project actually needs
+  one. Production kept its Upstash database; the preview pair (Supabase
+  project and Upstash database both) was decommissioned, along with the
+  Preview-scoped Vercel env vars and the per-PR `migrate (preview)` CI job.
+  See [deploy/vercel/README.md](../../deploy/vercel/README.md).
 - **The quota governor ships burst-window-only** (plus the Currents
   observed-snapshot write), **fail-open** to in-process counting when Redis is
   unreachable. The day-rolling local ledger exists for headerless providers;

@@ -279,16 +279,14 @@ pause "All good — continue?"
 # ──────────────────────────────────────────────────────────────────────────
 stage "Supabase — create the production project"
 # ──────────────────────────────────────────────────────────────────────────
-say "A SECOND Supabase project. The free tier allows two active ones and the"
-say "preview pair is the other — previews must never point at production,"
-say "because fixture mode still INGESTS and would write fixture articles into"
-say "the real corpus."
+say "A dedicated Supabase project for production. (There used to be a second,"
+say "free-tier preview pair here too — retired 2026-08-26, since Upstash allows"
+say "only one Redis database per project and previews needed one of their own"
+say "or none at all. Just this one project now.)"
 open_url "https://supabase.com/dashboard/new"
 step "Name it 'zammy-production'."
 step "Region: East US (North Virginia) — us-east-1."
-note "  Vercel Hobby deploys to iad1, which is us-east-1. The preview project sits"
-note "  in us-east-2 and pays a cross-region hop on every pooler query; there is no"
-note "  reason for production to inherit that."
+note "  Vercel Hobby deploys to iad1, which is us-east-1 — stay in-region."
 step "Generate a strong database password and SAVE IT in your password manager."
 note "  Supabase shows it once. It is embedded in both connection strings below,"
 note "  so losing it means resetting it and re-running stages 3, 7 and 9."
@@ -351,7 +349,7 @@ note "  break a KEY=value file. Stages 7 and 9 read it from here."
 stage "Upstash — the production Redis database"
 # ──────────────────────────────────────────────────────────────────────────
 say "Redis carries the burst window, the per-IP counters, the ingest pending"
-say "ledger and the fill cache. A second database, separate from preview's."
+say "ledger and the fill cache."
 open_url "https://console.upstash.com/redis"
 step "Create database → name 'zammy-production', region us-east-1 (N. Virginia)."
 step "Leave TLS enabled — it is the default and it is not optional here."
@@ -458,33 +456,16 @@ fi
 pause "Continue?"
 
 # ──────────────────────────────────────────────────────────────────────────
-stage "GitHub Actions secrets — the migration jobs"
+stage "GitHub Actions secrets — the migration job"
 # ──────────────────────────────────────────────────────────────────────────
-say "ci.yml's 'migrate (production)' and 'migrate (preview)' jobs read these."
-say "Both fail loudly on a missing one rather than running against no URL."
+say "ci.yml's 'migrate (production)' job reads these. It fails loudly on a"
+say "missing one rather than running against no URL."
 set_secret PRODUCTION_DATABASE_SESSION_URL "$DATABASE_SESSION_URL"
 set_secret SUPABASE_CA_CERT "$(cat "$CA_CERT_FILE")"
-step "Fetching the PREVIEW session URL from the Vercel project…"
-# A directory rather than a file: `vercel env pull` prompts before overwriting
-# an existing path, and a prompt with stdout redirected is an exit 1 that looks
-# like a failure to read the environment.
-_preview_dir="$(mktemp -d)"
-_preview_env="$_preview_dir/preview.env"
-if vercel env pull --environment=preview "$_preview_env" --yes >/dev/null 2>&1 &&
-   grep -q '^DATABASE_SESSION_URL=' "$_preview_env"; then
-  _preview_url="$(grep '^DATABASE_SESSION_URL=' "$_preview_env" | head -n1)"
-  _preview_url="${_preview_url#DATABASE_SESSION_URL=}"
-  _preview_url="${_preview_url%\"}"; _preview_url="${_preview_url#\"}"
-  set_secret PREVIEW_DATABASE_SESSION_URL "$_preview_url"
-else
-  SKIPPED+=("GitHub secret PREVIEW_DATABASE_SESSION_URL (from the preview env)")
-  warn "could not read the preview DATABASE_SESSION_URL — set that secret by hand."
-fi
-rm -rf "$_preview_dir"
 say ""
-note "The preview project is one migration behind: it has 17 of 18 applied, and"
-note "0018 (chore_runs) arrived with Phase 4 after the last hand-run. The first"
-note "PR after this lands will apply it."
+note "There is no PREVIEW_DATABASE_SESSION_URL secret and no 'migrate (preview)'"
+note "job. The preview data plane was retired 2026-08-26 — Upstash allows only"
+note "one Redis database per project. See ADR-0015 and deploy/vercel/README.md."
 pause "Continue?"
 
 # ──────────────────────────────────────────────────────────────────────────
