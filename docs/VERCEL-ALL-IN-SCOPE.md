@@ -757,7 +757,7 @@ Each phase ends with something demonstrable; none of them is "and then we cut ov
 | **2. The queue** (2–3 d) ✅ | §3.2 — new `IngestQueue` implementation (eight members counting `settle`), `api/queues/ingest.ts`, a **900 s** message TTL (not the 5 min §0 planned — see Q0), rewritten tests, and `POST /api/drain`. | **All three criteria met, deployed and verified 2026-08-25.** A cold topic fills behind the reader; `meta.ingest` drains to zero — a delivery logs `ingest delivery` then `ingest job settled` for one message id, which is the evidence, not the 200; and **a failed delivery now redelivers** at +0 s, +305 s and +610 s, the third settling and giving up. Getting the third took a day: it failed first, and the cause was a 300 s TTL colliding with a 305 s visibility lease (Q0). Two things this phase added beyond its scope, both because the failure showed they were needed: per-delivery logging, and the manual drain promoted from fallback to built. **The drain has never run against a live deployment** — its logic is unit-tested only. |
 | **3. Quota + limits** (1–2 d) 🚧 | §3.4 (burst-only, fail-open) and §3.5 (Redis store, fail-open). | **Deployed and verified 2026-08-25 (`zammy-bn5h84rr1`) for §3.5; §3.4 is unverifiable on a fixture preview and stays open.** The per-IP guard is real and genuinely shared: 60 requests admitted and the 61st answered 429 with `retry-after: 50`, **across six distinct instances** — per-instance counters would have admitted 60 × 6 — with `x-ratelimit-remaining` monotonic and gapless across separate invocations, and `/healthz` still 200 throughout. Fail-open is real, and wider than expected (below). **The burst-ceiling criterion cannot be met from here**: fixture mode returns `FixtureCurrentsClient`, which builds its own `UnmeteredQuotaGovernor` and ignores the injected one, so no deployed code path calls `reserve`. See below. |
 | **4. Chores** (1–1.5 d) 🚧 | §3.3 + Supabase Cron + `chore_runs` + the keep-alive ping, **plus what Phase 0 added**: the `REINDEX CONCURRENTLY` sweep in the retention chore. The late-candidate sweep is gated off (findings §2.6), so this phase no longer carries a deadline problem; if it is ever switched back on, the bound and persisted cursor come back with it. | **Built and green locally; nothing is scheduled yet.** Three of the five criteria are met without a deployment and are pinned by tests: any pass runs on demand by query param (eight of them, up from §3.3's seven), a twice-triggered run skips on the lock **and records the skip**, and a gated night reports `lateCandidates.skipped: true` rather than a clean `offered: 0`. The two that need the platform are open: **no schedule exists** — `deploy/vercel/supabase-cron.sql` is written and unrun — and the 202's cold latency has been measured only on the spike (669 ms, for a route with no `buildApp` behind it), not on this one. |
-| **5. Observability + cutover** (1–2 d) 🚧 | The migration CI jobs (§6, prod + preview), env vars (§4), **seed production from the dev corpus** (a 24 MB `pg_dump -Fc`, measured at 1.9 s out and 1.1 s in — findings §4), DNS. ~~Drain the 2,981-storyline label backlog first (§3.3).~~ **There is no backlog** — 0 promoted storylines have never been offered to a model, measured 2026-08-26. Nothing gates the cutover here; see below. | **Every part that does not need an account is built; nothing is provisioned.** The two migration jobs are in `ci.yml`, both gated on `verify`. [seed-production.sh](../deploy/vercel/seed-production.sh) is written and **tested end to end** against a scratch database — 23.8 MB out, 4.2 s round trip, all sixteen tables' row counts matching and `db:migrate` answering "Nothing to migrate" afterwards. [deploy.sh](../deploy/vercel/deploy.sh) encapsulates the non-git-copy workaround. What is missing is everything behind a dashboard login: **no production Supabase project, no production Upstash database, one environment variable on the Production environment, no production deployment, no DNS.** [provision-production.sh](../deploy/vercel/provision-production.sh) is the twelve-stage wizard that closes all five. **The exit criterion is unmet.** |
+| **5. Observability + cutover** (1–2 d) 🚧 | The migration CI jobs (§6, prod + preview), env vars (§4), **seed production from the dev corpus** (a 24 MB `pg_dump -Fc`, measured at 1.9 s out and 1.1 s in — findings §4), DNS. ~~Drain the 2,981-storyline label backlog first (§3.3).~~ **The backlog is real but much smaller than §3.3 recorded, and it no longer gates the cutover.** Measured against production 2026-08-26: of 6,673 active storylines, **534 have never been offered to a model** (`label_at IS NULL`) and a further 399 were offered and came back without a label — 933 unlabelled in total. §3.3's figure was 2,981 of 3,934. "Never offered" is the number that matters here, since the other 399 are not work the label pass has left to do; at `CHORE_MAX_LABELS=50` it is about eleven nights. | **Provisioned, deployed, seeded and serving 2026-08-26 — and the criterion is half met.** Production Supabase (us-east-1) carries the corpus and has grown past it (32,476 articles against 32,045 restored); Upstash, the 17 env vars, the deployment, `zammy.info` and all four Supabase Cron jobs are up; `/api/v1/timeline` serves the seeded corpus. **"Production traffic against the seeded corpus" is met. "Did last night's chores run?" is not yet answerable** — `chore_runs` holds only the two `source: cli` rows the dump carried, and the first scheduled pass is retention at 03:00 UTC. The schedule's first act was to expose a real bug: `/api/drain` returned 500 four times, a Redis-readiness race, now fixed and verified. See below. |
 
 **Total: 7–13 days.** Phase 0's measurements added the reindex sweep to Phase 4 and took the
 late-candidate sweep's deadline problem out of the plan altogether — it was a linking bug, its fix
@@ -765,6 +765,44 @@ exposed a runaway, and the pass is now gated off (findings §2.6). Phase 0's dep
 Phase 1 have both since run and neither moved the estimate; the remaining spread is Phase 2.
 
 ### Phase 5 as it stands
+
+**Provisioned, deployed, seeded and serving — 2026-08-26.** The wizard ran. What it produced, and
+what each part is evidenced by:
+
+| | State |
+|---|---|
+| Production Supabase (us-east-1) | Seeded. **32,476 articles / 27,051 storylines**, against 32,045 / 26,665 restored — so live ingest has added to it |
+| Production Upstash | `/readyz` → `redis.ok: true` on the second read |
+| Vercel Production env | 17 variables |
+| The deployment | `● Ready`, `/readyz` → `ready`, `/healthz` → 200 |
+| The corpus, read | `/api/v1/timeline?q=climate` serves real articles with coverage 2026-07-11 → 08-25 |
+| `zammy.info` | 200, redirecting to `www.zammy.info` |
+| Supabase Cron | four jobs registered and `active` |
+| `mine` | absent from production — the exclusion held |
+
+**The exit criterion is half met, and the honest half is the one that is not.** "Production traffic
+against the seeded corpus" is met and demonstrable. "Did last night's chores run?" **cannot be
+answered yet**: `chore_runs` holds exactly the two `source: cli` rows that came along in the dump, and
+the first scheduled pass is retention at 03:00 UTC. Ask again tomorrow, with `pnpm chores status`.
+
+**And the first thing the schedule did was fail.** See
+[deploy/vercel/README.md](../deploy/vercel/README.md), "What the first live drain found". Four 500s
+from `/api/drain` — a Redis-readiness race that only a hosted Redis is slow enough to lose, in the
+one route whose first act is a Redis read. It is fixed and verified. Three things about the *shape*
+of that failure are worth carrying forward beyond the bug:
+
+- **`cron.job_run_details.status` said `succeeded` for every 500.** It describes the SQL statement,
+  not the HTTP request. `net._http_response.status_code` is the column that means what you want it
+  to mean, and §3.3's "a 202 is not evidence the pass ran" understates it: a *`succeeded` cron row*
+  is not evidence the request was answered either.
+- **§7's log retention is worse in practice than on paper.** The docs priced Hobby at one hour.
+  Measured: `vercel logs` returned **no lines at all** for a deployment minutes old. The route's own
+  500 body was `{"error":"drain failed"}`, so the reason existed nowhere a human could reach. The
+  body now carries it, which is safe on a `CRON_SECRET`-gated route and is the difference between a
+  one-line diagnosis and an afternoon.
+- **A test suite that drives real Redis over loopback cannot see a handshake race.** The drain had
+  ten unit tests and all ten passed. This is the second time this phase that "tested" and "exercised
+  on the platform" turned out to name different things.
 
 **Built to the edge of the account, and stopped there.** Everything Phase 5 needs that can be
 written was written and, where it could be, exercised; everything it needs that requires a Supabase
@@ -776,10 +814,10 @@ and the last thing they should need is an AI re-deriving them each time.
 
 | | What it is | Exercised? |
 |---|---|---|
-| `ci.yml` → `migrate (preview)`, `migrate (production)` | §6's discrete migration step, both gated on `verify` | No — needs the secrets |
+| `ci.yml` → `migrate (preview)`, `migrate (production)` | §6's discrete migration step, both gated on `verify` | No — the secrets are set; main is unpushed, so neither job has run |
 | [seed-production.sh](../deploy/vercel/seed-production.sh) | dump the dev corpus, restore it through the session pooler, verify | **Yes**, end to end against a scratch database |
-| [deploy.sh](../deploy/vercel/deploy.sh) | `vercel build && vercel deploy --prebuilt` from a `.git`-excluded copy | Not against production |
-| [provision-production.sh](../deploy/vercel/provision-production.sh) | the twelve stages a human has to drive | Stages 1–4 traced non-interactively |
+| [deploy.sh](../deploy/vercel/deploy.sh) | `vercel build && vercel deploy --prebuilt` from a `.git`-excluded copy | **Yes** — three production deploys; its URL capture needed a fix (CLI 59 ends on a JSON `}`) |
+| [provision-production.sh](../deploy/vercel/provision-production.sh) | the twelve stages a human has to drive | **Yes — run end to end 2026-08-26** |
 
 **Five decisions the scope did not make.**
 
