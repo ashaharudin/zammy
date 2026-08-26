@@ -271,6 +271,20 @@ A boot that rejects instead names Redis and is retried whole on the next deliver
 `/api/chores` does **not** need this and deliberately does not have it: no chore pass touches Redis,
 `ChoreDeps` has no client, and its boot never calls `buildServices`.
 
+**Verified on deployment `dpl_GJ9xwKPDw9J7ZQDNpwqpmyMpeHfv`** with a cold `?q=avalanche`: 13
+deliveries, 12 settled, `meta.ingest` reaching `complete` / `pendingJobs: 0`, and **no
+`Stream isn't writeable` on `POST /api/queues/ingest` at all**. The same deployment logged that error
+three times on the REQUEST path — twice on a cold `GET /api/v1/timeline`, once on a cold `/readyz`,
+which answered `degraded` and then `ready` on the second probe. Two paths, one client, different
+postures on purpose; that contrast is the evidence, and it is the thing to re-check after any change
+to `buildServices`.
+
+The one redelivery in that run was unrelated and is worth knowing about: a segment sitting on the
+30-day lookback boundary at plan time is out of range by the time the consumer runs it, so Currents
+answers `400 date_range: Max lookback is 30 days`. It came back at `deliveryCount: 2` and settled —
+the clamp had moved the window back into range — so it costs a five-minute delay rather than a lost
+job. `deliveryCount` never exceeded 2, and never exceeded 1 for anything else.
+
 **Verified on a scheduled fire, not just a curl.** The fires at 21:00, 21:10 and 21:20 UTC were 500;
 the deploy landed at ~21:26; the **21:30 fire returned 200**. That is the evidence that matters here —
 a manual `POST` proves the route, while a cron row proves the whole path: pg_cron → `pg_net` → TLS →
