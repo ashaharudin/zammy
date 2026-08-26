@@ -15,7 +15,6 @@ import {
   runStorylineGraphChore,
   runStorylineLabelChore,
   runStorylinePass,
-  type RetentionChoreReport,
   type StorylinePassDeps,
 } from "./chores.js";
 
@@ -41,12 +40,11 @@ import {
  * spell it.
  *
  * §3.3 promised "all seven": the six individual chores plus `storylines`. There
- * are nine here because two things happened after that was written —
- * `runStorylineGraphChore` was added (the percolation alarm needed a nightly
- * series, VERCEL-PHASE-0-FINDINGS §2.7) and `retention` became a composite of
- * three steps rather than one. The promise was that anything the night does can
- * be re-run on its own from a curl instead of an SSH, and that is what this list
- * is.
+ * are eight here because `runStorylineGraphChore` was added after that was
+ * written — the percolation alarm needed a nightly series
+ * (VERCEL-PHASE-0-FINDINGS §2.7). The promise was that anything the night does
+ * can be re-run on its own from a curl instead of an SSH, and that is what this
+ * list is.
  *
  * The two composites come first because they are what a scheduler points at; the
  * rest are the on-demand halves of them.
@@ -203,6 +201,13 @@ export async function runChorePass(
   }
 
   const summary = summarizeChoreReport(report);
+  // The aggregate, as its own line. Each sub-chore logs its own tally, but the
+  // composite's shape — which halves ran, what the night ended at — was only
+  // ever visible in `chores-cli.ts`'s `storyline pass complete`, which the route
+  // had no equivalent of. It is emitted here so both entrypoints have it, and it
+  // is the SUMMARIZED report so the log cannot carry what the row deliberately
+  // does not.
+  deps.log.info({ pass, report: summary }, "chore pass report");
   await closeRun(
     db,
     runId,
@@ -241,6 +246,15 @@ async function withPassLock(
       await run();
       return true;
     } finally {
+      // Unguarded on purpose. The unhandled case — the unlock throws, the
+      // connection survives, and it returns to the pool still holding a
+      // session-scoped lock that is re-entrant for whoever draws it next — is
+      // unreachable rather than merely unlikely: `pg_advisory_unlock` on a live
+      // backend that holds the lock cannot fail, so a throw here means the
+      // connection is broken, a broken backend's session is gone, and Postgres
+      // has released the lock with it. node-postgres also discards an errored
+      // client rather than returning it to the pool. Catching would only convert
+      // that into a swallowed diagnostic.
       await sql`select pg_advisory_unlock(${sql.lit(key)})`.execute(connection);
     }
   });
@@ -319,32 +333,59 @@ function modelCallsFrom(pass: ChorePass, report: unknown): number | undefined {
 }
 
 /**
- * The report as it goes into `chore_runs.report`.
+ * The report as it goes into `chore_runs.report`, with every long array replaced
+ * by a count and a sample.
  *
- * One member is replaced and everything else is passed through: the retention
- * report's `idleTopics` is every idle topic's fingerprint, which is unbounded in
- * the corpus and grows for as long as retention keeps reporting rather than
- * deleting. A record of the night must not be a second copy of the corpus, and
- * the number is what a series of nights is read from — so it becomes
- * `idleTopicCount`, renamed rather than truncated so nothing reads a count as a
- * list.
+ * **This is a size bound, and it is load-bearing in the same PR that adds a
+ * sweep to defend a 500 MB budget.** Several reports carry members that scale
+ * with the corpus rather than with the night: the retention report's
+ * `idleTopics` is every idle topic's fingerprint and grows for as long as
+ * retention keeps reporting rather than deleting; `BridgeSweepReport.survivors`
+ * and `LabelMergeReport.survivors`/`refusals` are UUIDs of everything the pass
+ * touched, which on a backlog night is thousands. `chore_runs` has no prune, so
+ * a record of the night would slowly become a second copy of the corpus.
+ *
+ * **A general rule rather than a list of known members**, deliberately: a
+ * per-shape summarizer is a thing five report types can each grow past without
+ * anybody noticing, and the failure is silent and cumulative. The cap is what a
+ * reader can actually use — you read a series of these for counts, and the
+ * identities of 400 merge survivors are in `storylines` where they belong.
+ *
+ * The sample is three items, so a spot-check is still possible without storing
+ * the set. The cap is above every SHORT array a report legitimately carries —
+ * `reindex.tables` is nine — so nothing useful is collapsed today, and adding a
+ * tenth table does not silently truncate it.
  */
+export const REPORT_ARRAY_CAP = 16;
+const REPORT_SAMPLE = 3;
+
 export function summarizeChoreReport(report: unknown): unknown {
-  if (report === undefined || report === null) return null;
-  if (!isRetentionChoreReport(report)) return report;
-  const { idleTopics, ...retention } = report.retention;
-  return {
-    ...report,
-    retention: { ...retention, idleTopicCount: idleTopics.length },
-  };
+  if (report === undefined) return null;
+  return boundArrays(report, 0);
 }
 
-function isRetentionChoreReport(value: unknown): value is RetentionChoreReport {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "retention" in value &&
-    typeof (value as RetentionChoreReport).retention === "object" &&
-    Array.isArray((value as RetentionChoreReport).retention?.idleTopics)
+/**
+ * Depth-limited on purpose. Reports are two levels deep at most (the composite
+ * pass's report of reports), and a bound that recurses forever is a bound that
+ * can be handed a cycle.
+ */
+function boundArrays(value: unknown, depth: number): unknown {
+  if (depth > 4) return value;
+  if (Array.isArray(value)) {
+    if (value.length <= REPORT_ARRAY_CAP) {
+      return value.map((entry) => boundArrays(entry, depth + 1));
+    }
+    return {
+      count: value.length,
+      sample: value.slice(0, REPORT_SAMPLE).map((entry) => boundArrays(entry, depth + 1)),
+    };
+  }
+  if (value === null || typeof value !== "object") return value;
+  // Anything with a prototype of its own (a Date, an Error) is left alone: it
+  // is not a report shape, and rebuilding it as a plain object would change
+  // what `JSON.stringify` makes of it.
+  if (Object.getPrototypeOf(value) !== Object.prototype) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [key, boundArrays(entry, depth + 1)]),
   );
 }

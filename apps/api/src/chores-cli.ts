@@ -1,4 +1,4 @@
-import { ConfigError, loadConfig } from "@zammy/config";
+import { ConfigError, loadConfig, type Config } from "@zammy/config";
 import { readChoreRuns } from "@zammy/storage";
 import { CHORE_PASSES, isChorePass, runChorePass, type ChorePass } from "./chore-runner.js";
 import { choreDepsFromConfig } from "./wiring.js";
@@ -99,7 +99,7 @@ if (named.length !== 1 || (!wantsStatus && !isChorePass(command ?? ""))) {
   process.exit(64);
 }
 
-let config;
+let config: Config;
 try {
   config = loadConfig();
 } catch (error) {
@@ -134,110 +134,128 @@ const log = {
 const deps = choreDepsFromConfig(config, log);
 const connectionName = config.DATABASE_SESSION_URL ? "DATABASE_SESSION_URL" : "DATABASE_URL";
 
-if (wantsStatus) {
-  // A read, not a pass: no lock, no record of its own, and it does not belong in
-  // `chore-runner.ts`. It is here because Phase 5's exit criterion — "did last
-  // night's chores run?" is answered by a `chore_runs` query — should not need
-  // anybody to write that query by hand against a session pooler.
+/**
+ * `status`: a read, not a pass — no lock, no record of its own, which is why it
+ * does not live in `chore-runner.ts`. It is here because Phase 5's exit
+ * criterion — "did last night's chores run?" is answered by a `chore_runs`
+ * query — should not need anybody to write that query by hand against a session
+ * pooler.
+ */
+async function printStatus(): Promise<number> {
   try {
-    let runs;
-    try {
-      runs = await readChoreRuns(deps.db, {
-        pass: flag("pass"),
-        ...(num("limit") !== undefined ? { limit: num("limit") as number } : {}),
-      });
-    } catch (error) {
-      // 42P01, the one failure worth translating: this is the first command
-      // anybody runs after pulling the branch that added the table, and a raw
-      // `relation "chore_runs" does not exist` sends them looking at the wrong
-      // thing. Every other error is rethrown — hiding those is how a real
-      // connection problem gets read as "nothing has run yet".
-      if ((error as { code?: string }).code !== "42P01") throw error;
-      console.error("chore_runs does not exist — run `pnpm db:migrate` (migration 0018)");
-      await deps.db.destroy();
-      process.exit(78); // EX_CONFIG: the database is not the shape this needs
-    }
-    if (runs.length === 0) {
-      console.error("no chore runs recorded");
-    }
-    for (const run of runs) {
-      console.log(
-        JSON.stringify({
-          pass: run.pass,
-          source: run.source,
-          startedAt: run.startedAt.toISOString(),
-          // Null here on a row whose pass never came back — the function was
-          // killed at `maxDuration`, or the process died. That is the state the
-          // row exists to make visible, so it is printed rather than hidden.
-          finishedAt: run.finishedAt?.toISOString() ?? null,
-          outcome: run.outcome,
-          modelCalls: run.modelCalls,
-          error: run.error,
-          report: run.report,
-        }),
-      );
-    }
+    return await readAndPrint();
   } finally {
+    // The pool, like the pass half's — held open it would keep the process
+    // alive past the last line of output.
     await deps.db.destroy();
   }
-  process.exit(0);
 }
 
-const pass = command as ChorePass;
+async function readAndPrint(): Promise<number> {
+  let runs;
+  try {
+    runs = await readChoreRuns(deps.db, {
+      pass: flag("pass"),
+      ...(num("limit") !== undefined ? { limit: num("limit") as number } : {}),
+    });
+  } catch (error) {
+    // 42P01, the one failure worth translating: this is the first command
+    // anybody runs after pulling the branch that added the table, and a raw
+    // `relation "chore_runs" does not exist` sends them looking at the wrong
+    // thing. Every other error is rethrown — hiding those is how a real
+    // connection problem gets read as "nothing has run yet".
+    if ((error as { code?: string }).code !== "42P01") throw error;
+    console.error("chore_runs does not exist — run `pnpm db:migrate` (migration 0018)");
+    return 78; // EX_CONFIG: the database is not the shape this needs
+  }
 
-// `--label-rate` can only usefully go SLOWER: the client enforces the ceiling
-// regardless. Lower it when the server is labelling too — the two processes have
-// separate pacers on one shared key.
-const labelRate = num("label-rate");
-if (labelRate !== undefined) deps.labelRatePerMinute = labelRate;
-const maxLabels = num("max-labels");
-if (maxLabels !== undefined) deps.maxLabels = maxLabels;
-// `--late-candidates` runs the sweep inside the storyline pass for one night
-// without editing the environment, because the honest way to drain the backlog
-// fixing candidate retrieval exposed is an operator watching the graph shape,
-// not a flag flipped once and forgotten. The config default is off.
-if (args.includes("--late-candidates")) deps.lateCandidateSweep = true;
-// That sweep's scope. `--full` is the flag that matters: the narrow pass gives up
-// "every group in the window, every night" (docs/ARCHITECTURE.md §9.1 lists what
-// that costs), so an operator needs a way to run the unscoped pass without
-// changing the environment the scheduler reads.
-if (args.includes("--full")) deps.lateCandidatesChangedOnly = false;
-else if (args.includes("--changed-only")) deps.lateCandidatesChangedOnly = true;
-
-// Which connection and which TLS, before any work: the lock cannot tell an
-// operator that it was session-scoped, and a pass that silently ran twice looks
-// exactly like a pass that ran once.
-log.info({ connection: connectionName, tls: config.DATABASE_SSL }, "chore pass starting");
-
-let failure: unknown;
-try {
-  const result = await runChorePass(pass, deps, { source: "cli" });
-  if (result.outcome === "failed") {
-    failure = result.error;
-    log.warn(
-      {
-        runId: result.runId,
-        err: result.error instanceof Error ? result.error.message : String(result.error),
-      },
-      "chore pass FAILED",
-    );
-  } else if (result.outcome === "ok") {
-    log.info(
-      { runId: result.runId, seconds: Number((result.ms / 1000).toFixed(1)) },
-      "chore pass ran",
+  if (runs.length === 0) console.error("no chore runs recorded");
+  for (const run of runs) {
+    console.log(
+      JSON.stringify({
+        pass: run.pass,
+        source: run.source,
+        startedAt: run.startedAt.toISOString(),
+        // Null here on a row whose pass never came back — the function was
+        // killed at `maxDuration`, or the process died. That is the state the
+        // row exists to make visible, so it is printed rather than hidden.
+        finishedAt: run.finishedAt?.toISOString() ?? null,
+        outcome: run.outcome,
+        modelCalls: run.modelCalls,
+        error: run.error,
+        report: run.report,
+      }),
     );
   }
-  // A skip already logged its own warn line inside the runner, and its
-  // `chore_runs` row says so durably.
-} finally {
-  // Ends the pool this CLI created, which is what lets the process exit rather
-  // than being held open by an idle connection — the cron contract.
-  await deps.db.destroy();
+  return 0;
 }
 
-if (failure !== undefined) {
-  // Rethrow rather than swallow: the stack is the whole diagnostic, and it goes
-  // to stderr where a scheduler's failure notification will quote it.
-  console.error(failure);
-  process.exit(1);
+/** One pass, with the flags applied as overrides on the configured night. */
+async function runPass(pass: ChorePass): Promise<number> {
+  // `--label-rate` can only usefully go SLOWER: the client enforces the ceiling
+  // regardless. Lower it when the server is labelling too — the two processes
+  // have separate pacers on one shared key.
+  const labelRate = num("label-rate");
+  if (labelRate !== undefined) deps.labelRatePerMinute = labelRate;
+  const maxLabels = num("max-labels");
+  if (maxLabels !== undefined) deps.maxLabels = maxLabels;
+  // `--late-candidates` runs the sweep inside the storyline pass for one night
+  // without editing the environment, because the honest way to drain the backlog
+  // fixing candidate retrieval exposed is an operator watching the graph shape,
+  // not a flag flipped once and forgotten. The config default is off.
+  if (args.includes("--late-candidates")) deps.lateCandidateSweep = true;
+  // That sweep's scope. `--full` is the flag that matters: the narrow pass gives
+  // up "every group in the window, every night" (docs/ARCHITECTURE.md §9.1 lists
+  // what that costs), so an operator needs a way to run the unscoped pass
+  // without changing the environment the scheduler reads.
+  if (args.includes("--full")) deps.lateCandidatesChangedOnly = false;
+  else if (args.includes("--changed-only")) deps.lateCandidatesChangedOnly = true;
+
+  // Which connection and which TLS, before any work: the lock cannot tell an
+  // operator that it was session-scoped, and a pass that silently ran twice
+  // looks exactly like a pass that ran once.
+  log.info({ connection: connectionName, tls: config.DATABASE_SSL }, "chore pass starting");
+
+  let failure: unknown;
+  try {
+    const result = await runChorePass(pass, deps, { source: "cli" });
+    if (result.outcome === "failed") {
+      failure = result.error;
+      log.warn(
+        {
+          runId: result.runId,
+          err: result.error instanceof Error ? result.error.message : String(result.error),
+        },
+        "chore pass FAILED",
+      );
+    } else if (result.outcome === "ok") {
+      log.info(
+        { runId: result.runId, seconds: Number((result.ms / 1000).toFixed(1)) },
+        "chore pass ran",
+      );
+    }
+    // A skip already logged its own warn line inside the runner, and its
+    // `chore_runs` row says so durably.
+  } finally {
+    // Ends the pool this CLI created, which is what lets the process exit rather
+    // than being held open by an idle connection — the cron contract.
+    await deps.db.destroy();
+  }
+
+  if (failure !== undefined) {
+    // Printed rather than swallowed: the stack is the whole diagnostic, and it
+    // goes to stderr where a scheduler's failure notification will quote it.
+    console.error(failure);
+    return 1;
+  }
+  return 0;
 }
+
+// `process.exitCode`, never `process.exit()`. `console.log` to a pipe is
+// asynchronous in Node and `process.exit` does not flush what is queued, so
+// `pnpm chores status --limit=200 | jq` would silently lose its tail — and these
+// rows are not small. Setting the code lets the process end on its own once
+// stdout has drained, which it now can: both halves close the pool themselves.
+process.exitCode = wantsStatus
+  ? await printStatus()
+  : await runPass(command as ChorePass);

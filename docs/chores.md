@@ -51,7 +51,7 @@ window), and the `REINDEX TABLE CONCURRENTLY` sweep.
 **The reindex sweep is a storage chore, not a latency one**, which is worth saying because the name
 reads the other way. Autovacuum keeps up with dead tuples here and does not return the pages;
 index pages are the bulk of what it does not return, and that was **22% of the database** at 15
-corpus-days — 41 MB, of which `story_token_days` alone was 40. On Supabase's free 500 MB it is the
+corpus-days — 41 MB across the database, 23 MB of it on `story_token_days` alone (its indexes go 30 MB to 7). On Supabase's free 500 MB it is the
 difference between the storage tripwire reading 1,214 articles/day and 1,485, against an observed
 742-1,747 (VERCEL-PHASE-0-FINDINGS §4, §5). It runs *after* the prune in the same pass, because that
 prune is the largest single source of the bloat it reclaims, and it never throws — a table that loses
@@ -126,7 +126,15 @@ A 202 in `net._http_response` means the request arrived, and nothing more.
 ## `chore_runs`, and why it is not optional
 
 Migration 0018. Every run writes a row: pass, source (`route` or `cli`), started/finished, outcome,
-the report summarized, and the label pass's model calls hoisted into their own column.
+the report summarized, and the label pass's model calls hoisted into their own column — the one
+number in a report that is a *cost* and gets summed across rows.
+
+"Summarized" is a size bound, and it is load-bearing: several report members are the identities of
+everything a pass touched — the retention report's idle-topic fingerprints, the bridge sweep's
+survivors, the label merge's survivors and refusals — and on a backlog night that is thousands of
+UUIDs per row, in a table with no prune. Any array past `REPORT_ARRAY_CAP` becomes `{count, sample}`,
+as a general rule rather than a list of known members: a per-shape summarizer is a thing five report
+types can each grow past without anybody noticing, and the failure is silent and cumulative.
 
 It exists because the two properties above compound. The route always answers 202, so the scheduler
 never sees a failure — and Hobby retains logs for **one hour**, so a pass that failed at 03:00 leaves

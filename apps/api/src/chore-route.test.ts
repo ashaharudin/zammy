@@ -271,6 +271,27 @@ describe("createHandler", () => {
     });
   });
 
+  it("warns when there is no platform request context to defer into", async () => {
+    // `@vercel/functions`' `waitUntil` is `getContext().waitUntil?.(promise)` and
+    // `getContext()` returns `{}` off-platform — a SILENT no-op, paired with an
+    // unconditional 202. The caller is told the pass was accepted and nothing
+    // holds the instance open to run it, which is indistinguishable from a
+    // platform kill. It cannot be fixed by awaiting (that is the 202 the whole
+    // shape exists for), so it is said out loud instead.
+    const warnings: string[] = [];
+    const handler = createHandler(async () => ({}) as StorylinePassDeps, {
+      readSecret: () => SECRET,
+      logger: { info: () => {}, warn: (_fields, message) => void warnings.push(message) },
+      runPass: async (pass) => ({ pass, outcome: "ok", runId: null, ms: 0 }),
+    });
+    const { res, seen } = capture();
+
+    await handler(authorized("/api/chores?pass=graph"), res);
+
+    expect(seen.status).toBe(202);
+    expect(warnings.some((line) => line.includes("no platform request context"))).toBe(true);
+  });
+
   it("still answers 202 when the boot fails", async () => {
     // Nothing downstream of the 202 is visible to the scheduler, boot included.
     // The failure is a log line and a missing `chore_runs` row — the same trade

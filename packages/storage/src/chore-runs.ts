@@ -120,7 +120,11 @@ export async function readChoreRuns(
       "model_calls",
     ])
     .orderBy("started_at", "desc")
-    .limit(Math.min(Math.max(options.limit ?? 20, 1), 200));
+    // Floored as well as clamped. The range is a sanity bound; the FLOOR is
+    // correctness — Postgres rejects `LIMIT 1.5`, and this is reached from a CLI
+    // flag, so a non-integer must not become a query error the caller has to
+    // decode.
+    .limit(Math.floor(Math.min(Math.max(options.limit ?? 20, 1), 200)));
   if (options.pass) query = query.where("pass", "=", options.pass);
 
   const rows = await query.execute();

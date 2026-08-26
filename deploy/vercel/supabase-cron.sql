@@ -17,11 +17,14 @@
 --
 -- ── The two things that are easy to get wrong ────────────────────────────────
 --
--- **`timeout_milliseconds`.** pg_net's default is 2000, and the chores route's
--- 202 from a cold function is a Node boot plus TLS plus config parsing — the
--- spike measured 669 ms cold on a route with no app behind it, on top of a
--- ~550 ms platform container floor. 2 s is not comfortably clear of that, and a
--- timed-out request is a night that silently did not run. 15 s is.
+-- **`timeout_milliseconds`.** pg_net's default is short and has moved between
+-- versions (2 s in the documentation §3.3 was written against, 5 s in current
+-- pg_net), while the chores route's 202 from a cold function is a Node boot plus
+-- TLS plus config parsing — the spike measured 669 ms cold for a route with NO
+-- app behind it, on top of a ~550 ms platform container floor. Neither default
+-- is comfortably clear of that, and a timed-out request is a night that silently
+-- did not run. Set it explicitly rather than inheriting whichever number this
+-- pg_net ships with.
 --
 -- **The timezone.** pg_cron reads these expressions in the DATABASE's timezone,
 -- which is UTC on Supabase. The passes bucket by `APP_TIMEZONE` day boundaries,
@@ -53,21 +56,53 @@ create extension if not exists pg_net;
 -- 2. One helper, so a URL or a token change is one place and not five.
 --
 --    SECURITY DEFINER because `vault.decrypted_secrets` is not readable by the
---    role pg_cron runs jobs as. `search_path` is pinned for the usual reason a
---    definer function pins it.
+--    role pg_cron runs jobs as. Three hardening steps come WITH that decision
+--    rather than after it, because a definer function that holds a bearer token
+--    and lives in `public` is reachable from the internet on Supabase:
+--    PostgREST exposes `public`, and Postgres grants EXECUTE to PUBLIC on every
+--    new function by default. Without the three below, anyone holding the
+--    project's (publicly shipped) anon key could POST
+--    `/rest/v1/rpc/zammy_cron_post` and start the expensive pass on demand --
+--    the exact thing CRON_SECRET exists to prevent -- with the function
+--    helpfully supplying the token.
+--
+--    1. `path` is checked against a FIXED allowlist. It is concatenated onto a
+--       base URL that has no trailing slash, so an unvalidated
+--       `'@evil.example/'` would resolve to `https://<host>@evil.example/` and
+--       send `Authorization: Bearer <CRON_SECRET>` to somebody else's server.
+--       Adding a schedule means adding its path here, deliberately; an ad-hoc
+--       re-run is a curl, not a cron job, and does not belong in this function.
+--    2. `search_path = ''`, with every reference schema-qualified. The usual
+--       definer footgun: any search path that leads with a writable schema lets
+--       somebody who can create objects there decide what this function calls.
+--    3. EXECUTE revoked from everyone but the owner (section 2b).
 -- ─────────────────────────────────────────────────────────────────────────────
-create or replace function zammy_cron_post(path text, timeout_ms integer default 15000)
+create or replace function public.zammy_cron_post(
+  path text,
+  timeout_ms integer default 15000
+)
 returns bigint
 language plpgsql
 security definer
-set search_path = public, vault, net
+set search_path = ''
 as $$
 declare
   base   text;
   secret text;
 begin
-  select decrypted_secret into base   from vault.decrypted_secrets where name = 'zammy_base_url';
-  select decrypted_secret into secret from vault.decrypted_secrets where name = 'zammy_cron_secret';
+  if path not in (
+    '/api/chores?pass=retention',
+    '/api/chores?pass=storylines',
+    '/api/keepalive',
+    '/api/drain'
+  ) then
+    raise exception 'zammy_cron_post refuses an unlisted path: %', path;
+  end if;
+
+  select decrypted_secret into base
+    from vault.decrypted_secrets where name = 'zammy_base_url';
+  select decrypted_secret into secret
+    from vault.decrypted_secrets where name = 'zammy_cron_secret';
   if base is null or secret is null then
     raise exception 'zammy_base_url or zammy_cron_secret is missing from vault';
   end if;
@@ -85,6 +120,14 @@ begin
 end;
 $$;
 
+-- 2b. Nobody but the owner may call it. `revoke from public` is the one that
+--     matters -- it is the default grant. The two role names are Supabase's
+--     PostgREST roles, revoked explicitly because a project's default grants on
+--     `public` reach them, and because an explicit revoke survives someone
+--     re-running a blanket `grant ... on all functions in schema public` later.
+revoke all on function public.zammy_cron_post(text, integer) from public;
+revoke all on function public.zammy_cron_post(text, integer) from anon, authenticated;
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 3. The jobs.
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -94,7 +137,7 @@ $$;
 select cron.schedule(
   'zammy-chores-retention',
   '0 3 * * *',
-  $$ select zammy_cron_post('/api/chores?pass=retention') $$
+  $$ select public.zammy_cron_post('/api/chores?pass=retention') $$
 );
 
 -- The storyline lifecycle pass: dormancy, bridge sweep, labels, label merge,
@@ -104,7 +147,7 @@ select cron.schedule(
 select cron.schedule(
   'zammy-chores-storylines',
   '0 4 * * *',
-  $$ select zammy_cron_post('/api/chores?pass=storylines') $$
+  $$ select public.zammy_cron_post('/api/chores?pass=storylines') $$
 );
 
 -- The pause guard. Its OWN job, and that is the point: Supabase does not promise
@@ -119,7 +162,7 @@ select cron.schedule(
 select cron.schedule(
   'zammy-keepalive',
   '0 12 * * *',
-  $$ select zammy_cron_post('/api/keepalive', 10000) $$
+  $$ select public.zammy_cron_post('/api/keepalive', 10000) $$
 );
 
 -- The manual ingest drain, on the cadence its own docs ask for. Anything slower
@@ -128,7 +171,7 @@ select cron.schedule(
 select cron.schedule(
   'zammy-ingest-drain',
   '*/10 * * * *',
-  $$ select zammy_cron_post('/api/drain') $$
+  $$ select public.zammy_cron_post('/api/drain') $$
 );
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -157,4 +200,4 @@ select cron.schedule(
 -- select cron.unschedule('zammy-chores-storylines');
 -- select cron.unschedule('zammy-keepalive');
 -- select cron.unschedule('zammy-ingest-drain');
--- drop function if exists zammy_cron_post(text, integer);
+-- drop function if exists public.zammy_cron_post(text, integer);

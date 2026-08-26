@@ -10,6 +10,7 @@ import {
   isChorePass,
   runChorePass,
   summarizeChoreReport,
+  REPORT_ARRAY_CAP,
 } from "./chore-runner.js";
 import type { StorylinePassDeps } from "./chores.js";
 
@@ -337,10 +338,10 @@ describe("runChorePass", () => {
     // sweep is for, and nothing else complains about it.
     expect(report.reindex.invalidIndexes).toEqual([]);
     expect(report.reindex.tables.map((entry) => entry.table)).toContain("story_token_days");
-    // And the retention report's unbounded member is a count by the time it gets
-    // here: a record of the night must not be a second copy of the corpus.
-    expect(report.retention).toHaveProperty("idleTopicCount", 0);
-    expect(report.retention).not.toHaveProperty("idleTopics");
+    // The retention report's unbounded member survives intact only because this
+    // corpus is empty; `summarizeChoreReport`'s own tests cover what happens
+    // when it is not.
+    expect(report.retention).toHaveProperty("idleTopics", []);
   });
 
   it("runs the pass even when the record cannot be written", async () => {
@@ -381,26 +382,56 @@ describe("readChoreRuns", () => {
 });
 
 describe("summarizeChoreReport", () => {
-  it("replaces the retention report's topic list with its count", () => {
+  it("bounds an array that scales with the corpus", () => {
+    // `chore_runs` has no prune, and several report members are UUIDs of
+    // everything a pass touched — the retention report's idle-topic
+    // fingerprints, the bridge sweep's survivors, the label merge's refusals. A
+    // record of the night must not become a second copy of the corpus, in the
+    // same phase that adds a sweep to defend a 500 MB budget.
+    const idleTopics = Array.from({ length: 400 }, (_, index) => `topic-${index}`);
     const summary = summarizeChoreReport({
-      retention: { articleCandidates: 3, sightingCandidates: 4, idleTopics: ["aa", "bb"] },
+      retention: { articleCandidates: 3, idleTopics },
       prunedStoryDf: 7,
-      reindex: { tables: [], ms: 1, failed: 0, invalidIndexes: [] },
-    }) as { retention: Record<string, unknown>; prunedStoryDf: number };
+    }) as { retention: { idleTopics: { count: number; sample: string[] } } };
 
-    // Renamed rather than truncated, so nothing downstream reads a count as a
-    // list — `idleTopics: 2` would be a trap in a jsonb column.
-    expect(summary.retention).toEqual({
-      articleCandidates: 3,
-      sightingCandidates: 4,
-      idleTopicCount: 2,
-    });
-    expect(summary.prunedStoryDf).toBe(7);
+    expect(summary.retention.idleTopics.count).toBe(400);
+    // A sample rather than nothing, so a spot-check is possible without storing
+    // the set.
+    expect(summary.retention.idleTopics.sample).toEqual(["topic-0", "topic-1", "topic-2"]);
   });
 
-  it("passes every other report through untouched", () => {
+  it("bounds a nested one too, wherever in the report it sits", () => {
+    // `BridgeSweepReport.survivors` and `LabelMergeReport.survivors`/`refusals`
+    // arrive nested under the composite pass's report — which is why the rule is
+    // general rather than a list of known members: a per-shape summarizer is a
+    // thing five report types can each grow past without anybody noticing.
+    const survivors = Array.from({ length: 900 }, (_, index) => `arc-${index}`);
+    const summary = summarizeChoreReport({
+      bridges: { merged: 12, survivors },
+      labelMerge: { merged: 3, refusals: [] },
+    }) as { bridges: { survivors: { count: number } }; labelMerge: { refusals: unknown[] } };
+
+    expect(summary.bridges.survivors.count).toBe(900);
+    // And a short array is left exactly as it was: bounding is a size rule, not
+    // a blanket "counts only" rule.
+    expect(summary.labelMerge.refusals).toEqual([]);
+  });
+
+  it("leaves the reindex tally intact, with room to grow", () => {
+    // The cap has to sit above every array a report legitimately carries in
+    // full. `reindex.tables` is the longest of them at nine, and adding a tenth
+    // table must not silently truncate the tally.
+    const tables = Array.from({ length: 9 }, (_, index) => ({ table: `t${index}`, ok: true }));
+    const summary = summarizeChoreReport({ reindex: { tables, invalidIndexes: [] } }) as {
+      reindex: { tables: unknown[] };
+    };
+    expect(summary.reindex.tables).toHaveLength(9);
+    expect(REPORT_ARRAY_CAP).toBeGreaterThan(9);
+  });
+
+  it("passes a short report through unchanged", () => {
     const report = { dormant: 2, labels: { model: 4, bigram: 1, none: 0, skipped: 3 } };
-    expect(summarizeChoreReport(report)).toBe(report);
+    expect(summarizeChoreReport(report)).toEqual(report);
     expect(summarizeChoreReport(undefined)).toBeNull();
   });
 });

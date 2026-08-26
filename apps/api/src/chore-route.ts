@@ -137,6 +137,27 @@ async function bootFromEnvironment(): Promise<StorylinePassDeps> {
     },
     "chore route booted",
   );
+  if (!config.DATABASE_SESSION_URL) {
+    // **A warning and not a refusal**, and the asymmetry is the point.
+    // `DATABASE_SESSION_URL` is optional because Compose and local dev connect
+    // directly, where every connection is already session-scoped and the lock
+    // works. On a deployment it is not optional at all: through a
+    // transaction-mode pooler a session lock is taken on one backend and looked
+    // for on another, so `pg_try_advisory_lock` returns true every time, two
+    // schedulers both run the night, and both log an ordinary success. Nothing
+    // downstream can detect it.
+    //
+    // Refusing would break the two configurations where the fallback is
+    // correct. So this is the loudest thing available instead — and it is a
+    // `warn` rather than the boot line's `info` because on Hobby the log is an
+    // hour long and the level is the only thing that makes a line findable.
+    log.warn(
+      {},
+      "DATABASE_SESSION_URL is unset; the pass lock is only real if DATABASE_URL " +
+        "is a DIRECT or session-mode connection. Through a transaction pooler every " +
+        "pg_try_advisory_lock succeeds and two schedulers run the same night.",
+    );
+  }
   return deps;
 }
 
@@ -171,6 +192,43 @@ function bootOnce(
 
 const booted = bootOnce(bootFromEnvironment);
 
+/**
+ * `waitUntil`, plus the check the SDK does not do.
+ *
+ * `@vercel/functions`' `waitUntil` is `getContext().waitUntil?.(promise)`, and
+ * `getContext()` returns `{}` when the platform's request-context global is
+ * absent — so **off-platform it is a silent no-op**. Combined with an
+ * unconditional 202 that is the worst pairing available: the caller is told the
+ * pass was accepted, nothing keeps the instance alive to run it, and the row is
+ * either never opened or opened and never closed — indistinguishable from a
+ * platform kill.
+ *
+ * The promise still RUNS (it was started before it got here); what is missing is
+ * anything holding the process open for it. So the fix is not to await — that
+ * would break the 202 the whole shape exists for — it is to say so loudly, once
+ * per invocation, in the only place a log survives.
+ *
+ * The symbol is read directly because `getContext` is not in the package's
+ * public export map. It is the same symbol `waitUntil` itself reads.
+ */
+const REQUEST_CONTEXT = Symbol.for("@vercel/request-context");
+
+function platformDefer(logger: ServiceLogger): (promise: Promise<unknown>) => void {
+  return (promise) => {
+    const context = (
+      globalThis as Record<symbol, { get?: () => { waitUntil?: unknown } } | undefined>
+    )[REQUEST_CONTEXT]?.get?.();
+    if (typeof context?.waitUntil !== "function") {
+      logger.warn(
+        {},
+        "no platform request context; background work is unsupervised and may be " +
+          "killed with the response — the 202 does not mean the pass will finish",
+      );
+    }
+    waitUntil(promise);
+  };
+}
+
 export interface ChoreHandlerOptions {
   readSecret?: () => string | undefined;
   /**
@@ -202,10 +260,10 @@ export function createHandler(
   boot: () => Promise<StorylinePassDeps>,
   options: ChoreHandlerOptions = {},
 ): (request: IncomingMessage, response: ServerResponse) => Promise<void> {
-  const readSecret = options.readSecret ?? secretFromEnvironment;
-  const defer = options.waitUntil ?? waitUntil;
-  const runPass = options.runPass ?? runChorePass;
   const logger = options.logger ?? log;
+  const readSecret = options.readSecret ?? secretFromEnvironment;
+  const defer = options.waitUntil ?? platformDefer(logger);
+  const runPass = options.runPass ?? runChorePass;
 
   return async (request, response) => {
     const json = (status: number, body: object): void => {
@@ -248,12 +306,18 @@ export function createHandler(
       "chore pass accepted",
     );
 
-    // **The work is deferred, INCLUDING the boot.** Building the pool inside
-    // `waitUntil` is what keeps the 202's latency down to config parsing on a
-    // cold instance, which is the number that has to fit inside pg_net's
-    // timeout. A boot failure therefore cannot be reported in the response —
-    // it is a log line and a missing `chore_runs` row, which is the same
-    // trade every other failure here makes.
+    // **The work is deferred, INCLUDING the boot**, so that no I/O happens
+    // before the 202 — which is the number that has to fit inside pg_net's
+    // timeout on a cold instance. Note what this does NOT do: the async IIFE
+    // runs synchronously to its first `await`, and `bootFromEnvironment` is
+    // synchronous until then, so `loadConfig()` and the `pg.Pool` object are
+    // built BEFORE the response goes out. That is fine and deliberate — neither
+    // touches the network, `pg.Pool` connects lazily — but it is why this
+    // comment does not claim the 202 costs nothing but config parsing.
+    //
+    // A boot failure cannot be reported in the response either way: it is a log
+    // line and a missing `chore_runs` row, the same trade every other failure
+    // here makes.
     defer(
       (async () => {
         let deps: StorylinePassDeps;

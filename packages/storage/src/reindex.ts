@@ -16,19 +16,25 @@ import type { Database } from "./database.js";
  * versus 12 MB restored).
  *
  * `REINDEX TABLE CONCURRENTLY` recovers it in **2.0 s across these tables**,
- * non-blocking. On Supabase's free 500 MB that is the difference between the
- * storage tripwire reading **1,214 articles/day and 1,485** — against an
- * observed ingest of 742–1,747/day. The habit is what keeps the corpus inside
- * the budget at 90 days of retention; the ingest rate alone does not decide it.
+ * non-blocking — `story_token_days` alone gives back **23 MB** (its indexes go
+ * 30 MB → 7 MB) in 355 ms of that. On Supabase's free 500 MB the whole sweep is
+ * the difference between the storage tripwire reading **1,214 articles/day and
+ * 1,485** — against an observed ingest of 742–1,747/day. The habit is what keeps
+ * the corpus inside the budget at 90 days of retention; the ingest rate alone
+ * does not decide it.
  *
  * ## Why these tables and not `REINDEX DATABASE`
  *
  * `REINDEX DATABASE` cannot be run CONCURRENTLY, so it takes locks a live
  * deployment should not take at 3am for the sake of tables that do not churn.
- * The list below is the measured one: §4's seven retention-scaling tables plus
- * `story_token_days`, which is not retention-scaling — it is bounded by the DF
- * window — but is the single largest recovery in the measurement and the one
- * table the linker rewrites wholesale every night.
+ * The nine below are **§4's seven retention-scaling tables plus the two DF-window
+ * tables**. The seven are the measured list. `story_token_days` is the addition
+ * that matters — it is not retention-scaling, it is bounded by the DF window,
+ * and it is nonetheless the single largest recovery in the measurement, because
+ * the linker rewrites it wholesale every night and the retention prune deletes
+ * from it. `story_corpus_days` joins it because it is its sibling: the same
+ * prune deletes from both in one transaction, so leaving it out would reindex
+ * half of a pair that churns together.
  *
  * Everything not listed accounted for ~5 MB of bloat between them (§5's
  * "everything else"), which is not worth the round trips or the invalid-index

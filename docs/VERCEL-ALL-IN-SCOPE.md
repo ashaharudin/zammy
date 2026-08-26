@@ -796,8 +796,8 @@ default one.
 
 **What the reindex sweep is, restated because "reindex" reads as a latency chore.** It is a
 **storage** chore. Autovacuum keeps up with dead tuples and does not return the pages; index pages are
-the bulk of what it does not return, and that is 22% of the database at 15 corpus-days — 41 MB, of
-which `story_token_days` alone is 40. On Supabase's 500 MB it is the difference between the storage
+the bulk of what it does not return, and that is 22% of the database at 15 corpus-days — 41 MB across the
+database, 23 MB of it on `story_token_days` alone (its indexes go 30 MB to 7). On Supabase's 500 MB it is the difference between the storage
 tripwire reading 1,214 articles/day and 1,485, against an observed 742–1,747 (findings §4, §5). It
 runs **after** the trailing-corpus prune in the same pass, because that prune is the largest single
 source of the bloat it reclaims. It never throws — a table that loses a lock race is recorded and the
