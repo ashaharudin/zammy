@@ -62,10 +62,18 @@ echo "==> vercel build ($TARGET)"
 vercel build "${build_args[@]}"
 
 echo "==> vercel deploy ($TARGET)"
-url="$(vercel deploy "${deploy_args[@]}" 2>/dev/null | tail -n1)"
+# Grep the URL out of the whole output rather than taking the last line. On CLI
+# 59 the last stdout line is a JSON `}`, so `tail -n1` captured a brace and the
+# `vercel inspect` below went looking for a deployment called "dpl_}". The
+# pattern is stable in a way the output shape is not. `tee /dev/stderr` keeps
+# the progress visible while it is captured.
+deploy_output="$(vercel deploy "${deploy_args[@]}" 2>&1 | tee /dev/stderr)"
+url="$(printf '%s\n' "$deploy_output" |
+  grep -oE 'https://[a-zA-Z0-9._-]+\.vercel\.app' | tail -n1)"
 
 if [ -z "$url" ]; then
-  echo "error: the CLI printed no deployment URL." >&2
+  echo "error: could not find a deployment URL in the CLI output." >&2
+  echo "       The deploy may still have succeeded — check \`vercel ls --prod\`." >&2
   exit 1
 fi
 

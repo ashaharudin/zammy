@@ -1,5 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { ConfigError, loadConfig } from "@zammy/config";
+// Named, not default: ioredis is CJS and the default import resolves to a
+// namespace rather than the class (server.ts says the same).
+import type { Redis } from "ioredis";
 import { INGEST_RETENTION_SECONDS } from "./ingest-queue-vercel.js";
 import {
   PendingSet,
@@ -258,6 +261,76 @@ export function isAuthorized(header: string | undefined, secret: string | undefi
 }
 
 /**
+ * How long the boot will wait for Redis to finish connecting.
+ *
+ * Upstash's TLS handshake was measured at ~800 ms from a cold instance, and
+ * Phase 3 saw it fail outright with `connect ETIMEDOUT` under a burst. Ten
+ * seconds is generous against both and still leaves the 300 s ceiling
+ * essentially untouched — and the point of the bound is not speed, it is that
+ * an unreachable Redis becomes a 503 with a reason instead of a function that
+ * sits there until `maxDuration` kills it.
+ */
+export const REDIS_READY_TIMEOUT_MS = 10_000;
+
+/**
+ * Wait for the shared Redis client to be usable.
+ *
+ * **Why this exists, and why it is here rather than in `buildServices`.**
+ * `buildServices` builds its client with `lazyConnect: true`,
+ * `enableOfflineQueue: false` and a deliberately un-awaited `redis.connect()`
+ * (server.ts) — "Redis is pure cache: never let a reconnect storm block a
+ * request that Postgres could have served". For the request path that is
+ * correct and worth keeping: a read that misses the cache still answers from
+ * Postgres, and awaiting the handshake would put ~800 ms in front of every cold
+ * timeline read.
+ *
+ * The drain is the one caller for which none of that holds. Redis is not its
+ * cache, it is its INPUT: `listOutstanding` is the first thing the pass does,
+ * and it is a `SCAN` issued microseconds after the boot returns. With the
+ * offline queue disabled ioredis does not wait for the stream — it throws
+ * `Stream isn't writeable and enableOfflineQueue options is false`, which
+ * `runDrain` does not guard because a ledger it cannot read is not a pass it can
+ * run. The result was a 500 on every cold invocation.
+ *
+ * Measured in production 2026-08-26: two scheduled passes and two manual ones,
+ * all four 500, while `/readyz` reported `redis.ok: true` from the warm request
+ * function and `/api/keepalive` answered 200 because it touches only Postgres.
+ * The unit tests never saw it — they drive a real local Redis over loopback,
+ * which is ready before the first command is written.
+ *
+ * `error` is deliberately not a rejection: ioredis retries, and a transient
+ * handshake error followed by a successful retry is a working connection. Only
+ * the timeout and a closed-for-good connection end the wait.
+ */
+export async function waitForRedis(
+  redis: Pick<Redis, "status" | "once" | "off">,
+  timeoutMs: number = REDIS_READY_TIMEOUT_MS,
+): Promise<void> {
+  if (redis.status === "ready") return;
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      redis.off("ready", onReady);
+      redis.off("end", onEnd);
+    };
+    const onReady = (): void => {
+      cleanup();
+      resolve();
+    };
+    const onEnd = (): void => {
+      cleanup();
+      reject(new Error("redis connection ended before it was ready"));
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`redis was not ready after ${timeoutMs} ms (status: ${redis.status})`));
+    }, timeoutMs);
+    redis.once("ready", onReady);
+    redis.once("end", onEnd);
+  });
+}
+
+/**
  * Config is loaded inside the boot, as in `vercel.ts` and `vercel-queue.ts`, so
  * a bad deploy answers with a listed reason rather than a module that throws
  * during import.
@@ -283,6 +356,9 @@ async function bootFromEnvironment(): Promise<Drainable> {
   }
 
   const services = await buildServices(config, log);
+  // Before the first SCAN, not after it. See `waitForRedis`: the boot's client
+  // connects in the background, and the drain's first act is a Redis read.
+  await waitForRedis(services.redis);
   // Its own PendingSet view over the services' Redis client, rather than an
   // enumerate member on `IngestQueue`. The interface is a contract two drivers
   // implement, and BullMQ would have to grow a method it has no use for to let
@@ -393,7 +469,12 @@ export function createHandler(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("drain failed:", message);
-      json(500, { error: "drain failed" });
+      // The reason travels in the BODY as well as the log, because on Hobby the
+      // log is gone in an hour and `vercel logs` may return nothing at all —
+      // which is how a `{"error":"drain failed"}` with no detail turned a
+      // one-line diagnosis into an afternoon. Safe to include: every caller here
+      // has already presented CRON_SECRET.
+      json(500, { error: "drain failed", reason: message });
     }
   };
 }

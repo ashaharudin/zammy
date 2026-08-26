@@ -207,6 +207,51 @@ line as `ingest drain complete`. Operating notes:
 - **Schedule it every 5–15 minutes** via Supabase Cron if you want cold topics covered promptly.
   Hobby's Vercel cron (once a day, ±59 min) is too coarse to be the primary driver.
 
+### What the first live drain found — 2026-08-26
+
+**Four 500s: two scheduled, two by hand.** The route had never run outside its unit tests, and it
+failed the moment Supabase Cron first called it. Worth reading as a shape, because nothing about the
+symptom pointed at the cause:
+
+- `cron.job_run_details` said **`succeeded`** for every fire. That status describes the SQL
+  statement, not the HTTP request — `select public.zammy_cron_post(...)` returned a row, so pg_cron
+  was satisfied. The 500 was in `net._http_response`, one table over.
+- `/readyz` said `redis.ok: true` throughout, because the request function was warm.
+- `/api/keepalive` answered 200, because it touches only Postgres.
+- The response body was `{"error":"drain failed"}` and nothing else, and `vercel logs` returned
+  **no lines at all** on Hobby.
+
+The cause is a race that only a hosted Redis is slow enough to lose. `buildServices` builds its
+client with `lazyConnect: true`, `enableOfflineQueue: false` and a deliberately **un-awaited**
+`redis.connect()` — correct for the request path, where Redis is pure cache and awaiting an ~800 ms
+Upstash handshake would sit in front of every cold read. The drain is the one caller for which that
+does not hold: `listOutstanding` is a `SCAN` issued microseconds after the boot returns, Redis is its
+*input* rather than its cache, and with the offline queue disabled ioredis does not wait for the
+stream — it throws `Stream isn't writeable and enableOfflineQueue options is false`. `runDrain` does
+not guard that call, because a ledger it cannot read is not a pass it can run.
+
+The unit tests could not have caught it. They drive a real local Redis over loopback, ready before
+the first command is written.
+
+**The fix** is a bounded wait in the drain's boot (`waitForRedis`, 10 s), not a change to
+`buildServices` — the request path's posture is deliberate and worth keeping. An unreachable Redis
+now becomes a 503 with a reason instead of a 500 or a function that runs to `maxDuration`.
+
+**Two things changed alongside it, both because the diagnosis was harder than the bug.** The 500 body
+now carries `reason` — safe, since every caller has already presented `CRON_SECRET`, and on Hobby the
+log that would otherwise hold it is gone within the hour. And `/readyz` answering `degraded` with
+*this exact string* on a cold read is now a known-good state rather than a puzzle: it is the same
+race, on a path that tolerates it.
+
+**The tripwire that would have caught it sooner**: `net._http_response.status_code`, not
+`cron.job_run_details.status`. Worth checking after any change to the cron jobs or the routes they
+call:
+
+```sql
+select id, status_code, left(coalesce(error_msg, ''), 80) as err, created
+  from net._http_response order by created desc limit 20;
+```
+
 ## The chores — `/api/chores` and `/api/keepalive`
 
 Both are `CRON_SECRET`-gated, both are driven by Supabase Cron, and
@@ -350,8 +395,10 @@ exist applies it.
 - **Nothing is in production.** Phase 2 is verified on *preview* only. Production has no seeded
   corpus and no `INGEST_QUEUE_DRIVER`, so leaving it at the `bullmq` default there would publish to
   a Redis queue nothing drains. Phase 5's code exists; the accounts it acts on do not.
-- **The drain has never run against a live deployment.** Its logic is unit-tested; the real Redis
-  `SCAN` and a real fill are not. Use `?limit=1` for the first pass.
+- ~~**The drain has never run against a live deployment.**~~ It has now, and it **failed on the
+  first four attempts** — see below. Fixed and verified 2026-08-26. A real fill is still unproven:
+  every pass so far has answered `scanned: 0`, which is the healthy answer and not an exercise of
+  the fill path.
 - **The chores are built and nothing schedules them.** The route, the table and the pause guard all
   exist as of Phase 4; [supabase-cron.sql](supabase-cron.sql) is written and **has not been run**.
   Until it is, no pass fires on a timer and a deployed project's database is reachable only as long
