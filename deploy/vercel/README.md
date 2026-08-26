@@ -87,6 +87,15 @@ configures), but it now boots with no `DATABASE_URL`/`REDIS_URL` at all and will
 ## Deploying
 
 ```bash
+./deploy/vercel/deploy.sh --prod
+```
+
+**Or not at all: the project is git-linked, so a push to main deploys production on its own** (the
+deployment carries the `zammy-git-main-<scope>.vercel.app` alias, and a PR branch gets its own).
+`deploy.sh` is for deploying local or uncommitted state, and its `.git`-excluded copy is what makes
+a *CLI* deploy work at all — the raw commands below land BLOCKED from inside the repository:
+
+```bash
 vercel build && vercel deploy --prebuilt
 ```
 
@@ -367,9 +376,15 @@ in production.
 ### Deploying — `deploy.sh`
 
 ```bash
-./deploy/vercel/deploy.sh          # a Vercel preview URL, no working data plane behind it
-./deploy/vercel/deploy.sh --prod   # production
+./deploy/vercel/deploy.sh --prod      # production
+./deploy/vercel/deploy.sh --preview   # a preview URL with NO data plane behind it
 ```
+
+**The target is not optional, and it used to default to preview.** That default could only ever
+produce a broken deployment once the Preview environment was retired, so the script now refuses to
+guess. `--preview` still works and warns: it is good for checking that the build and the function
+dependency trace still resolve, and good for nothing else, because the deployment has no
+`DATABASE_URL` and no `REDIS_URL` and will answer `unready` to every probe.
 
 The `.git`-excluded copy described under [Deploying](#deploying) above, as a script instead of a
 paragraph people re-read. It runs `vercel inspect` afterwards, because the CLI's exit code is not a
@@ -387,8 +402,10 @@ reads two repository secrets, both set by stage 9 of the wizard:
 | `PRODUCTION_DATABASE_SESSION_URL` | `migrate (production)` |
 | `SUPABASE_CA_CERT` | `DATABASE_SSL=verify-full` needs something to verify against |
 
-The job does not deploy, and can't: the project is not git-linked, so the deploy is `deploy.sh` run
-by hand.
+The job does not deploy — but the git integration does. A push to main produces a production
+deployment on its own, and it does not wait for this job, nor this job for it. That is exactly the
+non-atomicity §6 describes, and expand/contract discipline is what makes it safe: additive
+migrations land before the code that needs them, destructive ones after the code that stopped.
 
 The workflow's `cancel-in-progress` is now conditional — pull requests still cancel superseded runs,
 pushes to main queue instead. A main run carries a migration, and cancelling one mid-DDL leaves the

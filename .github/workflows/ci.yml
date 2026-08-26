@@ -138,10 +138,24 @@ jobs:
   # the schema where it is — so it must not run off a commit whose tests never
   # passed.
   #
-  # This job does not deploy. The Vercel project is not git-linked (deploys are
-  # `vercel build && vercel deploy --prebuilt` from a copy of the tree with
-  # `.git` excluded, because Vercel stamps a deployment with the commit author
-  # and the resulting deployment lands BLOCKED — see deploy/vercel/README.md).
+  # This job does not deploy — but something else does, and that is worth
+  # stating precisely because it was not true when these jobs were written.
+  # **The Vercel project IS git-linked.** A push to main produces a production
+  # deployment on its own (it carries the `zammy-git-main-<scope>.vercel.app`
+  # alias), and a PR branch produces a preview one. So merging to main ships
+  # code, whether or not anyone runs deploy.sh.
+  #
+  # deploy/vercel/deploy.sh still exists and is still the way to deploy local or
+  # uncommitted state: a CLI deploy from the repository itself lands BLOCKED,
+  # because Vercel stamps it with the commit author rather than the account that
+  # owns the project, which is why that script builds from a `.git`-excluded
+  # copy. Deployments made through the git integration are attributed by the
+  # integration and do not hit that.
+  #
+  # The ordering consequence for a migration-bearing merge: the git-linked
+  # production deploy and this job start at roughly the same moment and neither
+  # waits for the other, which is precisely the non-atomicity §6 describes.
+  # Expand/contract is what makes that safe.
   #
   # There used to be a matching `migrate-preview` job here, migrating a second
   # free-tier Supabase project on pull requests. It's gone: Upstash only
