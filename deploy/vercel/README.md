@@ -4,16 +4,19 @@ Plan A of [RESEARCH-VERCEL-SUPABASE](../../docs/RESEARCH-VERCEL-SUPABASE.md), ad
 [ADR-0015](../../docs/adr/0015-all-in-on-vercel-hobby-shaped.md) and phased in
 [VERCEL-ALL-IN-SCOPE §9](../../docs/VERCEL-ALL-IN-SCOPE.md). **Phases 1 and 2 are deployed to
 preview and verified**: the api serves as one Function, the ingest queue has a push-mode consumer
-that drains and redelivers, and `POST /api/drain` is the manual fallback. The chores are still
-manual. **Phase 3 (the Redis quota governor and rate-limit store) is deployed to preview**: the
-per-IP guard is verified shared across six instances, and the burst ceiling is deployed but
-unexercised, because a fixture-mode preview never calls the governor at all. Phases 4–5 (the chores
-route, cutover) are scoped and unbuilt — so **nothing here is serving production traffic yet**.
+that drains and redelivers, and `POST /api/drain` is the manual fallback. **Phase 3 (the Redis quota
+governor and rate-limit store) is deployed to preview**: the per-IP guard is verified shared across
+six instances, and the burst ceiling is deployed but unexercised, because a fixture-mode preview
+never calls the governor at all. **Phase 4 (the chores route, `chore_runs`, the pause guard) is
+built and tested but SCHEDULED NOWHERE** — [supabase-cron.sql](supabase-cron.sql) has not been run
+against any project, so no pass fires on a timer and nothing is keeping the database awake. Phase 5
+(cutover) is scoped and unbuilt, so **nothing here is serving production traffic yet**.
 
 The configuration itself lives at the repository root, because that is where Vercel looks:
 [`vercel.json`](../../vercel.json), [`api/index.ts`](../../api/index.ts),
-[`api/queues/ingest.ts`](../../api/queues/ingest.ts) and
-[`.vercelignore`](../../.vercelignore). This file is the part that would not fit in JSON.
+[`api/queues/ingest.ts`](../../api/queues/ingest.ts), [`api/chores.ts`](../../api/chores.ts),
+[`api/keepalive.ts`](../../api/keepalive.ts) and [`.vercelignore`](../../.vercelignore). This file is
+the part that would not fit in JSON.
 
 ## The shape, and why
 
@@ -26,6 +29,8 @@ build-time API base URL — the property §1.1 picked this layout to protect.
 | The SPA | `pnpm build` → `apps/web/dist`, served as static output |
 | The api | `api/index.ts` → `apps/api/src/vercel.ts` → `buildApp(config, { consumer: false })` |
 | The ingest consumer | `api/queues/ingest.ts` → `apps/api/src/vercel-queue.ts` → `buildServices` + `ingestDispatch` |
+| The nightly chores | `api/chores.ts` → `apps/api/src/chore-route.ts` → `chore-runner.ts`, 202 + `waitUntil` |
+| The pause guard | `api/keepalive.ts` → `apps/api/src/keepalive.ts`, one `select 1`, synchronous |
 | Routing | three rewrites in `vercel.json`, **not** the function's filename |
 | Fixtures | `includeFiles` on **both** functions — the consumer ingests, so it reads the corpus too |
 
@@ -55,7 +60,8 @@ What differs from a Compose `.env`:
 | `DATABASE_POOL_MAX` | `1`–`2` — every instance holds its own pool | ditto |
 | `REDIS_URL` | Upstash | a second, separate Upstash database |
 | `INGEST_QUEUE_DRIVER` | `vercel` — the default is `bullmq`, and leaving it there publishes to a Redis queue nothing drains | `vercel` |
-| `CRON_SECRET` | a long random string — gates `POST /api/drain`; unset disables that route | ditto, and a DIFFERENT string |
+| `CRON_SECRET` | a long random string — gates `/api/drain`, `/api/chores` and `/api/keepalive`; unset disables all three, **including the pause guard** | ditto, and a DIFFERENT string |
+| `CHORE_MAX_LABELS` | `50` (the default) — 75 labels is the whole 300 s ceiling at `GEMINI_MAX_RPM=15` | ditto, or lower |
 | `CURRENTS_MODE` | `live` (needs `CURRENTS_API_KEY`) | `fixture` — costs no upstream quota |
 | `FIXTURES_DIR` | irrelevant | `fixtures` — the function's cwd is the deployment root, so the `../../fixtures` in the template is wrong here |
 | `TRUSTED_PROXY_HOPS` | `1` — measured on the spike: Fastify sees `127.0.0.1` with the client one hop out in `x-forwarded-for` | `1` |
@@ -198,16 +204,59 @@ line as `ingest drain complete`. Operating notes:
 - **Schedule it every 5–15 minutes** via Supabase Cron if you want cold topics covered promptly.
   Hobby's Vercel cron (once a day, ±59 min) is too coarse to be the primary driver.
 
-## What Phase 2 does not do
+## The chores — `/api/chores` and `/api/keepalive`
+
+Both are `CRON_SECRET`-gated, both are driven by Supabase Cron, and
+[docs/chores.md](../../docs/chores.md) has the behaviour and the reasoning. The operator's half:
+
+```bash
+curl -X POST -H "Authorization: Bearer $CRON_SECRET" "$URL/api/chores?pass=storylines"
+```
+
+- **Scheduling is one paste.** [supabase-cron.sql](supabase-cron.sql) creates all four jobs
+  (retention, storylines, keep-alive, drain) after two placeholders are replaced, keeps the bearer
+  token in Vault rather than inline in `cron.job.command`, and sets `timeout_milliseconds` to 15 s.
+  **Raising that timeout is not optional** — pg_net defaults to 2 s, and a cold 202 is a Node boot
+  plus TLS on top of a ~550 ms platform container floor. A timed-out request is a night that silently
+  did not run.
+- **A 202 is not evidence the pass ran.** The route answers before the work starts, on purpose, so
+  `net._http_response` can only tell you the request arrived. `chore_runs` is the record — read it
+  with `pnpm chores status` against `DATABASE_SESSION_URL`, or:
+  ```sql
+  select pass, source, started_at, finished_at, outcome, model_calls
+    from chore_runs order by started_at desc limit 20;
+  ```
+- **`finished_at IS NULL` on an old row means the pass never came back** — a function killed at
+  `maxDuration`, most likely the label pass. That is the state the row exists to make visible, and the
+  reason it is opened before the work rather than written at the end.
+- **Any pass runs on demand**: `retention`, `storylines`, and the six steps —
+  `dormancy`, `bridges`, `late-candidates`, `labels`, `label-merge`, `graph`. `?max-labels=` and
+  `?changed-only=` are the query twins of the CLI flags. Naming `late-candidates` runs the sweep
+  regardless of `STORYLINE_LATE_CANDIDATE_SWEEP`, which is the deliberate act that gate protects.
+- **A laptop run and a scheduled run contend.** `pnpm chores` takes the same advisory lock as the
+  route, so re-running the label pass by hand mid-night skips rather than doubling the Gemini bill —
+  and the skip is recorded as `outcome: 'skipped'` rather than as nothing.
+- **The keep-alive is deliberately not a chore.** Supabase does not promise pg_cron's own activity
+  prevents the 7-day free-tier pause; it prescribes external requests. Folding the ping into the
+  chores would make "the database stays awake" a downstream consequence of the most complex nightly
+  job in the system. It answers synchronously — a ping whose result is not in the response cannot
+  tell a paused project from a healthy one.
+- **The reindex sweep rides on `pass=retention`.** ~2 s of non-blocking `REINDEX TABLE CONCURRENTLY`
+  that returns 22% of the database (findings §5). Its tripwire is `reindex.invalidIndexes` in the
+  report: an interrupted rebuild leaves a `_ccnew` twin that is never read and still maintained on
+  every write, and nothing in Postgres complains about it. Non-empty wants a `DROP INDEX` by hand.
+
+## What is still not done
 
 - **Nothing is in production.** Phase 2 is verified on *preview* only. Production has no seeded
   corpus and no `INGEST_QUEUE_DRIVER`, so leaving it at the `bullmq` default there would publish to
   a Redis queue nothing drains. Cutover is Phase 5.
 - **The drain has never run against a live deployment.** Its logic is unit-tested; the real Redis
   `SCAN` and a real fill are not. Use `?limit=1` for the first pass.
-- **The chores do not run.** No route, no schedule, no `chore_runs` table yet (§3.3), and the
-  Supabase free-tier pause guard comes with them. Until then a deployed project's database is
-  reachable only as long as something else keeps it awake.
+- **The chores are built and nothing schedules them.** The route, the table and the pause guard all
+  exist as of Phase 4; [supabase-cron.sql](supabase-cron.sql) is written and **has not been run**.
+  Until it is, no pass fires on a timer and a deployed project's database is reachable only as long
+  as something else keeps it awake.
 - **The quota governor has never governed anything on a deployment.** Phase 3 ships it and a
   fixture-mode preview cannot exercise it: `CURRENTS_MODE=fixture` returns `FixtureCurrentsClient`,
   which builds its own unmetered governor and ignores the injected one. `/readyz` reporting

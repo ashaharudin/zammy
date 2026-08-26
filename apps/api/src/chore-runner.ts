@@ -1,0 +1,350 @@
+import { sql } from "kysely";
+import {
+  finishChoreRun,
+  startChoreRun,
+  type ChoreOutcome,
+  type Database,
+} from "@zammy/storage";
+import type { Kysely } from "kysely";
+import {
+  runBridgeSweepChore,
+  runDormancyChore,
+  runLabelMergeChore,
+  runLateCandidateChore,
+  runRetentionChore,
+  runStorylineGraphChore,
+  runStorylineLabelChore,
+  runStorylinePass,
+  type RetentionChoreReport,
+  type StorylinePassDeps,
+} from "./chores.js";
+
+/**
+ * One pass, under a lock, with a durable record of it — the part of
+ * VERCEL-ALL-IN-SCOPE §3.3 that is neither HTTP nor a chore.
+ *
+ * It exists as its own module because **two entrypoints run these passes and
+ * both must record them identically**: `chores-cli.ts` under Compose and a
+ * laptop, `chore-route.ts` on the deployment. If only the route wrote
+ * `chore_runs`, the table would answer "did last night's chores run?" for the
+ * Vercel half of the system and lie by omission about the other half — and the
+ * two halves share a database. The advisory lock has the same shape of reason:
+ * the keys here are the CLI's original keys, so a laptop run and a scheduled run
+ * exclude each other rather than both spending the label budget.
+ *
+ * Everything in this file is about *running* a pass. What a pass DOES is
+ * `chores.ts`, and what schedules one is outside the process entirely.
+ */
+
+/**
+ * Every addressable pass, exactly as the route's `?pass=` and the CLI's argument
+ * spell it.
+ *
+ * §3.3 promised "all seven": the six individual chores plus `storylines`. There
+ * are nine here because two things happened after that was written —
+ * `runStorylineGraphChore` was added (the percolation alarm needed a nightly
+ * series, VERCEL-PHASE-0-FINDINGS §2.7) and `retention` became a composite of
+ * three steps rather than one. The promise was that anything the night does can
+ * be re-run on its own from a curl instead of an SSH, and that is what this list
+ * is.
+ *
+ * The two composites come first because they are what a scheduler points at; the
+ * rest are the on-demand halves of them.
+ */
+export const CHORE_PASSES = [
+  "retention",
+  "storylines",
+  "dormancy",
+  "bridges",
+  "late-candidates",
+  "labels",
+  "label-merge",
+  "graph",
+] as const;
+
+export type ChorePass = (typeof CHORE_PASSES)[number];
+
+export function isChorePass(value: string): value is ChorePass {
+  return (CHORE_PASSES as readonly string[]).includes(value);
+}
+
+/**
+ * Session-scoped advisory lock keys — **two domains, not one per pass**.
+ *
+ * These are the exact keys `chores-cli.ts` has always used, and that is the
+ * point: the CLI and the route must contend, or "re-run just the label pass from
+ * a laptop" becomes a way to run the label pass twice at once while the
+ * scheduler is midway through it. The label pass spends real money per call.
+ *
+ * A key per *pass* would have been the obvious shape and is wrong for the same
+ * reason: `storylines` CONTAINS `labels`, so passes in one family overlap by
+ * construction and a per-pass key would let them run concurrently. One domain
+ * per family is the coarsest lock that is still honest about what conflicts.
+ *
+ * Deliberately adjacent to, and never equal to, the migrator's 7226461501 — a
+ * chore that took the migration lock would be a deploy hanging behind a label
+ * pass.
+ */
+export const CHORE_LOCK_KEYS = {
+  retention: 7_226_461_502,
+  storylines: 7_226_461_503,
+} as const;
+
+/**
+ * Which lock a pass takes, and the one pass that takes none.
+ *
+ * `graph` is pure read — `readStorylineStats` and a log line — so it cannot
+ * conflict with anything, and giving it the storyline lock would make the
+ * percolation alarm unreadable during exactly the multi-hour pass you would want
+ * to read it during.
+ */
+export function choreLockKey(pass: ChorePass): number | null {
+  if (pass === "graph") return null;
+  if (pass === "retention") return CHORE_LOCK_KEYS.retention;
+  return CHORE_LOCK_KEYS.storylines;
+}
+
+const PASS_RUNNERS: Record<ChorePass, (deps: StorylinePassDeps) => Promise<unknown>> = {
+  retention: (deps) => runRetentionChore(deps),
+  storylines: (deps) => runStorylinePass(deps),
+  dormancy: (deps) => runDormancyChore(deps),
+  bridges: (deps) => runBridgeSweepChore(deps),
+  // Addressed directly, the sweep RUNS — the `lateCandidateSweep` gate is not
+  // consulted here and that is not an oversight. The gate exists so the sweep
+  // does not happen at 3am unattended while K is unmeasured
+  // (VERCEL-PHASE-0-FINDINGS §2.6); naming it in a query parameter is the
+  // deliberate operator act the gate was protecting, exactly as
+  // `--late-candidates` is on the CLI. What it still honours is the SCOPE knob,
+  // because "unfiltered or changed-set" is a question about the run rather than
+  // about whether to run.
+  "late-candidates": (deps) =>
+    runLateCandidateChore({
+      ...deps,
+      ...(deps.lateCandidatesChangedOnly !== undefined
+        ? { changedOnly: deps.lateCandidatesChangedOnly }
+        : {}),
+    }),
+  labels: (deps) => runStorylineLabelChore(deps),
+  "label-merge": (deps) => runLabelMergeChore(deps),
+  graph: (deps) => runStorylineGraphChore(deps),
+};
+
+/** What one invocation did. `runId` is null when the record itself could not be written. */
+export interface ChoreRunResult {
+  pass: ChorePass;
+  outcome: ChoreOutcome;
+  runId: string | null;
+  report?: unknown;
+  error?: unknown;
+  ms: number;
+}
+
+export interface ChoreRunOptions {
+  /** Which entrypoint is running this — recorded on the row. */
+  source: "route" | "cli";
+}
+
+/**
+ * Take the pass's lock, run it, and record the run.
+ *
+ * The order is load-bearing in one place: **the `chore_runs` row is opened
+ * before the lock is attempted**, so a night that skipped is a row saying so
+ * rather than a silence indistinguishable from a night nothing was scheduled.
+ * That is the whole reason `skipped` is an outcome and not an early return.
+ *
+ * Never throws. A pass that fails is recorded as `failed` and returned, because
+ * the callers want to log it themselves — the CLI as a non-zero exit, the route
+ * as a line in a log the response has long since stopped waiting for.
+ */
+export async function runChorePass(
+  pass: ChorePass,
+  deps: StorylinePassDeps,
+  options: ChoreRunOptions,
+): Promise<ChoreRunResult> {
+  const db = deps.db;
+  const startedAt = deps.now();
+  const runId = await openRun(db, pass, options.source, startedAt, deps.log);
+  const clockStartedAt = Date.now();
+  const elapsed = (): number => Date.now() - clockStartedAt;
+
+  const lockKey = choreLockKey(pass);
+  let report: unknown;
+  let ran = true;
+  try {
+    if (lockKey === null) {
+      report = await PASS_RUNNERS[pass](deps);
+    } else {
+      ran = await withPassLock(db, lockKey, async () => {
+        report = await PASS_RUNNERS[pass](deps);
+      });
+    }
+  } catch (error) {
+    await closeRun(
+      db,
+      runId,
+      {
+        finishedAt: deps.now(),
+        outcome: "failed",
+        error: error instanceof Error ? error.message : String(error),
+      },
+      deps.log,
+    );
+    return { pass, outcome: "failed", runId, error, ms: elapsed() };
+  }
+
+  if (!ran) {
+    await closeRun(db, runId, { finishedAt: deps.now(), outcome: "skipped" }, deps.log);
+    deps.log.warn(
+      { pass },
+      "another run holds this pass's lock — skipping. Expected when a run overlaps " +
+        "the next schedule; a run that never finishes looks like this every night.",
+    );
+    return { pass, outcome: "skipped", runId, ms: elapsed() };
+  }
+
+  const summary = summarizeChoreReport(report);
+  await closeRun(
+    db,
+    runId,
+    {
+      finishedAt: deps.now(),
+      outcome: "ok",
+      report: summary,
+      modelCalls: modelCallsFrom(pass, report),
+    },
+    deps.log,
+  );
+  return { pass, outcome: "ok", runId, report: summary, ms: elapsed() };
+}
+
+/**
+ * `pg_TRY_advisory_lock`, not `pg_advisory_lock`: a second run must skip, not
+ * queue behind the first and then start the same night's work an hour late.
+ *
+ * Session-scoped, on a PINNED connection — through a transaction-mode pooler a
+ * session lock is taken on one backend and looked for on another, so
+ * `pg_try_advisory_lock` returns true every time and both schedulers run the
+ * night. That is why every caller of this builds its handle with
+ * `session: true` (§4.1, `wiring.createConfiguredDb`).
+ */
+async function withPassLock(
+  db: Kysely<Database>,
+  key: number,
+  run: () => Promise<void>,
+): Promise<boolean> {
+  return db.connection().execute(async (connection) => {
+    const locked = await sql<{
+      locked: boolean;
+    }>`select pg_try_advisory_lock(${sql.lit(key)}) as locked`.execute(connection);
+    if (locked.rows[0]?.locked !== true) return false;
+    try {
+      await run();
+      return true;
+    } finally {
+      await sql`select pg_advisory_unlock(${sql.lit(key)})`.execute(connection);
+    }
+  });
+}
+
+/**
+ * The bookkeeping is allowed to fail; the pass is not allowed to fail with it.
+ *
+ * A deployment whose migrations have not caught up has no `chore_runs` table,
+ * and refusing to run the night's work over a missing record would be the record
+ * doing harm. Both halves therefore warn and continue, and a null `runId` simply
+ * means there is nothing to close.
+ */
+async function openRun(
+  db: Kysely<Database>,
+  pass: ChorePass,
+  source: "route" | "cli",
+  startedAt: Date,
+  log: StorylinePassDeps["log"],
+): Promise<string | null> {
+  try {
+    return await startChoreRun(db, { pass, source, startedAt });
+  } catch (error) {
+    log.warn(
+      { pass, err: error instanceof Error ? error.message : String(error) },
+      "could not open a chore_runs row; the pass still runs",
+    );
+    return null;
+  }
+}
+
+async function closeRun(
+  db: Kysely<Database>,
+  runId: string | null,
+  finish: {
+    finishedAt: Date;
+    outcome: ChoreOutcome;
+    report?: unknown;
+    error?: string;
+    modelCalls?: number | undefined;
+  },
+  log: StorylinePassDeps["log"],
+): Promise<void> {
+  if (runId === null) return;
+  try {
+    await finishChoreRun(db, { id: runId, ...finish });
+  } catch (error) {
+    log.warn(
+      { runId, err: error instanceof Error ? error.message : String(error) },
+      "could not close the chore_runs row; it will read as never finished",
+    );
+  }
+}
+
+/**
+ * Model calls this run spent, for the `chore_runs` column.
+ *
+ * **It is the LABEL pass's count and not a full audit**, which is worth stating
+ * because the number looks like one. The bridge sweep, the late-candidate sweep
+ * and the label-agreement merge each re-label the survivors of what they change,
+ * and none of their reports counts those calls — the report shapes are about
+ * merges and attachments, and widening them to carry a call count is a change to
+ * five signatures for a number the label pass dominates by orders of magnitude.
+ * What this column is for is the trend ("what is a night costing?"), and the
+ * trend is the label pass.
+ */
+function modelCallsFrom(pass: ChorePass, report: unknown): number | undefined {
+  const labels =
+    pass === "labels"
+      ? (report as { model?: unknown } | undefined)
+      : pass === "storylines"
+        ? (report as { labels?: { model?: unknown } } | undefined)?.labels
+        : undefined;
+  const model = labels?.model;
+  return typeof model === "number" ? model : undefined;
+}
+
+/**
+ * The report as it goes into `chore_runs.report`.
+ *
+ * One member is replaced and everything else is passed through: the retention
+ * report's `idleTopics` is every idle topic's fingerprint, which is unbounded in
+ * the corpus and grows for as long as retention keeps reporting rather than
+ * deleting. A record of the night must not be a second copy of the corpus, and
+ * the number is what a series of nights is read from — so it becomes
+ * `idleTopicCount`, renamed rather than truncated so nothing reads a count as a
+ * list.
+ */
+export function summarizeChoreReport(report: unknown): unknown {
+  if (report === undefined || report === null) return null;
+  if (!isRetentionChoreReport(report)) return report;
+  const { idleTopics, ...retention } = report.retention;
+  return {
+    ...report,
+    retention: { ...retention, idleTopicCount: idleTopics.length },
+  };
+}
+
+function isRetentionChoreReport(value: unknown): value is RetentionChoreReport {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "retention" in value &&
+    typeof (value as RetentionChoreReport).retention === "object" &&
+    Array.isArray((value as RetentionChoreReport).retention?.idleTopics)
+  );
+}

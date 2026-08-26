@@ -412,6 +412,29 @@ const EnvSchema = z
      */
     GEMINI_MAX_RPM: z.coerce.number().int().min(1).max(10_000).default(15),
     /**
+     * Storylines one nightly label pass may relabel — the ceiling that makes the
+     * pass fit a function's wall clock (VERCEL-ALL-IN-SCOPE §3.3).
+     *
+     * **A deployment parameter, not an operator convenience**, which is the
+     * whole reason it is here rather than only behind `--max-labels`. On Hobby
+     * the chores route has 300 s, and at `GEMINI_MAX_RPM=15` a label is >=4 s of
+     * pacing plus model latency — so **75 labels IS the entire window**, against
+     * the pass's own code default of 500. An unbounded night therefore exceeds
+     * the function ceiling long before it exceeds Gemini's daily quota, and what
+     * a truncated night loses is not latency but the `chore_runs` row and the
+     * passes ordered after the label one.
+     *
+     * 50 is the middle of Phase 0's measured 40-60 (findings §2). The bound
+     * costs nothing durable: the pass is resumable across nights — it selects
+     * the storylines whose labels are missing or drifted — so a bound defers
+     * labels rather than dropping them.
+     *
+     * `--max-labels` still overrides it, which is what an operator draining a
+     * backlog against a clone wants. The default moved from "unbounded" to this
+     * on purpose: an unbounded run is now the deliberate act.
+     */
+    CHORE_MAX_LABELS: z.coerce.number().int().min(1).max(100_000).default(50),
+    /**
      * How long a label may wait for a rate-limit slot before giving up on the
      * model and taking the fallback. Bounds the pacer's queue, which the live
      * ingest tail would otherwise grow without limit during a promotion burst.

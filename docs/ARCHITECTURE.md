@@ -936,17 +936,27 @@ All triggers originate from a user request:
 The worker also handles coverage-span merging and a daily `/available/*` refresh (3 calls).
 
 **The nightly chores are not in this process.** Retention (§7.5) and the storyline lifecycle pass
-(ADR-0011) are one-shot runs of `apps/api/src/chores-cli.ts` — `pnpm chores retention`, `pnpm chores
-storylines` — on the platform's scheduler. In production that is Supabase Cron firing an HTTP
-chores route (VERCEL-ALL-IN-SCOPE §3.3): 202 + `waitUntil`, every pass individually addressable
-for on-demand reruns, and each run writing a durable `chore_runs` record because 1-hour Hobby log
-retention cannot answer "did last night's chores run?". The earlier schedulers — systemd timers on
-a staging VM, OCI Resource Scheduler — are **archival** (no OCI VM was ever created; OCI abandoned
-2026-08-21). The requirement is the pass, not the mechanism.
+(ADR-0011) are one-shot runs on the platform's scheduler, reached two ways that share everything
+below the entrypoint (`chore-runner.ts`): `pnpm chores <pass>` locally, and `POST
+/api/chores?pass=<name>` on the deployment — 202 + `waitUntil`, so pg_net's own timeout is a question
+about the request rather than about the night. **All eight passes are individually addressable**, the
+two composites and the six steps of the storyline pass, so an on-demand re-run is a curl rather than
+an SSH. Every run — from either entrypoint — writes a durable `chore_runs` record (migration 0018),
+because a route that always answers 202 plus 1-hour Hobby log retention cannot otherwise answer "did
+last night's chores run?"; the row is opened before the pass and closed after it, so a function
+killed at `maxDuration` leaves `finished_at IS NULL` rather than leaving nothing. The Supabase
+free-tier pause guard is a separate route on a separate schedule (`/api/keepalive`), deliberately
+sharing no failure mode with the most complex nightly job. **Nothing is scheduled yet**:
+`deploy/vercel/supabase-cron.sql` is written and has not been run. The earlier schedulers — systemd
+timers on a staging VM, OCI Resource Scheduler — are **archival** (no OCI VM was ever created; OCI
+abandoned 2026-08-21). The requirement is the pass, not the mechanism.
 
 The chores were once a BullMQ job scheduler registered at boot, which bought exactly-once across N
-instances from Redis-shared state; the runner buys it from a Postgres advisory lock, one key per
-pass.
+instances from Redis-shared state; the runner buys it from a Postgres advisory lock — **two domains,
+not one key per pass**, because `storylines` contains `labels` and a per-pass key would let an
+on-demand label re-run spend the night's Gemini budget twice. `graph` takes none: it is a read, and
+locking it would make the percolation alarm unreadable during the pass you would want to read it
+during.
 
 #### The late-candidate sweep's two modes, and what the narrow one stops promising
 
@@ -960,8 +970,7 @@ the narrow mode ship off**, and the honest reasons are below rather than in a co
 **The marker's home was a decision.** Not `storyline_groups.attached_at`, which deliberately
 preserves the loser's timestamp when a merge re-points membership, so a merge WINNER — whose profile
 was just re-derived over both memberships — never appears in `attached_at > $lastRun`. And not a
-`chore_runs` row: that table belongs to the Vercel deployment plan above and is unbuilt, and a single
-global "when did the pass last run" timestamp is the wrong shape regardless — it is not crash-safe (a
+`chore_runs` row: a single global "when did the pass last run" timestamp is the wrong shape — it is not crash-safe (a
 run that dies half way marks the whole night done), it cannot survive a missed night without a
 lookback window somebody keeps in step with a scheduler this process cannot see, and the schedule is
 explicitly outside the app. A per-row marker cleared by the pass that consumed it has none of those
@@ -1035,7 +1044,7 @@ late-candidate pass instead of the whole fortnight.
 Two consequences, neither of them visible in the api's logs. A schedule the app registers cannot be
 forgotten, while an external one is absent until someone configures it — so if nothing schedules the
 runner, every pass silently never runs and `/readyz` stays green throughout (the `chore_runs`
-table's most recent row is the check; locally, `systemctl list-timers` was). And the labelling pacer no longer spans both: it is a window inside
+table's most recent row is the check — `pnpm chores status`; locally, `systemctl list-timers` was). And the labelling pacer no longer spans both: it is a window inside
 one Gemini client, so two processes labelling at once is up to 2x `GEMINI_MAX_RPM` on the shared key
 (STORYLINE-LABELS, "The pacer's scope"). What it buys is an api that need not be awake at 3am for
 any of this to happen.
@@ -1331,7 +1340,10 @@ CREATE INDEX articles_language_window_idx ON articles (language, published DESC)
 All three were derived from `articles`, so no ADR-0001 exemption is needed — but the baseline's
 accumulated history took a week of real traffic and cannot be rebuilt, which is why the migration's
 `down` restores the schema **empty** and records that plainly. With `term_snapshots` goes §7.5's one
-deleting prune; the nightly chore now prunes only the linker's trailing corpus.
+deleting prune; the nightly chore now prunes only the linker's trailing corpus, and carries the
+`REINDEX TABLE CONCURRENTLY` sweep — a storage chore, not a latency one: index bloat was 22% of the
+database at 15 corpus-days, and returning it moves the 500 MB tripwire from 1,214 articles/day to
+1,485 (VERCEL-PHASE-0-FINDINGS §5).
 
 The read is one aggregate: a windowed join for recency and window count, a lateral for the arc's
 size and breadth, exclusions in `where`, the breadth gate in a `having`, ordered by the decayed
@@ -1499,7 +1511,7 @@ apart see the same cloud.
 | 5c | **Article grouping (§14.3):** `group_id` / `group_published` / `title_tokens` on `articles`, write-time grouping after the collapse, the keyset moved onto the group axis, per-topic representative from the source-authority list, the "related" disclosure. | ✅ |
 | 5e | **Storylines:** day-clustered slots (ADR-0009), then the persistent arc that superseded them (ADR-0011) — `storylines` / `storyline_days`, the linker, bridges and auto-merge, the timeline paged over storyline-days. Migration 0012 dropped the day-bounded model and its flag. | ✅ |
 | 5f | **Storyline labels (ADR-0011, "Labels"):** Gemini-generated names at promotion, merge and drift, bigram fallback when no key is set, plus `label_source` so a relabel campaign can resume. | ✅ |
-| 6 | **Deploy** — Vercel, all in ([ADR-0015](adr/0015-all-in-on-vercel-hobby-shaped.md), phased in VERCEL-ALL-IN-SCOPE §9). AWS superseded by **OCI** on 2026-08-14; OCI then **abandoned 2026-08-21** for lack of free Ampere capacity, [DEPLOYMENT-OCI.md](DEPLOYMENT-OCI.md) now archival, its Phase 1 network/vault/LB left standing inside Always Free. Vercel Phase 0 (the spikes) and **Phases 1–2 (the api as one Function; the queue on Vercel Queues) are done and verified on preview. Phase 3 (the Redis quota governor and rate-limit store) is deployed but only half verifiable**: its rate-limit half is confirmed across six instances, its burst half is unexercised because a fixture-mode preview never calls the governor at all — VERCEL-ALL-IN-SCOPE §9 keeps it 🚧 for that reason. The chores route and cutover are Phases 4–5. Operator's half: [deploy/vercel/](../deploy/vercel/). | 🚧 in progress — Phase 3 of 5 |
+| 6 | **Deploy** — Vercel, all in ([ADR-0015](adr/0015-all-in-on-vercel-hobby-shaped.md), phased in VERCEL-ALL-IN-SCOPE §9). AWS superseded by **OCI** on 2026-08-14; OCI then **abandoned 2026-08-21** for lack of free Ampere capacity, [DEPLOYMENT-OCI.md](DEPLOYMENT-OCI.md) now archival, its Phase 1 network/vault/LB left standing inside Always Free. Vercel Phase 0 (the spikes) and **Phases 1–2 (the api as one Function; the queue on Vercel Queues) are done and verified on preview. Phase 3 (the Redis quota governor and rate-limit store) is deployed but only half verifiable**: its rate-limit half is confirmed across six instances, its burst half is unexercised because a fixture-mode preview never calls the governor at all. **Phase 4 (the chores route, `chore_runs`, the pause guard, the reindex sweep) is built and green locally and is scheduled nowhere** — `deploy/vercel/supabase-cron.sql` is written and unrun. VERCEL-ALL-IN-SCOPE §9 keeps both 🚧 for those reasons. Cutover is Phase 5. Operator's half: [deploy/vercel/](../deploy/vercel/). | 🚧 in progress — Phase 4 of 5 |
 | 7a | **Second provider behind the client interface:** `@zammy/news-client` core + per-provider adapters + the composite, GNews added, `provider` column on `articles`/`sightings` (§5.6, ADR-0012). | ✅ |
 | 7b | Topic summaries into `topics.summary`. The schema reserves the columns (§7.2); nothing generates them. | ⬜ not started |
 
