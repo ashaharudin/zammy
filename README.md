@@ -12,8 +12,8 @@ wordcloud of the storylines the last 24 hours updated. Backed by
 write-time dedup, the query service with caching and progressive fill, the timeline front end,
 article grouping, persistent storylines with Gemini-generated labels, the landing-page wordcloud
 (now naming recently updated storylines), and GNews as a second provider behind the client
-interface. No deploy target: the OCI deploy was **abandoned 2026-08-21** for lack of free Ampere
-capacity and its plan is now archival ([docs/DEPLOYMENT-OCI.md](docs/DEPLOYMENT-OCI.md)). Not
+interface. Deployment moved to Vercel + Supabase + Upstash
+([ADR-0015](docs/adr/0015-all-in-on-vercel-hobby-shaped.md)) and is in progress. Not
 started: topic summaries (Phase 7b). The full phase table is in
 [ARCHITECTURE §13](docs/ARCHITECTURE.md#13-delivery-phases).
 
@@ -119,26 +119,14 @@ Note `--build`: `docker compose up` alone reuses a stale image and silently runs
 
 ## Deployment
 
-⛔ **There is currently no deployment target.** Oracle Cloud was the target from 2026-08-14 until
-**2026-08-21**, when it was abandoned: free Ampere capacity never appeared in the tenancy's only
-region, and winning a minutes-wide window would have meant running a permanent poller to acquire
-the host we then depend on. [docs/DEPLOYMENT-OCI.md](docs/DEPLOYMENT-OCI.md) is preserved as
-**archival** — accurate as research, not to be actioned.
-
-AWS (ECS Fargate + RDS + ElastiCache,
-[ARCHITECTURE 4.1](docs/ARCHITECTURE.md#41-deployment-target--none-chosen-aws-is-the-standing-plan-local-development-on-docker-compose))
-is the standing plan, still not an immediate goal. **The abandonment cost no application code**, which was
-the point of the discipline: one image, environment variables as the only difference between
-environments, migrations as a discrete deploy step, `/healthz` for liveness, `/readyz` for routing.
-A new target is a Terraform rewrite, not an application rewrite.
+Deployment moved to Vercel + Supabase + Upstash
+([ADR-0015](docs/adr/0015-all-in-on-vercel-hobby-shaped.md); see
+[ARCHITECTURE 4.1](docs/ARCHITECTURE.md#41-deployment-target--vercel--supabase-adr-0015-local-development-on-docker-compose)
+for the shape and [deploy/vercel/](deploy/vercel/) for the operator scripts). Rollout is in
+progress — see [ARCHITECTURE §13](docs/ARCHITECTURE.md#13-delivery-phases) for current status.
 
 Docker Compose here is the local development environment and was never a deploy target; the same
-image runs everywhere, differing only by environment variables. Infrastructure-as-code exists only
-as the frozen OCI Phase 1 in `deploy/terraform` (see its README before touching it).
-
-**Do not run `terraform destroy` there.** 37 resources are still standing in the OCI tenancy on
-purpose — they sit inside Always Free, cost nothing, and tearing them down is not what walking away
-from the target requires.
+image runs everywhere, differing only by environment variables.
 
 ## Conventions worth knowing
 

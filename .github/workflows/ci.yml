@@ -1,19 +1,12 @@
 # CI — verify, and build the deploy artifact to prove it still builds.
 #
-# It no longer PUBLISHES anywhere. The `publish image to OCIR` job was removed
-# 2026-08-21 when the OCI deploy was abandoned (docs/DEPLOYMENT-OCI.md is
-# archival): it pushed an image on every merge to a tenancy nobody watches,
-# using credentials we no longer need. Both OCI secrets and the three OCI_*
-# repository variables were deleted with it, so restoring the job needs new
-# credentials rather than just this file.
+# Deployment moved to Vercel + Supabase + Upstash (ADR-0015). This workflow no
+# longer publishes a deploy image anywhere.
 #
-# ⚠️ arm64 is now an UNJUSTIFIED CONSTRAINT, deliberately left in place.
-# Everything ran on arm64 because the target was OCI Ampere, which is arm64-only
-# — that reason is gone and no replacement target is chosen. `ubuntu-24.04-arm`
-# is a native arm64 runner (2 vCPU, free-minutes eligible), so this is not
-# costing us QEMU, and flipping architecture on the way out would be churn on a
-# guess. Revisit when a target exists: the next platform decides this, and
-# whoever makes that call should know arm64 here is inertia, not a requirement.
+# ⚠️ arm64 is a leftover from an earlier, abandoned deploy target and is not a
+# current requirement. `ubuntu-24.04-arm` is a native arm64 runner (2 vCPU,
+# free-minutes eligible), so this is not costing us QEMU, and flipping
+# architecture on the way out would be churn on a guess.
 
 name: CI
 

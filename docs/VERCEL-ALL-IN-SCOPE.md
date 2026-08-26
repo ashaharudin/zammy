@@ -115,8 +115,7 @@ layout, which costs the hop and the hop count but nothing structural.
 
 The last row is the reassuring one and it is large: the storage layer, the linker, the labeller and
 every provider adapter do not know where they run and do not change. This is a deployment-shape
-migration, not a rewrite — the opposite of
-[HEATWAVE-MIGRATION-SCOPE.md](HEATWAVE-MIGRATION-SCOPE.md)'s verdict for MySQL.
+migration, not a rewrite — the opposite of what a MySQL/HeatWave move would have required.
 
 ---
 

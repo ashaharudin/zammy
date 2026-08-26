@@ -1,9 +1,9 @@
 # Local development stack (ARCHITECTURE 4.1).
 #
-# This is the DEV environment, not the deployment target. In AWS these become
-# RDS and ElastiCache; the api image is identical in both, differing only by
-# environment variables. Nothing here should teach the app anything it would not
-# also learn in production.
+# This is the DEV environment, not the deployment target. Production runs on
+# Vercel + Supabase + Upstash; the api image is identical in both, differing
+# only by environment variables. Nothing here should teach the app anything it
+# would not also learn in production.
 #
 #   docker compose up -d postgres redis   # data stores only, run the app on the host
 #   docker compose --profile app up       # everything, including the api container

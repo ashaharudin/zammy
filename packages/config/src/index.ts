@@ -54,10 +54,11 @@ const CaCert = z
  * `degraded` and keeps serving, because cache and queue both heal on reconnect
  * (health.ts, ARCHITECTURE 11). A *malformed* URL is a different animal. It can
  * never heal, and nothing downstream surfaces it: the boot failure is a warning
- * the app deliberately swallows (server.ts), and a load balancer watching
- * `/readyz` sees HTTP 200 and routes traffic to an instance whose ingest queue
- * silently does nothing (DEPLOYMENT-OCI §2.4, archival — the failure mode is the
- * load balancer's, not that target's).
+ * the app deliberately swallows (server.ts), and whatever watches `/readyz`
+ * sees HTTP 200 and routes traffic to an instance whose ingest queue silently
+ * does nothing. (Deployment moved to Vercel + Supabase + Upstash, ADR-0015 —
+ * the failure mode belongs to whoever watches `/readyz`, not to any one
+ * platform.)
  *
  * Three things are checked, because each fails silently in its own way:
  * `http://cache:6379` parses fine and is just as dead, `redis//cache:6379`
@@ -284,8 +285,8 @@ const EnvSchema = z
      * Set it to the number of proxies between the internet and this process:
      * **1** behind a single load balancer that terminates TLS, **2** if another
      * proxy is ever put in front of that. Local dev talks to the port directly,
-     * so the default is 0. (Worked through for the OCI load balancer in
-     * DEPLOYMENT-OCI §4 and §9.2, archival; the arithmetic is the same for any.)
+     * so the default is 0. (Deployment moved to Vercel + Supabase + Upstash,
+     * ADR-0015; the arithmetic is the same for any proxy topology.)
      *
      * **Over-counting is as bad as `true`, so do not round up "to be safe".**
      * Measured against Fastify with `X-Forwarded-For: 9.9.9.9, 5.5.5.5`: a count

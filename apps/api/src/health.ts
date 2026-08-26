@@ -13,8 +13,10 @@ interface HealthDeps {
 }
 
 /**
- * Liveness and readiness (ARCHITECTURE 6.1). The ALB uses these in AWS, and
- * `docker compose` uses them locally, so the split matters:
+ * Liveness and readiness (ARCHITECTURE 6.1). Deployment moved to
+ * Vercel + Supabase + Upstash (ADR-0015), which has no container health-check
+ * loop to feed; `/readyz` is used for manual and CI verification instead, and
+ * `docker compose` uses both locally, so the split still matters:
  *
  *   /healthz — is the process alive? No dependency checks. A failing dependency
  *              must not get the container killed and restarted, which fixes nothing.
