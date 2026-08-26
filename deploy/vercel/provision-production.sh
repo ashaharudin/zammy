@@ -502,7 +502,43 @@ else
   warn "skipped."
 fi
 say ""
-ask PRODUCTION_URL "The production URL (https://…):"
+warn "What you need next is the STABLE PRODUCTION ALIAS, not the URL deploy.sh"
+warn "just printed."
+note "  deploy.sh prints the per-DEPLOYMENT URL — zammy-<hash>.vercel.app — which"
+note "  names one immutable deployment and nothing else. It is fine for a health"
+note "  probe and wrong for everything durable: the same value goes into Supabase"
+note "  Vault as zammy_base_url in the next stage, and cron pinned to a specific"
+note "  deployment keeps hitting that one after every later deploy. Nothing"
+note "  complains — the old deployment answers, against whatever environment it"
+note "  was built with, until it is eventually pruned."
+say ""
+step "Find the alias — it is the one that does NOT change between deploys:"
+say "    vercel inspect <the URL deploy.sh printed>    # see the 'Aliases' section"
+say "  or the dashboard: Project → Settings → Domains."
+say "  On a fresh project it is usually https://zammy.vercel.app."
+say ""
+attempts=0
+while :; do
+  ask PRODUCTION_URL "The stable production alias (https://…):"
+  if [[ "$PRODUCTION_URL" == https://* ]]; then
+    # A CLI deployment URL is `<project>-<9-char hash>-<scope>.vercel.app`, and
+    # the hash segment is what distinguishes it from the alias. Catching the
+    # obvious shape is worth it; this is the value cron will live on.
+    if [[ "$PRODUCTION_URL" =~ ^https://[a-z0-9-]+-[a-z0-9]{9}(-[a-z0-9-]+)?\.vercel\.app/?$ ]]; then
+      warn "that looks like a per-deployment URL (it carries a hash segment)."
+      note "  Use the alias, or paste it again to override if you are sure."
+      ask CONFIRM_URL "Paste it again to use it anyway, or the alias:"
+      if [[ "$CONFIRM_URL" == "$PRODUCTION_URL" ]]; then break; fi
+      PRODUCTION_URL="$CONFIRM_URL"
+      continue
+    fi
+    break
+  fi
+  warn "that does not start with https:// — paste the full origin."
+  attempts=$((attempts + 1))
+  [[ "$attempts" -lt 5 ]] || { warn "five attempts without a valid value — stopping."; exit 1; }
+done
+PRODUCTION_URL="${PRODUCTION_URL%/}"
 write_env PRODUCTION_URL "$PRODUCTION_URL"
 step "Probing /readyz twice — the first read is a cold start and can lose the"
 step "race with Upstash's ~800 ms handshake, so only the second one counts."

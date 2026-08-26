@@ -272,7 +272,7 @@ offers everything already captured as a default.
 | 7 | Sixteen environment variables onto the Vercel **Production** environment |
 | 8 | [seed-production.sh](seed-production.sh) — the corpus, then the migration-ledger check |
 | 9 | The three GitHub Actions secrets `ci.yml`'s migration jobs read |
-| 10 | [deploy.sh](deploy.sh) `--prod`, then `/readyz` twice |
+| 10 | [deploy.sh](deploy.sh) `--prod`, then `/readyz` twice, then the **stable production alias** |
 | 11 | [supabase-cron.sql](supabase-cron.sql) — the step that has never been run anywhere |
 | 12 | `zammy.info` at the registrar, then `CORS_ORIGIN` and a redeploy |
 
@@ -281,6 +281,14 @@ preview pair: a Postgres URL carrying `?sslmode=` (`@zammy/config` rejects one o
 node-postgres then silently ignores `DATABASE_SSL`), the two pooler ports swapped, and a `redis://`
 Upstash URL where `rediss://` was needed. Catching them at the prompt is a moment; catching them at
 `/readyz` is a deploy cycle each.
+
+**And a fourth, which fails later and quieter than any of them.** Stage 10 wants the *stable
+production alias*, not the per-deployment URL `deploy.sh` prints. `zammy-<hash>.vercel.app` names one
+immutable deployment; the same value goes into Supabase Vault as `zammy_base_url` in stage 11, so
+cron pinned to it keeps hitting that one deployment after every later deploy — answering 202 from
+stale code against whatever environment it was built with, until Vercel eventually prunes it.
+Nothing in `chore_runs` or `net._http_response` would read as wrong. The wizard recognises the
+hash-segment shape and asks again.
 
 ### Seeding — `seed-production.sh`
 
