@@ -167,11 +167,12 @@ describe("drainableFrom", () => {
     };
   };
 
-  const services = (redis: object) => ({
+  const services = (redis: object, close: () => Promise<void> = async () => {}) => ({
     redis,
     queue: { settle: async () => {}, name: "ingest" },
     deps: {},
     trendingDeps: {},
+    close,
   });
 
   it("does not hand back a drainable while Redis is still connecting", async () => {
@@ -214,5 +215,43 @@ describe("drainableFrom", () => {
     redis.emit("end");
 
     await expect(booting).rejects.toThrow(/redis connection ended before it was ready/);
+  });
+
+  it("closes the services when the wait fails, so a retried boot does not leak", async () => {
+    // `buildServices` unwinds its OWN failures; this wait is a layer above it,
+    // and `bootOnce` drops a failed boot so the next delivery builds a fresh
+    // pool and client. Without this close the previous pair stay open with
+    // nothing referencing them — a DATABASE_POOL_MAX-sized pool per retry,
+    // against a free-tier connection budget (server.ts:172).
+    const redis = fakeRedis("connecting");
+    const closed = vi.fn(async () => {});
+    const booting = drainableFrom(services(redis, closed) as never);
+    redis.emit("end");
+
+    await expect(booting).rejects.toThrow(/ended before it was ready/);
+    expect(closed).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not close the services on the happy path", async () => {
+    // The mirror of the above: closing a healthy boot would tear down the pool
+    // the dispatch is about to use.
+    const closed = vi.fn(async () => {});
+    await drainableFrom(services(fakeRedis("ready"), closed) as never);
+    expect(closed).not.toHaveBeenCalled();
+  });
+
+  it("reports the wait's failure, not the close's", async () => {
+    // A `pool.end()` that rejects on a half-open connection must not become the
+    // reason the boot failed — the operator needs "redis", not whatever the
+    // teardown made of it.
+    const redis = fakeRedis("connecting");
+    const booting = drainableFrom(
+      services(redis, async () => {
+        throw new Error("pool teardown exploded");
+      }) as never,
+    );
+    redis.emit("end");
+
+    await expect(booting).rejects.toThrow(/ended before it was ready/);
   });
 });

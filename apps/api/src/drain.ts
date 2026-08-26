@@ -286,7 +286,17 @@ async function bootFromEnvironment(): Promise<Drainable> {
   const services = await buildServices(config, log);
   // Before the first SCAN, not after it. See `redis-ready.ts`: the boot's client
   // connects in the background, and the drain's first act is a Redis read.
-  await waitForRedis(services.redis);
+  //
+  // Closed on rejection for the same reason `vercel-queue.ts` closes: this is a
+  // layer above `buildServices`, so its `abandon` list does not reach here, and
+  // `bootOnce` drops a failed boot — leaving the pool and client open with
+  // nothing referencing them (server.ts:172). The drain runs every 10 minutes.
+  try {
+    await waitForRedis(services.redis);
+  } catch (error) {
+    await services.close().catch(() => {});
+    throw error;
+  }
   // Its own PendingSet view over the services' Redis client, rather than an
   // enumerate member on `IngestQueue`. The interface is a contract two drivers
   // implement, and BullMQ would have to grow a method it has no use for to let

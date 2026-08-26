@@ -207,8 +207,35 @@ async function bootFromEnvironment(): Promise<Drainable> {
  * want: `bootOnce` drops the failed promise so the next delivery retries the
  * whole thing, and the log line names Redis instead of a lock.
  */
+/**
+ * Wait for Redis, and close the services if it never arrives.
+ *
+ * The close is not tidiness. `buildServices` unwinds its own failures through an
+ * `abandon` list, but that only covers throws INSIDE it — this wait happens one
+ * layer up, after it has already returned a fully built pool and client. Without
+ * the close, a rejection escapes with both still open and nothing holding a
+ * reference to them, which is precisely the hazard server.ts:172 was written
+ * about: "anything this attempt left open leaks once per invocation for the life
+ * of an instance that lives for hours". `bootOnce` drops a failed boot so the
+ * next invocation retries the whole thing, so an unreachable Redis would
+ * otherwise leak a `DATABASE_POOL_MAX`-sized pool per retry against a
+ * free-tier connection budget.
+ *
+ * `close()` failing must not mask the reason the boot failed, so it is
+ * swallowed — the caller wants "Redis was not ready", not whatever `pool.end()`
+ * made of a half-open connection.
+ */
+async function readyOrClose(services: Services): Promise<void> {
+  try {
+    await waitForRedis(services.redis);
+  } catch (error) {
+    await services.close().catch(() => {});
+    throw error;
+  }
+}
+
 export async function drainableFrom(services: Services): Promise<Drainable> {
-  await waitForRedis(services.redis);
+  await readyOrClose(services);
   return { queue: services.queue, dispatch: ingestDispatch(services) };
 }
 
