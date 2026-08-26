@@ -50,8 +50,8 @@ the how). One naming rule up front: **"queue topic" means Vercel Queues' topic**
 | Plan posture | Hobby-shaped; Pro is the escape hatch, not the start | §8 |
 | Beta queue in the load-bearing position | Accepted; pending set is the backstop, manual drain is the fallback | §3.2 |
 | Chore-run visibility | A durable `chore_runs` record per pass run — **new code**, non-optional on Hobby | §3.3 |
-| Preview data plane | A second free-tier Supabase + Upstash pair; previews never touch production | §4 |
-| Preview migrations | A per-PR CI step migrates the preview DB (doubles as a pooler rehearsal) | §6 |
+| Preview data plane | ~~A second free-tier Supabase + Upstash pair; previews never touch production~~ **Retired 2026-08-26** — Upstash allows only one Redis database per project; see ADR-0015 | §4 |
+| Preview migrations | ~~A per-PR CI step migrates the preview DB (doubles as a pooler rehearsal)~~ **Removed with the preview data plane, 2026-08-26** | §6 |
 | Quota governor scope | Burst-window-only + Currents observed snapshot; daily ledger deferred with GNews | §3.4 |
 | Governor failure mode | Fail-open to in-process counting when Redis is unreachable | §3.4 |
 | Per-IP rate limit | Moves to Redis (fail-open); WAF is Pro-only and off the table | §3.5 |
@@ -602,6 +602,13 @@ knowing:
 
 ## 4. Config, secrets, and previews — ~0.5 day
 
+> **Retired 2026-08-26.** The preview pair described below (a second free-tier Supabase project
+> and Upstash database) is decommissioned — Upstash allows only one Redis database per project,
+> and that forced a choice once the project needed one for real. The bullets below stay as a
+> record of what was built and verified; they no longer describe the running system. See
+> [ADR-0015](adr/0015-all-in-on-vercel-hobby-shaped.md) and
+> [deploy/vercel/README.md](../deploy/vercel/README.md).
+
 - **66 environment variables** in [.env.example](../.env.example) become Vercel project env vars
   across Production/Preview/Development. `vercel env pull`/`add` from the CLI, not the dashboard, or
   this becomes an afternoon of typing and a typo that boots green.
@@ -667,12 +674,21 @@ cannot be made atomic:
 
 - A GitHub Actions job runs `pnpm db:migrate` against `DATABASE_SESSION_URL` — the CLI already
   prefers it and announces which URL it used.
-- **A per-PR step migrates the preview database** (§4's second free-tier pair) before the preview
-  deploy. Beyond keeping migration-bearing PRs' previews working, this is the rehearsal the missing
-  atomicity wants: every migration runs against a real Supabase session pooler once before it
-  touches production. The initial *setup* of each Supabase project — schema on the preview pair,
-  schema plus the seeded corpus on production (§9 Phase 5) — is one-time; the CI steps are what
-  carry the 16-migrations-in-10-days cadence after that.
+- ~~**A per-PR step migrates the preview database**~~ — **removed 2026-08-26 with the preview data
+  plane.** This is the consequential half of that retirement and it belongs here rather than only in
+  §4, because what went with it was a safety property, not a convenience: the per-PR step was *the
+  rehearsal the missing atomicity wants*, the thing that ran every migration against a real Supabase
+  session pooler once before it touched production. **There is no longer any rehearsal. The first
+  contact between a new migration and a real pooler is production**, in the `migrate (production)`
+  job, after merge, with no rollback available — Instant Rollback reverts code and leaves the schema
+  where it is. The initial *setup* of the production project (schema plus the seeded corpus, §9
+  Phase 5) was one-time; that one CI step now carries the whole 16-migrations-in-10-days cadence.
+  **So the expand/contract discipline in the next bullet stopped being belt-and-braces and became
+  the only thing standing here.** A migration that behaves differently through a pooler than against
+  local Postgres — a session-scoped lock, a statement timeout, anything transaction-mode-sensitive —
+  now has no cheap place to be caught. If that ever costs a bad afternoon, restoring a throwaway
+  Supabase project purely as a migration target is the cheapest fix, and it needs no Upstash
+  database, no Vercel environment and no fixtures: it is one URL and one CI job.
 - Whichever order you pick, there is a window where one of the two is ahead. That makes
   **expand/contract migration discipline a requirement rather than a good habit**: additive
   migrations deploy before the code that needs them, destructive ones after the code that stopped
@@ -813,7 +829,7 @@ and the last thing they should need is an AI re-deriving them each time.
 
 | | What it is | Exercised? |
 |---|---|---|
-| `ci.yml` → `migrate (preview)`, `migrate (production)` | §6's discrete migration step, both gated on `verify` | No — the secrets are set; main is unpushed, so neither job has run |
+| `ci.yml` → `migrate (production)` | §6's discrete migration step, gated on `verify` | **Yes** — ran on the first push to main and printed "Nothing to migrate — database is up to date.", which is also the proof the seeded schema matches the ledger. `migrate (preview)` existed until 2026-08-26 and never ran once. |
 | [seed-production.sh](../deploy/vercel/seed-production.sh) | dump the dev corpus, restore it through the session pooler, verify | **Yes**, end to end against a scratch database |
 | [deploy.sh](../deploy/vercel/deploy.sh) | `vercel build && vercel deploy --prebuilt` from a `.git`-excluded copy | **Yes** — three production deploys; its URL capture needed a fix (CLI 59 ends on a JSON `}`) |
 | [provision-production.sh](../deploy/vercel/provision-production.sh) | the twelve stages a human has to drive | **Yes — run end to end 2026-08-26** |
@@ -844,11 +860,14 @@ mid-DDL is survivable (the advisory lock sits on a pinned connection, so a kille
 connection, releases the lock and rolls back) but leaves the deploy racing it against a database one
 migration short, silently. Main runs queue; pull requests still cancel.
 
-*Both migration jobs gate on `verify`.* A migration is the one thing in this repository a rollback
+*The migration job gates on `verify`.* A migration is the one thing in this repository a rollback
 cannot undo — Instant Rollback rolls code back and leaves the schema where it is (§6) — so it must
-not run off a commit whose tests never passed. The cost is that a migration-bearing PR's preview
-database waits for the test suite. Given the previews are not git-linked and are deployed by hand
-anyway, that costs nothing real.
+not run off a commit whose tests never passed. This was written of two jobs; only
+`migrate (production)` remains, and the gate matters more on that one than it ever did on the
+preview twin. Note what the gate does **not** cover: **the project is git-linked**, so the push that
+triggers this job also triggers a production deployment, and that deployment does not wait for
+`verify`. The gate protects the schema, not the code — which is the right way round, since the code
+can be rolled back and the schema cannot.
 
 **And the backlog this phase was gated on does not exist.** §3.3 gated the cutover on draining the
 label backlog first, at 2,981 unlabelled of 3,934 promoted (findings §3, measured 2026-08-15). The

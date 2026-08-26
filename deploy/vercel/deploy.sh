@@ -2,8 +2,15 @@
 #
 # Deploy to Vercel, from a copy of the tree with `.git` excluded.
 #
-#   ./deploy/vercel/deploy.sh          # preview
-#   ./deploy/vercel/deploy.sh --prod   # production
+#   ./deploy/vercel/deploy.sh --prod      # production
+#   ./deploy/vercel/deploy.sh --preview   # a preview URL with NO data plane
+#
+# THE TARGET IS NOT OPTIONAL, and it used to default to preview. That default
+# stopped being able to produce anything that works when the Preview
+# environment was retired (2026-08-26): a preview deployment now boots with no
+# DATABASE_URL and no REDIS_URL, so it builds, deploys, reports Ready, and
+# cannot serve a request. A flag you must type is cheaper than a deployment
+# that looks healthy from the outside and answers `unready` to every probe.
 #
 # WHY THE COPY. Vercel stamps a deployment with the COMMIT AUTHOR rather than
 # the account that owns the project. The commit author here is not the Vercel
@@ -23,8 +30,29 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-TARGET="preview"
-[ "${1:-}" = "--prod" ] && TARGET="production"
+
+case "${1:-}" in
+  --prod|--production) TARGET="production" ;;
+  --preview)
+    TARGET="preview"
+    echo "warning: a preview deployment has no data plane behind it." >&2
+    echo "         The Preview environment was retired 2026-08-26 — no DATABASE_URL," >&2
+    echo "         no REDIS_URL — so this will build and deploy and then fail every" >&2
+    echo "         request. Useful for checking that the build and the function trace" >&2
+    echo "         still resolve, and for nothing else." >&2
+    ;;
+  *)
+    echo "usage: $0 --prod | --preview" >&2
+    echo >&2
+    echo "  --prod     deploy to production" >&2
+    echo "  --preview  a preview URL with NO working data plane (see above)" >&2
+    echo >&2
+    echo "The target used to default to preview. It no longer does: since the" >&2
+    echo "Preview environment was retired, that default could only ever produce a" >&2
+    echo "deployment that reports Ready and cannot serve a request." >&2
+    exit 1
+    ;;
+esac
 
 command -v vercel >/dev/null 2>&1 || { echo "error: the vercel CLI is not installed." >&2; exit 1; }
 command -v rsync  >/dev/null 2>&1 || { echo "error: rsync is not installed." >&2; exit 1; }

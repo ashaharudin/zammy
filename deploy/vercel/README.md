@@ -55,30 +55,45 @@ needed a third; it is deleted instead (§7).
 
 What differs from a Compose `.env`:
 
-| Variable | Production | Preview |
-| --- | --- | --- |
-| `DATABASE_URL` | Supabase **transaction** pooler, port 6543 | the preview project's, same shape |
-| `DATABASE_SESSION_URL` | Supabase **session** pooler, port 5432 (migrations, chores) | ditto |
-| `DATABASE_SSL` | `verify-full`, with Supabase's CA in `DATABASE_CA_CERT` | ditto |
-| `DATABASE_POOL_MAX` | `1`–`2` — every instance holds its own pool | ditto |
-| `REDIS_URL` | Upstash | a second, separate Upstash database |
-| `INGEST_QUEUE_DRIVER` | `vercel` — the default is `bullmq`, and leaving it there publishes to a Redis queue nothing drains | `vercel` |
-| `CRON_SECRET` | a long random string — gates `/api/drain`, `/api/chores` and `/api/keepalive`; unset disables all three, **including the pause guard** | ditto, and a DIFFERENT string |
-| `CHORE_MAX_LABELS` | `50` (the default) — 75 labels is the whole 300 s ceiling at `GEMINI_MAX_RPM=15` | ditto, or lower |
-| `CURRENTS_MODE` | `live` (needs `CURRENTS_API_KEY`) | `fixture` — costs no upstream quota |
-| `FIXTURES_DIR` | irrelevant | `fixtures` — the function's cwd is the deployment root, so the `../../fixtures` in the template is wrong here |
-| `TRUSTED_PROXY_HOPS` | `1` — measured on the spike: Fastify sees `127.0.0.1` with the client one hop out in `x-forwarded-for` | `1` |
-| `CORS_ORIGIN` | the deployment origin | the preview origin |
-
-**Previews never point at production.** Fixture mode still *ingests*: a preview aimed at the
-production database would write fixture articles into the real corpus and its storylines. The
-preview pair (a second free-tier Supabase project and Upstash database) is what §4 decided, and a
-per-PR CI step migrates it.
+| Variable | Production |
+| --- | --- |
+| `DATABASE_URL` | Supabase **transaction** pooler, port 6543 |
+| `DATABASE_SESSION_URL` | Supabase **session** pooler, port 5432 (migrations, chores) |
+| `DATABASE_SSL` | `verify-full`, with Supabase's CA in `DATABASE_CA_CERT` |
+| `DATABASE_POOL_MAX` | `1`–`2` — every instance holds its own pool |
+| `REDIS_URL` | Upstash |
+| `INGEST_QUEUE_DRIVER` | `vercel` — the default is `bullmq`, and leaving it there publishes to a Redis queue nothing drains |
+| `CRON_SECRET` | a long random string — gates `/api/drain`, `/api/chores` and `/api/keepalive`; unset disables all three, **including the pause guard** |
+| `CHORE_MAX_LABELS` | `50` (the default) — 75 labels is the whole 300 s ceiling at `GEMINI_MAX_RPM=15` |
+| `CURRENTS_MODE` | `live` (needs `CURRENTS_API_KEY`) |
+| `FIXTURES_DIR` | irrelevant |
+| `TRUSTED_PROXY_HOPS` | `1` — measured on the spike: Fastify sees `127.0.0.1` with the client one hop out in `x-forwarded-for` |
+| `CORS_ORIGIN` | the deployment origin |
 
 `pnpm` 11 needs `ENABLE_EXPERIMENTAL_COREPACK=1` set as a project environment variable, after which
 Vercel reads `packageManager` from the root manifest.
 
+**There is no Preview environment.** §4 originally gave previews their own free-tier Supabase +
+Upstash pair, in fixture mode, so a preview aimed at production couldn't write fixture articles
+into the real corpus. That pair is retired (2026-08-26): Upstash's free tier only supports one
+Redis database per project, and once that constraint forced a choice, there was no cheap way to
+keep a second, isolated data plane just for previews. The 13 Preview-scoped env vars on the `zammy`
+Vercel project and the `migrate (preview)` CI job are both gone with it — see
+[ADR-0015](../../docs/adr/0015-all-in-on-vercel-hobby-shaped.md). A `vercel deploy` without
+`--prod` still produces a Vercel preview URL (that's a platform feature, not something this repo
+configures), but it now boots with no `DATABASE_URL`/`REDIS_URL` at all and will not serve traffic
+— there is no supported way to preview this app outside production.
+
 ## Deploying
+
+```bash
+./deploy/vercel/deploy.sh --prod
+```
+
+**Or not at all: the project is git-linked, so a push to main deploys production on its own** (the
+deployment carries the `zammy-git-main-<scope>.vercel.app` alias, and a PR branch gets its own).
+`deploy.sh` is for deploying local or uncommitted state, and its `.git`-excluded copy is what makes
+a *CLI* deploy work at all — the raw commands below land BLOCKED from inside the repository:
 
 ```bash
 vercel build && vercel deploy --prebuilt
@@ -361,9 +376,15 @@ in production.
 ### Deploying — `deploy.sh`
 
 ```bash
-./deploy/vercel/deploy.sh          # preview
-./deploy/vercel/deploy.sh --prod   # production
+./deploy/vercel/deploy.sh --prod      # production
+./deploy/vercel/deploy.sh --preview   # a preview URL with NO data plane behind it
 ```
+
+**The target is not optional, and it used to default to preview.** That default could only ever
+produce a broken deployment once the Preview environment was retired, so the script now refuses to
+guess. `--preview` still works and warns: it is good for checking that the build and the function
+dependency trace still resolve, and good for nothing else, because the deployment has no
+`DATABASE_URL` and no `REDIS_URL` and will answer `unready` to every probe.
 
 The `.git`-excluded copy described under [Deploying](#deploying) above, as a script instead of a
 paragraph people re-read. It runs `vercel inspect` afterwards, because the CLI's exit code is not a
@@ -371,29 +392,28 @@ signal — a BLOCKED deployment exits 0.
 
 ### Migrations in CI
 
-`ci.yml` carries `migrate (preview)` (on pull requests) and `migrate (production)` (on pushes to
-main). Both gate on `verify`: a migration is the one thing here a rollback cannot undo, since
-Instant Rollback rolls code back and leaves the schema where it is. Both fail loudly on a missing
-secret rather than running against no URL. They read three repository secrets, all set by stage 9 of
-the wizard:
+`ci.yml` carries `migrate (production)`, on pushes to main. It gates on `verify`: a migration is
+the one thing here a rollback cannot undo, since Instant Rollback rolls code back and leaves the
+schema where it is. It fails loudly on a missing secret rather than running against no URL. It
+reads two repository secrets, both set by stage 9 of the wizard:
 
 | Secret | Used by |
 | --- | --- |
 | `PRODUCTION_DATABASE_SESSION_URL` | `migrate (production)` |
-| `PREVIEW_DATABASE_SESSION_URL` | `migrate (preview)` |
-| `SUPABASE_CA_CERT` | both — `DATABASE_SSL=verify-full` needs something to verify against |
+| `SUPABASE_CA_CERT` | `DATABASE_SSL=verify-full` needs something to verify against |
 
-Neither job deploys, and neither can: the project is not git-linked, so the deploy is `deploy.sh` run
-by hand. "The preview migration runs before the preview deploy" is therefore operator ordering here,
-not something CI sequences.
+The job does not deploy — but the git integration does. A push to main produces a production
+deployment on its own, and it does not wait for this job, nor this job for it. That is exactly the
+non-atomicity §6 describes, and expand/contract discipline is what makes it safe: additive
+migrations land before the code that needs them, destructive ones after the code that stopped.
 
 The workflow's `cancel-in-progress` is now conditional — pull requests still cancel superseded runs,
 pushes to main queue instead. A main run carries a migration, and cancelling one mid-DDL leaves the
 deploy racing it against a database one migration short.
 
-**The preview database is one migration behind.** Seventeen of eighteen are applied; `0018`
-(`chore_runs`) arrived with Phase 4 after the last hand-run. The first PR to land after these jobs
-exist applies it.
+There used to be a matching `migrate (preview)` job here, on pull requests, gated the same way,
+reading a `PREVIEW_DATABASE_SESSION_URL` secret. Both the job and the secret are gone (2026-08-26) —
+see "There is no Preview environment" above.
 
 ## What is still not done
 
