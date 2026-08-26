@@ -1,5 +1,6 @@
 import { Redis } from "ioredis";
 import { QueueClient } from "@vercel/queue";
+import { isNewsError } from "@zammy/news-client";
 import {
   PendingSet,
   STALE_PENDING_MS,
@@ -138,6 +139,56 @@ export const INGEST_RETENTION_SECONDS =
  */
 export function shouldRetryDelivery(deliveryCount: number): boolean {
   return deliveryCount < MAX_INGEST_DELIVERIES;
+}
+
+/**
+ * Failure kinds no redelivery of the same message can fix, so the retry budget
+ * above should not be spent on them.
+ *
+ * Deliberately a KIND LIST rather than the taxonomy's own `retryable` flag, and
+ * the difference is the whole reason this function exists. `retryable` answers
+ * "should the HTTP transport try again immediately", on a 30s breaker cooldown
+ * and a 2s backoff — a different question from "is this worth another delivery
+ * 305s from now". `NewsCircuitOpenError` is where the two answers diverge:
+ * `retryable: false`, because an immediate retry is known to be pointless, yet a
+ * redelivery lands long after the cooldown has elapsed and is one of the retries
+ * the budget is FOR. Reading the flag here would drop exactly the work most
+ * likely to succeed on the next attempt.
+ *
+ * So the three listed are the ones where the message itself is the problem:
+ *
+ *   - `invalid_query` — a 400. Our query construction is wrong, which is never
+ *     a transient fault (see `NewsInvalidQueryError`). This is the one observed
+ *     in production: a lookback violation on the oldest segment of a cold
+ *     search, which cost three deliveries over ~610s and succeeded on the
+ *     second only because the clamp had moved the window by then. Waiting can
+ *     only make a lookback violation worse — the horizon moves one way.
+ *   - `auth` — the key is missing, wrong, or revoked. An operator fixes that,
+ *     on a timescale no 610s budget reaches.
+ *   - `blocked` — a client-fingerprint ban on our User-Agent. Same remedy, same
+ *     timescale.
+ *
+ * Everything else keeps its retries, including the ones flagged non-retryable:
+ * `schema` (an unparseable body can be a momentary bad gateway page),
+ * `caller_aborted`, and `circuit_open` above. Dropping is cheap to be wrong
+ * about in one direction only — the gap the job named is re-planned by the next
+ * reader who finds it unfilled, the same recovery the give-up path relies on —
+ * so the list stays short and each entry has a reason.
+ *
+ * Structural check via `isNewsError`, not `instanceof`: these errors cross a
+ * package boundary, and a duplicated `@zammy/news-client` in the graph would
+ * make `instanceof` quietly false.
+ */
+const PERMANENT_FAILURE_KINDS: ReadonlySet<string> = new Set([
+  "invalid_query",
+  "auth",
+  "blocked",
+]);
+
+export function isPermanentIngestFailure(
+  error: unknown,
+): error is Error & { kind: string; provider: string } {
+  return isNewsError(error) && PERMANENT_FAILURE_KINDS.has(error.kind);
 }
 
 /** The publish half of the SDK, narrowed to what this needs so it can be faked. */

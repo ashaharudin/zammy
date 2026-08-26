@@ -53,13 +53,26 @@ and method in [PROBE-FINDINGS.md](./PROBE-FINDINGS.md). Several contradict the O
 | `page_size` | supported, **max 20** (Free tier) |
 | `page_number` | supported, **1-indexed**; past-end → `200` + empty array |
 | **Max retrievable results** | **100 per query** (5 pages) |
-| **Max lookback** | **30 days** |
+| **Max lookback** | **30 days**, and the edge MOVES (see below) |
 | **Max date range per call** | **7 days** (drift: observed 2026-08-11; the 2026-08-04 probe's single 30-day call now 400s — `date_range: Max range is 7 days`) |
 | **`start_date`/`end_date` bounds** | **both INCLUSIVE** — a closed `[start, end]` interval, honoured to the second (PROBE §6e) |
 | Default sort | `published` DESC (undocumented, but consistent and page-stable) |
 | `domain` | supported |
 | `offset`, `sort_by` | silently ignored — no sort control exists |
 | Unknown params | silently ignored |
+
+**The lookback edge cannot be sat on.** 30 days back from *now*, and `now` is theirs, not ours.
+A request whose `start_date` is exactly the boundary is rejected — observed in production
+2026-08-26 (`dpl_GJ9xwKPDw9J7ZQDNpwqpmyMpeHfv`), on the oldest segment of a cold search, as
+`400 date_range: Max lookback is 30 days`. Three things push a boundary value out of the window
+after we compute it, all in the same direction: the wire format is second-precision so encoding
+FLOORS the timestamp by up to 999ms; the request itself takes up to ~28s across retries, all
+re-sending a start date computed before the first attempt; and any clock skew narrows their window
+against ours. So both places that touch the edge leave slack rather than aiming at it —
+`LOOKBACK_PLAN_SLACK_MS` (15 min, the planner, sized so a queued segment survives until the
+message's own retention expires) and `LOOKBACK_CLAMP_MARGIN_MS` (60s, the pre-flight clamp, the
+backstop for every other caller). The cost is the oldest fifteen minutes of a 30-day window, never
+fetched; it ages out before any later read could plan it.
 
 **Rate-limit headers are present on every response** — `x-ratelimit-limit`, `-remaining`,
 `-burst-limit`, `-burst-remaining`, `-reset-time` — so quota can be *observed* rather than guessed

@@ -10,6 +10,37 @@ export interface Span {
   to: Date;
 }
 
+/**
+ * How far inside the lookback horizon the PLAN starts, so a segment is still
+ * fetchable when whoever fills it actually calls upstream.
+ *
+ * The planner and the fetcher are not the same moment. A gap computed here is
+ * either filled synchronously (a second or two later) or enqueued — and a
+ * queued segment is fetched when the consumer dequeues it, which on Vercel
+ * Queues is a first delivery at +0s and, if that one fails, redeliveries at
+ * +305s and +610s. A plan whose oldest segment starts exactly ON the horizon is
+ * therefore valid only for the sync path; by the time the queue gets to it the
+ * horizon has moved past it and upstream answers 400 `Max lookback is 30 days`
+ * — which is precisely what production did on 2026-08-26 for the oldest segment
+ * of every cold search.
+ *
+ * Fifteen minutes is not a guess, it is the message's whole lifetime:
+ * `INGEST_RETENTION_SECONDS` (900s) is when the queue deletes a message, so no
+ * delivery can happen more than 900s after the plan that produced it. Slack
+ * equal to that bounds every delivery that can still exist, with the +610s
+ * final attempt comfortably inside. `coverage-gaps.test.ts` pins the two
+ * together, since the relationship is the reason for the number.
+ *
+ * **What it costs** is the oldest fifteen minutes of a 30-day window, never
+ * fetched: the horizon only moves forward, so that sliver ages out of the
+ * window before any later read could plan it. Fifteen minutes of month-old news
+ * at the exact edge upstream is about to drop it — against a guaranteed 400 and
+ * a five-minute delay on every cold search. One horizon for both paths, rather
+ * than a second one for queued segments only: coverage is recorded for the span
+ * we ASKED for, and two horizons is two chances to record a span nobody fetched.
+ */
+export const LOOKBACK_PLAN_SLACK_MS = 15 * 60 * 1000;
+
 export function subtractCoverage(
   window: Span,
   covered: readonly Span[],
@@ -29,7 +60,13 @@ export function subtractCoverage(
   // Clamp before diffing. Below the lookback horizon upstream 400s — never
   // spend a call to learn that — and above `now` a fetch would return nothing
   // yet be recorded as covered, hiding articles published minutes later.
-  const horizon = bounds.now.getTime() - bounds.lookbackDays * 86_400_000;
+  //
+  // The horizon carries `LOOKBACK_PLAN_SLACK_MS`, so it is where the edge will
+  // still be once the segment is actually fetched rather than where it is at
+  // this instant. Sitting on the live edge produced a 400 on every cold search
+  // (see the constant).
+  const horizon =
+    bounds.now.getTime() - bounds.lookbackDays * 86_400_000 + LOOKBACK_PLAN_SLACK_MS;
   const from = Math.max(window.from.getTime(), horizon);
   const to = Math.min(window.to.getTime(), bounds.now.getTime());
   if (from >= to) return [];

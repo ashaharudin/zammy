@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { subtractCoverage, type Span } from "./coverage-gaps.js";
+import { LOOKBACK_PLAN_SLACK_MS, subtractCoverage, type Span } from "./coverage-gaps.js";
+import { INGEST_RETENTION_SECONDS } from "./ingest-queue-vercel.js";
 
 /**
  * Coverage-gap math (ARCHITECTURE 6.3 step 3): requested window − covered
@@ -71,12 +72,43 @@ describe("subtractCoverage", () => {
   it("clamps to the lookback horizon — never spend a call to learn a 400", () => {
     // Upstream rejects anything older than 30 days (§6.3 step 3). The window
     // may ask; the gap plan must not.
+    //
+    // The horizon sits `LOOKBACK_PLAN_SLACK_MS` INSIDE the 30-day edge (12:00
+    // + 15 min), which is the difference between a segment that is fetchable
+    // now and one that is still fetchable when the queue gets to it.
     const gaps = subtractCoverage(
       span("2026-06-01T00:00:00Z", "2026-08-09T00:00:00Z"),
       [],
       bounds,
     );
-    expect(iso(gaps)).toEqual(["2026-07-11T12:00:00.000Z/2026-08-09T00:00:00.000Z"]);
+    expect(iso(gaps)).toEqual(["2026-07-11T12:15:00.000Z/2026-08-09T00:00:00.000Z"]);
+  });
+
+  it("leaves the oldest segment fetchable for the queue's whole retry budget", () => {
+    // The 400 observed in production 2026-08-26: the oldest segment of a cold
+    // search started exactly ON the horizon, and the consumer dequeued it
+    // seconds to minutes later, by which time the edge had moved past it —
+    // `date_range: Max lookback is 30 days` on every cold search.
+    //
+    // Asserted as a property rather than a literal: replan the same window at
+    // the latest instant any delivery of that plan can still happen, and the
+    // oldest segment must STILL be above the live edge.
+    const window = span("2026-06-01T00:00:00Z", "2026-08-09T00:00:00Z");
+    const oldest = subtractCoverage(window, [], bounds).at(-1)!;
+
+    const atLastDelivery = new Date(NOW.getTime() + INGEST_RETENTION_SECONDS * 1000);
+    const liveEdge = atLastDelivery.getTime() - 30 * 86_400_000;
+
+    expect(oldest.from.getTime()).toBeGreaterThanOrEqual(liveEdge);
+  });
+
+  it("keeps the plan slack at least as long as a message can live", () => {
+    // The derivation of the constant, pinned where changing either side breaks.
+    // A message is deleted at `INGEST_RETENTION_SECONDS`, so no delivery can
+    // happen later than that — slack equal to it bounds every delivery that can
+    // still exist. Shrink the slack below the retention and the oldest segment
+    // of a cold search goes back to 400ing on its last attempts.
+    expect(LOOKBACK_PLAN_SLACK_MS).toBeGreaterThanOrEqual(INGEST_RETENTION_SECONDS * 1000);
   });
 
   it("clamps to now — the future is not a gap", () => {

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   INGEST_RETENTION_SECONDS,
   MAX_INGEST_DELIVERIES,
+  isPermanentIngestFailure,
   OBSERVED_REDELIVERY_LEASE_SECONDS,
   VercelIngestQueue,
   shouldRetryDelivery,
@@ -18,6 +19,15 @@ import {
   type IngestJob,
   type SegmentJob,
 } from "./ingest-queue.js";
+import {
+  NewsAuthError,
+  NewsBlockedError,
+  NewsCircuitOpenError,
+  NewsInvalidQueryError,
+  NewsQuotaError,
+  NewsTimeoutError,
+  NewsUpstreamError,
+} from "@zammy/news-client";
 
 /**
  * The hosted driver, split the way VERCEL-ALL-IN-SCOPE §3.2 says it has to be:
@@ -182,6 +192,41 @@ describe("parseIngestJob", () => {
     expect(parseIngestJob({ kind: "sample" })).toBeNull();
     expect(parseIngestJob({ ...segment(), startPage: "1" })).toBeNull();
     expect(parseIngestJob({ fingerprint: "f", from: "x" })).toBeNull();
+  });
+});
+
+describe("isPermanentIngestFailure", () => {
+  it("drops the failures the message itself causes", () => {
+    // `invalid_query` is the one production produced (2026-08-26): a lookback
+    // violation on the oldest segment of a cold search, three deliveries and
+    // ~610s spent on a 400 that could not become a 200.
+    expect(isPermanentIngestFailure(new NewsInvalidQueryError("400"))).toBe(true);
+    expect(isPermanentIngestFailure(new NewsAuthError("401"))).toBe(true);
+    expect(isPermanentIngestFailure(new NewsBlockedError("cloudflare 1010"))).toBe(true);
+  });
+
+  it("keeps the retries for failures the world causes", () => {
+    expect(isPermanentIngestFailure(new NewsUpstreamError("502", 502))).toBe(false);
+    expect(isPermanentIngestFailure(new NewsQuotaError("429"))).toBe(false);
+    expect(isPermanentIngestFailure(new NewsTimeoutError("deadline"))).toBe(false);
+  });
+
+  it("keeps an open circuit, whose `retryable: false` means something else", () => {
+    // The whole reason this is a kind list rather than a read of `retryable`.
+    // The flag answers "retry immediately?" against a 30s cooldown; a
+    // redelivery lands 305s out, long after the breaker has gone half-open.
+    const error = new NewsCircuitOpenError("open", new Date());
+    expect(error.retryable).toBe(false);
+    expect(isPermanentIngestFailure(error)).toBe(false);
+  });
+
+  it("keeps anything that is not a news error at all", () => {
+    // The contended-segment-lock throw in `processSegmentJob` is a plain Error,
+    // and it is exactly the case redelivery was built for.
+    expect(isPermanentIngestFailure(new Error("segment is locked; retrying later"))).toBe(
+      false,
+    );
+    expect(isPermanentIngestFailure(undefined)).toBe(false);
   });
 });
 

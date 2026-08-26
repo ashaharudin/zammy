@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { NewsCircuitOpenError, NewsInvalidQueryError } from "@zammy/news-client";
 import { createMessageHandler, drainableFrom, type DeliveryMetadata } from "./vercel-queue.js";
 import { MAX_INGEST_DELIVERIES } from "./ingest-queue-vercel.js";
 import type { IngestJob, SegmentJob } from "./ingest-queue.js";
@@ -113,6 +114,47 @@ describe("createMessageHandler", () => {
     // is no pending entry it could correspond to.
     expect(settled).toEqual([]);
     expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("drops a query error on the first delivery instead of spending the budget", async () => {
+    // Observed in production 2026-08-26: the oldest segment of a cold search
+    // 400ed on the lookback limit, and because the error left `processSegmentJob`
+    // like any other it cost three deliveries over ~610s. `retryable: false` is
+    // the provider telling us the request is the problem; another delivery of
+    // the same message cannot make it well-formed.
+    const { settled, drainable: d } = drainable(async () => {
+      throw new NewsInvalidQueryError("upstream rejected our query (400)", {
+        date_range: "Max lookback is 30 days",
+      });
+    });
+    const warn = vi.fn();
+
+    await expect(
+      createMessageHandler(d, { info: () => {}, warn })(
+        segment,
+        delivery({ deliveryCount: 1 }),
+      ),
+    ).resolves.toBeUndefined();
+
+    // Settled, not just swallowed: an unsettled entry nobody will attempt again
+    // holds the topic at `in_progress` until the fifteen-minute stale prune.
+    expect(settled).toEqual([segment]);
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("keeps retrying an open circuit, which the retryable flag would have dropped", async () => {
+    // The reason the consumer reads a kind list and not `retryable`.
+    // `NewsCircuitOpenError` is flagged non-retryable because an IMMEDIATE
+    // retry is pointless — the cooldown is 30s and a redelivery is 305s away,
+    // so it is one of the retries the budget exists for.
+    const { settled, drainable: d } = drainable(async () => {
+      throw new NewsCircuitOpenError("circuit open", new Date("2026-08-26T00:00:30Z"));
+    });
+
+    await expect(
+      createMessageHandler(d, silent)(segment, delivery({ deliveryCount: 1 })),
+    ).rejects.toThrow("circuit open");
+    expect(settled).toEqual([]);
   });
 
   it("routes a sample to the same dispatch a segment takes", async () => {
