@@ -252,6 +252,25 @@ the first command is written.
 `buildServices` — the request path's posture is deliberate and worth keeping. An unreachable Redis
 now becomes a 503 with a reason instead of a 500 or a function that runs to `maxDuration`.
 
+**The push-mode consumer had the same race, and it was fixed pre-emptively — 2026-08-26.** It calls
+the same `buildServices` and then dispatches immediately, so it too can reach Redis on a client that
+is still shaking hands. It has never actually failed, and the reason is *timing luck* rather than any
+ordering guarantee: both handlers happen to make a Postgres round trip before their first Redis
+command (`processSegmentJob` reads the topic before `tryAcquire`; `processSampleJob` upserts one),
+and a warm same-region pooler query has been beating a cold handshake. The Supabase cutover made that
+margin **narrower**, not wider — production Postgres is now us-east-1 beside `iad1`, so the Postgres
+half of the race got faster while the handshake did not. The consumer's boot now awaits the same
+helper, which moved to `apps/api/src/redis-ready.ts` so a route no longer exports a utility the other
+one imports.
+
+Worth knowing as an operator because of how it *would* have presented: not a 500, but a job that
+fails and is redelivered at +305 s and +610 s before being given up on, logging an error three lines
+from the legitimate `segment ... is locked; retrying later`. It would have read as lock contention.
+A boot that rejects instead names Redis and is retried whole on the next delivery.
+
+`/api/chores` does **not** need this and deliberately does not have it: no chore pass touches Redis,
+`ChoreDeps` has no client, and its boot never calls `buildServices`.
+
 **Verified on a scheduled fire, not just a curl.** The fires at 21:00, 21:10 and 21:20 UTC were 500;
 the deploy landed at ~21:26; the **21:30 fire returned 200**. That is the evidence that matters here —
 a manual `POST` proves the route, while a cron row proves the whole path: pg_cron → `pg_net` → TLS →
