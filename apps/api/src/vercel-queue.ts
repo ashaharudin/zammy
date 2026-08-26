@@ -7,7 +7,8 @@ import {
   type IngestQueue,
 } from "./ingest-queue.js";
 import { MAX_INGEST_DELIVERIES, shouldRetryDelivery } from "./ingest-queue-vercel.js";
-import { buildServices, ingestDispatch, type ServiceLogger } from "./server.js";
+import { waitForRedis } from "./redis-ready.js";
+import { buildServices, ingestDispatch, type ServiceLogger, type Services } from "./server.js";
 
 /**
  * The §9.1 consumer as a Vercel Queues push-mode function
@@ -165,6 +166,76 @@ async function bootFromEnvironment(): Promise<Drainable> {
   }
 
   const services = await buildServices(config, log);
+  return drainableFrom(services);
+}
+
+/**
+ * The rest of the boot, given built services: wait for Redis, then hand back
+ * something that can drain. Separated from `bootFromEnvironment` because the
+ * wait is the part worth pinning and the part around it needs a platform, a
+ * database and an upstream.
+ *
+ * **The wait is the whole point of this function.** `buildServices` connects its
+ * Redis client in the background on purpose — `lazyConnect`,
+ * `enableOfflineQueue: false`, an un-awaited `connect()` — because on the
+ * request path Redis is pure cache and awaiting Upstash's ~800 ms handshake
+ * would sit in front of every cold timeline read. See `redis-ready.ts`; that
+ * posture stays.
+ *
+ * For this consumer it is wrong, in the same way it was wrong for the drain, and
+ * for the same reason: the boot returns and a job runs immediately against a
+ * client that may still be shaking hands, where a disabled offline queue makes
+ * ioredis throw `Stream isn't writeable` rather than wait.
+ *
+ * Unlike the drain this has never actually failed, and the reason is TIMING
+ * LUCK rather than any ordering guarantee. Both handlers happen to make a
+ * Postgres round trip before their first Redis command — `processSegmentJob`
+ * reads the topic before `tryAcquire` takes the segment lock, `processSampleJob`
+ * upserts the topic first — and a warm same-region pooler query has been
+ * winning that race against a cold handshake. It got NARROWER at the Supabase
+ * cutover, not wider: production is now us-east-1 beside Vercel's iad1, so the
+ * Postgres half of the race got faster while the handshake did not.
+ *
+ * And the way it would present is worse than a 500. `tryAcquire` throwing is
+ * caught as a failed job, so the message comes back at +305 s and +610 s before
+ * anything gives up — and the error reads as the legitimate case sitting three
+ * lines away in that same function, "segment ... is locked; retrying later".
+ * Lock contention and a connection that was never ready are not the same
+ * problem, and a fix aimed at the wrong one of them is an afternoon.
+ *
+ * A rejection here fails the boot rather than the job. That is the outcome we
+ * want: `bootOnce` drops the failed promise so the next delivery retries the
+ * whole thing, and the log line names Redis instead of a lock.
+ */
+/**
+ * Wait for Redis, and close the services if it never arrives.
+ *
+ * The close is not tidiness. `buildServices` unwinds its own failures through an
+ * `abandon` list, but that only covers throws INSIDE it — this wait happens one
+ * layer up, after it has already returned a fully built pool and client. Without
+ * the close, a rejection escapes with both still open and nothing holding a
+ * reference to them, which is precisely the hazard server.ts:172 was written
+ * about: "anything this attempt left open leaks once per invocation for the life
+ * of an instance that lives for hours". `bootOnce` drops a failed boot so the
+ * next invocation retries the whole thing, so an unreachable Redis would
+ * otherwise leak a `DATABASE_POOL_MAX`-sized pool per retry against a
+ * free-tier connection budget.
+ *
+ * `close()` failing must not mask the reason the boot failed, so it is
+ * swallowed — the caller wants "Redis was not ready", not whatever `pool.end()`
+ * made of a half-open connection.
+ */
+async function readyOrClose(services: Services): Promise<void> {
+  try {
+    await waitForRedis(services.redis);
+  } catch (error) {
+    await services.close().catch(() => {});
+    throw error;
+  }
+}
+
+export async function drainableFrom(services: Services): Promise<Drainable> {
+  await readyOrClose(services);
   return { queue: services.queue, dispatch: ingestDispatch(services) };
 }
 

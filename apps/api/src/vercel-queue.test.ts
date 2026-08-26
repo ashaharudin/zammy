@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createMessageHandler, type DeliveryMetadata } from "./vercel-queue.js";
+import { createMessageHandler, drainableFrom, type DeliveryMetadata } from "./vercel-queue.js";
 import { MAX_INGEST_DELIVERIES } from "./ingest-queue-vercel.js";
 import type { IngestJob, SegmentJob } from "./ingest-queue.js";
 
@@ -126,5 +126,132 @@ describe("createMessageHandler", () => {
 
     expect(seen).toEqual([{ kind: "sample", language: "en" }]);
     expect(settled).toEqual([{ kind: "sample", language: "en" }]);
+  });
+});
+
+/**
+ * The boot's Redis wait — the drain's production 500 of 2026-08-26, caught in
+ * the one other place it could still happen.
+ *
+ * `buildServices` connects its client in the background on purpose (server.ts:
+ * "Redis is pure cache: never let a reconnect storm block a request that
+ * Postgres could have served"), so this boot has to wait for it before a
+ * delivery can reach `tryAcquire`. What these pin is ORDERING, which is exactly
+ * what the rest of this file cannot: every other test here is handed a
+ * `Drainable` that already exists.
+ *
+ * The bug was never a wrong wait, it was the absence of one, so a fake client
+ * that stays `connecting` is the whole apparatus. `waitForRedis` itself is
+ * pinned in `redis-ready.test.ts`.
+ */
+describe("drainableFrom", () => {
+  /** ioredis' `status` plus the two events the wait subscribes to. */
+  const fakeRedis = (status: string) => {
+    const handlers = new Map<string, Array<() => void>>();
+    return {
+      status,
+      once(event: string, fn: () => void) {
+        handlers.set(event, [...(handlers.get(event) ?? []), fn]);
+        return this;
+      },
+      off(event: string, fn: () => void) {
+        handlers.set(
+          event,
+          (handlers.get(event) ?? []).filter((h) => h !== fn),
+        );
+        return this;
+      },
+      emit(event: string) {
+        for (const fn of [...(handlers.get(event) ?? [])]) fn();
+      },
+    };
+  };
+
+  const services = (redis: object, close: () => Promise<void> = async () => {}) => ({
+    redis,
+    queue: { settle: async () => {}, name: "ingest" },
+    deps: {},
+    trendingDeps: {},
+    close,
+  });
+
+  it("does not hand back a drainable while Redis is still connecting", async () => {
+    // The race itself. With `enableOfflineQueue: false` a command written now
+    // throws `Stream isn't writeable` rather than waiting, and the handlers only
+    // survive it today because both make a Postgres round trip first.
+    const redis = fakeRedis("connecting");
+    let settledTo: unknown = null;
+    const booting = drainableFrom(services(redis) as never).then((d) => (settledTo = d));
+
+    // Several turns of the microtask queue: enough for anything that was not
+    // actually waiting on the connection to have resolved.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settledTo).toBeNull();
+
+    redis.emit("ready");
+    await booting;
+    expect(settledTo).not.toBeNull();
+  });
+
+  it("returns a drainable over the services' own queue once Redis is ready", async () => {
+    const built = services(fakeRedis("ready"));
+    const drainable = await drainableFrom(built as never);
+
+    // The same queue object, not a second one: this consumer settles into the
+    // pending registry the read path polls.
+    expect(drainable.queue).toBe(built.queue);
+    expect(typeof drainable.dispatch).toBe("function");
+  });
+
+  it("fails the boot, naming Redis, when the connection ends before it is ready", async () => {
+    // Rejecting HERE rather than later is the point of the whole change. A boot
+    // that fails is dropped by `bootOnce` and retried on the next delivery, and
+    // the log line says redis; a boot that succeeded onto a dead client fails
+    // instead inside `tryAcquire`, three lines from "segment ... is locked;
+    // retrying later" — which is a different problem with a different fix.
+    const redis = fakeRedis("connecting");
+    const booting = drainableFrom(services(redis) as never);
+    redis.emit("end");
+
+    await expect(booting).rejects.toThrow(/redis connection ended before it was ready/);
+  });
+
+  it("closes the services when the wait fails, so a retried boot does not leak", async () => {
+    // `buildServices` unwinds its OWN failures; this wait is a layer above it,
+    // and `bootOnce` drops a failed boot so the next delivery builds a fresh
+    // pool and client. Without this close the previous pair stay open with
+    // nothing referencing them — a DATABASE_POOL_MAX-sized pool per retry,
+    // against a free-tier connection budget (server.ts:172).
+    const redis = fakeRedis("connecting");
+    const closed = vi.fn(async () => {});
+    const booting = drainableFrom(services(redis, closed) as never);
+    redis.emit("end");
+
+    await expect(booting).rejects.toThrow(/ended before it was ready/);
+    expect(closed).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not close the services on the happy path", async () => {
+    // The mirror of the above: closing a healthy boot would tear down the pool
+    // the dispatch is about to use.
+    const closed = vi.fn(async () => {});
+    await drainableFrom(services(fakeRedis("ready"), closed) as never);
+    expect(closed).not.toHaveBeenCalled();
+  });
+
+  it("reports the wait's failure, not the close's", async () => {
+    // A `pool.end()` that rejects on a half-open connection must not become the
+    // reason the boot failed — the operator needs "redis", not whatever the
+    // teardown made of it.
+    const redis = fakeRedis("connecting");
+    const booting = drainableFrom(
+      services(redis, async () => {
+        throw new Error("pool teardown exploded");
+      }) as never,
+    );
+    redis.emit("end");
+
+    await expect(booting).rejects.toThrow(/ended before it was ready/);
   });
 });
