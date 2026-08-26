@@ -1,8 +1,7 @@
 # Research — running Zammy on Vercel + Supabase
 
-Companion to [DEPLOYMENT-OCI.md](DEPLOYMENT-OCI.md), which is now archival: OCI was abandoned for
-lack of Always Free Ampere capacity, so the question "where does this actually run" is open again.
-This document prices **Vercel (compute + CDN) + Supabase (Postgres)** against the app as it is
+Written when deployment moved off the earlier AWS/Oracle Cloud plans and the question "where does
+this actually run" was open again. This document prices **Vercel (compute + CDN) + Supabase (Postgres)** against the app as it is
 written today. Every claim about the codebase carries a file:line; every claim about the platforms
 carries a source at the bottom. Researched 2026-08-21.
 
@@ -41,7 +40,8 @@ push target and the app's shape changes with it.
 
 ## 2. What moves cleanly
 
-**`web` is the easy win, and it is better on Vercel than in the AWS plan.** The browser calls
+**`web` is the easy win, and it is better on Vercel than the earlier persistent-host plans were.**
+The browser calls
 `/api/v1/...` relative — [api.ts:86–114](../apps/web/src/api.ts) — so serving `web` and `api` from
 one Vercel project makes them same-origin. That deletes two of §4.1's "two places local and
 production genuinely differ":
@@ -53,11 +53,10 @@ production genuinely differ":
   same-origin value, and `@fastify/cors` is left registered against a boundary nothing crosses.
 
 **Postgres is a like-for-like move.** Supabase is stock Postgres with the extensions on top, so
-none of the six load-bearing mechanisms priced in
-[HEATWAVE-MIGRATION-SCOPE.md](HEATWAVE-MIGRATION-SCOPE.md) are in play: `RETURNING`, the `xmax = 0`
-insert-vs-update detection, arrays, CTEs, the group-identity trigger and all 16 migrations run as
-written. This is the exact opposite of the HeatWave verdict — the storage layer does not change
-shape, only its connection string and its TLS does (§4).
+none of the six load-bearing mechanisms a MySQL/HeatWave move would have priced are in play:
+`RETURNING`, the `xmax = 0` insert-vs-update detection, arrays, CTEs, the group-identity trigger and
+all 16 migrations run as written. The storage layer does not change shape, only its connection
+string and its TLS does (§4).
 
 **Bundle size is a non-issue.** `fixtures/` is 352 KB across 7 files, and the function limit is
 250 MB uncompressed. If `CURRENTS_MODE=fixture` is ever wanted in a deployed preview, the directory

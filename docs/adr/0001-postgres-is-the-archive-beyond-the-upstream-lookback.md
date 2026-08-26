@@ -4,17 +4,9 @@ status: accepted
 
 # Postgres is the archive beyond the upstream 30-day lookback
 
-> Amended 2026-08-17: the deployment target moved from AWS to OCI
-> ([DEPLOYMENT-OCI](../DEPLOYMENT-OCI.md)). Where this ADR says "RDS", read "the managed
-> production Postgres" — DEPLOYMENT-OCI §4 carries the backup and PITR requirement forward
-> onto OCI Database with PostgreSQL, unchanged.
->
-> Amended again 2026-08-21: **OCI was abandoned** (lack of free Ampere capacity; DEPLOYMENT-OCI is
-> now archival) and no replacement target is chosen. Read "the managed production Postgres" as
-> provider-neutral. **This ADR's decision is unaffected** — it is about where the archive lives and
-> what it must guarantee, not about who hosts it. The backup and PITR requirement now has no plan
-> carrying it, which makes it a requirement the next deploy plan must pick up rather than one
-> already satisfied.
+> Amended 2026-08-22: deployment moved to Vercel + Supabase + Upstash
+> ([ADR-0015](0015-all-in-on-vercel-hobby-shaped.md)). Where this ADR says "RDS", read "Supabase
+> Postgres" — the backup and PITR requirement carries forward unchanged.
 
 Currents API refuses any `start_date` older than 30 days (verified: 29 days returns
 200, 31 days returns `400 "Max lookback is 30 days"`). Articles we stored more than

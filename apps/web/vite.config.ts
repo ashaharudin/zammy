@@ -2,8 +2,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 // The API base URL is the one thing that genuinely differs between local dev and
-// production (ARCHITECTURE 4.1): a dev-server proxy here, an absolute CloudFront
-// origin in AWS. Configured, never defaulted.
+// production (ARCHITECTURE 4.1): a dev-server proxy here, an absolute Vercel
+// origin in production. Configured, never defaulted.
 export default defineConfig({
   plugins: [react()],
   server: {

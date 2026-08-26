@@ -1,6 +1,6 @@
 # Zammy — Architectural Proposal
 
-**Status:** Phases 0–5f and 7a built (§13); **no deploy target — OCI abandoned 2026-08-21** (DEPLOYMENT-OCI is archival) · **Scope:** the design; decisions live in ADRs
+**Status:** Phases 0–5f and 7a built (§13); **deployment moved to Vercel + Supabase + Upstash** ([ADR-0015](adr/0015-all-in-on-vercel-hobby-shaped.md)) · **Scope:** the design; decisions live in ADRs
 
 A news aggregator that takes keywords from a user and returns a time-ordered timeline of headlines
 and topic summaries, backed by [Currents API](https://currentsapi.services/en/docs/).
@@ -156,25 +156,14 @@ request *and* generates the TS type), **Kysely** for typed SQL — deliberately 
 **Decided 2026-08-22 (ADR-0015):** the target is Vercel + Supabase + Upstash, Hobby-shaped —
 Plan A of RESEARCH-VERCEL-SUPABASE, scoped and priced in
 [VERCEL-ALL-IN-SCOPE.md](VERCEL-ALL-IN-SCOPE.md), whose §1 topology table is the deployment map.
-This replaced OCI (abandoned 2026-08-21 on free-Ampere capacity; DEPLOYMENT-OCI is archival),
-which had replaced AWS. The AWS sketch below is kept as the persistent-host alternative — it is
-what "Plan B" concretely looks like if Hobby's ceilings are outgrown — and it retains the property
-that survived every change of target: moving is an infrastructure rewrite, not an application
-rewrite.
+Vercel + Supabase + Upstash is now the only deployment target; the earlier AWS and Oracle Cloud
+plans are superseded. Moving between targets has always been an infrastructure rewrite, not an
+application rewrite.
 
 Docker Compose is the **local development
 environment**, not a deployment target — built as a faithful rehearsal of production. The **same
 images** run in both, differing only by environment variables. No code path may branch on
 environment; the moment one does, local development stops predicting production.
-
-| Unit | Local dev (Compose) | AWS (the persistent-host alternative, not the target) |
-| --- | --- | --- |
-| `api` + in-process consumer | container | ECS **Fargate** service behind an ALB |
-| `web` | Vite dev server | static build on S3 + CloudFront |
-| Postgres | `postgres:17` container, named volume | **RDS** Postgres, automated backups, PITR |
-| Redis | `redis:7` container | **ElastiCache** |
-| Secrets | gitignored `.env` | **Secrets Manager / SSM**, injected into the task definition |
-| Logs | stdout to the terminal | stdout → **CloudWatch** |
 
 The two places local and production genuinely differ, needing explicit configuration:
 
@@ -219,10 +208,8 @@ fork.
 **What the Vercel move requires** is scoped and phased in VERCEL-ALL-IN-SCOPE §3 and §9: the
 `buildApp` split, the queue reimplementation, the chores route, the Redis quota governor and
 rate-limit store, config, and a CI migration step (ADR-0003's discrete `Migrator` step survives as
-CI, since Vercel has no post-deploy hook). If the persistent-host alternative is ever taken
-instead, the AWS sketch above is the starting point — task definitions, RDS/ElastiCache, an ALB on
-the existing `/healthz` and `/readyz` probes (§6.1) — and IaC is worth writing at the point of that
-move, not before.
+CI, since Vercel has no post-deploy hook). If Hobby's ceilings are outgrown, ADR-0015 names Vercel
+Pro as the next tier, not a re-architecture.
 
 ---
 
@@ -947,9 +934,9 @@ last night's chores run?"; the row is opened before the pass and closed after it
 killed at `maxDuration` leaves `finished_at IS NULL` rather than leaving nothing. The Supabase
 free-tier pause guard is a separate route on a separate schedule (`/api/keepalive`), deliberately
 sharing no failure mode with the most complex nightly job. **Nothing is scheduled yet**:
-`deploy/vercel/supabase-cron.sql` is written and has not been run. The earlier schedulers — systemd
-timers on a staging VM, OCI Resource Scheduler — are **archival** (no OCI VM was ever created; OCI
-abandoned 2026-08-21). The requirement is the pass, not the mechanism.
+`deploy/vercel/supabase-cron.sql` is written and has not been run. (Deployment moved to
+Vercel + Supabase + Upstash, ADR-0015; earlier AWS/Oracle Cloud scheduler plans are superseded.)
+The requirement is the pass, not the mechanism.
 
 The chores were once a BullMQ job scheduler registered at boot, which bought exactly-once across N
 instances from Redis-shared state; the runner buys it from a Postgres advisory lock — **two domains,
@@ -1490,9 +1477,9 @@ apart see the same cloud.
 ## 13. Delivery phases
 
 > **Two numbering schemes exist in this repo, and they are unrelated.** These are the *product*
-> phases; the OCI rollout had its own 0–5 in [DEPLOYMENT-OCI §7](DEPLOYMENT-OCI.md) (archival since
-> 2026-08-21). "Phase 3" means the Query Service here and "first end-to-end deploy" there. Say
-> which you mean.
+> phases; the Vercel rollout has its own 0–5 in
+> [VERCEL-ALL-IN-SCOPE §9](VERCEL-ALL-IN-SCOPE.md). "Phase 3" means the Query Service here and
+> "the Redis quota governor" there. Say which you mean.
 >
 > Status column: ✅ built · 🔄 in progress · ⬜ not started · ⛔ blocked on something outside the
 > phase.
@@ -1511,7 +1498,7 @@ apart see the same cloud.
 | 5c | **Article grouping (§14.3):** `group_id` / `group_published` / `title_tokens` on `articles`, write-time grouping after the collapse, the keyset moved onto the group axis, per-topic representative from the source-authority list, the "related" disclosure. | ✅ |
 | 5e | **Storylines:** day-clustered slots (ADR-0009), then the persistent arc that superseded them (ADR-0011) — `storylines` / `storyline_days`, the linker, bridges and auto-merge, the timeline paged over storyline-days. Migration 0012 dropped the day-bounded model and its flag. | ✅ |
 | 5f | **Storyline labels (ADR-0011, "Labels"):** Gemini-generated names at promotion, merge and drift, bigram fallback when no key is set, plus `label_source` so a relabel campaign can resume. | ✅ |
-| 6 | **Deploy** — Vercel, all in ([ADR-0015](adr/0015-all-in-on-vercel-hobby-shaped.md), phased in VERCEL-ALL-IN-SCOPE §9). AWS superseded by **OCI** on 2026-08-14; OCI then **abandoned 2026-08-21** for lack of free Ampere capacity, [DEPLOYMENT-OCI.md](DEPLOYMENT-OCI.md) now archival, its Phase 1 network/vault/LB left standing inside Always Free. Vercel Phase 0 (the spikes) and **Phases 1–2 (the api as one Function; the queue on Vercel Queues) are done and verified on preview. Phase 3 (the Redis quota governor and rate-limit store) is deployed but only half verifiable**: its rate-limit half is confirmed across six instances, its burst half is unexercised because a fixture-mode preview never calls the governor at all. **Phase 4 (the chores route, `chore_runs`, the pause guard, the reindex sweep) is built and green locally and is scheduled nowhere** — `deploy/vercel/supabase-cron.sql` is written and unrun. VERCEL-ALL-IN-SCOPE §9 keeps both 🚧 for those reasons. Cutover is Phase 5. Operator's half: [deploy/vercel/](../deploy/vercel/). | 🚧 in progress — Phase 4 of 5 |
+| 6 | **Deploy** — Vercel, all in ([ADR-0015](adr/0015-all-in-on-vercel-hobby-shaped.md), phased in VERCEL-ALL-IN-SCOPE §9), superseding earlier AWS and Oracle Cloud plans. Vercel Phase 0 (the spikes) and **Phases 1–2 (the api as one Function; the queue on Vercel Queues) are done and verified on preview. Phase 3 (the Redis quota governor and rate-limit store) is deployed but only half verifiable**: its rate-limit half is confirmed across six instances, its burst half is unexercised because a fixture-mode preview never calls the governor at all. **Phase 4 (the chores route, `chore_runs`, the pause guard, the reindex sweep) is built and green locally and is scheduled nowhere** — `deploy/vercel/supabase-cron.sql` is written and unrun. VERCEL-ALL-IN-SCOPE §9 keeps both 🚧 for those reasons. Cutover is Phase 5. Operator's half: [deploy/vercel/](../deploy/vercel/). | 🚧 in progress — Phase 4 of 5 |
 | 7a | **Second provider behind the client interface:** `@zammy/news-client` core + per-provider adapters + the composite, GNews added, `provider` column on `articles`/`sightings` (§5.6, ADR-0012). | ✅ |
 | 7b | Topic summaries into `topics.summary`. The schema reserves the columns (§7.2); nothing generates them. | ⬜ not started |
 
@@ -1573,12 +1560,13 @@ pure-recency ordering — along with the click that ran a label verbatim and ret
 ([0014](adr/0014-the-cloud-ranks-by-volume-and-searches-what-the-coverage-says.md)), which brings
 0008's decay and its half-life back with it.
 
-Resolved by decision, then reopened: the target was AWS, then OCI, and since 2026-08-21 there is
-**no target** (§4.1). What the original decision corrected still stands — the earlier claim that the
-deployment choice would not affect the architecture. It does, in two places: the job queue needs
-at-least-once delivery rather than a naive `LPOP`, and the breadth-sample trigger needs a lock a
-single host would not need. Fargate keeping CPU allocated settles scale-to-zero, so the consumer
-stays in-process.
+Resolved by decision, then reopened: the target moved from AWS to Oracle Cloud to
+**Vercel + Supabase + Upstash** (ADR-0015, §4.1). What the original decision corrected still
+stands — the earlier claim that the deployment choice would not affect the architecture. It does,
+in two places: the job queue needs at-least-once delivery rather than a naive `LPOP`, and the
+breadth-sample trigger needs a lock a single host would not need. Vercel Functions scale to zero,
+which is why the consumer moved out of the api process to a Vercel Queues push consumer (§9.1) —
+the opposite of what a persistent host would have needed.
 
 Still open:
 
