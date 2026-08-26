@@ -750,13 +750,69 @@ Each phase ends with something demonstrable; none of them is "and then we cut ov
 | **1. The api as a Function** (1–2 d) ✅ | §3.1. Consumer disabled, chores still manual. Preview in fixture mode against the preview data plane (§4). | **Done, deployed and verified 2026-08-24** (commit `8be3fa9`). `/readyz` returns `{"status":"ready"}` with `postgres.ok` and `redis.ok` both true. The three halves only a deploy could exercise all came back: **Supabase through the transaction pooler** — a `/api/v1/timeline` read whose `servedFrom` moves `upstream` → `store` across polls, so the rows were written and read back through 6543; **Upstash** — reachable, after the scheme fix below; **`includeFiles` does place `fixtures/`** — a fresh topic answers `servedFrom: "upstream"` with recorded fixture content, and an absent directory would have failed the boot into a 503 instead. Cold start **993 ms**, warm 190–298 ms — close to Phase 0's 947 ms on the platform (§7.1). All 17 migrations applied through the session pooler under `verify-full` in 8.2 s. **One third of the criterion as written was unreachable and is struck** — `degraded: "ingest_timeout"`, see below. |
 | **2. The queue** (2–3 d) ✅ | §3.2 — new `IngestQueue` implementation (eight members counting `settle`), `api/queues/ingest.ts`, a **900 s** message TTL (not the 5 min §0 planned — see Q0), rewritten tests, and `POST /api/drain`. | **All three criteria met, deployed and verified 2026-08-25.** A cold topic fills behind the reader; `meta.ingest` drains to zero — a delivery logs `ingest delivery` then `ingest job settled` for one message id, which is the evidence, not the 200; and **a failed delivery now redelivers** at +0 s, +305 s and +610 s, the third settling and giving up. Getting the third took a day: it failed first, and the cause was a 300 s TTL colliding with a 305 s visibility lease (Q0). Two things this phase added beyond its scope, both because the failure showed they were needed: per-delivery logging, and the manual drain promoted from fallback to built. **The drain has never run against a live deployment** — its logic is unit-tested only. |
 | **3. Quota + limits** (1–2 d) 🚧 | §3.4 (burst-only, fail-open) and §3.5 (Redis store, fail-open). | **Deployed and verified 2026-08-25 (`zammy-bn5h84rr1`) for §3.5; §3.4 is unverifiable on a fixture preview and stays open.** The per-IP guard is real and genuinely shared: 60 requests admitted and the 61st answered 429 with `retry-after: 50`, **across six distinct instances** — per-instance counters would have admitted 60 × 6 — with `x-ratelimit-remaining` monotonic and gapless across separate invocations, and `/healthz` still 200 throughout. Fail-open is real, and wider than expected (below). **The burst-ceiling criterion cannot be met from here**: fixture mode returns `FixtureCurrentsClient`, which builds its own `UnmeteredQuotaGovernor` and ignores the injected one, so no deployed code path calls `reserve`. See below. |
-| **4. Chores** (1–1.5 d) | §3.3 + Supabase Cron + `chore_runs` + the keep-alive ping, **plus what Phase 0 added**: the `REINDEX CONCURRENTLY` sweep in the retention chore. The late-candidate sweep is gated off (findings §2.6), so this phase no longer carries a deadline problem; if it is ever switched back on, the bound and persisted cursor come back with it. | All scheduled passes run on schedule and write `chore_runs` rows, any pass runs on demand by query param, twice-triggered runs skip on the lock, the 202 arrives from cold within pg_net's configured timeout, **and a gated night reports `skipped: true` rather than a clean `offered: 0`** |
+| **4. Chores** (1–1.5 d) 🚧 | §3.3 + Supabase Cron + `chore_runs` + the keep-alive ping, **plus what Phase 0 added**: the `REINDEX CONCURRENTLY` sweep in the retention chore. The late-candidate sweep is gated off (findings §2.6), so this phase no longer carries a deadline problem; if it is ever switched back on, the bound and persisted cursor come back with it. | **Built and green locally; nothing is scheduled yet.** Three of the five criteria are met without a deployment and are pinned by tests: any pass runs on demand by query param (eight of them, up from §3.3's seven), a twice-triggered run skips on the lock **and records the skip**, and a gated night reports `lateCandidates.skipped: true` rather than a clean `offered: 0`. The two that need the platform are open: **no schedule exists** — `deploy/vercel/supabase-cron.sql` is written and unrun — and the 202's cold latency has been measured only on the spike (669 ms, for a route with no `buildApp` behind it), not on this one. |
 | **5. Observability + cutover** (1–2 d) | The migration CI jobs (§6, prod + preview), env vars (§4), **seed production from the dev corpus** (a 24 MB `pg_dump -Fc`, measured at 1.9 s out and 1.1 s in — findings §4), DNS. Drain the 2,981-storyline label backlog first (§3.3). | Production traffic against the seeded corpus, and "did last night's chores run?" is answered by a `chore_runs` query |
 
 **Total: 7–13 days.** Phase 0's measurements added the reindex sweep to Phase 4 and took the
 late-candidate sweep's deadline problem out of the plan altogether — it was a linking bug, its fix
 exposed a runaway, and the pass is now gated off (findings §2.6). Phase 0's deployment half and
 Phase 1 have both since run and neither moved the estimate; the remaining spread is Phase 2.
+
+### Phase 4 as it stands
+
+**Built, tested, and unscheduled.** `api/chores.ts` and `api/keepalive.ts` exist,
+`chore_runs` is migration 0018, and the `REINDEX CONCURRENTLY` sweep is in the retention chore. What
+has NOT happened is the only part that needs an outward-facing action: nobody has run
+[supabase-cron.sql](../deploy/vercel/supabase-cron.sql) against a Supabase project, so **no pass is
+on a schedule and the pause guard is not guarding anything**. Until that is run, a deployed project's
+database stays awake only as long as something else keeps it awake.
+
+**Four decisions the scope did not make.**
+
+*The `chore_runs` row is opened before the pass and updated after it*, where §3.3 said "at pass end".
+An end-only write cannot record the failure this route is most exposed to: `maxDuration` is 300 s,
+the label pass is the pass that approaches it, and a function killed at the ceiling runs no `finally`
+— so the night that most needs a record would leave none, and would look exactly like a night nothing
+was scheduled. `finished_at IS NULL` on an old row is now a positive statement instead. It costs one
+round trip a night.
+
+*Two lock domains, not one key per pass.* `storylines` **contains** `labels`, so a per-pass key would
+let "re-run just the label pass from a laptop" run the label pass twice at once while the scheduler
+was midway through it. The keys are the CLI's original ones, which is what makes a laptop run and a
+scheduled run contend rather than both spending the night's Gemini budget. `graph` takes no lock at
+all — it is a read, and locking it would make the percolation alarm unreadable during exactly the
+multi-hour pass you would want to read it during.
+
+*The CLI writes `chore_runs` too.* `chores-cli.ts` and the route now share `chore-runner.ts` down to
+the lock and the record. A table that only knew about the route would answer "did last night's chores
+run?" for the Vercel half of the system and lie by omission about the other half — and they share a
+database. `pnpm chores status` is the query, so Phase 5's exit criterion does not need anyone to
+write SQL against a session pooler by hand.
+
+*`CHORE_MAX_LABELS` defaults to 50 and changes the CLI's default too.* §3.3 said `--max-labels`
+becomes a deployment parameter; the pass's own code default was 500, and 75 labels is the entire
+300 s window at `GEMINI_MAX_RPM=15`. The unbounded run is now the deliberate act rather than the
+default one.
+
+**What the reindex sweep is, restated because "reindex" reads as a latency chore.** It is a
+**storage** chore. Autovacuum keeps up with dead tuples and does not return the pages; index pages are
+the bulk of what it does not return, and that is 22% of the database at 15 corpus-days — 41 MB across the
+database, 23 MB of it on `story_token_days` alone (its indexes go 30 MB to 7). On Supabase's 500 MB it is the difference between the storage
+tripwire reading 1,214 articles/day and 1,485, against an observed 742–1,747 (findings §4, §5). It
+runs **after** the trailing-corpus prune in the same pass, because that prune is the largest single
+source of the bloat it reclaims. It never throws — a table that loses a lock race is recorded and the
+next one attempted, because the retention *report* is the deliverable and this is the side effect.
+
+**One tripwire this phase adds.** `REINDEX ... CONCURRENTLY` interrupted leaves an invalid `*_ccnew`
+twin that is never read and still maintained on every write — the exact inversion of what the sweep
+is for, accumulating silently, with nothing in Postgres complaining. The sweep counts them afterwards
+and warns; the report's `invalidIndexes` should always be empty, and anything in it wants a `DROP
+INDEX` by hand. Dropping an index is not a decision a nightly chore gets to make on its own.
+
+**And one thing Phase 4 does not close.** Q3's open half — does the cloud fill? — was blocked on
+there being no labelled storylines in preview, and this phase builds the route that would label them.
+It does not run it. Closing Q3 still needs a bounded `?pass=labels` against the preview, and the free
+tier is 500/day per model.
 
 ### Phase 3 as it stands
 

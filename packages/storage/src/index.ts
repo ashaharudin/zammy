@@ -11,6 +11,8 @@ export * from "./ingest.js";
 export * from "./coverage.js";
 export * from "./topics.js";
 export * from "./retention.js";
+export * from "./reindex.js";
+export * from "./chore-runs.js";
 export * from "./trending-storylines.js";
 export * from "./grouping.js";
 export * from "./storylines.js";

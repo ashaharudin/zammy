@@ -171,6 +171,13 @@ export interface FetchLogTable {
 export type StorylineStatus = "provisional" | "active" | "dormant";
 
 /**
+ * How a chore run ended. `skipped` is first-class because the advisory lock
+ * makes it a NORMAL outcome — the second of two schedulers skipping is the
+ * mechanism working, not a failure and not a success (migration 0018).
+ */
+export type ChoreOutcome = "ok" | "failed" | "skipped";
+
+/**
  * One persistent arc of one event (ADR-0011). Identity is the UUID and only the
  * UUID — the label is non-unique presentation that regenerates as the storyline
  * drifts, so nothing may key off it.
@@ -301,6 +308,35 @@ export interface StorylineFormationRefusalsTable {
   refused_at: Generated<Date>;
 }
 
+/**
+ * One run of one nightly pass (migration 0018): the durable answer to "did last
+ * night's chores run?", which a 202-and-`waitUntil` route plus one hour of log
+ * retention cannot otherwise give (VERCEL-ALL-IN-SCOPE §3.3).
+ *
+ * The row is inserted BEFORE the pass and updated after it, so `finished_at IS
+ * NULL` on an old row says the pass started and did not come back — a function
+ * killed at `maxDuration` runs no `finally` and would otherwise leave nothing at
+ * all.
+ */
+export interface ChoreRunsTable {
+  id: Generated<string>;
+  /** The addressable pass name, as the route's `?pass=` and the CLI spell it. */
+  pass: string;
+  /** `route` or `cli` — both entrypoints record here. */
+  source: string;
+  started_at: Generated<Date>;
+  /** Null while the pass is in flight, and forever if it never returned. */
+  finished_at: Timestamp | null;
+  /** `ok` | `failed` | `skipped`; null exactly when `finished_at` is. */
+  outcome: ChoreOutcome | null;
+  /** The pass's own report, summarized — see `summarizeChoreReport`. */
+  report: ColumnType<unknown, string | null, string | null>;
+  /** The failure message for `failed`. The stack goes to the log. */
+  error: string | null;
+  /** Model calls spent, hoisted out of `report` because it is summed across rows. */
+  model_calls: number | null;
+}
+
 export interface Database {
   sightings: SightingsTable;
   articles: ArticlesTable;
@@ -315,6 +351,7 @@ export interface Database {
   story_corpus_days: StoryCorpusDaysTable;
   storyline_bridges: StorylineBridgesTable;
   storyline_formation_refusals: StorylineFormationRefusalsTable;
+  chore_runs: ChoreRunsTable;
 }
 
 /** How TLS to Postgres is decided. libpq's names, minus the modes nobody here wants. */

@@ -12,6 +12,12 @@
       "maxDuration": 300,
       "includeFiles": "fixtures/**"
     },
+    "api/chores.ts": {
+      "maxDuration": 300
+    },
+    "api/keepalive.ts": {
+      "maxDuration": 15
+    },
     "api/queues/ingest.ts": {
       "maxDuration": 300,
       "includeFiles": "fixtures/**",

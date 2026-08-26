@@ -1,23 +1,12 @@
-import { ConfigError, loadConfig } from "@zammy/config";
-import { sql } from "kysely";
-import {
-  runRetentionChore,
-  runStorylinePass,
-  type ChoreDeps,
-  type StorylinePassDeps,
-} from "./chores.js";
-import {
-  createConfiguredDb,
-  createLabeler,
-  createLabelMergeRules,
-  createLinkerConfig,
-} from "./wiring.js";
+import { ConfigError, loadConfig, type Config } from "@zammy/config";
+import { readChoreRuns } from "@zammy/storage";
+import { CHORE_PASSES, isChorePass, runChorePass, type ChorePass } from "./chore-runner.js";
+import { choreDepsFromConfig } from "./wiring.js";
 
 /**
- * `pnpm chores <retention|storylines> [--label-rate=N] [--max-labels=N]
- * [--late-candidates] [--changed-only|--full]` — the nightly chores as a one-shot
- * process
- * (ARCHITECTURE 9.1).
+ * `pnpm chores <pass> [--label-rate=N] [--max-labels=N] [--late-candidates]
+ * [--changed-only|--full]`, and `pnpm chores status [--pass=N] [--limit=N]` —
+ * the nightly chores as a one-shot process (ARCHITECTURE 9.1).
  *
  * A chore, not a command: unlike `regroup` or `backfill:storylines` this is not
  * something an operator decides to do, it is what happens every night. What
@@ -25,7 +14,12 @@ import {
  * platform's scheduler (see `chores.ts`, "Where the schedule lives"). The
  * schedules this replaced were `0 3 * * *` for retention and `0 4 * * *` for
  * storylines, in UTC; whatever schedules this must reproduce them, including the
- * timezone, or the day boundaries the passes bucket by shift under them.
+ * timezone, or the day boundaries the passes bucket by shift under them. On the
+ * Vercel deployment that scheduler is Supabase Cron against `api/chores.ts`
+ * (VERCEL-ALL-IN-SCOPE §3.3), and this file and that route deliberately share
+ * everything below the entrypoint — `chore-runner.ts` holds the lock, the pass
+ * table and the `chore_runs` record, so a run from a laptop and a run from the
+ * scheduler contend for the same lock and land in the same table.
  *
  * ── Contract with the scheduler ──────────────────────────────────────────────
  * It runs one pass and exits, holding nothing open — the requirement every cron
@@ -40,25 +34,9 @@ import {
  * (Railway skips a cron whose previous run is still Active; a systemd timer will
  * not re-enter a running unit), so it is expected rather than exceptional, and
  * alerting on it would train an operator to ignore the alert. The warn line it
- * logs is what a stuck run shows up as.
+ * logs is what a stuck run shows up as — and since Phase 4 so is a `chore_runs`
+ * row with `outcome: 'skipped'`, which outlives the log.
  */
-
-const PASSES = ["retention", "storylines"] as const;
-type Pass = (typeof PASSES)[number];
-
-/**
- * Session-scoped advisory lock keys, one per pass so the two never block each
- * other — they are scheduled an hour apart, but a retention run that overruns
- * must not eat the storyline pass's night.
- *
- * Arbitrary but stable, and deliberately adjacent to (never equal to) the
- * migrator's 7226461501: a chore that blocked on the migration lock, or worse
- * took it, would be a deploy hanging behind a label pass.
- */
-const LOCK_KEYS: Record<Pass, number> = {
-  retention: 7_226_461_502,
-  storylines: 7_226_461_503,
-};
 
 const args = process.argv.slice(2);
 const flag = (name: string): string | undefined =>
@@ -75,38 +53,53 @@ const num = (name: string): number | undefined => {
 };
 
 const named = args.filter((arg) => !arg.startsWith("--"));
-if (named.length !== 1 || !PASSES.includes(named[0] as Pass)) {
+const command = named[0];
+const wantsStatus = command === "status";
+
+if (named.length !== 1 || (!wantsStatus && !isChorePass(command ?? ""))) {
   console.error(
-    `usage: chores <${PASSES.join("|")}> [--label-rate=N] [--max-labels=N] ` +
+    `usage: chores <${CHORE_PASSES.join("|")}|status> [--label-rate=N] [--max-labels=N] ` +
       "[--late-candidates] [--changed-only|--full]",
   );
   console.error("");
-  console.error("  retention   the retention report, and the trailing-corpus prune");
-  console.error("  storylines  dormancy, bridge sweep, labels, label merge");
+  console.error("  retention        the retention report, the trailing-corpus prune, and the");
+  console.error("                   REINDEX CONCURRENTLY sweep");
+  console.error("  storylines       dormancy, bridge sweep, labels, label merge, graph shape");
+  console.error("");
+  console.error("  Any single step of the storyline pass is also addressable on its own, for");
+  console.error("  a re-run that must not drag the whole night with it:");
+  console.error("    dormancy, bridges, late-candidates, labels, label-merge, graph");
+  console.error("");
+  console.error("  status           what recently ran, from chore_runs — the durable answer");
+  console.error("                   to 'did last night's chores run?'");
+  console.error("                   [--pass=NAME] [--limit=N]");
   console.error("");
   console.error(
-    "  --late-candidates  also run the late-candidate sweep. Off by default: it",
+    "  --late-candidates  the storyline pass also runs the late-candidate sweep. Off",
   );
   console.error(
-    "                     percolates against the fixed candidate retrieval until",
+    "                     by default: it percolates against the fixed candidate",
   );
   console.error(
-    "                     K is re-measured (docs/STORYLINE-LINKING.md).",
+    "                     retrieval until K is re-measured (docs/STORYLINE-LINKING.md).",
   );
+  console.error(
+    "                     Naming `late-candidates` as the pass runs it regardless —",
+  );
+  console.error("                     that IS the deliberate act the gate protects.");
   console.error(
     "  --changed-only     that sweep: offer only groups whose candidate set could",
   );
   console.error(
-    "                     have changed. --full forces the unscoped pass. Neither",
+    "                     have changed. --full forces the unscoped pass.",
   );
   console.error(
-    "                     does anything without --late-candidates.",
+    "  --max-labels       overrides CHORE_MAX_LABELS (default 50) for this run only.",
   );
   process.exit(64);
 }
-const pass = named[0] as Pass;
 
-let config;
+let config: Config;
 try {
   config = loadConfig();
 } catch (error) {
@@ -124,120 +117,145 @@ try {
  * person at a prompt — which is the
  * difference between this and the operator CLIs' human-readable printing.
  */
+const passLabel = wantsStatus ? "status" : (command as ChorePass);
 const emit = (level: string, obj: object, msg: string): void => {
-  console.log(JSON.stringify({ level, pass, msg, ...obj }));
+  console.log(JSON.stringify({ level, pass: passLabel, msg, ...obj }));
 };
 const log = {
   info: (obj: object, msg: string) => emit("info", obj, msg),
   warn: (obj: object, msg: string) => emit("warn", obj, msg),
 };
 
-// max: 4 — one connection is pinned for the advisory lock below and the passes
-// borrow the rest. Sequential work, so this is slack rather than parallelism;
-// what it must not be is 1, which would deadlock against the pinned connection.
-//
-// DATABASE_SESSION_URL when there is one. The lock below is session-scoped, and
-// through a transaction-mode pooler a session lock is taken on one backend and
-// looked for on another: `pg_try_advisory_lock` then returns true every time,
-// two schedulers both run the night's pass, and both log an ordinary success
-// (@zammy/config on DATABASE_SESSION_URL; RESEARCH-VERCEL-SUPABASE §4.1).
+// Built exactly as the route builds it — same wiring, same linker bar, same
+// labeler pacing, same session-mode connection and pool size. `wiring.ts` owns
+// that construction so the two entrypoints cannot drift; the flags below are
+// this entrypoint's own, and they are overrides applied to it rather than a
+// second configuration.
+const deps = choreDepsFromConfig(config, log);
 const connectionName = config.DATABASE_SESSION_URL ? "DATABASE_SESSION_URL" : "DATABASE_URL";
-const db = createConfiguredDb(config, { max: 4, session: true });
 
-const choreDeps: ChoreDeps = {
-  db,
-  config: {
-    retentionDays: config.RETENTION_DAYS,
-    storyDfWindowDays: config.STORYLINE_DF_WINDOW_DAYS,
-    storylineDormancyDays: config.STORYLINE_DORMANCY_DAYS,
-    timeZone: config.APP_TIMEZONE,
-  },
-  now: () => new Date(),
-  log,
-};
+/**
+ * `status`: a read, not a pass — no lock, no record of its own, which is why it
+ * does not live in `chore-runner.ts`. It is here because Phase 5's exit
+ * criterion — "did last night's chores run?" is answered by a `chore_runs`
+ * query — should not need anybody to write that query by hand against a session
+ * pooler.
+ */
+async function printStatus(): Promise<number> {
+  try {
+    return await readAndPrint();
+  } finally {
+    // The pool, like the pass half's — held open it would keep the process
+    // alive past the last line of output.
+    await deps.db.destroy();
+  }
+}
 
-const startedAt = Date.now();
-let failure: unknown;
+async function readAndPrint(): Promise<number> {
+  let runs;
+  try {
+    runs = await readChoreRuns(deps.db, {
+      pass: flag("pass"),
+      ...(num("limit") !== undefined ? { limit: num("limit") as number } : {}),
+    });
+  } catch (error) {
+    // 42P01, the one failure worth translating: this is the first command
+    // anybody runs after pulling the branch that added the table, and a raw
+    // `relation "chore_runs" does not exist` sends them looking at the wrong
+    // thing. Every other error is rethrown — hiding those is how a real
+    // connection problem gets read as "nothing has run yet".
+    if ((error as { code?: string }).code !== "42P01") throw error;
+    console.error("chore_runs does not exist — run `pnpm db:migrate` (migration 0018)");
+    return 78; // EX_CONFIG: the database is not the shape this needs
+  }
 
-// Which connection and which TLS, before any work: the lock below cannot tell
-// an operator that it was session-scoped, and a pass that silently ran twice
-// looks exactly like a pass that ran once.
-log.info({ connection: connectionName, tls: config.DATABASE_SSL }, "chore pass starting");
-
-try {
-  // pg_TRY_advisory_lock, not pg_advisory_lock: a second run must skip, not
-  // queue behind the first and then start the same night's work an hour late.
-  // The lock is what replaces BullMQ's exactly-once — with the clock outside the
-  // app, two schedulers pointed at one database is a configuration mistake
-  // nothing else would catch, and the label pass spends real money per call.
-  const ran = await db.connection().execute(async (connection) => {
-    const locked = await sql<{
-      locked: boolean;
-    }>`select pg_try_advisory_lock(${sql.lit(LOCK_KEYS[pass])}) as locked`.execute(connection);
-    if (locked.rows[0]?.locked !== true) return false;
-
-    try {
-      if (pass === "retention") {
-        await runRetentionChore(choreDeps);
-      } else {
-        const storylineDeps: StorylinePassDeps = {
-          ...choreDeps,
-          linker: createLinkerConfig(config),
-          labeler: createLabeler(config, log),
-          rules: createLabelMergeRules(config),
-          // Defaults to the configured ceiling, so the pass paces itself rather
-          // than piling into the client's pacer and waiting there.
-          // `--label-rate` can only usefully go SLOWER: the client enforces the
-          // ceiling regardless. Lower it when the server is labelling too — the
-          // two processes have separate pacers on one shared key.
-          labelRatePerMinute: num("label-rate") ?? config.GEMINI_MAX_RPM,
-          ...(num("max-labels") !== undefined ? { maxLabels: num("max-labels") } : {}),
-          // `--late-candidates` runs it for one night without editing the
-          // environment, because the honest way to drain the backlog fixing
-          // candidate retrieval exposed is an operator watching the graph shape,
-          // not a flag flipped once and forgotten. The config default is off.
-          lateCandidateSweep:
-            args.includes("--late-candidates") || config.STORYLINE_LATE_CANDIDATE_SWEEP,
-          // That sweep's scope, read only when it runs. `--full` is the flag
-          // that matters: the narrow pass gives up "every group in the window,
-          // every night" (docs/ARCHITECTURE.md §9.1 lists what that costs), so an
-          // operator needs a way to run the unscoped pass without changing the
-          // environment the scheduler reads.
-          lateCandidatesChangedOnly: args.includes("--full")
-            ? false
-            : args.includes("--changed-only") ||
-              config.STORYLINE_LATE_CANDIDATE_CHANGED_ONLY,
-        };
-        const report = await runStorylinePass(storylineDeps);
-        log.info({ report }, "storyline pass complete");
-      }
-      return true;
-    } finally {
-      await sql`select pg_advisory_unlock(${sql.lit(LOCK_KEYS[pass])})`.execute(connection);
-    }
-  });
-
-  if (ran) {
-    log.info({ seconds: Number(((Date.now() - startedAt) / 1000).toFixed(1)) }, "chore pass ran");
-  } else {
-    log.warn(
-      {},
-      "another run holds this pass's lock — skipping. Expected when a run overlaps " +
-        "the next schedule; a run that never finishes looks like this every night.",
+  if (runs.length === 0) console.error("no chore runs recorded");
+  for (const run of runs) {
+    console.log(
+      JSON.stringify({
+        pass: run.pass,
+        source: run.source,
+        startedAt: run.startedAt.toISOString(),
+        // Null here on a row whose pass never came back — the function was
+        // killed at `maxDuration`, or the process died. That is the state the
+        // row exists to make visible, so it is printed rather than hidden.
+        finishedAt: run.finishedAt?.toISOString() ?? null,
+        outcome: run.outcome,
+        modelCalls: run.modelCalls,
+        error: run.error,
+        report: run.report,
+      }),
     );
   }
-} catch (error) {
-  failure = error;
-  log.warn({ err: error instanceof Error ? error.message : String(error) }, "chore pass FAILED");
-} finally {
-  // Ends the pool this CLI created, which is what lets the process exit rather
-  // than being held open by an idle connection — the cron contract.
-  await db.destroy();
+  return 0;
 }
 
-if (failure !== undefined) {
-  // Rethrow rather than swallow: the stack is the whole diagnostic, and it goes
-  // to stderr where a scheduler's failure notification will quote it.
-  console.error(failure);
-  process.exit(1);
+/** One pass, with the flags applied as overrides on the configured night. */
+async function runPass(pass: ChorePass): Promise<number> {
+  // `--label-rate` can only usefully go SLOWER: the client enforces the ceiling
+  // regardless. Lower it when the server is labelling too — the two processes
+  // have separate pacers on one shared key.
+  const labelRate = num("label-rate");
+  if (labelRate !== undefined) deps.labelRatePerMinute = labelRate;
+  const maxLabels = num("max-labels");
+  if (maxLabels !== undefined) deps.maxLabels = maxLabels;
+  // `--late-candidates` runs the sweep inside the storyline pass for one night
+  // without editing the environment, because the honest way to drain the backlog
+  // fixing candidate retrieval exposed is an operator watching the graph shape,
+  // not a flag flipped once and forgotten. The config default is off.
+  if (args.includes("--late-candidates")) deps.lateCandidateSweep = true;
+  // That sweep's scope. `--full` is the flag that matters: the narrow pass gives
+  // up "every group in the window, every night" (docs/ARCHITECTURE.md §9.1 lists
+  // what that costs), so an operator needs a way to run the unscoped pass
+  // without changing the environment the scheduler reads.
+  if (args.includes("--full")) deps.lateCandidatesChangedOnly = false;
+  else if (args.includes("--changed-only")) deps.lateCandidatesChangedOnly = true;
+
+  // Which connection and which TLS, before any work: the lock cannot tell an
+  // operator that it was session-scoped, and a pass that silently ran twice
+  // looks exactly like a pass that ran once.
+  log.info({ connection: connectionName, tls: config.DATABASE_SSL }, "chore pass starting");
+
+  let failure: unknown;
+  try {
+    const result = await runChorePass(pass, deps, { source: "cli" });
+    if (result.outcome === "failed") {
+      failure = result.error;
+      log.warn(
+        {
+          runId: result.runId,
+          err: result.error instanceof Error ? result.error.message : String(result.error),
+        },
+        "chore pass FAILED",
+      );
+    } else if (result.outcome === "ok") {
+      log.info(
+        { runId: result.runId, seconds: Number((result.ms / 1000).toFixed(1)) },
+        "chore pass ran",
+      );
+    }
+    // A skip already logged its own warn line inside the runner, and its
+    // `chore_runs` row says so durably.
+  } finally {
+    // Ends the pool this CLI created, which is what lets the process exit rather
+    // than being held open by an idle connection — the cron contract.
+    await deps.db.destroy();
+  }
+
+  if (failure !== undefined) {
+    // Printed rather than swallowed: the stack is the whole diagnostic, and it
+    // goes to stderr where a scheduler's failure notification will quote it.
+    console.error(failure);
+    return 1;
+  }
+  return 0;
 }
+
+// `process.exitCode`, never `process.exit()`. `console.log` to a pipe is
+// asynchronous in Node and `process.exit` does not flush what is queued, so
+// `pnpm chores status --limit=200 | jq` would silently lose its tail — and these
+// rows are not small. Setting the code lets the process end on its own once
+// stdout has drained, which it now can: both halves close the pool themselves.
+process.exitCode = wantsStatus
+  ? await printStatus()
+  : await runPass(command as ChorePass);

@@ -1,38 +1,66 @@
 # Chores and the ingest drain
 
 The scheduled background work: what runs, what it depends on, and why the ingest drain sits beside
-it rather than inside it. Source of truth is [chores.ts](../apps/api/src/chores.ts),
-[chores-cli.ts](../apps/api/src/chores-cli.ts) and [drain.ts](../apps/api/src/drain.ts); this page
-is the map, not a second copy of the reasoning in those files.
+it rather than inside it. Source of truth is [chores.ts](../apps/api/src/chores.ts) (what a pass
+does), [chore-runner.ts](../apps/api/src/chore-runner.ts) (the lock and the record),
+[chore-route.ts](../apps/api/src/chore-route.ts) and [chores-cli.ts](../apps/api/src/chores-cli.ts)
+(the two entrypoints), and [drain.ts](../apps/api/src/drain.ts); this page is the map, not a second
+copy of the reasoning in those files.
 
 ## Two things on a schedule, and they have nothing in common
 
 | | Chores | Ingest drain |
 |---|---|---|
-| Entry point | `chores-cli.ts` (Compose) / §3.3's route (unbuilt) | `api/drain.ts` → [drain.ts](../apps/api/src/drain.ts) |
+| Entry point | `chores-cli.ts` (Compose) and `api/chores.ts` (Vercel), sharing [chore-runner.ts](../apps/api/src/chore-runner.ts) | `api/drain.ts` → [drain.ts](../apps/api/src/drain.ts) |
 | Touches | Postgres, and Gemini for labels | **Redis**, and the upstream news API |
-| Exactly-once | Postgres advisory lock, one key per pass | none needed — see below |
+| Exactly-once | Postgres advisory lock, two domains | none needed — see below |
 | Cadence | nightly | as often as every ~5 min, if you want hot topics covered |
 | Spends money | yes, the label pass | yes, every fill |
-| Built? | yes as a CLI, **not** as a route | **yes, as a route** |
+| Built? | yes, both — **not scheduled anywhere yet** | **yes, as a route** |
 
 They are on this page together because they are both "work on a timer that no user is waiting for",
 and that is the *only* thing they share. Every dependency, bound and failure mode differs.
 
 ## The chores
 
-`chores-cli.ts` exposes two passes, `retention` and `storylines`, and the seven exported chore
-functions distribute across them. The runner takes a session-scoped Postgres advisory lock per pass
-([chores-cli.ts:58](../apps/api/src/chores-cli.ts:58)) — `pg_try_advisory_lock`, so a second
+Two composites are what a scheduler points at — `retention` and `storylines` — and every step of
+them is also addressable on its own, for a re-run that must not drag the whole night with it:
+`dormancy`, `bridges`, `late-candidates`, `labels`, `label-merge`, `graph`. Eight names, one
+[pass table](../apps/api/src/chore-runner.ts), reached identically as `pnpm chores <name>` and as
+`POST /api/chores?pass=<name>`.
+
+The runner takes a session-scoped Postgres advisory lock — `pg_try_advisory_lock`, so a second
 concurrent run *skips* rather than queues. That lock is what replaced BullMQ's exactly-once when the
 clock moved outside the app, and it matters most for the label pass, which spends real money per
 call.
 
-**`--pass retention`** runs [`runRetentionChore`](../apps/api/src/chores.ts:90) alone. It reports;
-it does not delete. Deletion is a separate deliberate decision (ADR-0001), so the numbers have to be
-visible long before any code acts on them.
+**There are two lock domains, not eight keys.** Retention has its own; every storyline-family pass
+shares one. A key per pass is the obvious shape and is wrong, because `storylines` *contains*
+`labels` — a per-pass key would let "re-run just the label pass" run it twice at once while the
+scheduler was midway through the night. The keys are the ones `chores-cli.ts` has always used, which
+is what makes a laptop run and a scheduled run contend rather than both spending the budget. `graph`
+takes no lock at all: it is a read, and locking it would make the percolation alarm unreadable during
+exactly the multi-hour pass you would want to read it during.
 
-**`--pass storylines`** runs [`runStorylinePass`](../apps/api/src/chores.ts:786), which is six steps
+**`retention`** runs [`runRetentionChore`](../apps/api/src/chores.ts:90). It reports; it does not
+delete. Deletion is a separate deliberate decision (ADR-0001), so the numbers have to be visible long
+before any code acts on them. Two things under the report *do* change, and both are about derived
+rows rather than about the corpus: the trailing-corpus prune (`story_token_days` past the linker's
+window), and the `REINDEX TABLE CONCURRENTLY` sweep.
+
+**The reindex sweep is a storage chore, not a latency one**, which is worth saying because the name
+reads the other way. Autovacuum keeps up with dead tuples here and does not return the pages;
+index pages are the bulk of what it does not return, and that was **22% of the database** at 15
+corpus-days — 41 MB across the database, 23 MB of it on `story_token_days` alone (its indexes go 30 MB to 7). On Supabase's free 500 MB it is the
+difference between the storage tripwire reading 1,214 articles/day and 1,485, against an observed
+742-1,747 (VERCEL-PHASE-0-FINDINGS §4, §5). It runs *after* the prune in the same pass, because that
+prune is the largest single source of the bloat it reclaims, and it never throws — a table that loses
+a lock race is recorded and the next one attempted, because the report is the deliverable and this is
+the side effect. Its one tripwire: an interrupted `CONCURRENTLY` rebuild leaves an invalid `_ccnew`
+twin that is never read and still maintained on every write. The sweep counts them and warns;
+`reindex.invalidIndexes` should always be empty, and anything in it wants a `DROP INDEX` by hand.
+
+**`storylines`** runs [`runStorylinePass`](../apps/api/src/chores.ts:786), which is six steps
 in a deliberate order, sequential and awaited because from step 2 down each step's input is what the
 previous step just changed:
 
@@ -60,9 +88,90 @@ states it outright — the runner needs no cache, no queue, and no `REDIS_URL` t
 anything — and `ChoreDeps` is `{ db, config, now, log }` with no client to give one. That is what
 makes the chores runnable as a bare one-shot process against nothing but Postgres.
 
-**Not built yet:** the §3.3 HTTP route, its schedule, and the `chore_runs` table. Until those land
-the chores run only as a CLI, which on a Vercel deployment means they do not run at all — and the
-Supabase free-tier pause guard comes with them.
+## The chores as a route — `POST /api/chores?pass=<name>`
+
+Same passes, same lock, same record; the only thing the route adds is a way for a scheduler that
+speaks HTTP to start one, and a way to re-run a single pass from a curl instead of an SSH this
+deployment does not have.
+
+```bash
+curl -X POST -H "Authorization: Bearer $CRON_SECRET" "$URL/api/chores?pass=labels&max-labels=20"
+```
+
+**It answers 202 and runs the pass in `waitUntil`.** The scheduler is `pg_net` inside Supabase, which
+is asynchronous with its own timeout — 2 s by default, plausibly shorter than a cold Node boot plus
+TLS. Returning before the work starts is what makes that timeout a question about the *request*
+rather than about the *night*: `maxDuration` (300 s on Hobby) bounds the background half, and the 202
+has only to beat `timeout_milliseconds`, which the cron job sets to 15 s explicitly.
+
+The consequence is the thing to internalise: **the response cannot tell you whether the pass worked**,
+because it is sent before the pass starts. Nothing downstream of the 202 reaches the scheduler at all.
+A 202 in `net._http_response` means the request arrived, and nothing more.
+
+- **`CRON_SECRET` gates it, fail-closed.** Unset disables the route rather than opening it — a pass
+  spends Gemini quota and rewrites the storyline graph. The `x-vercel-cron-schedule` header is read
+  for pass *selection* and is never an authenticator; it is client-settable, and Vercel's own cron
+  sends the bearer token for that.
+- **GET and POST both**, unlike the drain's POST-only. The drain refuses GET against a crawler
+  following a link by accident; this route is behind the same bearer check, and Vercel's own cron
+  sends GET and nothing else.
+- **An unknown pass is the one thing that is not a 202.** It answers 400 and lists the names, because
+  the 202 contract would otherwise swallow a scheduler misconfiguration forever. There is deliberately
+  no default pass: the two composites cost hours and money respectively, and "the cron entry lost its
+  query string" must not silently become "run the expensive one".
+- **`?max-labels=` and `?changed-only=`** are the query twins of `--max-labels` and
+  `--changed-only`/`--full`. Naming `late-candidates` as the pass runs the sweep regardless of
+  `STORYLINE_LATE_CANDIDATE_SWEEP` — that IS the deliberate operator act the gate protects.
+
+## `chore_runs`, and why it is not optional
+
+Migration 0018. Every run writes a row: pass, source (`route` or `cli`), started/finished, outcome,
+the report summarized, and the label pass's model calls hoisted into their own column — the one
+number in a report that is a *cost* and gets summed across rows.
+
+"Summarized" is a size bound, and it is load-bearing: several report members are the identities of
+everything a pass touched — the retention report's idle-topic fingerprints, the bridge sweep's
+survivors, the label merge's survivors and refusals — and on a backlog night that is thousands of
+UUIDs per row, in a table with no prune. Any array past `REPORT_ARRAY_CAP` becomes `{count, sample}`,
+as a general rule rather than a list of known members: a per-shape summarizer is a thing five report
+types can each grow past without anybody noticing, and the failure is silent and cumulative.
+
+It exists because the two properties above compound. The route always answers 202, so the scheduler
+never sees a failure — and Hobby retains logs for **one hour**, so a pass that failed at 03:00 leaves
+no trace by 04:01. "Did last night's chores run?" is unanswerable by construction without this table.
+
+**The row is opened before the pass and closed after it**, which is one write more than the scope doc
+specified and buys the failure that write could not record: a function killed at `maxDuration` runs
+no `finally`, so an end-only write would leave nothing at all — and a killed night would look exactly
+like a night nothing was scheduled. `finished_at IS NULL` on an old row is a positive statement
+instead. `outcome` is `ok | failed | skipped`, and `skipped` is first-class because the lock makes it
+a *normal* outcome: recorded as a failure it would train an operator to ignore failures, recorded as
+a success it would hide a run that never finishes and therefore makes every later night skip.
+
+The CLI writes here too. A table that only knew about the route would answer the question for the
+Vercel half of the system and lie by omission about the other half — and they share a database.
+
+```bash
+pnpm chores status --pass=storylines --limit=5
+```
+
+## The pause guard — `POST /api/keepalive`
+
+A `select 1` through the transaction pooler, on its own daily schedule, deliberately sharing no code
+path with the chores. Supabase does not promise that pg_cron's internal activity prevents the 7-day
+free-tier pause: it defines inactivity as insufficient *user* database activity and prescribes
+external requests. The chore route's own pooler queries qualify — but only on nights the chore runs
+and reaches the database, which would make "the database stays awake" a downstream consequence of the
+most complex nightly job in the system. A label pass failing for a week is a bad week; a label pass
+failing for a week that also lets the database pause is a bad week that ends with the deployment down.
+
+Unlike the chores it answers **synchronously**, and that is the point: a ping whose result is not in
+the response cannot tell a paused project from a healthy one. It is authenticated by the same secret,
+with the same fail-closed rule — and the cost is worth being explicit about: **a project with no
+`CRON_SECRET` has no pause guard**.
+
+**Not scheduled yet.** [supabase-cron.sql](../deploy/vercel/supabase-cron.sql) is written and has not
+been run against any Supabase project, so as of now nothing fires any of this on a timer.
 
 ## The ingest drain
 
@@ -130,11 +239,22 @@ Supabase Cron (pg_net) is the intended driver for both, at minute precision. Hob
 once a day ±59 min, which is fine for the chores and useless for the half of the drain's job that
 needs a tighter cadence.
 
-| | Suggested | Why |
+[supabase-cron.sql](../deploy/vercel/supabase-cron.sql) is the whole thing, ready to paste into the
+SQL editor after two placeholders. **It has not been run against any project yet**, so nothing is on
+a timer today.
+
+| | Schedule | Why |
 |---|---|---|
-| `chores --pass retention` | nightly | a report, not an action |
-| `chores --pass storylines` | nightly | converges night over night; the label pass costs money |
-| `POST /api/drain` | every 5–15 min | anything slower and only cold topics are ever covered |
+| `/api/chores?pass=retention` | `0 3 * * *` | a report, not an action — and the schedule this pass has always run on |
+| `/api/chores?pass=storylines` | `0 4 * * *` | converges night over night; the label pass costs money. An hour after retention, because the prune moves the corpus the linker judges against |
+| `/api/keepalive` | `0 12 * * *` | daily, not weekly: a guard with one chance a week has no margin for the week it fails |
+| `POST /api/drain` | `*/10 * * * *` | anything slower and only cold topics are ever covered |
+
+Two things that are easy to get wrong and are written into that file. **`timeout_milliseconds` must
+be raised** — pg_net's default is 2000, and a cold 202 is a Node boot plus TLS plus config parsing
+against a ~550 ms platform container floor; a timed-out request is a night that silently did not run.
+And **pg_cron reads these expressions in the database's timezone**, UTC on Supabase, which is what the
+passes' day bucketing assumes.
 
 ## The pending window, and why it is 15 minutes
 

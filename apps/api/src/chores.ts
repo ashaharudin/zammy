@@ -7,8 +7,10 @@ import {
   pruneStoryDf,
   readLinkableGroups,
   readStorylineStats,
+  reindexBloatedTables,
   retentionReport,
   type Database,
+  type ReindexReport,
   type RetentionReport,
 } from "@zammy/storage";
 import { storyDfDay } from "./story-df.js";
@@ -83,11 +85,24 @@ export interface ChoreDeps {
 }
 
 /**
+ * Everything the retention night does. The REPORT is the deliverable; the two
+ * numbers under it are the only things the pass changes, and both are about
+ * derived rows rather than about the corpus (ADR-0001).
+ */
+export interface RetentionChoreReport {
+  retention: RetentionReport;
+  /** Day buckets dropped past the linker's trailing window. */
+  prunedStoryDf: number;
+  /** The index-bloat sweep (VERCEL-ALL-IN-SCOPE §3.3). */
+  reindex: ReindexReport;
+}
+
+/**
  * Run the report and put it in the structured log — that IS the deliverable.
  * Deletion is a later, deliberate decision (ADR-0001), so the numbers must be
  * visible long before any code acts on them.
  */
-export async function runRetentionChore(deps: ChoreDeps): Promise<RetentionReport> {
+export async function runRetentionChore(deps: ChoreDeps): Promise<RetentionChoreReport> {
   const report = await retentionReport(deps.db, {
     retentionDays: deps.config.retentionDays,
     topicIdleDays: TOPIC_IDLE_DAYS,
@@ -116,7 +131,32 @@ export async function runRetentionChore(deps: ChoreDeps): Promise<RetentionRepor
     "pruned story_token_days past the trailing-corpus window (ADR-0011)",
   );
 
-  return report;
+  // The index-bloat sweep, AFTER the prune and in the same pass, which is the
+  // whole reason it lives here rather than on a schedule of its own: the prune
+  // above is the largest single source of the dead index pages the sweep
+  // reclaims (605,268 deletes against 84,550 live rows on `story_token_days`),
+  // so reindexing before it would rebuild indexes the prune is about to churn.
+  //
+  // It is a STORAGE chore, not a performance one — 22% of the database on a
+  // 500 MB budget, recovered in ~2 s of non-blocking work
+  // (VERCEL-PHASE-0-FINDINGS §5). `reindexBloatedTables` never throws, so a
+  // table that loses a lock race cannot cost us the report above.
+  const reindex = await reindexBloatedTables(deps.db);
+  deps.log.info(
+    { reindex },
+    "reindexed the churning tables — index bloat is storage, not latency (findings §5)",
+  );
+  if (reindex.invalidIndexes.length > 0) {
+    // Nothing cleans these up and nothing else complains: an interrupted
+    // CONCURRENTLY rebuild leaves a twin that is never read and still maintained
+    // on every write, which is the exact opposite of what this sweep is for.
+    deps.log.warn(
+      { invalidIndexes: reindex.invalidIndexes },
+      "invalid indexes standing after REINDEX CONCURRENTLY — drop them by hand",
+    );
+  }
+
+  return { retention: report, prunedStoryDf, reindex };
 }
 
 /**

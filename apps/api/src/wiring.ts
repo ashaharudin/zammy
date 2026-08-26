@@ -1,4 +1,5 @@
 import type { Config } from "@zammy/config";
+import type { StorylinePassDeps } from "./chores.js";
 import { createDb, databaseSsl, type Database } from "@zammy/storage";
 import type { Kysely } from "kysely";
 import { createGeminiClient } from "./gemini.js";
@@ -186,5 +187,54 @@ export function createLabeler(config: Config, logger?: Labeler["logger"]): Label
     sampleSize: config.STORYLINE_LABEL_SAMPLE,
     driftFactor: config.STORYLINE_LABEL_DRIFT_FACTOR,
     logger,
+  };
+}
+
+/**
+ * The configured night: everything a chore pass needs, from `Config` alone.
+ *
+ * It belongs here for the reason the three constructions below it do — **two
+ * entrypoints build one**. `chores-cli.ts` runs the passes under Compose and
+ * from a laptop; `chore-route.ts` runs them on the deployment. A route that
+ * built its own linker bar or its own labeler pacing would judge Monday's group
+ * by rules the live path never used, with nothing in the rows recording which
+ * bar was applied — which is the accident this module exists to prevent, stated
+ * at the top of it.
+ *
+ * The per-run knobs (`--max-labels`, `--changed-only`, `--late-candidates`, and
+ * their query-parameter twins) are deliberately NOT here. They are overrides an
+ * operator applies to this, one run at a time; folding them in would make the
+ * configured night and a one-off run indistinguishable.
+ */
+export function choreDepsFromConfig(
+  config: Config,
+  log: StorylinePassDeps["log"],
+): StorylinePassDeps {
+  return {
+    // `session: true` and `max: 4`: the pass lock is session-scoped, so it must
+    // not go through a transaction-mode pooler (`chore-runner.ts` has why), and
+    // one connection is pinned holding it while the passes borrow the rest. What
+    // it must not be is 1, which would deadlock against the pinned connection.
+    db: createConfiguredDb(config, { max: 4, session: true }),
+    config: {
+      retentionDays: config.RETENTION_DAYS,
+      storyDfWindowDays: config.STORYLINE_DF_WINDOW_DAYS,
+      storylineDormancyDays: config.STORYLINE_DORMANCY_DAYS,
+      timeZone: config.APP_TIMEZONE,
+    },
+    now: () => new Date(),
+    log,
+    linker: createLinkerConfig(config),
+    labeler: createLabeler(config, log),
+    rules: createLabelMergeRules(config),
+    // Defaults to the configured ceiling, so the pass paces itself rather than
+    // piling into the client's pacer and waiting there.
+    labelRatePerMinute: config.GEMINI_MAX_RPM,
+    // The deployment parameter, not the pass's code default of 500: at
+    // `GEMINI_MAX_RPM=15` a label is >=4 s of pacing, so 75 labels IS the whole
+    // 300 s function ceiling (VERCEL-ALL-IN-SCOPE §3.3).
+    maxLabels: config.CHORE_MAX_LABELS,
+    lateCandidateSweep: config.STORYLINE_LATE_CANDIDATE_SWEEP,
+    lateCandidatesChangedOnly: config.STORYLINE_LATE_CANDIDATE_CHANGED_ONLY,
   };
 }
