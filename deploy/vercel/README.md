@@ -237,6 +237,11 @@ the first command is written.
 `buildServices` — the request path's posture is deliberate and worth keeping. An unreachable Redis
 now becomes a 503 with a reason instead of a 500 or a function that runs to `maxDuration`.
 
+**Verified on a scheduled fire, not just a curl.** The fires at 21:00, 21:10 and 21:20 UTC were 500;
+the deploy landed at ~21:26; the **21:30 fire returned 200**. That is the evidence that matters here —
+a manual `POST` proves the route, while a cron row proves the whole path: pg_cron → `pg_net` → TLS →
+a cold Node boot → the route, inside the 15 s `timeout_milliseconds`.
+
 **Two things changed alongside it, both because the diagnosis was harder than the bug.** The 500 body
 now carries `reason` — safe, since every caller has already presented `CRON_SECRET`, and on Hobby the
 log that would otherwise hold it is gone within the hour. And `/readyz` answering `degraded` with
