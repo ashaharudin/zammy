@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { createCurrentsClient } from "./factory.js";
 import { collectPages } from "@zammy/news-client";
-import { usefulCategories } from "./client.js";
+import { repairedRegions, usefulCategories } from "./client.js";
 import type { CurrentsClient } from "./client.js";
 import { FIXTURES_DIR } from "./test-support.js";
 
@@ -132,6 +132,40 @@ describe("reference data offline", () => {
     expect(languages["English"]).toBe("en");
     expect(languages["Malay"]).toBe("msa");
     expect(regions["United State"]).toBe("US");
+  });
+
+  it("spell-checks the region names a picker draws, and only those", async () => {
+    const regions = repairedRegions(await client.availableRegions());
+
+    // The four typos, repaired. The code — the half that travels — is untouched.
+    expect(regions["United States"]).toBe("US");
+    expect(regions["Germany"]).toBe("DE");
+    expect(regions["Ghana"]).toBe("GH");
+    expect(regions["Indonesia"]).toBe("ID");
+    expect(regions).not.toHaveProperty("United State");
+    expect(regions).not.toHaveProperty("German");
+
+    // Nothing here shortens a word: the plural region names upstream spells
+    // correctly keep their `s`, which is what made "United State" a typo rather
+    // than evidence of a fold running over this data.
+    expect(regions["Philippines"]).toBe("PH");
+    expect(regions["Netherlands"]).toBe("NL");
+    expect(regions["United Arab Emirates"]).toBe("AE");
+
+    // A repair moves an entry rather than adding one, so no code is lost and
+    // none is invented.
+    const upstream = await client.availableRegions();
+    expect(Object.keys(regions)).toHaveLength(Object.keys(upstream).length);
+    expect(new Set(Object.values(regions))).toEqual(new Set(Object.values(upstream)));
+  });
+
+  it("leaves a repair alone when upstream already uses the name", () => {
+    // Upstream is free to fix its own typo without telling us. Two entries
+    // cannot share a key, so the repair yields rather than swallow a code.
+    const regions = repairedRegions({ Germany: "DEU", German: "DE" });
+
+    expect(regions["Germany"]).toBe("DEU");
+    expect(regions["German"]).toBe("DE");
   });
 
   it("serves categories verbatim, junk included", async () => {

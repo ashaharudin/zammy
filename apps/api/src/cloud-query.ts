@@ -1,4 +1,4 @@
-import { labelWords } from "./storyline-label-merge.js";
+import { labelWordForms } from "./storyline-label-merge.js";
 
 /**
  * The search a cloud word runs (ARCHITECTURE 10.5, ADR-0014).
@@ -58,13 +58,25 @@ export const CLOUD_QUERY_TERMS = 2;
  * ranking the candidates by `story_token_df`, would put the trailing corpus on
  * the cloud's request path to re-derive an ordering the label already carries.
  *
- * `labelWords` is the fold, and specifically NOT a second regex here: it exists
- * because label words and corpus words must arrive at the same spelling for the
- * same word, and it has already paid for the lesson ("Dillard's" reaching
+ * `labelWordForms` is the fold, and specifically NOT a second regex here: it
+ * exists because label words and corpus words must arrive at the same spelling
+ * for the same word, and it has already paid for the lesson ("Dillard's" reaching
  * `dillard'` on one side and `dillard` on the other). `profile_tokens` hold the
  * corpus spelling, so membership is the whole test — a label word the tokenizer
  * would have thrown away (a stopword, a bare digit, an identifier fragment)
  * simply is not in the profile, and drops out without this file knowing why.
+ *
+ * What the query SPELLS, though, is the label's own word rather than the folded
+ * one, and that distinction is the whole reason `labelWordForms` returns a pair.
+ * This string is not an internal key: it becomes `?q=`, the command bar's value,
+ * the hero placeholder's ghost text (`searchPlaceholder`), and the keywords
+ * handed to upstream `/search`. `singular` drops a bare trailing `s` and nothing
+ * more, so a folded query put "gaza crisi" on the landing page and then asked
+ * Currents for it — a misspelling shown to the reader, and a term the body-text
+ * matcher has less reason to hit than the word the label actually used. Nothing
+ * downstream loses by it: `findSurfacedStorylines`' containment test re-folds
+ * every keyword before comparing (`timeline-service.ts`), so the arc's own pill
+ * still appears.
  *
  * Two fallbacks, in order, and both are for storylines that should not exist:
  *
@@ -94,7 +106,31 @@ export function cloudQuery(input: {
   profileTokens: readonly string[];
 }): string {
   const profile = new Set(input.profileTokens);
-  const grounded = labelWords(input.label).filter((word) => profile.has(word));
-  const terms = [...new Set(grounded.length > 0 ? grounded : input.profileTokens)];
+  // Matched on `folded`, spelled with `surface`. The fold is what meets
+  // `profile_tokens`, and it is also lossy in a way a reader can see — `singular`
+  // takes "crisis" to `crisi` — so the word that goes into the query is the
+  // label's own spelling of the word the profile matched. De-duplication stays on
+  // the FOLD, or a label saying "State States" would spend both of its two terms
+  // on one word.
+  const grounded = labelWordForms(input.label).filter((word) => profile.has(word.folded));
+  const terms =
+    grounded.length > 0
+      ? dedupeBy(grounded, (word) => word.folded).map((word) => word.surface)
+      : // No surface spelling to recover here: `profile_tokens` are stored folded
+        // and this arc's label shares nothing with them to read one off. The
+        // fallback is for storylines that should not exist (see above), so it
+        // keeps the corpus spelling rather than inventing one.
+        [...new Set(input.profileTokens)];
   return terms.length > 0 ? terms.slice(0, CLOUD_QUERY_TERMS).join(" ") : input.label;
+}
+
+/** First claimant wins, so label order survives de-duplication. */
+function dedupeBy<T>(items: readonly T[], key: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const k = key(item);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
