@@ -32,3 +32,7 @@ deploy/terraform/terraform.tfvars
 deploy/terraform/retry-capacity.log
 deploy/terraform/.retry-capacity.lock/
 .vercel
+
+# Downloaded by deploy/vercel/provision-production.sh. Public root CA, but
+# project-scoped in the Supabase dashboard — fetched, not committed.
+deploy/vercel/prod-ca.crt

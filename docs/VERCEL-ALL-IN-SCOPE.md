@@ -14,7 +14,8 @@ Its deployment half finished on 2026-08-23 (findings §8), which closed the last
 one failure and its fix are Q0. **Phase 3 is deployed to preview (2026-08-25): §3.5's per-IP guard
 is verified across six instances, and §3.4's burst ceiling is deployed but unexercised, because
 fixture mode bypasses the governor entirely** — §9's row and "Phase 3 as it stands" carry both
-halves. Nothing is in production yet — that is Phase 5.
+halves. Nothing is in production yet — that is Phase 5, whose code half is now built and whose
+remaining half is an account nobody has created (§9, "Phase 5 as it stands").
 [deploy/vercel/](../deploy/vercel/) is the operator's half of it.**
 
 **Bottom line: 7–12 focused days, and one piece of it no delivery phase carried.** Two things
@@ -473,11 +474,16 @@ wrapper plus one new table:
   label pass. What Phase 4 keeps is only the `REINDEX CONCURRENTLY` sweep and the ordinary chore
   wiring; the bound and cursor become a safety valve for whenever the sweep is switched back on,
   worth building then rather than now. A denormalized sort key was tested and rejected at 8% (§2.2).
-- **The label backlog must not run in this route.** 2,981 of 3,934 promoted storylines have never
+- ~~**The label backlog must not run in this route.** 2,981 of 3,934 promoted storylines have never
   been labelled and **zero have drifted**, so the nightly drift pass is nearly free while the
   backlog is 3.3 hours of paced calls — quota-bound, ~6 days of Gemini free tier. It is
   `backfill:storylines` work against the session pooler, and draining it before cutover is the
-  cheaper order since Phase 5 seeds production from this corpus (findings §3).
+  cheaper order since Phase 5 seeds production from this corpus (findings §3).~~ **The backlog is
+  gone. Measured 2026-08-26: `label_at is null` among promoted, unmerged storylines is 0** — every
+  one of the 5,253 has been offered to a model. The constraint the bullet describes was real when
+  findings §3 measured it and no longer has a population to apply to; what remains of it is the
+  reason the route still must not run an unbounded pass, which `CHORE_MAX_LABELS` now enforces on
+  both the route and the CLI. See "Phase 5 as it stands" for what the residual 373 actually is.
 - **A `REINDEX TABLE CONCURRENTLY` sweep joins the retention chore.** Index bloat is 22% of the
   database at 15 days — 41 MB, of which 23 MB is `story_token_days` alone — and 2.0 s of
   non-blocking work recovers all of it. On a 500 MB budget that is the difference between the
@@ -751,12 +757,101 @@ Each phase ends with something demonstrable; none of them is "and then we cut ov
 | **2. The queue** (2–3 d) ✅ | §3.2 — new `IngestQueue` implementation (eight members counting `settle`), `api/queues/ingest.ts`, a **900 s** message TTL (not the 5 min §0 planned — see Q0), rewritten tests, and `POST /api/drain`. | **All three criteria met, deployed and verified 2026-08-25.** A cold topic fills behind the reader; `meta.ingest` drains to zero — a delivery logs `ingest delivery` then `ingest job settled` for one message id, which is the evidence, not the 200; and **a failed delivery now redelivers** at +0 s, +305 s and +610 s, the third settling and giving up. Getting the third took a day: it failed first, and the cause was a 300 s TTL colliding with a 305 s visibility lease (Q0). Two things this phase added beyond its scope, both because the failure showed they were needed: per-delivery logging, and the manual drain promoted from fallback to built. **The drain has never run against a live deployment** — its logic is unit-tested only. |
 | **3. Quota + limits** (1–2 d) 🚧 | §3.4 (burst-only, fail-open) and §3.5 (Redis store, fail-open). | **Deployed and verified 2026-08-25 (`zammy-bn5h84rr1`) for §3.5; §3.4 is unverifiable on a fixture preview and stays open.** The per-IP guard is real and genuinely shared: 60 requests admitted and the 61st answered 429 with `retry-after: 50`, **across six distinct instances** — per-instance counters would have admitted 60 × 6 — with `x-ratelimit-remaining` monotonic and gapless across separate invocations, and `/healthz` still 200 throughout. Fail-open is real, and wider than expected (below). **The burst-ceiling criterion cannot be met from here**: fixture mode returns `FixtureCurrentsClient`, which builds its own `UnmeteredQuotaGovernor` and ignores the injected one, so no deployed code path calls `reserve`. See below. |
 | **4. Chores** (1–1.5 d) 🚧 | §3.3 + Supabase Cron + `chore_runs` + the keep-alive ping, **plus what Phase 0 added**: the `REINDEX CONCURRENTLY` sweep in the retention chore. The late-candidate sweep is gated off (findings §2.6), so this phase no longer carries a deadline problem; if it is ever switched back on, the bound and persisted cursor come back with it. | **Built and green locally; nothing is scheduled yet.** Three of the five criteria are met without a deployment and are pinned by tests: any pass runs on demand by query param (eight of them, up from §3.3's seven), a twice-triggered run skips on the lock **and records the skip**, and a gated night reports `lateCandidates.skipped: true` rather than a clean `offered: 0`. The two that need the platform are open: **no schedule exists** — `deploy/vercel/supabase-cron.sql` is written and unrun — and the 202's cold latency has been measured only on the spike (669 ms, for a route with no `buildApp` behind it), not on this one. |
-| **5. Observability + cutover** (1–2 d) | The migration CI jobs (§6, prod + preview), env vars (§4), **seed production from the dev corpus** (a 24 MB `pg_dump -Fc`, measured at 1.9 s out and 1.1 s in — findings §4), DNS. Drain the 2,981-storyline label backlog first (§3.3). | Production traffic against the seeded corpus, and "did last night's chores run?" is answered by a `chore_runs` query |
+| **5. Observability + cutover** (1–2 d) 🚧 | The migration CI jobs (§6, prod + preview), env vars (§4), **seed production from the dev corpus** (a 24 MB `pg_dump -Fc`, measured at 1.9 s out and 1.1 s in — findings §4), DNS. ~~Drain the 2,981-storyline label backlog first (§3.3).~~ **There is no backlog** — 0 promoted storylines have never been offered to a model, measured 2026-08-26. Nothing gates the cutover here; see below. | **Every part that does not need an account is built; nothing is provisioned.** The two migration jobs are in `ci.yml`, both gated on `verify`. [seed-production.sh](../deploy/vercel/seed-production.sh) is written and **tested end to end** against a scratch database — 23.8 MB out, 4.2 s round trip, all sixteen tables' row counts matching and `db:migrate` answering "Nothing to migrate" afterwards. [deploy.sh](../deploy/vercel/deploy.sh) encapsulates the non-git-copy workaround. What is missing is everything behind a dashboard login: **no production Supabase project, no production Upstash database, one environment variable on the Production environment, no production deployment, no DNS.** [provision-production.sh](../deploy/vercel/provision-production.sh) is the twelve-stage wizard that closes all five. **The exit criterion is unmet.** |
 
 **Total: 7–13 days.** Phase 0's measurements added the reindex sweep to Phase 4 and took the
 late-candidate sweep's deadline problem out of the plan altogether — it was a linking bug, its fix
 exposed a runaway, and the pass is now gated off (findings §2.6). Phase 0's deployment half and
 Phase 1 have both since run and neither moved the estimate; the remaining spread is Phase 2.
+
+### Phase 5 as it stands
+
+**Built to the edge of the account, and stopped there.** Everything Phase 5 needs that can be
+written was written and, where it could be, exercised; everything it needs that requires a Supabase
+login, an Upstash login or a registrar login is unstarted. That line is the honest status, and it is
+also why the work is shaped as a wizard rather than a runbook — the remaining steps are a human's,
+and the last thing they should need is an AI re-deriving them each time.
+
+**The four artefacts.**
+
+| | What it is | Exercised? |
+|---|---|---|
+| `ci.yml` → `migrate (preview)`, `migrate (production)` | §6's discrete migration step, both gated on `verify` | No — needs the secrets |
+| [seed-production.sh](../deploy/vercel/seed-production.sh) | dump the dev corpus, restore it through the session pooler, verify | **Yes**, end to end against a scratch database |
+| [deploy.sh](../deploy/vercel/deploy.sh) | `vercel build && vercel deploy --prebuilt` from a `.git`-excluded copy | Not against production |
+| [provision-production.sh](../deploy/vercel/provision-production.sh) | the twelve stages a human has to drive | Stages 1–4 traced non-interactively |
+
+**Five decisions the scope did not make.**
+
+*The seed is a FULL dump, not migrations-then-`--data-only`.* The tempting order is the other one:
+the 18 migrations are already proven against a Supabase session pooler on the preview project, so
+running them and then restoring data alone looks like the lower-risk path. It does not work. A
+data-only restore into a schema whose foreign keys already exist needs `--disable-triggers`, which
+issues `ALTER TABLE ... DISABLE TRIGGER ALL`, and disabling a table's *internal* (foreign-key)
+triggers is superuser-only — which Supabase does not grant. pg_dump's own ordering solves the
+problem the constraint was in the way of: tables, then data, then constraints and indexes. The dump
+carries `kysely_migration` too, so the migration ledger arrives with the schema it describes, and
+`pnpm db:migrate` printing "Nothing to migrate" afterwards becomes the restore's verification rather
+than a separate step.
+
+*One table is excluded from the seed.* `mine` (id uuid, label text, 413 rows) is scratch left from
+the storyline pile cleanup and **no migration creates it**. Left in, it would become a permanent
+fixture of the production schema that the migration ledger has never heard of. The exclusion list is
+a named variable in the script rather than a `-T` buried in a command, because the next scratch table
+should be added to it rather than discovered in production.
+
+*`ci.yml`'s `cancel-in-progress` is now conditional on the event.* It was unconditionally true, on
+the reasoning that "a superseded run on the same ref has nothing to tell us" — which was correct
+while the workflow only verified. A push-to-main run now carries a migration, and cancelling one
+mid-DDL is survivable (the advisory lock sits on a pinned connection, so a killed process drops the
+connection, releases the lock and rolls back) but leaves the deploy racing it against a database one
+migration short, silently. Main runs queue; pull requests still cancel.
+
+*Both migration jobs gate on `verify`.* A migration is the one thing in this repository a rollback
+cannot undo — Instant Rollback rolls code back and leaves the schema where it is (§6) — so it must
+not run off a commit whose tests never passed. The cost is that a migration-bearing PR's preview
+database waits for the test suite. Given the previews are not git-linked and are deployed by hand
+anyway, that costs nothing real.
+
+**And the backlog this phase was gated on does not exist.** §3.3 gated the cutover on draining the
+label backlog first, at 2,981 unlabelled of 3,934 promoted (findings §3, measured 2026-08-15). The
+number to check is `label_at is null` among promoted, unmerged storylines, and on 2026-08-26 it is
+**0**. Every one of the 5,253 promoted storylines has been offered to a model. **Nothing gates the
+cutover** — there is no pass to run first and no quota to spend.
+
+**What is easy to mistake for a backlog, and is not one.** A raw `label is null` count over active
+storylines reads 934, and each of the two things that number folds together is worth separating
+before anyone schedules a drain against it:
+
+| `status = 'active'`, `label is null` | Count | What it is |
+|---|---|---|
+| `merged_into is not null` | 562 | **Aliases** — merged-away UUIDs kept so a stale link still resolves. `storylines.ts:636` says it plainly: "an alias is not a storyline." Every read filters them out, `setStorylineLabel` carries `.where("merged_into", "is", null)` so a label written to one is a silent no-op, and `mergeStorylines` deletes their `storyline_groups` rows — which is why they show zero groups and why any size histogram that buckets zero into a catch-all will misreport them as the largest arcs in the corpus. |
+| `merged_into is null` | 372 | **Model refusals** — asked, and no name came back. `setStorylineLabel` stamps `label_at` and `label_group_count` on a null label deliberately, so that "a storyline the model refused to name is not owed another attempt until its coverage has doubled". `label_source` is null on all 372. |
+
+Neither is work. `readStorylineStats` already models this correctly and has all along — its
+`unlabelled` field is documented as "Promoted storylines that were asked and produced no label at
+all", it excludes aliases, and `storyline-backfill-cli.ts` prints it as **"asked and unnameable"**
+rather than as a backlog. **The stat needs no fix**: it returns 373, and `labelled + unlabelled =
+4,880 + 373 = 5,253 = promoted` closes exactly, because `promoted` there means "holds more than one
+group" (ADR-0011's line) rather than `status = 'active'`.
+
+**One row where those two senses of "promoted" disagree**, and it is a data inconsistency rather than
+a counting one: `45687b93-2af7-494c-820d-33a95c6f0042` holds 2 groups but still reads
+`status = 'provisional'`, having been offered to a model at 2026-08-25 22:29 and refused. It is the
+whole difference between the 373 the stat reports and the 372 a `status = 'active'` filter finds. A
+pass that selects candidates by group count can stamp `label_at` on a row whose status has not caught
+up, because `setStorylineLabel` guards on `merged_into` and not on status. One row is not worth a
+migration; it is worth knowing before the next person subtracts these two numbers and goes looking
+for a bug in the SQL.
+
+Nothing about an unnamed storyline degrades a read: the label is a display name, and the drift pass
+that maintains it is nearly free because **zero have drifted**.
+
+**What the wizard cannot do for you, restated because it is the whole remaining risk.** The Supabase
+project must be created in **us-east-1**, not the preview pair's us-east-2, or production inherits a
+cross-region hop on every pooler query (§4). The Upstash URL must be `rediss://`. Neither Postgres
+URL may carry `?sslmode=`. Each of those three has already cost a deploy cycle once on the preview
+pair; the wizard refuses all three at the prompt rather than at `/readyz`.
 
 ### Phase 4 as it stands
 
@@ -876,7 +971,8 @@ fallback to built code.
 **What is not verified:** the drain has never run against a live deployment — ten unit tests, no
 real Redis `SCAN` and no real fill. `?limit=1` exists for a cautious first pass. And **production
 carries none of this**: no seeded corpus, no `INGEST_QUEUE_DRIVER` on the production environment,
-no cutover. That is Phase 5.
+no cutover. That is Phase 5, and Phase 5's remaining half is
+[provision-production.sh](../deploy/vercel/provision-production.sh).
 
 **The standing tripwire:** the 900 s TTL is sized against a platform latency that has already moved
 30× once (Q0). If the visibility lease passes 900 s, redelivery breaks again, silently and

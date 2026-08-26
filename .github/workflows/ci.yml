@@ -22,10 +22,17 @@ on:
     branches: [main]
   pull_request:
 
-# A superseded run on the same ref has nothing to tell us.
+# A superseded run on the same ref has nothing to tell us — on a PULL REQUEST.
+# Main is different now that this workflow carries a migration (`migrate
+# (production)`): cancelling a push-to-main run can kill `pnpm db:migrate`
+# mid-DDL. That is survivable — the migrator holds `pg_advisory_lock` on a
+# pinned connection, so a killed process drops the connection, releases the lock
+# and rolls its transaction back — but the deploy that is racing it would then
+# be running against a database one migration short, silently. Let main runs
+# queue instead; there are few of them and each one is a schema change.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -122,3 +129,117 @@ jobs:
           # Write the cache from main only. Letting every PR write it invites
           # concurrent branches thrashing each other's entries for no gain.
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
+
+  # ─── Migrations ────────────────────────────────────────────────────────────
+  #
+  # ADR-0003 requires migrations as a discrete step, never on boot, and Vercel
+  # has no outbound post-deploy hook — so the deploy and the migration cannot be
+  # made atomic (VERCEL-ALL-IN-SCOPE §6). These two jobs are the discrete step.
+  # What makes the missing atomicity survivable is expand/contract discipline,
+  # which is a rule about the migrations themselves and not something a workflow
+  # file can enforce: additive migrations land BEFORE the code that needs them,
+  # destructive ones AFTER the code that stopped needing them.
+  #
+  # Both gate on `verify`. A migration is the one thing in this repo that a
+  # rollback cannot undo — Vercel's Instant Rollback rolls code back and leaves
+  # the schema where it is — so it must not run off a commit whose tests never
+  # passed.
+  #
+  # Neither job deploys. The Vercel project is not git-linked (deploys are
+  # `vercel build && vercel deploy --prebuilt` from a copy of the tree with
+  # `.git` excluded, because Vercel stamps a deployment with the commit author
+  # and the resulting deployment lands BLOCKED — see deploy/vercel/README.md).
+  # So "before the preview deploy" is a matter of operator ordering here, not
+  # something CI sequences.
+
+  migrate-preview:
+    name: migrate (preview)
+    needs: verify
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04-arm
+
+    env:
+      # The SESSION pooler, port 5432. The migrator's advisory lock is
+      # session-scoped, and a pin borrowed from a transaction-mode pooler is not
+      # a pin to a backend — two racing runs would interleave DDL instead of
+      # serialising. migrate-cli.ts prefers this name for exactly that reason.
+      DATABASE_SESSION_URL: ${{ secrets.PREVIEW_DATABASE_SESSION_URL }}
+      DATABASE_SSL: verify-full
+      DATABASE_CA_CERT: ${{ secrets.SUPABASE_CA_CERT }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # A missing secret must be loud. Without this the job would run
+      # `db:migrate` with no URL, exit 1 on the CLI's own error, and read as a
+      # broken migration rather than an unconfigured repository.
+      - name: secrets are present
+        run: |
+          test -n "$DATABASE_SESSION_URL" || {
+            echo "::error::PREVIEW_DATABASE_SESSION_URL is not set. See deploy/vercel/provision-production.sh."
+            exit 1
+          }
+          test -n "$DATABASE_CA_CERT" || {
+            echo "::error::SUPABASE_CA_CERT is not set; DATABASE_SSL=verify-full needs it."
+            exit 1
+          }
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # `db:migrate` runs `tsc -b` itself, which would build the references it
+      # needs — but a fresh checkout that builds only what one project points at
+      # has bitten this repo before. Building every package first is a few
+      # seconds and removes the question.
+      - run: pnpm -r --filter "./packages/*" build
+
+      # Beyond keeping migration-bearing PRs' previews working, this is the
+      # rehearsal the missing atomicity wants: every migration runs against a
+      # real Supabase session pooler once before it touches production (§6).
+      - run: pnpm db:migrate
+
+  migrate-production:
+    name: migrate (production)
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+
+    env:
+      DATABASE_SESSION_URL: ${{ secrets.PRODUCTION_DATABASE_SESSION_URL }}
+      DATABASE_SSL: verify-full
+      DATABASE_CA_CERT: ${{ secrets.SUPABASE_CA_CERT }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: secrets are present
+        run: |
+          test -n "$DATABASE_SESSION_URL" || {
+            echo "::error::PRODUCTION_DATABASE_SESSION_URL is not set. See deploy/vercel/provision-production.sh."
+            exit 1
+          }
+          test -n "$DATABASE_CA_CERT" || {
+            echo "::error::SUPABASE_CA_CERT is not set; DATABASE_SSL=verify-full needs it."
+            exit 1
+          }
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r --filter "./packages/*" build
+
+      # The CLI announces which of the two URLs it used, and prints one line per
+      # migration. A run that says "Nothing to migrate" is the healthy majority
+      # case — most merges carry no schema change.
+      - run: pnpm db:migrate

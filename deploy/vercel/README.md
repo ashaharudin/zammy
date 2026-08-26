@@ -9,8 +9,11 @@ governor and rate-limit store) is deployed to preview**: the per-IP guard is ver
 six instances, and the burst ceiling is deployed but unexercised, because a fixture-mode preview
 never calls the governor at all. **Phase 4 (the chores route, `chore_runs`, the pause guard) is
 built and tested but SCHEDULED NOWHERE** — [supabase-cron.sql](supabase-cron.sql) has not been run
-against any project, so no pass fires on a timer and nothing is keeping the database awake. Phase 5
-(cutover) is scoped and unbuilt, so **nothing here is serving production traffic yet**.
+against any project, so no pass fires on a timer and nothing is keeping the database awake.
+**Phase 5 (cutover) is built and unprovisioned**: the migration CI jobs, the seed and the deploy
+script all exist, and there is no production Supabase project, no production Upstash database and no
+production deployment for them to act on. **Nothing here is serving production traffic yet**, and
+[provision-production.sh](provision-production.sh) is the twelve stages that would change that.
 
 The configuration itself lives at the repository root, because that is where Vercel looks:
 [`vercel.json`](../../vercel.json), [`api/index.ts`](../../api/index.ts),
@@ -246,17 +249,107 @@ curl -X POST -H "Authorization: Bearer $CRON_SECRET" "$URL/api/chores?pass=story
   report: an interrupted rebuild leaves a `_ccnew` twin that is never read and still maintained on
   every write, and nothing in Postgres complains about it. Non-empty wants a `DROP INDEX` by hand.
 
+## The cutover — Phase 5
+
+Three scripts and a wizard. Run the wizard; it calls the other two at the right moments.
+
+```bash
+./deploy/vercel/provision-production.sh
+```
+
+**Twelve stages, and the first eleven happen in order.** It creates nothing on your behalf that a
+browser is needed for — it opens each page, says what to click, captures what you copy back, and
+writes the values where they belong (a gitignored `deploy/vercel/.env.production`, the Vercel
+Production environment, and three GitHub Actions secrets). Ctrl-C is safe at any point: re-running
+offers everything already captured as a default.
+
+| Stage | What it does |
+| --- | --- |
+| 1 | Preflight — `vercel`, `gh`, `docker`, and whether the dev corpus container is up |
+| 2–4 | The production Supabase project: create it in **us-east-1**, both pooler URLs, the CA certificate |
+| 5 | The production Upstash database — `rediss://`, and it checks |
+| 6 | `CRON_SECRET` (generated), and the Currents/Gemini keys carried from the dev `.env` |
+| 7 | Sixteen environment variables onto the Vercel **Production** environment |
+| 8 | [seed-production.sh](seed-production.sh) — the corpus, then the migration-ledger check |
+| 9 | The three GitHub Actions secrets `ci.yml`'s migration jobs read |
+| 10 | [deploy.sh](deploy.sh) `--prod`, then `/readyz` twice |
+| 11 | [supabase-cron.sql](supabase-cron.sql) — the step that has never been run anywhere |
+| 12 | `zammy.info` at the registrar, then `CORS_ORIGIN` and a redeploy |
+
+**The three shapes it refuses at the prompt**, each of which has already cost a deploy cycle on the
+preview pair: a Postgres URL carrying `?sslmode=` (`@zammy/config` rejects one outright, because
+node-postgres then silently ignores `DATABASE_SSL`), the two pooler ports swapped, and a `redis://`
+Upstash URL where `rediss://` was needed. Catching them at the prompt is a moment; catching them at
+`/readyz` is a deploy cycle each.
+
+### Seeding — `seed-production.sh`
+
+One-time, and it refuses a target that already has tables. Measured against a scratch database:
+**23.8 MB out, 4.2 s round trip**, all sixteen tables' row counts matching.
+
+It restores a **full** custom-format dump rather than running the migrations and restoring
+`--data-only`. That is not a preference: a data-only restore into a schema whose foreign keys
+already exist needs `--disable-triggers`, and disabling a table's internal FK triggers is
+superuser-only, which Supabase does not grant. The full dump's own ordering — tables, data, then
+constraints and indexes — sidesteps the question. The dump carries `kysely_migration` with it, so
+`pnpm db:migrate` afterwards printing **"Nothing to migrate"** is the verification that the restored
+schema is the one the code expects. Anything else there means stop.
+
+`mine` is excluded (`SEED_EXCLUDE_TABLES`): 413 rows of scratch from the storyline pile cleanup that
+**no migration creates**, and which would otherwise become a permanent fixture of the production
+schema that the ledger has never heard of. Add the next one to that variable rather than finding it
+in production.
+
+### Deploying — `deploy.sh`
+
+```bash
+./deploy/vercel/deploy.sh          # preview
+./deploy/vercel/deploy.sh --prod   # production
+```
+
+The `.git`-excluded copy described under [Deploying](#deploying) above, as a script instead of a
+paragraph people re-read. It runs `vercel inspect` afterwards, because the CLI's exit code is not a
+signal — a BLOCKED deployment exits 0.
+
+### Migrations in CI
+
+`ci.yml` carries `migrate (preview)` (on pull requests) and `migrate (production)` (on pushes to
+main). Both gate on `verify`: a migration is the one thing here a rollback cannot undo, since
+Instant Rollback rolls code back and leaves the schema where it is. Both fail loudly on a missing
+secret rather than running against no URL. They read three repository secrets, all set by stage 9 of
+the wizard:
+
+| Secret | Used by |
+| --- | --- |
+| `PRODUCTION_DATABASE_SESSION_URL` | `migrate (production)` |
+| `PREVIEW_DATABASE_SESSION_URL` | `migrate (preview)` |
+| `SUPABASE_CA_CERT` | both — `DATABASE_SSL=verify-full` needs something to verify against |
+
+Neither job deploys, and neither can: the project is not git-linked, so the deploy is `deploy.sh` run
+by hand. "The preview migration runs before the preview deploy" is therefore operator ordering here,
+not something CI sequences.
+
+The workflow's `cancel-in-progress` is now conditional — pull requests still cancel superseded runs,
+pushes to main queue instead. A main run carries a migration, and cancelling one mid-DDL leaves the
+deploy racing it against a database one migration short.
+
+**The preview database is one migration behind.** Seventeen of eighteen are applied; `0018`
+(`chore_runs`) arrived with Phase 4 after the last hand-run. The first PR to land after these jobs
+exist applies it.
+
 ## What is still not done
 
 - **Nothing is in production.** Phase 2 is verified on *preview* only. Production has no seeded
   corpus and no `INGEST_QUEUE_DRIVER`, so leaving it at the `bullmq` default there would publish to
-  a Redis queue nothing drains. Cutover is Phase 5.
+  a Redis queue nothing drains. Phase 5's code exists; the accounts it acts on do not.
 - **The drain has never run against a live deployment.** Its logic is unit-tested; the real Redis
   `SCAN` and a real fill are not. Use `?limit=1` for the first pass.
 - **The chores are built and nothing schedules them.** The route, the table and the pause guard all
   exist as of Phase 4; [supabase-cron.sql](supabase-cron.sql) is written and **has not been run**.
   Until it is, no pass fires on a timer and a deployed project's database is reachable only as long
-  as something else keeps it awake.
+  as something else keeps it awake. It is stage 11 of the wizard.
+- **The production data plane does not exist.** No Supabase project, no Upstash database, and the
+  Production environment carries exactly one variable (`ENABLE_EXPERIMENTAL_COREPACK`). Stages 2–7.
 - **The quota governor has never governed anything on a deployment.** Phase 3 ships it and a
   fixture-mode preview cannot exercise it: `CURRENTS_MODE=fixture` returns `FixtureCurrentsClient`,
   which builds its own unmetered governor and ignores the injected one. `/readyz` reporting
