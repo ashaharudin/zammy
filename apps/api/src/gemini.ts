@@ -16,7 +16,8 @@ import { z } from "zod";
  *    against RECORDED responses and never against the live API;
  *  - retries on 429, 5xx and network faults only — a 400 is our prompt's bug and
  *    a retry buys the same answer twice;
- *  - a PACER, because the free tier publishes 15 requests per minute and the
+ *  - a PACER, because the free tier publishes 30 requests per minute (for
+ *    `gemma-4-26b-a4b-it`, config's default model — see ADR-0011) and the
  *    ceiling is per key, not per caller — see `admit` below;
  *  - no daily budget, no circuit breaker, no fixture mode. Currents has those
  *    because a failed search is a reader staring at an empty page; a failed
@@ -53,8 +54,9 @@ export interface GeminiOptions {
   maxRetries?: number;
   backoffBaseMs?: number;
   /**
-   * The provider's per-minute ceiling, in requests. 15 is the free tier's
-   * published figure and the default in config; raise it with the plan.
+   * The provider's per-minute ceiling, in requests. 30 is the free tier's
+   * published figure for `gemma-4-26b-a4b-it` and the default in config;
+   * raise it with the plan.
    *
    * Enforced HERE rather than in each caller because the ceiling belongs to the
    * KEY, and five callers share one: the live ingest tail, the late-candidate
@@ -99,6 +101,16 @@ export interface GenerateRequest {
    * written. Generous, because it costs nothing unless it is used, and the
    * chatty-model guard the small cap was reaching for is `validateLabel`'s job
    * anyway.
+   *
+   * `gemma-4-26b-a4b-it` (config's default model) raises the floor further:
+   * unlike Gemini 3.x, it has no `thinkingLevel`/`thinkingBudget` knob at all
+   * — the API 400s on both — so its thinking cannot be capped or disabled.
+   * MEASURED live on 2026-08-27 against the Fort Hood prompt: 256 spent the
+   * whole budget on an unfinished thought and returned `MAX_TOKENS` with no
+   * label; 2048 was enough to finish thinking (703 tokens) and answer (7
+   * tokens). The default below reflects that floor, not this model's typical
+   * spend — see `gemini.ts`'s pacer note for why the rpm gain is still worth
+   * that per-call cost for a background chore with a deterministic fallback.
    */
   maxOutputTokens?: number;
   /** 0 by default: the same coverage should name the same story on a replay. */
@@ -172,7 +184,7 @@ export function createGeminiClient(options: GeminiOptions): TextGenerator {
     timeoutMs = 8_000,
     maxRetries = 2,
     backoffBaseMs = 250,
-    maxRequestsPerMinute = 15,
+    maxRequestsPerMinute = 30,
     maxRateWaitMs = 120_000,
     fetch: fetchImpl = globalThis.fetch,
     sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -319,7 +331,7 @@ export function createGeminiClient(options: GeminiOptions): TextGenerator {
               contents: [{ role: "user", parts: [{ text: request.prompt }] }],
               generationConfig: {
                 temperature: request.temperature ?? 0,
-                maxOutputTokens: request.maxOutputTokens ?? 256,
+                maxOutputTokens: request.maxOutputTokens ?? 2048,
                 candidateCount: 1,
                 ...(thinkingLevel ? { thinkingConfig: { thinkingLevel } } : {}),
               },

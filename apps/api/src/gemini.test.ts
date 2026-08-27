@@ -90,7 +90,7 @@ describe("the Gemini client", () => {
 
     const body = JSON.parse(calls[0]!.init.body as string);
     expect(body.generationConfig.temperature).toBe(0);
-    expect(body.generationConfig.maxOutputTokens).toBe(256);
+    expect(body.generationConfig.maxOutputTokens).toBe(2048);
   });
 
   it("asks for no thinking by default, and passes a level through when set", async () => {
@@ -177,7 +177,8 @@ describe("the Gemini client", () => {
   it("reports a candidate with no text as unavailable, with its finish reason", async () => {
     // Recorded from the live API: a reasoning model spent its whole output
     // budget on thoughts and returned a candidate with no content at all.
-    // `maxOutputTokens` counts thinking, which is why the cap is now 256.
+    // `maxOutputTokens` counts thinking, which is why the cap is now 2048 —
+    // `gemma-4-26b-a4b-it` alone needs ~700 of it just to finish thinking.
     const { fetch } = recorder(jsonResponse(RESPONSES.truncated));
     const client = createGeminiClient({ ...OPTIONS, fetch, sleep: noSleep });
 
