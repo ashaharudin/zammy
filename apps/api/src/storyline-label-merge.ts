@@ -103,7 +103,17 @@ export interface LabelMergeCandidate {
 
 /** One component: everything that becomes a single storyline. */
 export interface LabelMergePlan {
-  /** The normalized label the component agreed on — what to log it by. */
+  /**
+   * The component's `labelKey` — what to log it by.
+   *
+   * NOT a label anybody wrote. `sharedLabels` keys its map by `labelKey`, the
+   * service passes that key straight in here, so this is the folded words as a
+   * SORTED BAG: "Q2 2026 Financial Results" arrives as `2026 financial q2
+   * result`. Fine for an operator's log line, which needs a stable handle for a
+   * component rather than a name — and worth spelling out, because "the
+   * normalized label" is what this said and it read like `normalizeLabel`
+   * output.
+   */
   label: string;
   winnerId: string;
   /** Merged into the winner, in the order the service should merge them. */
@@ -112,6 +122,7 @@ export interface LabelMergePlan {
 
 /** A component that agreed on a name and was refused anyway. */
 export interface LabelMergeRefusal {
+  /** A `labelKey` too — see `LabelMergePlan.label`. */
   label: string;
   storylines: number;
   reason: "no grounded name" | "component too large";
@@ -135,19 +146,55 @@ export interface LabelMergeRefusal {
  * `trimWordPunctuation`.
  */
 export function normalizeLabel(label: string): string {
+  return labelWordForms(label)
+    .map((word) => word.folded)
+    .join(" ");
+}
+
+/**
+ * One word of a label in both spellings the system needs it in.
+ *
+ * The fold is lossy in the direction that matters here: `singular` drops a bare
+ * trailing `s` and nothing more, so "crisis" reaches the corpus as `crisi` and
+ * "boxes" as `boxe`. `normalizeLabel`'s own doc calls that acceptable, and it is
+ * — for a COMPARISON, where both sides fold alike and the spelling is never
+ * read. It stops being acceptable the moment a folded word is shown to a reader
+ * or sent upstream as a search term, which is what `cloudQuery` does, and what
+ * put "gaza crisi" in the hero placeholder and in the command bar.
+ *
+ * So a caller that displays a label word takes `surface`, and a caller that
+ * matches it against the corpus takes `folded` — from the same walk of the same
+ * label, so the two can never drift apart the way two regexes would.
+ */
+export interface LabelWord {
+  /** The label's own spelling, lowercased, minus the punctuation that WRAPS a word. */
+  surface: string;
+  /** The corpus spelling: `surface` under `singular`. */
+  folded: string;
+}
+
+/**
+ * The words of a label, each in both spellings — the single walk `normalizeLabel`
+ * and `labelWords` are both written on.
+ *
+ * Lowercased rather than kept as the model cased it, because both consumers want
+ * it lowercase: the corpus side to meet `story_tokens`, and the display side to
+ * stand beside the stock examples in the hero placeholder as something a reader
+ * would plausibly have typed.
+ */
+export function labelWordForms(label: string): LabelWord[] {
   return label
     .normalize("NFKC")
     .toLowerCase()
     .split(/\s+/)
     .map(trimWordPunctuation)
     .filter((word) => word.length > 0)
-    .map(singular)
-    .join(" ");
+    .map((surface) => ({ surface, folded: singular(surface) }));
 }
 
 /** The words of a label, folded the way `normalizeLabel` folds them. */
 export function labelWords(label: string): string[] {
-  return normalizeLabel(label).split(" ").filter((word) => word.length > 0);
+  return labelWordForms(label).map((word) => word.folded);
 }
 
 /**

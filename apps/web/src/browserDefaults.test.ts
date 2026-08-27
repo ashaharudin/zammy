@@ -12,7 +12,7 @@ import { defaultCountry, defaultLanguage, defaultedFilters } from "./browserDefa
 const LANGUAGES = { English: "en", French: "fr", German: "de", Malay: "msa" };
 
 /** Codes are upper-case here, unlike languages — upstream serves them that way. */
-const REGIONS = { Canada: "CA", "United State": "US", Japan: "JP", India: "IN" };
+const REGIONS = { Canada: "CA", "United States": "US", Japan: "JP", India: "IN" };
 
 describe("defaultLanguage", () => {
   it("takes the browser's most-preferred language", () => {

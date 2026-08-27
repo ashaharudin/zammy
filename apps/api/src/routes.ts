@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { isStorylineView, TimelineQuery, TrendingQuery } from "@zammy/shared";
 import { countTopicArticles, readCoverage, readTopic } from "@zammy/storage";
+import { repairedLanguages, repairedRegions } from "@zammy/currents-client";
 import { canonicalize, type ReferenceCodes } from "./canonical.js";
 import {
   InvalidCursorError,
@@ -120,8 +121,11 @@ export async function registerQueryRoutes(
   });
 
   app.get("/api/v1/reference", async (_request, reply) => {
-    // Verbatim upstream values, junk categories included: filtering belongs
+    // Verbatim upstream CODES, junk categories included: filtering belongs
     // to the UI picker, because a stored sighting may legitimately carry one.
+    // The region and language NAMES are spell-checked (`repairedRegions`,
+    // `repairedLanguages`) — they are display text, and five of them are typed
+    // wrong upstream.
     return reply.send(await loadReference(deps));
   });
 
@@ -196,6 +200,25 @@ export function registerTrendingRoute(
  * mode it simply mirrors the recorded bodies.
  */
 async function loadReference(deps: TimelineDeps): Promise<ReferenceData> {
+  const reference = await fetchReference(deps);
+  // Names are repaired on the way OUT, not on the way into the cache, and that
+  // is the point: `ref:*` holds upstream's body for a day, so repairing before
+  // the `set` would leave every already-warm cache — and every fixture bundle —
+  // serving "United State" until tomorrow, and would make the tables' next edit
+  // wait on a TTL. Codes are untouched, so `referenceCodes` still validates a
+  // filter against exactly what upstream accepts (§2).
+  //
+  // The browser caches this response for a day of its own (`useReference`), so a
+  // tab that loaded before a table changed keeps the old name until it reloads.
+  // Server-side is the half this can control.
+  return {
+    ...reference,
+    regions: repairedRegions(reference.regions),
+    languages: repairedLanguages(reference.languages),
+  };
+}
+
+async function fetchReference(deps: TimelineDeps): Promise<ReferenceData> {
   const keys = ["ref:languages", "ref:regions", "ref:categories"] as const;
   try {
     const [languages, regions, categories] = await deps.redis.mget(...keys);

@@ -70,13 +70,40 @@ describe("cloudQuery", () => {
 
   it("folds possessives too, which a second regex got wrong once", () => {
     // The `dillard'` lesson (see trimWordPunctuation): `singular` alone leaves
-    // the apostrophe stranded and the two sides never meet.
+    // the apostrophe stranded and the two sides never meet. The possessive is
+    // still stripped from what the query SPELLS — it wraps the word rather than
+    // belonging to it, and "dillard's earnings" is not what a reader would type.
     expect(
       cloudQuery({
         label: "Dillard's Earnings Beat",
         profileTokens: ["beat", "dillard", "earning"],
       }),
-    ).toBe("dillard earning");
+    ).toBe("dillard earnings");
+  });
+
+  it("spells the label's own word, not the fold that matched it", () => {
+    // The fold is a comparison key and `singular` is lossy: "crisis" folds to
+    // `crisi`, which is what the corpus stores and what this used to put in
+    // `?q=`, in the command bar and in the hero's ghost text — and then asked
+    // upstream for. Matching still happens on `crisi`; only the spelling
+    // changed.
+    expect(
+      cloudQuery({
+        label: "Gaza Crisis Talks",
+        profileTokens: ["crisi", "gaza", "talk"],
+      }),
+    ).toBe("gaza crisis");
+  });
+
+  it("spends one term per word of the corpus, not one per spelling of it", () => {
+    // De-duplication stays on the fold. Both label words mean `state` to the
+    // corpus, so spending both of a two-term budget on them would buy one word.
+    expect(
+      cloudQuery({
+        label: "State States Register Ruling",
+        profileTokens: ["register", "ruling", "state"],
+      }),
+    ).toBe("state register");
   });
 
   it("keeps label order rather than the profile's, and de-duplicates", () => {

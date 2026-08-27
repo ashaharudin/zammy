@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { createCurrentsClient } from "./factory.js";
 import { collectPages } from "@zammy/news-client";
-import { usefulCategories } from "./client.js";
+import { repairedLanguages, repairedRegions, usefulCategories } from "./client.js";
 import type { CurrentsClient } from "./client.js";
 import { FIXTURES_DIR } from "./test-support.js";
 
@@ -132,6 +132,70 @@ describe("reference data offline", () => {
     expect(languages["English"]).toBe("en");
     expect(languages["Malay"]).toBe("msa");
     expect(regions["United State"]).toBe("US");
+  });
+
+  it("spell-checks the region names a picker draws, and only those", async () => {
+    const regions = repairedRegions(await client.availableRegions());
+
+    // The four typos, repaired. The code — the half that travels — is untouched.
+    expect(regions["United States"]).toBe("US");
+    expect(regions["Germany"]).toBe("DE");
+    expect(regions["Ghana"]).toBe("GH");
+    expect(regions["Indonesia"]).toBe("ID");
+    expect(regions).not.toHaveProperty("United State");
+    expect(regions).not.toHaveProperty("German");
+
+    // Nothing here shortens a word: the plural region names upstream spells
+    // correctly keep their `s`, which is what made "United State" a typo rather
+    // than evidence of a fold running over this data.
+    expect(regions["Philippines"]).toBe("PH");
+    expect(regions["Netherlands"]).toBe("NL");
+    expect(regions["United Arab Emirates"]).toBe("AE");
+
+    // A repair moves an entry rather than adding one, so no code is lost and
+    // none is invented.
+    const upstream = await client.availableRegions();
+    expect(Object.keys(regions)).toHaveLength(Object.keys(upstream).length);
+    expect(new Set(Object.values(regions))).toEqual(new Set(Object.values(upstream)));
+  });
+
+  it("spell-checks the language names too, and knows German is not one of them", async () => {
+    const languages = repairedLanguages(await client.availableLanguages());
+
+    expect(languages["Vietnamese"]).toBe("vi");
+    expect(languages).not.toHaveProperty("Vietnamise");
+    // The trap the code-keyed tables exist for: "German" is the correct name of
+    // the language `de` and the wrong name of the country `DE`. A repair matched
+    // on the string would rename this one to "Germany".
+    expect(languages["German"]).toBe("de");
+    expect(Object.keys(languages)).toHaveLength(23);
+  });
+
+  it("leaves a repair alone when upstream already uses the name", () => {
+    // Upstream is free to fix its own typo without telling us. Two entries
+    // cannot share a key, so the repair yields rather than swallow a code.
+    const regions = repairedRegions({ Germany: "DEU", German: "DE" });
+
+    expect(regions["Germany"]).toBe("DEU");
+    expect(regions["German"]).toBe("DE");
+  });
+
+  it("survives the keys a JSON body can carry that an object literal cannot", () => {
+    // `JSON.parse` makes `__proto__` an OWN property, and assigning one into an
+    // object literal is a silent no-op — the entry would vanish, and with it a
+    // code that `referenceCodes` needs to accept a filter. A code of `toString`
+    // would find a function on the fixes table and key the output by its source.
+    const regions = repairedRegions(
+      JSON.parse('{"__proto__":"XX","Odd":"toString","United State":"US"}') as Record<
+        string,
+        string
+      >,
+    );
+
+    expect(Object.keys(regions)).toHaveLength(3);
+    expect(new Set(Object.values(regions))).toEqual(new Set(["XX", "toString", "US"]));
+    expect(regions["Odd"]).toBe("toString");
+    expect(regions["United States"]).toBe("US");
   });
 
   it("serves categories verbatim, junk included", async () => {

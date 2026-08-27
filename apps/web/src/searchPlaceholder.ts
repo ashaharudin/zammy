@@ -23,8 +23,11 @@ const STOCK_EXAMPLES = ["ai regulation", "wildfires", "interest rates"];
  * old version of this function a suggestion to search for an empty timeline.
  * The two stock examples are two-word searches for the same reason.
  *
- * Already lowercase, since `query` is built from folded corpus tokens — where
- * the label needed folding to stand beside the stock examples.
+ * Already lowercase, because `cloudQuery` lowercases every word it takes from a
+ * label. Not because it folds them — it deliberately does not, so this ghost
+ * text says "gaza crisis" rather than the corpus's `crisi` — but the two happen
+ * to want the same case, and lowercase is what stands beside the stock examples
+ * as something a reader would plausibly have typed.
  */
 export function searchPlaceholder(storylines: readonly TrendingStoryline[]): string {
   const examples =

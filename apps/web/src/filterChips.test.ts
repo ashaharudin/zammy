@@ -10,10 +10,15 @@ import { filterChips } from "./filterChips.js";
  * Codes are what travels (§2); names are what a chip's LIST shows. The country
  * chip reads as a place ("Canada") because a bare "CA" says nothing, while the
  * language chip stays the code the URL carries.
+ *
+ * The names here are the ones the API serves, which are upstream's spell-checked
+ * (`repairedRegions`) rather than upstream's own — this component receives a
+ * reference body and has no opinion about it, so quoting the typo would pin a
+ * string the API can no longer produce.
  */
 const REFERENCE: Reference = {
   languages: { English: "en", French: "fr" },
-  regions: { Canada: "CA", "United State": "US" },
+  regions: { Canada: "CA", "United States": "US" },
   categories: ["sports", "world"],
 };
 
@@ -55,7 +60,7 @@ describe("filterChips", () => {
     expect(location?.options).toEqual([
       { code: undefined, label: "any country" },
       { code: "CA", label: "Canada" },
-      { code: "US", label: "United State" },
+      { code: "US", label: "United States" },
     ]);
     expect(language?.options).toEqual([
       // "all" rather than undefined: the API canonicalizes it to no language
