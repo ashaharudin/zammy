@@ -249,20 +249,20 @@ function Rail({
         </RailEntry>
       )}
       {groupByDay(items, now, timeZone).map((day) => {
-        const dayCollapsed = isCollapsed(collapsed, day.day);
+        const dayCollapsed = isCollapsed(collapsed, day.key);
         // A day whose coverage all landed in one part of the day gets no
         // segment treatment: a divider that chunks nothing is noise. Read off
         // the shape groupByDay already produced.
         const segmented = day.segments.length >= 2;
         return (
-          <section key={day.day} aria-label={day.day}>
+          <section key={day.key} aria-label={day.day}>
             <RailEntry
               // ▶ not the smaller ▸: at the rail's font size ▶ carries roughly
               // the dot's ink, and its optical centre matches ●'s to the pixel,
               // so both states sit on the same line without a nudge.
               marker={dayCollapsed ? "▶" : "●"}
               big
-              toggle={() => setCollapsed((sections) => toggle(sections, day.day))}
+              toggle={() => setCollapsed((sections) => toggle(sections, day.key))}
             >
               <h2
                 style={{
@@ -279,7 +279,7 @@ function Rail({
                   heading collapses what it heads.
                 */}
                 <button
-                  onClick={() => setCollapsed((sections) => toggle(sections, day.day))}
+                  onClick={() => setCollapsed((sections) => toggle(sections, day.key))}
                   aria-expanded={!dayCollapsed}
                   style={{
                     border: "none",
@@ -303,10 +303,14 @@ function Rail({
             </RailEntry>
             {!dayCollapsed &&
               day.segments.map((part) => {
-                const key = segmentKey(day.day, part.segment);
+                const key = segmentKey(day.key, part.segment);
                 const partCollapsed = segmented && isCollapsed(collapsed, key);
                 return (
-                  <div key={key}>
+                  // A landmark only where there is a segment to name: an
+                  // unsegmented day is one undivided run of cards, and a
+                  // section around it would announce a division that the rail
+                  // deliberately does not draw.
+                  <Wrapper key={key} {...(segmented ? { "aria-label": part.segment } : {})}>
                     {segmented && (
                       <SegmentDivider
                         segment={part.segment}
@@ -327,9 +331,15 @@ function Rail({
                           onOpenStorylineView={onOpenStorylineView}
                           qualifiers={qualifiers}
                           timeZone={timeZone}
+                          // A card's own disclosures sit one level below
+                          // whatever heads them, so they are h4 under a
+                          // segment's h3 and h3 under a bare day's h2. Without
+                          // this they would either collide with the segment
+                          // heading or skip a level on an unsegmented day.
+                          relatedLevel={segmented ? "h4" : "h3"}
                         />
                       ))}
-                  </div>
+                  </Wrapper>
                 );
               })}
           </section>
@@ -412,6 +422,7 @@ function GroupCard({
   onOpenStorylineView,
   qualifiers,
   timeZone,
+  relatedLevel,
 }: {
   entry: TimelineEntry;
   onOpenStorylineView: (storylineId: string) => void;
@@ -419,6 +430,8 @@ function GroupCard({
   qualifiers: Map<string, string>;
   /** The reader's zone, so a card's clock agrees with the day it sits under. */
   timeZone: string;
+  /** The heading level for this card's own disclosures — one below its head. */
+  relatedLevel: "h3" | "h4";
 }) {
   const [showRelated, setShowRelated] = useState(false);
   const updated = hasLaterCoverage(entry);
@@ -487,6 +500,7 @@ function GroupCard({
                   label="same story"
                   articles={entry.related}
                   timeZone={timeZone}
+                  level={relatedLevel}
                   softCap
                 />
               )}
@@ -495,6 +509,7 @@ function GroupCard({
                   label="more coverage"
                   articles={entry.moreCoverage}
                   timeZone={timeZone}
+                  level={relatedLevel}
                 />
               )}
             </div>
@@ -523,6 +538,29 @@ function GroupCard({
  * It needs no offset of its own — it sits inside the container that already
  * carries the rail's `RAIL_INSET` padding, so it lines up with card content.
  */
+/** A heading whose LEVEL its caller decides, because its depth in the rail varies. */
+function Heading({
+  level,
+  style,
+  children,
+}: {
+  level: "h3" | "h4";
+  style: React.CSSProperties;
+  children: React.ReactNode;
+}) {
+  const Tag = level;
+  return <Tag style={style}>{children}</Tag>;
+}
+
+/**
+ * A segment's run of cards: a `<section>` when it is a named part of the day,
+ * a bare `<div>` when the day was never divided. Same children either way —
+ * only whether the run is a landmark changes.
+ */
+function Wrapper({ children, ...rest }: { children: React.ReactNode; "aria-label"?: string }) {
+  return rest["aria-label"] === undefined ? <div>{children}</div> : <section {...rest}>{children}</section>;
+}
+
 function SegmentDivider({
   segment,
   count,
@@ -637,11 +675,14 @@ function RelatedSection({
   label,
   articles,
   timeZone,
+  level,
   softCap,
 }: {
   label: string;
   articles: Article[];
   timeZone: string;
+  /** h4 beneath a segment's h3, h3 beneath a bare day's h2. */
+  level: "h3" | "h4";
   softCap?: boolean;
 }) {
   const [showAll, setShowAll] = useState(false);
@@ -657,7 +698,8 @@ function RelatedSection({
 
   return (
     <section aria-label={label}>
-      <h3
+      <Heading
+        level={level}
         style={{
           margin: "0 0 0.3rem",
           fontSize: "0.65rem",
@@ -688,7 +730,7 @@ function RelatedSection({
           {label}
           {!open && ` (${articles.length})`}
         </button>
-      </h3>
+      </Heading>
       {open && (
         <ul
           style={{
@@ -943,14 +985,14 @@ function RailEntry({
   } as const;
 
   const glyph = toggle ? (
-    <button
+    // A span, not a button: it is already out of the a11y tree, and a
+    // FOCUSABLE node inside a hidden subtree is the worst of both — a mouse
+    // click would move focus onto something that announces nothing. The
+    // heading carries the keyboard path, so this needs only to be clickable.
+    <span
       onClick={toggle}
       aria-hidden="true"
-      tabIndex={-1}
       style={{
-        // `font: inherit` first: the shorthand would otherwise reset the
-        // rail's marker size back to the button default.
-        font: "inherit",
         ...markerStyle,
         // A 1.5rem box keeps the glyph on the rail's centre line while
         // giving the pointer a 24px target instead of the glyph's ~22×16.
@@ -969,7 +1011,7 @@ function RailEntry({
       }}
     >
       {marker}
-    </button>
+    </span>
   ) : (
     <span aria-hidden="true" className={pulse ? "shimmer" : undefined} style={markerStyle}>
       {marker}

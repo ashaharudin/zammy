@@ -60,12 +60,32 @@ const SEGMENTS: readonly { from: number; name: Segment }[] = [
  * not decoration — Intl reports midnight as "24" under some hourCycle
  * readings, and without it every midnight slot files under Evening.
  */
+/**
+ * `Intl.DateTimeFormat` is expensive to construct and cheap to reuse, and both
+ * of these run once per slot per render — `Rail` re-renders on every collapse
+ * click and every ingest poll. Built per zone, of which a session has one.
+ */
+const hourFormatters = new Map<string, Intl.DateTimeFormat>();
+const dayKeyFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function formatter(
+  cache: Map<string, Intl.DateTimeFormat>,
+  timeZone: string,
+  build: () => Intl.DateTimeFormat,
+): Intl.DateTimeFormat {
+  const cached = cache.get(timeZone);
+  if (cached) return cached;
+  const built = build();
+  cache.set(timeZone, built);
+  return built;
+}
+
 function hourIn(iso: string, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
+  const parts = formatter(
+    hourFormatters,
     timeZone,
-    hour: "2-digit",
-    hour12: false,
-  }).formatToParts(new Date(iso));
+    () => new Intl.DateTimeFormat("en-US", { timeZone, hour: "2-digit", hour12: false }),
+  ).formatToParts(new Date(iso));
   return Number(parts.find((part) => part.type === "hour")?.value ?? 0) % 24;
 }
 
@@ -78,12 +98,17 @@ export function segmentOf(iso: string, timeZone: string): Segment {
 
 /** YYYY-MM-DD of `iso` in `timeZone`. en-CA formats exactly this shape. */
 function dayKey(iso: string, timeZone: string): string {
-  return new Intl.DateTimeFormat("en-CA", {
+  return formatter(
+    dayKeyFormatters,
     timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date(iso));
+    () =>
+      new Intl.DateTimeFormat("en-CA", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }),
+  ).format(new Date(iso));
 }
 
 /**
@@ -100,7 +125,12 @@ function daysBetween(later: string, earlier: string): number {
 }
 
 export function dayLabel(iso: string, now: Date, timeZone: string): string {
-  const diff = daysBetween(dayKey(now.toISOString(), timeZone), dayKey(iso, timeZone));
+  return labelFor(dayKey(iso, timeZone), iso, dayKey(now.toISOString(), timeZone), timeZone);
+}
+
+/** `dayLabel` with today's key already in hand — it is constant per render. */
+function labelFor(key: string, iso: string, todayKey: string, timeZone: string): string {
+  const diff = daysBetween(todayKey, key);
   if (diff === 0) return "Today";
   if (diff === 1) return "Yesterday";
   return new Date(iso).toLocaleDateString(undefined, {
@@ -120,6 +150,17 @@ export function timeLabel(iso: string, timeZone: string): string {
 }
 
 export interface DayGroup {
+  /**
+   * The day's identity: its YYYY-MM-DD key in the reader's zone. What collapse
+   * state and React key on, because the LABEL moves — a section the reader
+   * collapsed as "Today" is called "Yesterday" a minute after local midnight,
+   * and keying on it would hand that collapsed flag to a different day.
+   *
+   * It is also what makes a segment's key uncollidable: two fixed-shape
+   * fields, where a localised label could in principle carry the separator.
+   */
+  key: string;
+  /** What the divider reads: "Today", "Yesterday", or a formatted date. */
   day: string;
   segments: { segment: Segment; items: TimelineEntry[] }[];
 }
@@ -140,12 +181,13 @@ export interface DayGroup {
  */
 export function groupByDay(items: TimelineEntry[], now: Date, timeZone: string): DayGroup[] {
   const days: DayGroup[] = [];
+  const todayKey = dayKey(now.toISOString(), timeZone);
   for (const item of items) {
-    const day = dayLabel(item.published, now, timeZone);
+    const key = dayKey(item.published, timeZone);
     const segment = segmentOf(item.published, timeZone);
     let lastDay = days[days.length - 1];
-    if (!lastDay || lastDay.day !== day) {
-      lastDay = { day, segments: [] };
+    if (!lastDay || lastDay.key !== key) {
+      lastDay = { key, day: labelFor(key, item.published, todayKey, timeZone), segments: [] };
       days.push(lastDay);
     }
     const lastSegment = lastDay.segments[lastDay.segments.length - 1];

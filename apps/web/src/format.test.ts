@@ -194,6 +194,35 @@ describe("groupByDay", () => {
     ]);
   });
 
+  it("keeps a day's identity when its label moves at midnight", () => {
+    // The label is not the identity: at 23:59 this slot's day reads "Today",
+    // two minutes later it reads "Yesterday". Collapse state keys on `key`,
+    // so a day the reader collapsed cannot hand that flag to its neighbour
+    // when the clock rolls over.
+    const slot = [entry("1", "2026-08-11T20:00:00.000Z")]; // 13:00 in Vancouver
+
+    const before = groupByDay(slot, new Date("2026-08-12T06:59:00.000Z"), VANCOUVER);
+    const after = groupByDay(slot, new Date("2026-08-12T07:01:00.000Z"), VANCOUVER);
+
+    expect(before[0]?.day).toBe("Today");
+    expect(after[0]?.day).toBe("Yesterday");
+    expect(after[0]?.key).toBe(before[0]?.key);
+    expect(after[0]?.key).toBe("2026-08-11");
+  });
+
+  it("identifies a day by the reader's calendar, not the UTC one", () => {
+    // 23:00 on the 11th in Vancouver is already the 12th in UTC. Keying on
+    // the UTC date would split one rail day in two.
+    const days = groupByDay(
+      [entry("1", "2026-08-12T06:59:00.000Z"), entry("2", "2026-08-12T05:00:00.000Z")],
+      new Date("2026-08-12T19:00:00.000Z"),
+      VANCOUVER,
+    );
+
+    expect(days).toHaveLength(1);
+    expect(days[0]?.key).toBe("2026-08-11");
+  });
+
   it("grows a second segment when older slots arrive", () => {
     // The accepted cost of hiding the divider until a day has two segments
     // (§8.1): loading older coverage can turn a bare day into a segmented one,
