@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { STORYLINE_UUID } from "@zammy/shared";
-import type { TopicFilters } from "./api.js";
+import { refreshStoryline, type TopicFilters } from "./api.js";
 import { Hero } from "./Hero.js";
 import {
   leaveStorylineView,
@@ -74,8 +74,19 @@ function TopicApp() {
   // (see the TimelinePage prop below) — one definition, shared by every entry
   // point (the hero's cloud, surfaced pills, the timeline gutter) so they
   // cannot drift on how a click gets there.
+  //
+  // It also asks, in the background, for a top-up of what this storyline's own
+  // coverage says (ADR-0017). Being the one definition is what makes that one
+  // line rather than four: every click that opens a storyline anywhere in the
+  // app feeds the demand-driven loop, which is the contribution ADR-0016 gave
+  // up when the cloud stopped running a search. The transition does not wait on
+  // it and the view does not show it — whatever arrives lands in the archive for
+  // the next read of the arc.
   const openStoryline = useCallback(
-    (storylineId: string) => navigate(openStorylineView(route, storylineId)),
+    (storylineId: string) => {
+      refreshStoryline(storylineId);
+      navigate(openStorylineView(route, storylineId));
+    },
     [navigate, route],
   );
 

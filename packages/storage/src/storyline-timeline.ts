@@ -211,7 +211,7 @@ export async function readStorylineTimelinePage(
  *
  * One spelling of the keyword answers both columns, and that is the whole
  * reason `label_words` is a column. `normalizeLabel` folds a label with
- * `trimWordPunctuation` then `singular` — the same two steps in the same order
+ * `trimWordPunctuation`, `foldDiacritics`, `singular` — the same three steps in order
  * the corpus ran into `story_tokens` — so both vocabularies hold the same
  * spelling of the same word and both conjuncts are a GIN `@>`. Splitting the
  * label in SQL on read would have been free of a write and a backfill, and

@@ -412,6 +412,7 @@ Accepts front-end requests and turns them into the right upstream query — or, 
 | `GET /api/v1/timeline` | The main read. Keywords + filters → time-ordered page of articles. |
 | `GET /api/v1/reference` | Cached `/available/*` values, for front-end filter controls. |
 | `GET /api/v1/topics/:fingerprint` | Topic metadata: coverage window, article count, freshness, summary. |
+| `POST /api/v1/storylines/:id/refresh` | Fire-and-forget: queue one background top-up of what this arc's coverage says (§9.1, ADR-0017). A UUID is the whole request — the keywords and the language are derived from the arc, never sent. 202 with `{ queued }`; nothing on the page reads it. |
 | `GET /healthz` · `GET /readyz` | Liveness, and dependency checks for Postgres/Redis/upstream. |
 
 `GET /api/v1/timeline` request:
@@ -1008,6 +1009,7 @@ All triggers originate from a user request:
 | **Breadth sample** — first landing-page visit after the last `/latest-news` snapshot staled (§10.1) | queued, background | `SAMPLE_PAGES` calls/sample (default 2), ≤48/day per language |
 | **Deferred backfill** — gap segments and subdivisions §6.3 didn't have budget for | queued, background | metered |
 | **Refresh-on-read** — stale coverage noticed while serving (§6.4) | queued, background | ~1 call |
+| **Storyline opened** — a label clicked anywhere: the cloud, the gutter, a pill (ADR-0017) | queued, background | 0 or 1 call, freshness-gated; ~38 distinct arcs is a day's background budget (ADR-0017) |
 
 The worker also handles coverage-span merging and a daily `/available/*` refresh (3 calls).
 
@@ -1180,6 +1182,12 @@ watchlist, the scheduler lock, and interval tuning entirely.
    Mitigation: the landing-page wordcloud (§10), whose sample is triggered by the first visitor
    after the previous snapshot staled — the one place where non-search-driven fetching earns its
    cost.
+4. **A STORYLINE nobody searched into stopped deepening**, which is a sharper version of (2) and
+   was live for as long as ADR-0016 stood alone: a cloud click opens an arc by UUID and mints no
+   topic, so the most-clicked storylines in the app had no mechanism for staying current. Opening
+   one now queues a background top-up of the topic its own coverage names (ADR-0017) — at most one
+   job, freshness-gated, no call on the request path. Every trigger still originates from a user
+   request; a click is one.
 
 ### 9.4 Budget guards that demand-driven ingestion requires
 

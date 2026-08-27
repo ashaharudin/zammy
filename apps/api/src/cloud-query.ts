@@ -148,3 +148,69 @@ function dedupeBy<T>(items: readonly T[], key: (item: T) => string): T[] {
     return true;
   });
 }
+
+/**
+ * The keywords a storyline is worth SEARCHING for, for a caller that has a
+ * storyline row rather than a cloud word — the storyline-opened refresh
+ * (ARCHITECTURE 9.1, ADR-0017).
+ *
+ * `cloudQuery` above is the whole of the judgment and this adds none: the two
+ * words a label's own coverage says are as good an ask for a background top-up
+ * as for a click, and deriving them twice by two rules would let a click's ask
+ * drift away from what the cloud's own placeholder proposes for the same arc.
+ *
+ * The KEYWORDS, precisely — not the fingerprint. A topic's identity also holds
+ * the language, country and category (§6.2), and the refresh always uses the
+ * arc's own modal language with no country and no category, while a reader
+ * executing the placeholder carries whatever chips are set. So the two coincide
+ * exactly when the chips happen to agree, and one rule for the words is worth
+ * having either way: it is the half that decides whether the ask can match the
+ * arc at all.
+ *
+ * What it adds is the case the cloud cannot reach: a **label-less** storyline.
+ * The cloud filters those out — an unlabelled arc has no word to draw — but the
+ * timeline gutter renders one label-less rather than not at all (ADR-0011,
+ * Labels), so it is clickable, and a click that queues nothing is a click that
+ * lets exactly the arcs whose labelling failed go stale. With no label there is
+ * no naming to ground, so the profile's own tokens are the whole vocabulary:
+ * two of them, ARBITRARILY which two (`refreshProfileTokens` stores the profile
+ * alphabetically), for the reason `cloudQuery`'s own profile-only fallback
+ * tolerates the same arbitrariness — there is no subject to name, and any two
+ * tokens the coverage says beat asking upstream for nothing.
+ *
+ * `null` — never an empty string — for an arc with **no profile**, whatever its
+ * label says: no coverage vocabulary means nothing to ask about, and
+ * `canonicalize` would answer a 400 on a keyword no caller chose.
+ *
+ * What such an arc IS, since the answer decides where to look when
+ * `zammy_storyline_refreshes_total{result="no_keywords"}` moves: a LIVE arc whose
+ * majority-support profile came out empty — every member's `story_tokens` empty,
+ * or a hand-built or provisional arc nobody labelled. Not a merged-away one,
+ * whose profile `mergeStorylines` also clears: `queueStorylineRefresh` resolves
+ * the alias chain BEFORE reading the row, so it only ever sees a survivor. So a
+ * count here is a tokenization or labelling problem, never a merge one.
+ *
+ * The profile guard comes FIRST, before the label, and that ordering is the whole
+ * of the difference from `cloudQuery`. `cloudQuery`'s last resort returns the
+ * label VERBATIM when the profile is empty, which is right for what it feeds — a
+ * placeholder is a string to show, and ADR-0013's behaviour is the best available
+ * one. It is wrong for what this feeds: these words become `?q=` and the keywords
+ * handed to upstream `/search`, so a four-word label arrives as four conjunctive
+ * terms — exactly the query ADR-0014 measured at zero results across every
+ * label-shaped search in the archive. `cloudQuery` calls that branch unreachable
+ * for a promoted, labelled arc and is right, but this route accepts any UUID the
+ * `storylines` table holds, so the reachability argument was doing more work here
+ * than it was written for. Better to spend nothing than to spend a call on a
+ * query already known to return nothing.
+ */
+export function storylineKeywords(input: {
+  label: string | null;
+  profileTokens: readonly string[];
+}): string | null {
+  const tokens = [...new Set(input.profileTokens)];
+  if (tokens.length === 0) return null;
+  if (input.label !== null) {
+    return cloudQuery({ label: input.label, profileTokens: input.profileTokens });
+  }
+  return tokens.slice(0, CLOUD_QUERY_TERMS).join(" ");
+}

@@ -19,6 +19,22 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The `repair (production)` job below, and only that job. Manual by design —
+  # see the comment on it.
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "regroup window in days (retention is 90; the CLI's own default of 1 repairs today only)"
+        required: true
+        default: "90"
+      story_df:
+        description: "also rebuild the trailing df corpus (step 2)"
+        type: boolean
+        default: true
+      label_words:
+        description: "also recompute label_words (step 3)"
+        type: boolean
+        default: true
 
 # A superseded run on the same ref has nothing to tell us — on a PULL REQUEST.
 # Main is different now that this workflow carries a migration (`migrate
@@ -141,6 +157,76 @@ jobs:
   # supports one environment per project, and once the preview Redis database
   # was removed there (2026-08-26) a separate preview data plane no longer made
   # sense — see deploy/vercel/README.md and ADR-0015.
+
+  # The TOKENIZER_VERSION repair chain (`grouping.ts`), against production, by
+  # hand.
+  #
+  # Not part of the push-to-main job, and not a chore: it re-derives materialized
+  # columns over the whole retention window, and `grouping.ts` is explicit that
+  # which steps a bump pays for is a decision a person makes — the same posture
+  # migrations take (ADR-0003). It lives here rather than in a runbook because the
+  # production credential lives here: the alternative is an operator pulling a
+  # live database URL onto a laptop to run a bulk write, which is a worse habit
+  # than a job with an audit trail.
+  #
+  # Version 8 is why it exists at all. Deploy and step 1 belong together for that
+  # bump (see TOKENIZER_VERSION), and until this job there was no way to run step
+  # 1 against production — a documented repair chain nobody could execute where it
+  # mattered.
+  #
+  # `--days` is an input rather than a constant because the blast radius is the
+  # caller's to choose, and it defaults to the retention window rather than to the
+  # CLI's own default of 1, which repairs today and silently leaves the archive.
+  repair-production:
+    name: repair (production)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04-arm
+
+    env:
+      # The SESSION url: these are long sequential transactions, not the
+      # request-path pooler's workload.
+      DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_SESSION_URL }}
+      DATABASE_SSL: verify-full
+      DATABASE_CA_CERT: ${{ secrets.SUPABASE_CA_CERT }}
+      # Required by `loadConfig` and unused by these three commands — none of them
+      # opens Redis or calls upstream. Inert values rather than real ones, so this
+      # job cannot touch either.
+      REDIS_URL: redis://127.0.0.1:6379
+      CURRENTS_USER_AGENT: zammy-repair (github-actions)
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: secrets are present
+        run: |
+          test -n "$DATABASE_URL" || {
+            echo "::error::PRODUCTION_DATABASE_SESSION_URL is not set. See deploy/vercel/provision-production.sh."
+            exit 1
+          }
+          test -n "$DATABASE_CA_CERT" || {
+            echo "::error::SUPABASE_CA_CERT is not set; DATABASE_SSL=verify-full needs it."
+            exit 1
+          }
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r --filter "./packages/*" build
+
+      # Step 1: stored tokens, and the profiles of arcs whose tokens MOVED.
+      - run: pnpm regroup --tokens-only --days=${{ inputs.days }}
+
+      # Step 2: the trailing df corpus, which `recordGrouping` never writes.
+      - if: inputs.story_df
+        run: pnpm story:df --rebuild
+
+      # Step 3: `label_words`, materialized from `label` through the same fold.
+      - if: inputs.label_words
+        run: pnpm backfill:label-words
 
   migrate-production:
     name: migrate (production)

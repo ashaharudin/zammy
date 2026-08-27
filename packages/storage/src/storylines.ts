@@ -1018,6 +1018,45 @@ export async function readGroupStorylines(
   return rows.map((row) => row.storyline_id);
 }
 
+/**
+ * The language a storyline is actually written in: the commonest `language` its
+ * member articles carry, or null when none of them carries one.
+ *
+ * Read for the same reason `profile_tokens` are read — a background refresh
+ * (ADR-0017) asks upstream for what the arc's own coverage says, and a language
+ * is part of that ask. Deriving it from the reader's language CHIP instead is
+ * the version that quietly wastes the call: an English arc clicked out of the
+ * English-only cloud (§10.1) by a reader whose chip says Malay would mint a
+ * Malay topic that can never match it, and the whole point of the refresh is to
+ * find relevant articles.
+ *
+ * Modal rather than the earliest article's, because one mislabelled sighting
+ * should not decide it, and tie-broken alphabetically so a bilingual arc answers
+ * the same thing every time — a fingerprint that moved between two calls would
+ * mint a second topic rather than deepen the first.
+ *
+ * Nulls are excluded rather than counted as a language: upstream leaves the
+ * field empty often enough that a "no language" majority is a fact about
+ * upstream's metadata, not about the story, and the caller's own default is a
+ * better answer than none.
+ */
+export async function readStorylineLanguage(
+  db: Kysely<Database>,
+  storylineId: string,
+): Promise<string | null> {
+  const row = await db
+    .selectFrom("storyline_groups as sg")
+    .innerJoin("articles as a", "a.group_id", "sg.group_id")
+    .select((eb) => ["a.language", eb.fn.countAll<string>().as("n")])
+    .where("sg.storyline_id", "=", storylineId)
+    .where("a.language", "is not", null)
+    .groupBy("a.language")
+    .orderBy("n", "desc")
+    .orderBy("a.language", "asc")
+    .executeTakeFirst();
+  return row?.language ?? null;
+}
+
 /** A storyline's day slots, newest first — the shape the storyline view pages. */
 export async function readStorylineDays(
   db: Kysely<Database>,

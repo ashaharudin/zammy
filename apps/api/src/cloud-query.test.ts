@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CLOUD_QUERY_TERMS, cloudQuery } from "./cloud-query.js";
+import { CLOUD_QUERY_TERMS, cloudQuery, storylineKeywords } from "./cloud-query.js";
 
 /**
  * The search a cloud word runs (ADR-0014).
@@ -128,10 +128,61 @@ describe("cloudQuery", () => {
     ).toBe("kelowna wildfire");
   });
 
+  it("reaches a name the coverage accents and the labeler does not", () => {
+    // The live arc that exposed the fold (dev archive, 2026-08-27): the profile
+    // is quoted verbatim, `niño` and all, and the label is the one the model
+    // wrote. Before tokenizer version 8 the naming word could not ground, so
+    // the arc searched for its two weakest words and `nino` was dropped.
+    const arc = {
+      label: "El Niño Hurricane Season",
+      profileTokens: ["el", "hurricane", "nino", "season", "storm"],
+    };
+    expect(cloudQuery(arc)).toBe("el niño");
+    // ...and the ASCII label the model wrote for a neighbouring arc grounds
+    // against the same profile, which is what the fold bought.
+    expect(cloudQuery({ ...arc, label: "El Nino Hurricane Season" })).toBe("el nino");
+  });
+
   it("falls back to the label when there is no profile at all", () => {
     // Unreachable through the read (a labelled, promoted storyline has a
     // profile, and merged-away ones are excluded before this runs), but an
     // empty query is a 400 from canonicalize on a word the reader can see.
     expect(cloudQuery({ label: "Fort Hood Crash", profileTokens: [] })).toBe("Fort Hood Crash");
+  });
+});
+
+describe("storylineKeywords", () => {
+  it("is cloudQuery wherever there is a label to ground", () => {
+    // One rule, not two: the fingerprint a click mints has to be the one the
+    // cloud's own placeholder proposes for the same arc (§6.2).
+    const arc = {
+      label: "Jason Arday plagiarism controversy",
+      profileTokens: ["academic", "arday", "cambridge", "jason", "professor", "university"],
+    };
+    expect(storylineKeywords(arc)).toBe(cloudQuery(arc));
+  });
+
+  it("searches the profile for an arc whose labelling failed", () => {
+    // The case the cloud never sees and the timeline gutter does: a promoted
+    // storyline renders label-less rather than not at all (ADR-0011), so it is
+    // clickable, and a click that asked for nothing would leave exactly those
+    // arcs to go stale.
+    expect(
+      storylineKeywords({ label: null, profileTokens: ["kelowna", "wildfire", "evacuation"] }),
+    ).toBe("kelowna wildfire");
+  });
+
+  it("has nothing to ask for when the arc has no profile, label or not", () => {
+    // A merged-away arc: `mergeStorylines` clears the loser's profile. Null
+    // rather than "", because an empty query is a 400 from canonicalize about a
+    // keyword no caller chose.
+    expect(storylineKeywords({ label: null, profileTokens: [] })).toBeNull();
+    // And with a label, which is where the two functions must diverge:
+    // `cloudQuery` returns the label VERBATIM here, which is the right string to
+    // SHOW and the wrong one to SEND — four conjunctive terms is the query
+    // ADR-0014 measured at zero results.
+    const label = "Hurricane Fausto Hawaii Landfall";
+    expect(cloudQuery({ label, profileTokens: [] })).toBe(label);
+    expect(storylineKeywords({ label, profileTokens: [] })).toBeNull();
   });
 });

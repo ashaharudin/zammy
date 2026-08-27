@@ -244,13 +244,26 @@ export class CountingClient implements CurrentsClient {
     this.priorities.push(opts?.priority);
     return this.inner.latestNews(params, opts);
   }
+  /**
+   * The `/available/*` calls, counted apart from `search`.
+   *
+   * They spend the same quota and were nonetheless invisible here, which is what
+   * let a request path advertised as spending NOTHING reach three of them through
+   * a cold reference cache (`cachedReference`). A claim about upstream spend needs
+   * a witness for every call that spends.
+   */
+  referenceCalls = 0;
+
   availableLanguages(opts?: CallOpts) {
+    this.referenceCalls += 1;
     return this.inner.availableLanguages(opts);
   }
   availableRegions(opts?: CallOpts) {
+    this.referenceCalls += 1;
     return this.inner.availableRegions(opts);
   }
   availableCategories(opts?: CallOpts) {
+    this.referenceCalls += 1;
     return this.inner.availableCategories(opts);
   }
   quota() {

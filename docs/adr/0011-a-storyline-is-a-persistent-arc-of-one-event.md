@@ -362,8 +362,8 @@ reach.
 **The label's words are stored, folded by `normalizeLabel`, in `label_words`.**
 One definition of "the label's words", used by everything that needs them: the
 label-agreement merge that has always used it, ADR-0014's `cloudQuery`, and now
-surfacing. `normalizeLabel` is `trimWordPunctuation` and then `singular` — the
-same two steps in the same order the corpus ran into `story_tokens` — so
+surfacing. `normalizeLabel` is `trimWordPunctuation`, then `foldDiacritics`, then `singular` — the
+same three steps in the same order the corpus ran into `story_tokens` — so
 `label_words` and `profile_tokens` hold the SAME SPELLING of the same word, and
 a keyword folded once answers both with a GIN `@>`. There is no inverse fold and
 nothing to keep in sync.

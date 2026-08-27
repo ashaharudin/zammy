@@ -1,10 +1,16 @@
 import type { FastifyInstance } from "fastify";
-import { isStorylineView, TimelineQuery, TrendingQuery } from "@zammy/shared";
+import {
+  isStorylineView,
+  STORYLINE_UUID,
+  TimelineQuery,
+  TrendingQuery,
+} from "@zammy/shared";
 import { countTopicArticles, readCoverage, readTopic } from "@zammy/storage";
 import { repairedLanguages, repairedRegions } from "@zammy/currents-client";
 import { canonicalize, type ReferenceCodes } from "./canonical.js";
 import {
   InvalidCursorError,
+  queueStorylineRefresh,
   readStorylineView,
   readTimeline,
   type TimelineDeps,
@@ -24,6 +30,13 @@ export interface QueryRouteOptions {
 
 /** 24h, matching the upstream refresh cadence in §9.1. */
 const REFERENCE_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** What a caller validates against when the cached reference is not there. */
+const EMPTY_REFERENCE_CODES: ReferenceCodes = {
+  languages: new Set(),
+  regions: new Set(),
+  categories: new Set(),
+};
 
 interface ReferenceData {
   languages: Record<string, string>;
@@ -119,6 +132,104 @@ export async function registerQueryRoutes(
       throw error;
     }
   });
+
+  /**
+   * POST /api/v1/storylines/:id/refresh (§9.1, ADR-0017) — opening a storyline
+   * queues one background top-up of the topic its own coverage names.
+   *
+   * A POST because it mints a topic and publishes to the queue, and a route of
+   * its own rather than a flag on the timeline read because the two answer
+   * different questions: the storyline view reads day slots by UUID and must
+   * not wait on ingestion, and this asks for ingestion and has nothing to
+   * render. The caller is fire-and-forget (`refreshStoryline` in the browser),
+   * so the body is for operators and tests — nothing on the page reads it.
+   *
+   * **A UUID is the whole request**: no keywords, no filters, no window. The
+   * planner derives every part of the ask from the arc's own coverage, and the
+   * reason it must is in `queueStorylineRefresh`. What is left here is the one
+   * thing the planner cannot do — checking the derived language against the
+   * reference lists, since only the route holds them (`loadReference`) — and see
+   * the callback below for why a language they do not list is DROPPED rather
+   * than refused. A 400 is therefore about the UUID's shape and nothing else.
+   */
+  app.post<{ Params: { id: string } }>(
+    "/api/v1/storylines/:id/refresh",
+    async (request, reply) => {
+      const { id } = request.params;
+      if (!STORYLINE_UUID.test(id)) {
+        return reply.status(400).send({
+          error: { message: "invalid query", fields: { id: "must be a storyline UUID" } },
+        });
+      }
+
+      // The CACHED reference only — never `loadReference`, which spends three
+      // interactive upstream calls on a cold cache. See `cachedReference`.
+      const cached = await cachedReference(deps);
+      const codes = cached === null ? null : referenceCodes(cached);
+      const outcome = await queueStorylineRefresh(deps, {
+        storylineId: id,
+        // The window is the default lookback ending now — no `from`/`to` is
+        // accepted, because a background refresh is about the leading edge and
+        // an arbitrary window would let a caller aim the queue at any span of
+        // the archive it liked.
+        canonicalize: ({ keywords, language }) => {
+          // An arc's own language is an ARTICLE's `language` field, and that is
+          // not drawn from the same vocabulary as `/available/languages`, which
+          // is what a query may be narrowed by. The reference table is mostly
+          // ISO-639-1 but not entirely — `{"Malay": "msa"}`, three letters,
+          // recorded in PROBE-FINDINGS 6 with the warning never to derive a code
+          // — so an article saying `ms` names a language upstream will not
+          // accept as a filter.
+          //
+          // Dropped rather than passed on to be refused. A 400 here would be
+          // silent by construction (the caller is fire-and-forget with no error
+          // path) and permanent for that arc, which is the worst available
+          // outcome: a refresh in the configured default is worth more than no
+          // refresh for as long as the arc exists.
+          const filter =
+            language !== undefined && codes !== null && codes.languages.has(language);
+          if (language !== undefined && !filter) {
+            deps.log?.warn(
+              { storyline: id, language, cachedReference: codes !== null },
+              "storyline refresh: the arc's own language is not a query code; falling back to the default",
+            );
+          }
+          return canonicalize(
+            { q: keywords, ...(filter ? { language } : {}) },
+            {
+              // An empty set on a cache miss, which costs nothing: the only field
+              // being validated is the language, and `filter` above has already
+              // dropped it. Country and category are never sent from here.
+              reference: codes ?? EMPTY_REFERENCE_CODES,
+              defaultLanguage: options.defaultLanguage,
+              lookbackDays: deps.config.lookbackDays,
+              now: deps.now(),
+            },
+          );
+        },
+      });
+
+      if (outcome.status === "unknown") {
+        return reply.status(404).send({ error: { message: "unknown storyline" } });
+      }
+      if (outcome.status === "invalid") {
+        return reply
+          .status(400)
+          .send({ error: { message: "invalid query", fields: outcome.errors } });
+      }
+      // 202 for every outcome that reached the planner, `fresh` included: the
+      // request was accepted and what it cost is a fact about coverage, not a
+      // different kind of answer. `queued: false` is the honest report of a
+      // storyline whose trailing edge is already inside the staleness tier.
+      return reply.status(202).send({
+        storyline: outcome.storylineId,
+        queued: outcome.status === "queued",
+        ...(outcome.status === "no_keywords"
+          ? { keywords: [] }
+          : { keywords: outcome.keywords, fingerprint: outcome.fingerprint }),
+      });
+    },
+  );
 
   app.get("/api/v1/reference", async (_request, reply) => {
     // Verbatim upstream CODES, junk categories included: filtering belongs
@@ -218,10 +329,31 @@ async function loadReference(deps: TimelineDeps): Promise<ReferenceData> {
   };
 }
 
-async function fetchReference(deps: TimelineDeps): Promise<ReferenceData> {
-  const keys = ["ref:languages", "ref:regions", "ref:categories"] as const;
+/**
+ * The cached reference, or `null` — for the one caller that must not spend an
+ * upstream call to learn a language code (`/storylines/:id/refresh`).
+ *
+ * `fetchReference` below falls through a cold or faulted cache to three
+ * `interactive` upstream calls, which on a request path advertised as spending
+ * nothing is the worst shape available: the reference load exists there only to
+ * decide whether to KEEP the arc's own language, and the route is already willing
+ * to drop it. A cold `ref:*` (dev Redis evicts under `volatile-lru`) or an
+ * Upstash blip would therefore have turned every label click into three calls at
+ * the moment the per-IP limiter also fails open (`skipOnError`) — a reader
+ * clicking through the cloud draining a day's quota, invisibly, since the caller
+ * has no error path.
+ *
+ * So a miss means "no codes", which means the language is dropped and the
+ * configured default is used. Same answer the route already gives a language the
+ * table does not list, reached without asking anyone.
+ */
+async function cachedReference(deps: TimelineDeps): Promise<ReferenceData | null> {
   try {
-    const [languages, regions, categories] = await deps.redis.mget(...keys);
+    const [languages, regions, categories] = await deps.redis.mget(
+      "ref:languages",
+      "ref:regions",
+      "ref:categories",
+    );
     if (languages && regions && categories) {
       return {
         languages: JSON.parse(languages) as Record<string, string>,
@@ -230,8 +362,15 @@ async function fetchReference(deps: TimelineDeps): Promise<ReferenceData> {
       };
     }
   } catch {
-    // Redis down → fetch through the client; degraded, not down (§11).
+    // Redis down — a miss, same as a cold key. Never an upstream call here.
   }
+  return null;
+}
+
+async function fetchReference(deps: TimelineDeps): Promise<ReferenceData> {
+  const keys = ["ref:languages", "ref:regions", "ref:categories"] as const;
+  const cached = await cachedReference(deps);
+  if (cached) return cached;
 
   const [languages, regions, categories] = await Promise.all([
     deps.currents.availableLanguages(),

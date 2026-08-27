@@ -1,6 +1,8 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
+import { sql } from "kysely";
 import { encodeCursor, TimelinePage, TrendingResponse } from "@zammy/shared";
+import { readTopic } from "@zammy/storage";
 import { canonicalize } from "./canonical.js";
 import { registerMetricsRoute } from "./metrics.js";
 import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
@@ -148,6 +150,106 @@ describe("GET /api/v1/timeline", () => {
     expect(response.statusCode).toBe(400);
     const body = response.json() as { error: { fields?: Record<string, string> } };
     expect(body.error.fields?.cursor).toBeDefined();
+  });
+});
+
+describe("POST /api/v1/storylines/:id/refresh", () => {
+  interface RefreshBody {
+    storyline: string;
+    queued: boolean;
+    keywords: string[];
+    fingerprint?: string;
+  }
+
+  const refresh = (id: string): string => `/api/v1/storylines/${id}/refresh`;
+
+  it("accepts a storyline a reader opened and says what it queued", async () => {
+    await setup();
+    // A read is how storylines come to exist here: grouping and its storyline
+    // layer run on the write path (§14.3), so the fixture's own articles are
+    // what a reader would have clicked.
+    const read = await app.inject({ method: "GET", url: `${TIMELINE}?q=climate&${QS}` });
+    const storylineId = (TimelinePage.parse(read.json()).items[0] as { storylineId: string })
+      .storylineId;
+
+    const response = await app.inject({ method: "POST", url: refresh(storylineId) });
+
+    expect(response.statusCode).toBe(202);
+    const body = response.json() as RefreshBody;
+    expect(body.storyline).toBe(storylineId);
+    // Whatever it decided, it decided it from the arc's own vocabulary — the
+    // request carried a UUID and nothing else.
+    expect(body.keywords.length).toBeGreaterThan(0);
+    expect(body.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("refreshes in the default language when the arc's own is not a query code", async () => {
+    await setup();
+    const read = await app.inject({ method: "GET", url: `${TIMELINE}?q=climate&${QS}` });
+    const storylineId = (TimelinePage.parse(read.json()).items[0] as { storylineId: string })
+      .storylineId;
+    // `articles.language` is upstream's ARTICLE field and `/available/languages`
+    // is what a query may be narrowed BY; they are not the same vocabulary (the
+    // reference table holds {"Malay": "msa"} against ISO-639-1 elsewhere,
+    // PROBE-FINDINGS 6). A 400 here would be silent — the caller has no error
+    // path — and permanent for the arc, so the language is dropped instead.
+    await sql`
+      update articles set language = 'zz-not-a-code'
+      where group_id in (select group_id from storyline_groups where storyline_id = ${storylineId}::uuid)
+    `.execute(harness.deps.db);
+
+    const response = await app.inject({ method: "POST", url: refresh(storylineId) });
+
+    expect(response.statusCode).toBe(202);
+    const body = response.json() as RefreshBody;
+    expect(body.keywords.length).toBeGreaterThan(0);
+    const topic = await readTopic(harness.deps.db, body.fingerprint!);
+    expect(topic?.language).toBe("en"); // the route's defaultLanguage
+  });
+
+  it("spends no upstream call, even with the reference cache cold", async () => {
+    await setup();
+    const read = await app.inject({ method: "GET", url: `${TIMELINE}?q=climate&${QS}` });
+    const storylineId = (TimelinePage.parse(read.json()).items[0] as { storylineId: string })
+      .storylineId;
+    // A cold `ref:*` is the ordinary state, not an exotic one — dev Redis evicts
+    // under volatile-lru. `loadReference` answers a miss with three INTERACTIVE
+    // upstream calls, which on a path advertised as spending nothing would let a
+    // reader clicking through the cloud drain the day's quota invisibly, at the
+    // same moment the per-IP limiter fails open. So this path reads the cache and
+    // stops there.
+    await harness.redis.del("ref:languages", "ref:regions", "ref:categories");
+    const calls = harness.counting.searchCalls;
+    const reference = harness.counting.referenceCalls;
+
+    const response = await app.inject({ method: "POST", url: refresh(storylineId) });
+
+    expect(response.statusCode).toBe(202);
+    expect(harness.counting.searchCalls).toBe(calls);
+    expect(harness.counting.referenceCalls).toBe(reference);
+  });
+
+  it("is a 404 for a UUID this database has never held", async () => {
+    await setup();
+
+    const response = await app.inject({
+      method: "POST",
+      url: refresh("1b671a64-40d5-491e-99b0-da01ff1f3341"),
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("refuses anything that is not a storyline UUID", async () => {
+    await setup();
+
+    // `?storyline=` stopped accepting a bigint with migration 0012 and so does
+    // this: a label's words are never an identity (ADR-0011, ADR-0016).
+    const response = await app.inject({ method: "POST", url: refresh("12345") });
+
+    expect(response.statusCode).toBe(400);
+    const body = response.json() as { error: { fields?: Record<string, string> } };
+    expect(body.error.fields?.id).toBeDefined();
   });
 });
 

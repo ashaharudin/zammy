@@ -299,6 +299,18 @@ export interface StoredArticle {
   groupId: string;
   /** True when nothing else shares this article's group. */
   isGroupOfOne: boolean;
+  /**
+   * `story_tokens` as STORED, so a re-derivation can tell whether it actually
+   * changed anything.
+   *
+   * Selected for one caller and one reason: a `TOKENIZER_VERSION` bump marks
+   * every row in the window stale, but a fold typically moves a hundredth of
+   * them — version 8 changed 513 rows of 32,279. `regroup` refreshes the
+   * storyline profiles built on the rows it re-derived, and without the old
+   * tokens to compare against, "the rows I re-derived" is the whole archive and
+   * the pass costs 14,670 profile rebuilds to repair 188.
+   */
+  storyTokens: string[];
 }
 
 /**
@@ -321,6 +333,7 @@ export async function readStaleTokenArticles(
       "a.language",
       "a.published",
       "a.group_id",
+      "a.story_tokens",
       sql<boolean>`not exists (
         select 1 from articles other
         where other.group_id = a.group_id and other.id <> a.id
@@ -341,6 +354,7 @@ export async function readStaleTokenArticles(
     published: row.published,
     groupId: row.group_id,
     isGroupOfOne: row.is_group_of_one,
+    storyTokens: row.story_tokens,
   }));
 }
 

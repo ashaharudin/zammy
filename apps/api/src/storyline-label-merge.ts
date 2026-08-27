@@ -1,5 +1,5 @@
 import { singular } from "./grouping.js";
-import { trimWordPunctuation } from "./headline-tokens.js";
+import { foldDiacritics, trimWordPunctuation } from "./headline-tokens.js";
 
 /**
  * The label-agreement merge (ADR-0011's merge repair, reached through the name
@@ -129,7 +129,8 @@ export interface LabelMergeRefusal {
 }
 
 /**
- * Fold a label to its comparison form: case, spacing and plurals.
+ * Fold a label to its comparison form: case, spacing, Latin diacritics and
+ * plurals.
  *
  * Deliberately NOT stopword-elided. "Strait of Hormuz Crisis" and "Strait Hormuz
  * Crisis" stay two labels here, even though ADR-0010's cloud phrasing would
@@ -169,7 +170,7 @@ export function normalizeLabel(label: string): string {
 export interface LabelWord {
   /** The label's own spelling, lowercased, minus the punctuation that WRAPS a word. */
   surface: string;
-  /** The corpus spelling: `surface` under `singular`. */
+  /** The corpus spelling: `surface` under `foldDiacritics` and then `singular`. */
   folded: string;
 }
 
@@ -189,7 +190,11 @@ export function labelWordForms(label: string): LabelWord[] {
     .split(/\s+/)
     .map(trimWordPunctuation)
     .filter((word) => word.length > 0)
-    .map((surface) => ({ surface, folded: singular(surface) }));
+    // `foldDiacritics` on the corpus side only, never on the surface: the corpus
+    // spelling has to meet `story_tokens`, which drops accents (the labeler
+    // writes "Nino" where the headlines say "Niño"), while the surface is read
+    // by a reader and sent upstream, so it keeps the label's own spelling.
+    .map((surface) => ({ surface, folded: singular(foldDiacritics(surface)) }));
 }
 
 /** The words of a label, folded the way `normalizeLabel` folds them. */

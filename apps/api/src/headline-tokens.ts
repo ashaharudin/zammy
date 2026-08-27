@@ -241,7 +241,11 @@ function tokenRuns(text: string): string[][] {
   for (const segment of segments) {
     let run: string[] = [];
     for (const chunk of segment.split(/\s+/u)) {
-      const token = trimWordPunctuation(chunk);
+      // The corpus spelling, which is a folded one: an accent here is a way for
+      // the same name to fail to match itself, and almost nothing reads a token
+      // back to a reader (`foldDiacritics` names the one thing that does — the
+      // bigram fallback label — and why that trade is taken).
+      const token = foldDiacritics(trimWordPunctuation(chunk));
       if (token.length > 0) {
         run.push(token);
       } else if (chunk.length > 0 && run.length > 0) {
@@ -273,6 +277,90 @@ function tokenRuns(text: string): string[][] {
  */
 export function trimWordPunctuation(token: string): string {
   return token.replaceAll(/^['-]+|['-]+$/g, "").replace(/'s$/iu, "");
+}
+
+/**
+ * Drop the diacritics off a LATIN word, so a name the corpus accents and a
+ * label that does not are one word.
+ *
+ * The third instance of the lesson `trimWordPunctuation` above is the first two
+ * of, and it arrived the same way — from the archive rather than from reasoning.
+ * A headline says "super El Niño", so the corpus holds `niño`; the labeler wrote
+ * "Super El Nino", which folds to `nino`; and no comparison in the system can
+ * see that those are the same name. Measured consequences, all silent:
+ *
+ *  - `cloudQuery` drops the arc's own naming word from its grounded terms.
+ *  - A reader typing "nino" — which is what a keyboard produces — misses the
+ *    arc entirely, because `findSurfacedStorylines` tests containment against
+ *    `profile_tokens`.
+ *  - Two arcs labelled "El Niño Forecast" and "El Nino Forecast" do not agree,
+ *    so the label-agreement merge never fires on them.
+ *  - Label grounding (`storyline-label.ts`) accepts or refuses a label on
+ *    whether its OTHER words happen to be in the coverage.
+ *
+ * **Latin only, and by the base character rather than by a character list.**
+ * `\p{Mn}` is not a decoration everywhere it appears: Devanagari's virama is one,
+ * and stripping it changes what a word says rather than how it is spelled. Since
+ * a topic may be in any language upstream serves (§6.1), the fold is narrowed to
+ * marks sitting on a Latin letter, which is exactly the alphabet where an
+ * accent is the same word carelessly typed. NFC on the way out because NFD
+ * decomposes Hangul into conjoining jamo, which are not marks and so survive
+ * the strip — without recomposing, a Korean token would come back as a
+ * different string than it went in as.
+ *
+ * It conflates where a Latin language means the accent — Vietnamese tone marks
+ * carry the word, and `sẽ`/`sé`/`se` become one token. Accepted, and it is the
+ * cheap direction: conflation costs recall inside one language, and the split it
+ * replaces cost every arc whose label lost a tilde.
+ *
+ * **What "by the base character" does not reach**, counted on the archive after
+ * the version-8 migration ran, because a boundary nobody measured is a boundary
+ * nobody knows the size of:
+ *
+ *  - **Atomic Latin letters.** `ł`, `ø`, `ð`, `æ`, `ı`, `đ` do not decompose —
+ *    they are letters in their own right, not accented ones — so `wojtyła`,
+ *    `nordsjælland`, `białystok`, `yatırımlar` and `suðurne` stay split from
+ *    their ASCII spellings. Six articles. Reaching them needs the hand-kept
+ *    transliteration table this function exists to avoid, and `ł` really is a
+ *    different letter from `l` to a Pole, so the table would be making a
+ *    judgement rather than undoing a typo.
+ *  - **The ʻokina.** `hawaiʻi` keeps U+02BB, a modifier LETTER rather than a
+ *    mark, so it is split from `hawaii`. Two articles. The tokenizer already
+ *    folds U+2019 and U+02BC to ASCII `'` (version 5); U+02BB belongs in that
+ *    list rather than in this function, and is left for the day it costs more
+ *    than two rows.
+ *
+ * Non-Latin scripts are untouched as designed, and the archive shows what that
+ * preserves: CJK tokens (`台灣產經新聞網`), Greek (`δt`) and Arabic all arrive
+ * intact.
+ *
+ * NOT folded into `trimWordPunctuation`, despite both being "the fold": that one
+ * also spells a label word for a READER (`LabelWord.surface`, and the "gaza
+ * crisi" lesson behind it), and a placeholder proposing `nino` for an arc whose
+ * headlines all say Niño is the same class of mistake one step smaller. The
+ * corpus spelling folds; the surface does not.
+ *
+ * **One reader does see the folded spelling, and it is worth naming rather than
+ * leaving the sentence above sounding absolute.** `bigramLabel` draws its
+ * candidates from `contentTokenPairs` — these tokens — and Title Cases them into
+ * `storylines.label`, so the DETERMINISTIC fallback label of an accented-name arc
+ * reads "Turkiye Ankara" where the headlines say Türkiye. The model's own labels
+ * are untouched (they arrive as text and keep their accents through
+ * `LabelWord.surface`), so this is the arcs the model could not name.
+ *
+ * Left as-is, deliberately. Undoing it needs a surface corpus on the labelling
+ * path — `story_tokens` carries one spelling per word and it is the folded one —
+ * which is the cost ADR-0014 declined for the ordering question and would decline
+ * again for a diacritic on a fallback label. Weighed against it: 108 names in the
+ * archive stop being two words. Recorded because the placement above was argued
+ * from "nothing reads a `story_tokens` entry back to a reader", and that premise
+ * is false rather than merely imprecise.
+ */
+export function foldDiacritics(token: string): string {
+  return token
+    .normalize("NFD")
+    .replaceAll(/(\p{Script=Latin})\p{Mn}+/gu, "$1")
+    .normalize("NFC");
 }
 
 /**
