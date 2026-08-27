@@ -70,6 +70,15 @@ function TopicApp() {
     [navigate],
   );
 
+  // Entering the storyline view is a transition of the ROUTE, not a search
+  // (see the TimelinePage prop below) — one definition, shared by every entry
+  // point (the hero's cloud, surfaced pills, the timeline gutter) so they
+  // cannot drift on how a click gets there.
+  const openStoryline = useCallback(
+    (storylineId: string) => navigate(openStorylineView(route, storylineId)),
+    [navigate, route],
+  );
+
   // The storyline view has no keywords — it is opened by clicking a label, and
   // its search box is empty (ADR-0011). So "no q" no longer means "the hero".
   const storylineView = route.storyline !== undefined && STORYLINE_UUID.test(route.storyline);
@@ -80,7 +89,7 @@ function TopicApp() {
         filters={route.filters}
         onFilters={setFilters}
         onSearch={(q) => navigate({ q, filters: route.filters })}
-        onOpenStoryline={(storylineId) => navigate(openStorylineView(route, storylineId))}
+        onOpenStoryline={openStoryline}
       />
     );
   }
@@ -102,7 +111,7 @@ function TopicApp() {
       // Entering and leaving the storyline view are transitions of the ROUTE,
       // not searches: only here is the search being left still in hand to be
       // recorded, and to be returned to.
-      onOpenStoryline={(storylineId) => navigate(openStorylineView(route, storylineId))}
+      onOpenStoryline={openStoryline}
       onLeaveStoryline={(typed) => {
         const { route: next, replace } = leaveStorylineView(route, typed);
         navigate(next, { replace });

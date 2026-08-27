@@ -1,5 +1,5 @@
 ---
-status: accepted (ADR-0013 makes the landing-page cloud one exception to "a label's words never execute as a search"; everything else here stands)
+status: accepted (ADR-0013 had made the landing-page cloud one exception to "a label's words never execute as a search"; ADR-0016 retracted that exception, so the rule stated here now holds everywhere without exception)
 ---
 
 # A storyline is a persistent arc of one event, paged as storyline-days
