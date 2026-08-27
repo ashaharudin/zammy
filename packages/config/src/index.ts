@@ -369,19 +369,25 @@ const EnvSchema = z
      * it under `/models`. A model id that appears in the catalogue and 404s on
      * use is exactly why this is config and not a constant.
      *
-     * LITE, and measured: naming a storyline is not a reasoning task. Asked to
-     * name the Fort Hood crash, `gemini-3.1-flash-lite` returns the same label
-     * as `gemini-3.7-flash` while spending ZERO thinking tokens, where 3.7
-     * spends ~300 — and thinking tokens bill as output. See
-     * docs/STORYLINE-LABELS.md for the comparison over the dev archive.
+     * `gemma-4-26b-a4b-it` ("a4b" = 4B active params, a MoE model), not a
+     * Gemini model: `gemini-3.1-flash-lite` already spent ZERO thinking
+     * tokens naming a storyline (see `gemini.ts`), and Gemma 4 26B publishes
+     * double that tier's free-tier ceiling (30 rpm vs 15). Served from the
+     * same endpoint (`GEMINI_BASE_URL`), so no client change was needed
+     * beyond the id, `GEMINI_MAX_RPM` below, and `maxOutputTokens` in
+     * `gemini.ts` — this model has no `thinkingLevel`/`thinkingBudget` knob
+     * (the API 400s on both), so unlike the flash families its thinking
+     * cannot be capped and must be budgeted for instead.
      */
-    GEMINI_MODEL: NonEmpty.default("gemini-3.1-flash-lite"),
+    GEMINI_MODEL: NonEmpty.default("gemma-4-26b-a4b-it"),
     /**
      * How much the model may think before answering, for the families that
-     * reason by default. EMPTY — omit the field — is the default because the
-     * measured answer is that thinking buys nothing here and costs everything:
-     * see `gemini.ts`. Set it (`low` is the floor 3.x flash accepts) only if a
-     * chosen model needs it.
+     * accept the knob. EMPTY — omit the field — is the default because a
+     * Gemini 3.x flash model spends thinking tokens for nothing here: see
+     * `gemini.ts`. Set it (`low` is the floor 3.x flash accepts) only if a
+     * chosen model needs it — NOT `gemma-4-26b-a4b-it`, the current default,
+     * which 400s if this is set at all; it thinks unconfigurably regardless,
+     * budgeted for via `maxOutputTokens` in `gemini.ts` instead.
      */
     GEMINI_THINKING_LEVEL: z.string().trim().default(""),
     /**
@@ -396,9 +402,9 @@ const EnvSchema = z
      */
     GEMINI_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(20_000),
     /**
-     * The tier's published request ceiling, per minute. THE KNOB: 15 is the
-     * free tier's figure; a paid tier raises it and this is the one number to
-     * change.
+     * The tier's published request ceiling, per minute. THE KNOB: 30 is
+     * `gemma-4-26b-it`'s free-tier figure (double `gemini-3.1-flash-lite`'s
+     * 15); a paid tier raises it and this is the one number to change.
      *
      * It is a ceiling on the KEY, not on a caller, which is why it is enforced
      * inside the client (`gemini.ts`) rather than at each of the five places
@@ -411,7 +417,7 @@ const EnvSchema = z
      * turns a batch of model labels into a batch of bigram ones — which are
      * sticky until the drift trigger fires. Slow is free here.
      */
-    GEMINI_MAX_RPM: z.coerce.number().int().min(1).max(10_000).default(15),
+    GEMINI_MAX_RPM: z.coerce.number().int().min(1).max(10_000).default(30),
     /**
      * Storylines one nightly label pass may relabel — the ceiling that makes the
      * pass fit a function's wall clock (VERCEL-ALL-IN-SCOPE §3.3).
