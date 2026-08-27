@@ -296,8 +296,6 @@ async function planAndRead(
 
   // §6.3 step 6 — ALWAYS answer from Postgres, never from the raw upstream
   // response, which is neither deduplicated nor ordered across sliced calls.
-  // §6.3 step 6 — ALWAYS answer from Postgres, never from the raw upstream
-  // response, which is neither deduplicated nor ordered across sliced calls.
   const stored = await readStorylineTimelinePage(deps.db, {
     fingerprint: query.fingerprint,
     from: query.window.from,
