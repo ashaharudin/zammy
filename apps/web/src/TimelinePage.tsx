@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Article, TimelineEntry } from "@zammy/shared";
 import { isTerminalPage } from "@zammy/shared";
 import { ApiError, type TopicQuery } from "./api.js";
@@ -7,8 +7,10 @@ import { isCollapsed, nothingCollapsed, segmentKey, toggle } from "./dayCollapse
 import {
   groupByDay,
   hasLaterCoverage,
+  readerDayKey,
   relativeTime,
   timeLabel,
+  type RailSlot,
   type Segment,
 } from "./format.js";
 import { storylineQualifiers, visibleStorylines } from "./storylineLabels.js";
@@ -47,7 +49,10 @@ export function TimelinePage({
 
   const pages = timeline.data?.pages ?? [];
   const latest = pages.at(-1);
-  const items = pages.flatMap((page) => page.items);
+  // Stable while the query's data is: everything downstream of this list is
+  // memoised on its identity, down to the rail's own grouping, and a fresh array
+  // per render would defeat all of it.
+  const items = useMemo(() => pages.flatMap((page) => page.items), [timeline.data]);
   const { visible, newCount, reveal } = useHeldNewItems(items, JSON.stringify(topic));
   const surfaced = latest?.storylines ?? [];
   // The date qualifier each storyline needs, computed over everything ON SCREEN
@@ -117,6 +122,23 @@ export function TimelinePage({
  * The anchor is the published timestamp of the newest item first shown for
  * this topic. Progressive fill is unaffected — it appends OLDER items, which
  * pass straight through (§6.5 point 3).
+ *
+ * The gate is on SLOTS, and one thing now slips past it: a poll that adds an
+ * article to a slot already on screen leaves that slot's own `published` where
+ * it was, so the slot passes through — and the rail may then draw the article
+ * as a card of its own above the one the reader is looking at, or, if it is the
+ * earliest thing in a part of the day already drawn, take that card's headline
+ * (`RailSlot`). The headline case remounts rather than mutating, since the
+ * card's key carries it. Accepted for now, and only inside the ingest window:
+ * `refetchOnWindowFocus` is off and the poll runs only while ingest is in
+ * progress, so the rail is visibly growing whenever this can happen. Closing it
+ * needs a different notion of "seen" than this anchor can carry: an article
+ * inside a slot has no position on the slot axis, and the first paint's own
+ * coverage is routinely newer than its newest slot — so gating coverage by
+ * this timestamp would hold back content that arrived WITH the first response.
+ * What it would take is the set of article ids already rendered, narrowed to
+ * slots already seen so that an appended older page still paints straight
+ * through.
  */
 function useHeldNewItems(items: TimelineEntry[], topicKey: string) {
   const [anchor, setAnchor] = useState<string | null>(null);
@@ -129,19 +151,21 @@ function useHeldNewItems(items: TimelineEntry[], topicKey: string) {
   if (anchor === null && newest !== null) setAnchor(newest);
 
   const effective = anchor ?? newest;
-  const visible =
-    effective === null ? items : items.filter((item) => item.published <= effective);
-  const held = items.slice(0, items.length - visible.length);
-  return {
-    visible,
-    // Articles, not slots: the pill promises "N new articles" and a held slot
-    // can carry several (§14.3) — copies and coverage both count.
-    newCount: held.reduce(
-      (total, entry) => total + 1 + entry.related.length + entry.moreCoverage.length,
-      0,
-    ),
-    reveal: () => setAnchor(newest),
-  };
+  return useMemo(() => {
+    const visible =
+      effective === null ? items : items.filter((item) => item.published <= effective);
+    const held = items.slice(0, items.length - visible.length);
+    return {
+      visible,
+      // Articles, not slots: the pill promises "N new articles" and a held slot
+      // can carry several (§14.3) — copies and coverage both count.
+      newCount: held.reduce(
+        (total, entry) => total + 1 + entry.related.length + entry.moreCoverage.length,
+        0,
+      ),
+      reveal: () => setAnchor(newest),
+    };
+  }, [items, effective, newest]);
 }
 
 /**
@@ -203,6 +227,15 @@ function Rail({
   // segment rules stay testable without a DOM.
   const timeZone = readTimeZone();
   const now = new Date();
+  // Memoised because it is no longer cheap: cutting slots into cards reads the
+  // zone's hour and day for every ARTICLE, not every slot, and `Rail` re-renders
+  // on every collapse click and every 1.5s ingest poll. Measured at 200 slots
+  // carrying 26 rows each, one pass is 16.5ms; nothing about a collapse click
+  // changes its answer. `now` is deliberately not a dependency — the only thing
+  // it decides is which day is called "Today", and `todayKey` is that question
+  // asked directly, so the labels still move at local midnight.
+  const todayKey = readerDayKey(now, timeZone);
+  const days = useMemo(() => groupByDay(items, now, timeZone), [items, timeZone, todayKey]);
 
   if (items.length === 0 && !ingesting) {
     return (
@@ -249,7 +282,7 @@ function Rail({
           </button>
         </RailEntry>
       )}
-      {groupByDay(items, now, timeZone).map((day) => {
+      {days.map((day) => {
         const dayCollapsed = isCollapsed(collapsed, day.key);
         // A day whose coverage all landed in one part of the day gets no
         // segment treatment: a divider that chunks nothing is noise. Read off
@@ -321,14 +354,14 @@ function Rail({
                       />
                     )}
                     {!partCollapsed &&
-                      part.items.map((entry) => (
+                      part.items.map((slot) => (
                         <GroupCard
-                          // NOT `storylineId` alone: under ADR-0011 a storyline
-                          // takes one slot per day it has coverage, so the id
-                          // repeats down the rail and React would reuse one
-                          // card for several days.
-                          key={`${entry.storylineId}:${entry.published}`}
-                          entry={entry}
+                          // NOT `storylineId` alone, and no longer the slot's
+                          // time either: `key` is unique per slot AND per part
+                          // of the day, since one slot can now draw a card in
+                          // more than one of them.
+                          key={slot.key}
+                          entry={slot}
                           onOpenStorylineView={onOpenStorylineView}
                           qualifiers={qualifiers}
                           timeZone={timeZone}
@@ -404,15 +437,18 @@ function LoadOlder({ loading, onLoadOlder }: { loading: boolean; onLoadOlder: ()
 }
 
 /**
- * One timeline slot (§14.3, ADR-0009): the storyline's headline article, with
- * the day's remaining coverage behind one disclosure in two sections —
- * "same story" (the lead group's other copies) and "more coverage" (the
- * storyline's other groups: retrospectives, follow-ups, fact-checks).
+ * One card on the rail (§14.3, ADR-0009): a slot's coverage of one part of the
+ * reader's day (`RailSlot`) — its headline article, with the rest of that
+ * part's coverage behind one disclosure in two sections, "same story" (the
+ * lead group's other copies) and "more coverage" (the storyline's other
+ * groups: retrospectives, follow-ups, fact-checks).
  *
- * The time shown is the STORYLINE's, not the headline article's — the slot
- * sits at its earliest published, and a card showing "3 hours ago" beneath
- * rows from five hours ago reads as a bug. Later coverage surfaces as an
- * "updated" stamp instead, the same treatment §8.1 gives a re-emitted article.
+ * The time shown is the CARD's earliest article, not necessarily the headline's
+ * own — a card showing "3 hours ago" beneath rows from five hours ago reads as
+ * a bug. Later coverage in the same part of the day surfaces as an "updated"
+ * stamp instead, the same treatment §8.1 gives a re-emitted article; coverage
+ * that reached a LATER part is not counted here at all, since the card heading
+ * that part carries it.
  *
  * A slot with wider coverage also carries its storyline phrase, hanging in the
  * gutter on the far side of the spine (ADR-0010): the day's story has a name,
@@ -425,7 +461,7 @@ function GroupCard({
   timeZone,
   relatedLevel,
 }: {
-  entry: TimelineEntry;
+  entry: RailSlot;
   onOpenStorylineView: (storylineId: string) => void;
   /** storyline id → the date that separates it from its namesakes on screen. */
   qualifiers: Map<string, string>;
@@ -436,6 +472,9 @@ function GroupCard({
 }) {
   const [showRelated, setShowRelated] = useState(false);
   const updated = hasLaterCoverage(entry);
+  // What this card holds — coverage that landed in a later part of the day is
+  // counted by the card that heads that part, so the disclosure never promises
+  // rows the reader has to leave the card to find.
   const total = entry.related.length + entry.moreCoverage.length;
 
   return (
@@ -447,11 +486,14 @@ function GroupCard({
       head={
         <div style={{ maxWidth: "640px" }}>
           {/*
-            The gutter holds the storyline's label, on every slot of a labelled
+            The gutter holds the storyline's label, on every CARD of a labelled
             storyline — universal, where ADR-0010's phrase appeared only on
             slots with wider coverage, because a label is an identity rather
-            than a lucky bigram. An unlabelled storyline leaves the gutter
-            empty, which is what "invisible as a storyline" looks like.
+            than a lucky bigram. A slot cut across parts of the day repeats it
+            per card, which is the point rather than a cost: a card headed by a
+            promoted follow-up has nothing else on it to say which story it
+            continues. An unlabelled storyline leaves the gutter empty, which is
+            what "invisible as a storyline" looks like.
           */}
           {entry.storyline?.label && (
             <StorylineLabel
@@ -813,9 +855,13 @@ function ArticleCard({
   timeZone,
 }: {
   article: Article;
-  /** The slot's time — the group's, which may predate this article's own. */
+  /**
+   * The card's time: for a lead card the slot's own, which may predate this
+   * article's; for one cut out of a later part of the day, this article's own
+   * (it heads that part because it is the earliest thing in it).
+   */
   published: string;
-  /** Newest coverage in the group, when later than the slot's time. */
+  /** Newest article in the CARD, when later than the card's time. */
   updatedAt: string | null;
   timeZone: string;
 }) {

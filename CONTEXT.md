@@ -49,7 +49,9 @@ _Avoid_: cluster, thread, saga, topic
 **Representative**:
 The article whose headline a timeline slot shows. Chosen per topic from the slot's lead group — the
 largest the storyline shows that day — among the members that matched that search, by source
-authority; never by how often upstream re-emitted it.
+authority; never by how often upstream re-emitted it. It heads the part of the day the slot's own
+time falls in; a card the rail cut out of a LATER part is headed by the earliest article that part
+holds, the wire carrying no group structure below the slot to choose within.
 _Avoid_: primary, canonical, best, winner
 
 **Seed**:
@@ -98,11 +100,15 @@ _Avoid_: history, range, window
 A part of the reader's own local day, dividing one day's slots on the rail: Night (00:00–06:00),
 Morning, Afternoon, Evening (18:00–24:00). Non-wrapping, so a segment never crosses midnight and
 always nests inside exactly one day. Presentation only — a coarser timestamp, never a unit anything
-is counted, paged or fetched by, and never a claim about when a story happened: a slot sits at its
-storyline's earliest article that day, so a storyline covered from breakfast to midnight is one slot
-filed under Morning. Cut in the reader's own zone, which is not `APP_TIMEZONE` (that bounds group
-drift on the write path) and not the country chip's (that answers whose news). A day with coverage in
-only one of them shows no segment at all.
+is counted, paged or fetched by, and never a claim about when a story happened. A segment CUTS a
+slot rather than filing it: a storyline covered from breakfast to midnight draws a card in each part
+of the day its coverage reached, headed by the storyline's own representative in the part the slot's
+position falls in and by that part's earliest headline elsewhere. What a part holds is a headline
+rather than an article, so one piece's copies stay together and no headline is drawn twice; coverage
+that crossed the reader's midnight is drawn under the day it actually ran in, which for a reader west
+of `APP_TIMEZONE` is most of it. Cut in the reader's own zone, which is not
+`APP_TIMEZONE` (that bounds group drift on the write path) and not the country chip's (that answers
+whose news). A day with coverage in only one of them shows no segment at all.
 _Avoid_: slot, block, bucket, period, part of day
 
 **Storyline label**:
