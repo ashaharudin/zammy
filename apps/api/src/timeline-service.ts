@@ -776,38 +776,38 @@ export async function queueStorylineRefresh(
     return { status: "fresh", ...settled };
   }
 
-  // Is the newest gap the TRAILING EDGE — the stretch time itself opened since
-  // the last fetch — or is it missing history with the present already covered?
-  //
-  // Asked of the GAP rather than through `trailingSliver`, which is what the read
-  // path uses. `trailingSliver` additionally requires the whole window to reduce
-  // to ONE sliced gap, which is right there — it separates "stale edge, repair
-  // behind the reader" from "missing history, take the synchronous fill" — and
-  // wrong for this one. A topic minted here is multi-gap from its
-  // first click onward BY CONSTRUCTION: the click fills the newest 7 days of a
-  // 30-day window and never reaches the rest, so the window is permanently four
-  // slices plus an edge. Under the shape test the edge was therefore never a
-  // sliver, the freshness gate below was unreachable, and what a click actually
-  // did depended on where the clock sat inside the quarter-hour: measured, an
-  // arc whose edge was 45 SECONDS old got a 15-second segment job and one
-  // upstream call, while the same arc a few minutes earlier got nothing. There
-  // is no synchronous fill on this path for the shape test to be choosing
-  // between, so the only question the edge poses is how stale it is.
   // Does the newest gap REACH the present? `subtractCoverage` clamps its upper
   // bound to min(window.to, now) and pushes a trailing gap only if the sweep did
-  // not already run past it, so a gap ending at that clamp is the leading edge
+  // not already run past it, so a gap ending at that clamp is the leading edge,
   // and a gap ending earlier is a hole with coverage above it.
   //
-  // Asked of the gap rather than of `max(coverage.upper)`, which is what this
-  // read instead for one round of review and got wrong: "the newest gap does not
-  // start at max(coverage.upper)" is not the same claim as "the present is
-  // covered", and a topic whose whole coverage has aged BELOW the lookback
-  // horizon satisfies the first while contradicting the second. Such a topic —
-  // one searched 40 days ago and untouched since, which is exactly the arc this
-  // ADR exists for — read `fresh` on every click, forever, with nothing else in
-  // the system to advance it. Reading the gap's own upper edge cannot make that
-  // mistake: below the horizon there is no coverage inside the window at all, so
-  // the gap runs to the clamp and the topic is treated as the cold one it is.
+  // **Two things this deliberately is not**, both of which were tried and both
+  // of which failed silently — worth the lines, because the failure mode of a
+  // wrong answer here is an arc that never advances and never complains.
+  //
+  // Not `trailingSliver`, which is what the read path uses: it additionally
+  // requires the whole window to reduce to ONE sliced gap. That is right there —
+  // it separates "stale edge, repair behind the reader" from "missing history,
+  // take the synchronous fill" — and wrong here, because a topic minted by a
+  // click is multi-gap from its first click onward BY CONSTRUCTION: the click
+  // fills the newest 7 days of a 30-day window and never reaches the rest, so
+  // the window is permanently four slices plus an edge. Under the shape test the
+  // edge was never a sliver, the freshness gate below was unreachable, and what
+  // a click did depended on where the clock sat inside the quarter-hour —
+  // measured, an arc whose edge was 45 SECONDS old got a 15-second segment job
+  // and one upstream call, while the same arc a few minutes earlier got nothing.
+  // There is no synchronous fill on this path for a shape test to choose
+  // between, so the only question an edge poses here is how stale it is.
+  //
+  // And not `max(coverage.upper)`, which replaced the shape test and is the more
+  // instructive mistake: "the newest gap does not start at max(coverage.upper)"
+  // is not the same claim as "the present is covered". `readCoverage` is
+  // unfiltered by window, so a topic whose whole coverage has aged BELOW the
+  // lookback horizon satisfies the first while contradicting the second — and
+  // read `fresh` on every click, forever, with nothing else in the system to
+  // advance it. The gap's own upper edge cannot make that mistake: below the
+  // horizon there is no coverage inside the window at all, so the gap runs to
+  // the clamp and the topic is treated as the cold one it is.
   const leadingEdgeMs = Math.min(query.window.to.getTime(), now.getTime());
   if (gap.to.getTime() !== leadingEdgeMs) {
     // An interior hole under a covered present. Not a freshness question at all,
@@ -820,6 +820,10 @@ export async function queueStorylineRefresh(
   // At the leading edge. Is it a TRAILING EDGE — coverage running right up to
   // where the gap starts — or is the window simply uncovered from the horizon
   // forward, which is a cold topic however old its rows are?
+  //
+  // This is where `max(coverage.upper)` IS the right question, and the contrast
+  // with the paragraph above is the whole point: it decides what kind of edge
+  // this is, not whether the present is covered.
   //
   // The highest coverage bound AT OR BELOW the leading edge, not `covered.at(-1)`.
   // Those are the same row except when coverage reaches past `now`, which the app
