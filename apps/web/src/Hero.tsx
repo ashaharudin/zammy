@@ -17,13 +17,9 @@ const SEARCH_PLACEHOLDER = "Search for a timeline of when it happens...";
  *
  * The same filter chips the open-topic bar carries sit under the prompt, set
  * before there is anything to search and carried into whatever the reader then
- * searches (§8.2, route.ts). They are not decoration here: the cloud is built
- * per language, so the language chip redraws it.
- *
- * That chip starts on English rather than the browser's language, unlike the
- * timeline's: the hero's job is to show the day's news to someone who has not
- * asked for anything yet, and English is the corpus upstream covers deeply
- * enough to fill a cloud.
+ * searches (§8.2, route.ts). The cloud is built for English (§10.1): upstream's
+ * corpus is deep enough there to fill it, so the language filter defaults to
+ * English rather than the browser's language.
  */
 export function Hero({
   filters,
