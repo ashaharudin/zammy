@@ -177,9 +177,28 @@ jobs:
   # `--days` is an input rather than a constant because the blast radius is the
   # caller's to choose, and it defaults to the retention window rather than to the
   # CLI's own default of 1, which repairs today and silently leaves the archive.
+  #
+  # Gates on `verify`, and pins to `main`, for the same reason `migrate-production`
+  # does: this is a bulk WRITE against the production database (three commands, not
+  # one, each rewriting a materialized column over the whole retention window), and
+  # until this comment neither guard existed here. `workflow_dispatch`'s branch
+  # selector lets the dispatcher run any ref's code against production — this job
+  # used to trust that choice unconditionally, unlike `migrate-production`, which
+  # has always been pinned to `refs/heads/main`. The `if:` below closes that gap the
+  # same way.
+  #
+  # `needs: verify` re-runs the full ~1000-test suite (with its Postgres/Redis
+  # service containers) on every dispatch, which is a few wasted minutes when main
+  # is already known-green from its own push-triggered run — `verify` carries no
+  # `if:` guard, so it always runs here too, dispatch included. That waste is
+  # deliberate: this repair has no reviewed PR and no Vercel deploy gate the way a
+  # push to main does, so `verify` is the only thing standing between a red commit
+  # and a bulk rewrite of production data. Trade a few minutes for that, the same
+  # trade `migrate-production` already makes.
   repair-production:
     name: repair (production)
-    if: github.event_name == 'workflow_dispatch'
+    needs: verify
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04-arm
 
     env:
