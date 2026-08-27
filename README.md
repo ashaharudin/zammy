@@ -126,7 +126,9 @@ for the shape and [deploy/vercel/](deploy/vercel/) for the operator scripts). Ro
 progress — see [ARCHITECTURE §13](docs/ARCHITECTURE.md#13-delivery-phases) for current status.
 
 Docker Compose here is the local development environment and was never a deploy target; the same
-image runs everywhere, differing only by environment variables.
+source and config run everywhere, differing only by environment variables. The api's container
+image itself does not ship to production — Vercel builds straight from source and never touches
+`apps/api/Dockerfile`, which exists for Compose only.
 
 ## Conventions worth knowing
 
