@@ -79,10 +79,56 @@ into the real corpus. That pair is retired (2026-08-26): Upstash's free tier onl
 Redis database per project, and once that constraint forced a choice, there was no cheap way to
 keep a second, isolated data plane just for previews. The 13 Preview-scoped env vars on the `zammy`
 Vercel project and the `migrate (preview)` CI job are both gone with it — see
-[ADR-0015](../../docs/adr/0015-all-in-on-vercel-hobby-shaped.md). A `vercel deploy` without
-`--prod` still produces a Vercel preview URL (that's a platform feature, not something this repo
-configures), but it now boots with no `DATABASE_URL`/`REDIS_URL` at all and will not serve traffic
-— there is no supported way to preview this app outside production.
+[ADR-0015](../../docs/adr/0015-all-in-on-vercel-hobby-shaped.md).
+
+The retirement left one thing behind, fixed 2026-08-26: the git integration went on building a
+preview for every PR-branch push. No Preview-scoped variable survived the retirement, so each one
+answered `/readyz` with a 503 — it could not serve traffic, and the green Vercel check it hung on
+the PR said nothing about whether the app worked. `vercel.json` now turns automatic branch deploys
+off:
+
+```json
+"git": { "deploymentEnabled": { "**": false, "main": true } }
+```
+
+A branch matching several patterns deploys if *any* of them is `true`, so `main` — which matches
+both rules — keeps its auto-deploy while every other branch stops. **That precedence rule is the
+only thing keeping production deploying, so it was tested rather than assumed** (2026-08-26): a
+throwaway branch pushed with `{"**": false, "claude/precedence-probe": true}` built a preview,
+which is the same both-rules-match shape `main` is in. If it had lost, main would have stopped
+deploying silently.
+
+**It must be `**`, not `*`.** These are [minimatch](https://github.com/isaacs/minimatch) patterns,
+and minimatch treats `/` as a path separator that a single `*` will not cross. Every branch in this
+repo is `claude/<something>`, so `"*": false` matches **nothing here** and the whole block is
+silently inert — it is not a config error, it just never fires. That is exactly how it was first
+committed, and the branch carrying the fix built its own preview to prove it (`vercel ls`, 2026-08-26).
+Vercel's own docs only ever demonstrate a slash-free pattern (`internal-*`), so the trap does not
+show up until a branch name has a slash in it.
+
+**Verifying a change to this block takes both halves, and the easy half is the useless one.**
+Pushing a branch and confirming `vercel ls` gains no Preview row tests only that previews are
+off — a typo in the `main` key (`"mian": true`) passes it perfectly while production auto-deploy
+is dead, and nothing announces that until someone notices the site is stale. So also confirm the
+positive: either watch for a new `Production` row in `vercel ls` right after the next merge to
+main, or, before merging, run the probe above on a throwaway branch named to match your `true`
+rule. The setting is read from the pushed commit, so the branch making the change tests itself.
+
+Two more consequences. **Vercel reads this from the pushed commit**, so a PR branched before this
+landed keeps building previews until it is rebased. And **it governs the git integration only** — a
+manual `vercel deploy` without `--prod` still mints a preview URL, because that is the CLI, not the
+integration. Such a deployment still boots with no `DATABASE_URL`/`REDIS_URL` and still will not
+serve traffic: there is no supported way to preview this app outside production.
+
+**What this costs: nothing exercises Vercel's Function bundling on a PR any more.** Env-less as
+those previews were, they did bundle all five functions, and that was the only PR-time check on
+`vercel.json`'s `functions` block — the `includeFiles: "fixtures/**"` entries and the queue's
+`experimentalTriggers` registration included. `verify` runs `pnpm build`, `pnpm typecheck` and
+`pnpm test`; none of them runs `vercel build`. So the first sign that a function stopped bundling,
+or that `fixtures/` stopped being placed, is now the production deploy on merge — a failure
+[VERCEL-PHASE-0-FINDINGS](../../docs/VERCEL-PHASE-0-FINDINGS.md) notes is only observable on a real
+deployment. Adding a `vercel build` step to `verify` would restore the check without deploying
+anything, and is the obvious move if this ever bites.
 
 ## Deploying
 
@@ -91,9 +137,10 @@ configures), but it now boots with no `DATABASE_URL`/`REDIS_URL` at all and will
 ```
 
 **Or not at all: the project is git-linked, so a push to main deploys production on its own** (the
-deployment carries the `zammy-git-main-<scope>.vercel.app` alias, and a PR branch gets its own).
-`deploy.sh` is for deploying local or uncommitted state, and its `.git`-excluded copy is what makes
-a *CLI* deploy work at all — the raw commands below land BLOCKED from inside the repository:
+deployment carries the `zammy-git-main-<scope>.vercel.app` alias). Main is now the only branch
+that deploys — see `git.deploymentEnabled` above. `deploy.sh` is for deploying local or
+uncommitted state, and its `.git`-excluded copy is what makes a *CLI* deploy work at all — the raw
+commands below land BLOCKED from inside the repository:
 
 ```bash
 vercel build && vercel deploy --prebuilt

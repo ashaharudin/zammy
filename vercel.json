@@ -3,6 +3,12 @@
   "framework": "vite",
   "buildCommand": "pnpm build",
   "outputDirectory": "apps/web/dist",
+  "git": {
+    "deploymentEnabled": {
+      "**": false,
+      "main": true
+    }
+  },
   "functions": {
     "api/index.ts": {
       "maxDuration": 60,

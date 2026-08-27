@@ -111,8 +111,18 @@ jobs:
   # stating precisely because it was not true when these jobs were written.
   # **The Vercel project IS git-linked.** A push to main produces a production
   # deployment on its own (it carries the `zammy-git-main-<scope>.vercel.app`
-  # alias), and a PR branch produces a preview one. So merging to main ships
-  # code, whether or not anyone runs deploy.sh.
+  # alias). So merging to main ships code, whether or not anyone runs deploy.sh.
+  # Main is the only branch that deploys: PR branches used to get a preview too,
+  # but the Preview environment's retirement left those previews with no env vars
+  # and unable to serve traffic, so vercel.json's `git.deploymentEnabled` turned
+  # automatic branch deploys off (2026-08-26). That setting takes minimatch
+  # patterns and needs `**`, not `*`: a single star will not cross the `/` in
+  # `claude/<branch>`, so `*` matches nothing here and goes silently inert.
+  #
+  # It cost this workflow a property worth knowing about: those previews were
+  # the only PR-time exercise of `vercel.json`'s `functions` block, and the
+  # steps below do not run `vercel build`. A function that stops bundling now
+  # surfaces on the production deploy. See deploy/vercel/README.md.
   #
   # deploy/vercel/deploy.sh still exists and is still the way to deploy local or
   # uncommitted state: a CLI deploy from the repository itself lands BLOCKED,
