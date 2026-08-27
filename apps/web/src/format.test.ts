@@ -5,12 +5,14 @@ import { dayLabel, groupByDay, hasLaterCoverage, segmentOf } from "./format.js";
 /**
  * Day and part-of-day bucketing over timeline slots (§8.1's rail dividers).
  *
- * Two traps worth pinning. A slot's day is the GROUP's, not its headline
+ * Three traps worth pinning. A slot's day is the GROUP's, not its headline
  * article's — those differ whenever a tier-1 outlet ran the story later than
  * whoever broke it (§14.3), and taking the article's would file the slot under
- * a divider it does not sit beneath. And the day is the READER's, in their own
+ * a divider it does not sit beneath. The day is the READER's, in their own
  * zone: every case below names its zone explicitly, so none of them can pass
- * by accident on a machine that happens to sit in it.
+ * by accident on a machine that happens to sit in it. And a slot is not one
+ * entry: its wider coverage is drawn in the part of the day it landed in, so a
+ * day's parts no longer fall out of slot adjacency (`RailSlot`).
  */
 
 const VANCOUVER = "America/Vancouver";
@@ -32,15 +34,33 @@ const article = (id: string, published: string): Article => ({
   latestSeen: published,
 });
 
-const entry = (id: string, published: string, headlinePublished = published): TimelineEntry => ({
-  storylineId: id,
-  published,
-  updatedAt: headlinePublished,
-  article: article(id, headlinePublished),
-  related: [],
-  moreCoverage: [],
-  storyline: null,
-});
+const entry = (
+  id: string,
+  published: string,
+  headlinePublished = published,
+  members: { related?: Article[]; moreCoverage?: Article[] } = {},
+): TimelineEntry => {
+  const related = members.related ?? [];
+  const moreCoverage = members.moreCoverage ?? [];
+  return {
+    storylineId: id,
+    published,
+    // What the service sends: the newest member of the WHOLE slot, coverage
+    // included (timeline-service.toEntry). Several cases below turn on the rail
+    // narrowing that to what a card still holds.
+    updatedAt: [headlinePublished, ...[...related, ...moreCoverage].map((a) => a.published)].reduce(
+      (latest, at) => (Date.parse(at) > Date.parse(latest) ? at : latest),
+    ),
+    article: article(id, headlinePublished),
+    related,
+    moreCoverage,
+    storyline: null,
+  };
+};
+
+/** The one slot every part-of-day case below reads: `days[0].segments`. */
+const partsOf = (days: ReturnType<typeof groupByDay>) =>
+  (days[0]?.segments ?? []).map((part) => part.segment);
 
 describe("hasLaterCoverage", () => {
   it("says nothing about a syndication burst", () => {
@@ -221,6 +241,153 @@ describe("groupByDay", () => {
 
     expect(days).toHaveLength(1);
     expect(days[0]?.key).toBe("2026-08-11");
+  });
+
+  it("draws a slot's later coverage as its own card in the part it landed in", () => {
+    // The live case (#155): a Loblaw labelling story broke at 08:31 and two
+    // outlets followed it up just after half one. All three sat under MORNING,
+    // the follow-ups inside a disclosure hanging off a card that ran five
+    // hours before them.
+    const days = groupByDay(
+      [
+        entry("1", "2026-08-11T15:31:00.000Z", "2026-08-11T15:31:00.000Z", {
+          moreCoverage: [
+            article("globalnews", "2026-08-11T20:35:00.000Z"), // 13:35 — Afternoon
+            article("ttnews", "2026-08-11T20:30:00.000Z"), // 13:30 — Afternoon
+          ],
+        }),
+      ],
+      now,
+      VANCOUVER,
+    );
+
+    expect(partsOf(days)).toEqual(["Afternoon", "Morning"]);
+    const [afternoon, morning] = days[0]!.segments;
+    // The afternoon's own card: its EARLIEST article heads it, the rest is the
+    // coverage around it, and it sits at the headline it shows.
+    expect(afternoon?.items).toHaveLength(1);
+    expect(afternoon?.items[0]?.article.id).toBe("ttnews");
+    expect(afternoon?.items[0]?.published).toBe("2026-08-11T20:30:00.000Z");
+    expect(afternoon?.items[0]?.moreCoverage.map((a) => a.id)).toEqual(["globalnews"]);
+    // Nothing in a later part of the day is the same story as its headline:
+    // the lead group's copies stayed with the lead.
+    expect(afternoon?.items[0]?.related).toEqual([]);
+    // The morning card keeps its headline and promises nothing it no longer
+    // holds: no coverage rows, and no "updated" stamp reaching into the
+    // afternoon (the service sent `updatedAt` over the whole slot).
+    expect(morning?.items[0]?.article.id).toBe("1");
+    expect(morning?.items[0]?.moreCoverage).toEqual([]);
+    expect(morning?.items[0]?.updatedAt).toBe("2026-08-11T15:31:00.000Z");
+    expect(hasLaterCoverage(morning!.items[0]!)).toBe(false);
+  });
+
+  it("stamps a part of the day's card from the coverage it still holds", () => {
+    // Three follow-ups in one afternoon: the earliest heads the card, and the
+    // last of them is what "updated" measures — the same treatment §8.1 gives
+    // a slot whose coverage went on after its headline.
+    const days = groupByDay(
+      [
+        entry("1", "2026-08-11T14:00:00.000Z", "2026-08-11T14:00:00.000Z", {
+          moreCoverage: [
+            article("late", "2026-08-11T23:00:00.000Z"), // 16:00
+            article("mid", "2026-08-11T21:00:00.000Z"), // 14:00
+            article("first", "2026-08-11T20:00:00.000Z"), // 13:00
+          ],
+        }),
+      ],
+      now,
+      VANCOUVER,
+    );
+
+    const afternoon = days[0]?.segments[0];
+    expect(afternoon?.segment).toBe("Afternoon");
+    expect(afternoon?.items[0]?.article.id).toBe("first");
+    // Newest first, the order the wire sent and the disclosure renders.
+    expect(afternoon?.items[0]?.moreCoverage.map((a) => a.id)).toEqual(["late", "mid"]);
+    expect(afternoon?.items[0]?.updatedAt).toBe("2026-08-11T23:00:00.000Z");
+    expect(hasLaterCoverage(afternoon!.items[0]!)).toBe(true);
+  });
+
+  it("keeps same-story copies with the headline, wherever they ran", () => {
+    // Syndication is the same piece on another wire, so a copy is never a
+    // second thing that happened: cutting it into its own part of the day
+    // would scatter one story down the rail to say nothing. It still stamps
+    // the card "updated", which is the treatment §8.1 gives it.
+    const days = groupByDay(
+      [
+        entry("1", "2026-08-11T15:00:00.000Z", "2026-08-11T15:00:00.000Z", {
+          related: [article("copy", "2026-08-11T21:00:00.000Z")], // 14:00 — Afternoon
+        }),
+      ],
+      now,
+      VANCOUVER,
+    );
+
+    expect(partsOf(days)).toEqual(["Morning"]);
+    expect(days[0]?.segments[0]?.items[0]?.related.map((a) => a.id)).toEqual(["copy"]);
+    expect(days[0]?.segments[0]?.items[0]?.updatedAt).toBe("2026-08-11T21:00:00.000Z");
+  });
+
+  it("keeps coverage that fell on another of the reader's days with the lead", () => {
+    // The slot's day is the one the API pages by (§7.3), and a reader east of
+    // APP_TIMEZONE can see a slot's coverage cross their midnight. Moving that
+    // row to another divider could put it in a day this page has not loaded,
+    // so only the cut inside the slot's own day is the rail's to make.
+    // One Vancouver day (03:00 and 09:00 PDT on the 11th), so this is a slot
+    // the service could really send; two Tokyo days (19:00 on the 11th and
+    // 01:00 on the 12th).
+    const days = groupByDay(
+      [
+        entry("1", "2026-08-11T10:00:00.000Z", "2026-08-11T10:00:00.000Z", {
+          moreCoverage: [article("late", "2026-08-11T16:00:00.000Z")],
+        }),
+      ],
+      now,
+      TOKYO,
+    );
+
+    expect(days).toHaveLength(1);
+    expect(partsOf(days)).toEqual(["Evening"]);
+    expect(days[0]?.segments[0]?.items[0]?.moreCoverage.map((a) => a.id)).toEqual(["late"]);
+  });
+
+  it("orders a part of the day by what its cards hold, not by which slot they came from", () => {
+    // Slots arrive published DESC, but a card cut out of a later part of the
+    // day sits at its own headline — which can be LATER than the headline of a
+    // slot above it. Read off adjacency, the afternoon would run oldest-first.
+    const days = groupByDay(
+      [
+        entry("1", "2026-08-11T19:30:00.000Z"), // 12:30 — Afternoon lead
+        entry("2", "2026-08-11T14:00:00.000Z", "2026-08-11T14:00:00.000Z", {
+          moreCoverage: [article("late", "2026-08-11T23:00:00.000Z")], // 16:00
+        }),
+      ],
+      now,
+      VANCOUVER,
+    );
+
+    expect(partsOf(days)).toEqual(["Afternoon", "Morning"]);
+    expect(days[0]?.segments[0]?.items.map((slot) => slot.published)).toEqual([
+      "2026-08-11T23:00:00.000Z",
+      "2026-08-11T19:30:00.000Z",
+    ]);
+  });
+
+  it("keys a slot's entries apart so React cannot reuse one for another", () => {
+    const days = groupByDay(
+      [
+        entry("1", "2026-08-11T15:31:00.000Z", "2026-08-11T15:31:00.000Z", {
+          moreCoverage: [article("later", "2026-08-11T20:35:00.000Z")],
+        }),
+      ],
+      now,
+      VANCOUVER,
+    );
+
+    expect(days[0]?.segments.flatMap((part) => part.items).map((slot) => slot.key)).toEqual([
+      "1:2026-08-11T15:31:00.000Z:Afternoon",
+      "1:2026-08-11T15:31:00.000Z:Morning",
+    ]);
   });
 
   it("grows a second segment when older slots arrive", () => {

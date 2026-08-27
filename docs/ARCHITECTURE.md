@@ -873,9 +873,18 @@ keywords in, timeline out.
   the block that most needed chunking was the one being chunked least. The zone is the READER's, from
   `Intl.DateTimeFormat().resolvedOptions().timeZone` — not the country chip (that answers "whose
   news"), and not `APP_TIMEZONE`, which bounds group drift on the write path (§7.4, ADR-0005) and has
-  never been the reader's. A slot is placed by its own `published` — the storyline's earliest that
-  day — so a segment is a coarser timestamp and never a claim about when a story happened. A day
-  whose coverage all landed in one segment shows no segment divider, since a divider that chunks
+  never been the reader's. A slot is CUT by these dividers rather than placed between them: a
+  storyline's coverage of one day lands hours apart, so each part of the day the slot reaches gets
+  its own card — the storyline's own headline where the day begins, and elsewhere the earliest
+  article that part holds, with the rest of that part's coverage behind its own disclosure. That is
+  the rule a storyline day already follows (its earliest as the hero) applied one level down, and
+  the wire carries no group structure below the slot to apply a better one; it is safe on §14.3's
+  count because a slot's members are already scoped to the topic that asked, so a promoted row is
+  never a headline the reader's keywords did not find. Same-story copies never move — syndication is
+  near-simultaneous, so cutting a copy off its headline would scatter one story down the rail to say
+  nothing — and neither does coverage that fell on another of the reader's days, since the day a
+  slot sits under is the one the API pages by (§7.3) and a row moved to another divider could land
+  in a day the page has not loaded. A day whose coverage all landed in one segment shows no segment divider, since a divider that chunks
   nothing is noise; the cost is that loading older coverage can turn a bare day into a segmented one
   and insert a heading above cards already on screen. Both dividers collapse — the day is the outer
   switch and leaves its segments as the reader left them — and a segment's heading text is its own
@@ -885,8 +894,10 @@ keywords in, timeline out.
   description snippet, thumbnail when `image_url` is non-null; whole card links out, `target="_blank" rel="noopener"`.
   One card = one **group** — usually one article; where several outlets ran the same story, the
   group's headline article with the rest behind a "N related" disclosure (§14.3). The card is
-  timestamped by the **group's** earliest published, with an "updated <relative time>" stamp when
-  later members exist — a 3-hours-ago headline below rows from five hours ago reads as a bug. The
+  timestamped by the earliest article it HOLDS, with an "updated <relative time>" stamp when
+  later members exist — the two are the same figure for an uncut slot, and a cut one stamps only
+  what it still holds, since a stamp measuring rows drawn further up the rail points at nothing the
+  reader can open there — a 3-hours-ago headline below rows from five hours ago reads as a bug. The
   stamp needs a real gap (an hour): syndication is near-simultaneous, and stamping "updated" on wire
   copies seconds apart claims a story developed when nothing did. Where `sighting_count > 1` (a
   continuously-updated post) the card shows the same quiet treatment from `latest_seen`. This is the

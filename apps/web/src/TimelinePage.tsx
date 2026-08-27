@@ -9,6 +9,7 @@ import {
   hasLaterCoverage,
   relativeTime,
   timeLabel,
+  type RailSlot,
   type Segment,
 } from "./format.js";
 import { storylineQualifiers, visibleStorylines } from "./storylineLabels.js";
@@ -321,14 +322,14 @@ function Rail({
                       />
                     )}
                     {!partCollapsed &&
-                      part.items.map((entry) => (
+                      part.items.map((slot) => (
                         <GroupCard
-                          // NOT `storylineId` alone: under ADR-0011 a storyline
-                          // takes one slot per day it has coverage, so the id
-                          // repeats down the rail and React would reuse one
-                          // card for several days.
-                          key={`${entry.storylineId}:${entry.published}`}
-                          entry={entry}
+                          // NOT `storylineId` alone, and no longer the slot's
+                          // time either: `key` is unique per slot AND per part
+                          // of the day, since one slot can now draw a card in
+                          // more than one of them.
+                          key={slot.key}
+                          entry={slot}
                           onOpenStorylineView={onOpenStorylineView}
                           qualifiers={qualifiers}
                           timeZone={timeZone}
@@ -404,15 +405,18 @@ function LoadOlder({ loading, onLoadOlder }: { loading: boolean; onLoadOlder: ()
 }
 
 /**
- * One timeline slot (§14.3, ADR-0009): the storyline's headline article, with
- * the day's remaining coverage behind one disclosure in two sections —
- * "same story" (the lead group's other copies) and "more coverage" (the
- * storyline's other groups: retrospectives, follow-ups, fact-checks).
+ * One card on the rail (§14.3, ADR-0009): a slot's coverage of one part of the
+ * reader's day (`RailSlot`) — its headline article, with the rest of that
+ * part's coverage behind one disclosure in two sections, "same story" (the
+ * lead group's other copies) and "more coverage" (the storyline's other
+ * groups: retrospectives, follow-ups, fact-checks).
  *
- * The time shown is the STORYLINE's, not the headline article's — the slot
- * sits at its earliest published, and a card showing "3 hours ago" beneath
- * rows from five hours ago reads as a bug. Later coverage surfaces as an
- * "updated" stamp instead, the same treatment §8.1 gives a re-emitted article.
+ * The time shown is the CARD's earliest article, not necessarily the headline's
+ * own — a card showing "3 hours ago" beneath rows from five hours ago reads as
+ * a bug. Later coverage in the same part of the day surfaces as an "updated"
+ * stamp instead, the same treatment §8.1 gives a re-emitted article; coverage
+ * that reached a LATER part is not counted here at all, since the card heading
+ * that part carries it.
  *
  * A slot with wider coverage also carries its storyline phrase, hanging in the
  * gutter on the far side of the spine (ADR-0010): the day's story has a name,
@@ -425,7 +429,7 @@ function GroupCard({
   timeZone,
   relatedLevel,
 }: {
-  entry: TimelineEntry;
+  entry: RailSlot;
   onOpenStorylineView: (storylineId: string) => void;
   /** storyline id → the date that separates it from its namesakes on screen. */
   qualifiers: Map<string, string>;
@@ -436,6 +440,9 @@ function GroupCard({
 }) {
   const [showRelated, setShowRelated] = useState(false);
   const updated = hasLaterCoverage(entry);
+  // What this card holds — coverage that landed in a later part of the day is
+  // counted by the card that heads that part, so the disclosure never promises
+  // rows the reader has to leave the card to find.
   const total = entry.related.length + entry.moreCoverage.length;
 
   return (
