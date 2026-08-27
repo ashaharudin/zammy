@@ -67,7 +67,11 @@ build rather than the code that exists today:
   one. Production kept its Upstash database; the preview pair (Supabase
   project and Upstash database both) was decommissioned, along with the
   Preview-scoped Vercel env vars and the per-PR `migrate (preview)` CI job.
-  See [deploy/vercel/README.md](../../deploy/vercel/README.md).
+  **Completed 2026-08-27**: the retirement missed the git integration, which
+  kept building an env-less preview on every PR-branch push — a deployment that
+  answered `/readyz` with a 503 and hung a meaningless green check on the PR.
+  `vercel.json`'s `git.deploymentEnabled` now limits automatic deploys to
+  `main`. See [deploy/vercel/README.md](../../deploy/vercel/README.md).
 - **The quota governor ships burst-window-only** (plus the Currents
   observed-snapshot write), **fail-open** to in-process counting when Redis is
   unreachable. The day-rolling local ledger exists for headerless providers;

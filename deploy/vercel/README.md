@@ -79,10 +79,25 @@ into the real corpus. That pair is retired (2026-08-26): Upstash's free tier onl
 Redis database per project, and once that constraint forced a choice, there was no cheap way to
 keep a second, isolated data plane just for previews. The 13 Preview-scoped env vars on the `zammy`
 Vercel project and the `migrate (preview)` CI job are both gone with it — see
-[ADR-0015](../../docs/adr/0015-all-in-on-vercel-hobby-shaped.md). A `vercel deploy` without
-`--prod` still produces a Vercel preview URL (that's a platform feature, not something this repo
-configures), but it now boots with no `DATABASE_URL`/`REDIS_URL` at all and will not serve traffic
-— there is no supported way to preview this app outside production.
+[ADR-0015](../../docs/adr/0015-all-in-on-vercel-hobby-shaped.md).
+
+The retirement left one thing behind, fixed 2026-08-27: the git integration went on building a
+preview for every PR-branch push. Those builds succeeded and served nothing — no Preview-scoped
+variable survived the retirement, so each one answered `/readyz` with a 503 while spending build
+minutes and hanging a meaningless green check on the PR. `vercel.json` now turns automatic branch
+deploys off:
+
+```json
+"git": { "deploymentEnabled": { "*": false, "main": true } }
+```
+
+A branch matching several patterns deploys if *any* of them is `true`, so `main` keeps its
+auto-deploy and every other branch stops. Two consequences worth knowing. **Vercel reads this from
+the pushed commit**, so a PR branched before this landed keeps building previews until it is
+rebased. And **it governs the git integration only** — a manual `vercel deploy` without `--prod`
+still mints a preview URL, because that is the CLI, not the integration. Such a deployment still
+boots with no `DATABASE_URL`/`REDIS_URL` and still will not serve traffic: there is no supported
+way to preview this app outside production.
 
 ## Deploying
 
@@ -91,8 +106,8 @@ configures), but it now boots with no `DATABASE_URL`/`REDIS_URL` at all and will
 ```
 
 **Or not at all: the project is git-linked, so a push to main deploys production on its own** (the
-deployment carries the `zammy-git-main-<scope>.vercel.app` alias, and a PR branch gets its own).
-`deploy.sh` is for deploying local or uncommitted state, and its `.git`-excluded copy is what makes
+deployment carries the `zammy-git-main-<scope>.vercel.app` alias). Main is now the only branch that
+deploys — see `git.deploymentEnabled` above. `deploy.sh` is for deploying local or uncommitted state, and its `.git`-excluded copy is what makes
 a *CLI* deploy work at all — the raw commands below land BLOCKED from inside the repository:
 
 ```bash
