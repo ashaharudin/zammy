@@ -41,6 +41,12 @@ export const TrendingStoryline = z.object({
    * behind it, and guessing from the label is what returned empty timelines.
    * Almost always a substring of `label` — never assume it, since a label whose
    * words the coverage does not say falls back to the profile's own tokens.
+   *
+   * Spelled as the LABEL spells it, lowercased, not as the corpus folds it: this
+   * string is shown to a reader (the command bar, the hero placeholder) and sent
+   * upstream, and the fold is lossy enough to be visible — `singular` takes
+   * "crisis" to `crisi`. The exception is that fallback, which has no surface to
+   * offer and can still hand over a folded token.
    */
   query: z.string().min(1),
   /** Distinct member ARTICLES published inside the window — the size input. */

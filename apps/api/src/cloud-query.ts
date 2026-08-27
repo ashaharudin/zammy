@@ -72,11 +72,22 @@ export const CLOUD_QUERY_TERMS = 2;
  * the hero placeholder's ghost text (`searchPlaceholder`), and the keywords
  * handed to upstream `/search`. `singular` drops a bare trailing `s` and nothing
  * more, so a folded query put "gaza crisi" on the landing page and then asked
- * Currents for it — a misspelling shown to the reader, and a term the body-text
- * matcher has less reason to hit than the word the label actually used. Nothing
- * downstream loses by it: `findSurfacedStorylines`' containment test re-folds
- * every keyword before comparing (`timeline-service.ts`), so the arc's own pill
- * still appears.
+ * Currents for it. The misspelling shown to the reader is the measured half; that
+ * `crisi` also matches upstream body text less often than `crisis` is UNMEASURED
+ * — plausible, and not why this changed.
+ *
+ * Nothing downstream loses by it, but the reason is worth stating because it
+ * MOVED. Containment used to hold by construction — every emitted term came out
+ * of `profile_tokens`, so `findSurfacedStorylines` could not fail to match. A
+ * surface term is by definition not in that column. It holds now because
+ * `timeline-service.ts` re-folds every keyword before the containment test, and
+ * re-folding a surface always recovers the fold it came from. That is a real
+ * dependency on another module, not a happy accident: drop that fold, or add a
+ * caller of `findSurfacedStorylines` that passes raw keywords, and the pill
+ * disappears for exactly the click that minted the query.
+ *
+ * The one place the fold still reaches a reader is the profile-only fallback
+ * below, which has no surface to offer. See it.
  *
  * Two fallbacks, in order, and both are for storylines that should not exist:
  *
@@ -87,9 +98,10 @@ export const CLOUD_QUERY_TERMS = 2;
  *    Which two of them is ARBITRARY, and that is worth saying plainly rather
  *    than dressing up as an ordering. `refreshProfileTokens` stores the profile
  *    alphabetically (`order by support.tok`), so this takes the two words
- *    nearest the front of the alphabet — the same reading the test two cases
- *    above rejects for the grounded path, where "climate" would have beaten
- *    "florida" and named the wrong subject. It is tolerable only here, and only
+ *    nearest the front of the alphabet — the same reading the "keeps label order
+ *    rather than the profile's" test rejects for the grounded path, where
+ *    "climate" would have beaten "florida" and named the wrong subject (a name,
+ *    not a line number: tests move). It is tolerable only here, and only
  *    because of what the fallback is for: the label has already failed to say
  *    anything the coverage says, so there is no subject to name, and any two
  *    profile tokens keep the containment that makes the arc's pill appear. If a
@@ -116,10 +128,13 @@ export function cloudQuery(input: {
   const terms =
     grounded.length > 0
       ? dedupeBy(grounded, (word) => word.folded).map((word) => word.surface)
-      : // No surface spelling to recover here: `profile_tokens` are stored folded
-        // and this arc's label shares nothing with them to read one off. The
-        // fallback is for storylines that should not exist (see above), so it
-        // keeps the corpus spelling rather than inventing one.
+      : // This branch STILL SHOWS THE FOLD, and cannot stop: `profile_tokens` are
+        // stored folded, and a label sharing nothing with them offers no surface
+        // to read one off. So a storyline whose label misses its own coverage can
+        // put `crisi` in the placeholder yet — rarely, since the fallback is for
+        // storylines that should not exist, but not never. Fixing it needs a
+        // surface corpus on the request path (`story_tokens`), which is the cost
+        // ADR-0014 declined for the ordering question and would decline again.
         [...new Set(input.profileTokens)];
   return terms.length > 0 ? terms.slice(0, CLOUD_QUERY_TERMS).join(" ") : input.label;
 }

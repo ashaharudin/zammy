@@ -102,11 +102,37 @@ span page boundaries (page 2: 9 in-page-unique, only 7 unseen). Cumulative uniqu
 ## 6. Reference data
 
 - **23 languages**, returned as `{"languages": {"English": "en", …}}` — a *name → code* map, not an
-  array as the spec implies. Note `"Malay": "msa"` (three letters) and the typo `"Vietnamise"`;
-  always use the values, never derive codes from names.
-- **Regions**: name → 2-letter code map, with typos (`"United State"`, `"German"`).
+  array as the spec implies. Note `"Malay": "msa"` (three letters) and the typo `"Vietnamise"` (`vi`,
+  1 of 23); always use the values, never derive codes from names.
+- **Regions**: name → 2-letter code map, with typos.
 - **Categories**: `{"categories": [...47 strings...]}` — includes junk values (`crap`, `notsure`,
   `redundant`) to filter out of any user-facing picker.
+
+### 6a. The reference NAMES are misspelled, and they are what a picker draws
+
+Counted over the recorded bodies (`fixtures/error-and-reference-bodies.json`, captured 2026-08-04),
+**five of 102 reference names are typed wrong** — four of 79 regions and one of 23 languages:
+
+| endpoint | code | upstream name | correct |
+|---|---|---|---|
+| regions | `US` | `United State` | United States |
+| regions | `DE` | `German` | Germany |
+| regions | `GH` | `Gahana` | Ghana |
+| regions | `ID` | `Indonedia` | Indonesia |
+| languages | `vi` | `Vietnamise` | Vietnamese |
+
+Note `German` is correct as the name of the LANGUAGE `de` and wrong only as the name of the country
+`DE` — the same string, right in one map and wrong in the other, which is why the repair tables in
+`currents-client/client.ts` are keyed by code rather than matched by string.
+
+These are typos, not a fold: `Philippines` (`PH`), `Netherlands` (`NL`) and `United Arab Emirates`
+(`AE`) come from the same map with their trailing `s` intact. Worth stating, because "United State"
+in the command bar was first read as evidence that something in our own pipeline was stripping a
+trailing `s`. Nothing was; the one fold that shortens words (`singular`) never runs on this data.
+
+`repairedRegions` / `repairedLanguages` spell-check them for user-facing pickers. The **codes** are
+authoritative and untouched — §2's rule stands, and a filter is still validated against exactly what
+upstream accepts. `Saudi-Arabia` (`SA`) is left alone: punctuated oddly, not spelled wrong.
 
 ## 6b. Keywordless / category-sliced search — the wordcloud corpus
 

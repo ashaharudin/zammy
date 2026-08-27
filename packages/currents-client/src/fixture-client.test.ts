@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { createCurrentsClient } from "./factory.js";
 import { collectPages } from "@zammy/news-client";
-import { repairedRegions, usefulCategories } from "./client.js";
+import { repairedLanguages, repairedRegions, usefulCategories } from "./client.js";
 import type { CurrentsClient } from "./client.js";
 import { FIXTURES_DIR } from "./test-support.js";
 
@@ -159,6 +159,18 @@ describe("reference data offline", () => {
     expect(new Set(Object.values(regions))).toEqual(new Set(Object.values(upstream)));
   });
 
+  it("spell-checks the language names too, and knows German is not one of them", async () => {
+    const languages = repairedLanguages(await client.availableLanguages());
+
+    expect(languages["Vietnamese"]).toBe("vi");
+    expect(languages).not.toHaveProperty("Vietnamise");
+    // The trap the code-keyed tables exist for: "German" is the correct name of
+    // the language `de` and the wrong name of the country `DE`. A repair matched
+    // on the string would rename this one to "Germany".
+    expect(languages["German"]).toBe("de");
+    expect(Object.keys(languages)).toHaveLength(23);
+  });
+
   it("leaves a repair alone when upstream already uses the name", () => {
     // Upstream is free to fix its own typo without telling us. Two entries
     // cannot share a key, so the repair yields rather than swallow a code.
@@ -166,6 +178,24 @@ describe("reference data offline", () => {
 
     expect(regions["Germany"]).toBe("DEU");
     expect(regions["German"]).toBe("DE");
+  });
+
+  it("survives the keys a JSON body can carry that an object literal cannot", () => {
+    // `JSON.parse` makes `__proto__` an OWN property, and assigning one into an
+    // object literal is a silent no-op — the entry would vanish, and with it a
+    // code that `referenceCodes` needs to accept a filter. A code of `toString`
+    // would find a function on the fixes table and key the output by its source.
+    const regions = repairedRegions(
+      JSON.parse('{"__proto__":"XX","Odd":"toString","United State":"US"}') as Record<
+        string,
+        string
+      >,
+    );
+
+    expect(Object.keys(regions)).toHaveLength(3);
+    expect(new Set(Object.values(regions))).toEqual(new Set(["XX", "toString", "US"]));
+    expect(regions["Odd"]).toBe("toString");
+    expect(regions["United States"]).toBe("US");
   });
 
   it("serves categories verbatim, junk included", async () => {

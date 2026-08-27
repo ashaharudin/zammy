@@ -217,9 +217,12 @@ export async function mergeAgreeingLabels(
     "label-agreement merge — the name as merge evidence (ADR-0011's repair)",
   );
   for (const refusal of report.refusals) {
-    // Every refusal by name, because a refusal is the precision guard reporting
-    // a label worth reading. "Q2 2026 Financial Results" is the one the archive
-    // supplies, and seeing it is how anyone knows the guard is load-bearing.
+    // Every refusal by component key, because a refusal is the precision guard
+    // reporting a name worth reading. The archive's own is "Q2 2026 Financial
+    // Results", and seeing it is how anyone knows the guard is load-bearing —
+    // though what prints is its `labelKey`, `2026 financial q2 result`, since
+    // a component is many labels agreeing and has no single spelling of its
+    // own (see `LabelMergePlan.label`).
     deps.log?.info(
       { label: refusal.label, storylines: refusal.storylines, reason: refusal.reason },
       "label-agreement merge refused a component",

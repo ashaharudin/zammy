@@ -90,9 +90,11 @@ Data-shape hazards the client must absorb — all confirmed live:
 - `keywords` must be **space-joined**; comma-joining returns **0 results**.
 - Responses include `source_category`, absent from the spec.
 - `401` and `400` bodies do **not** match the spec's `ApiResponse` shape (§5.3).
-- Reference endpoints return name→code *maps*, not arrays, with typos (`"Vietnamise"`,
-  `"United State"`) — use the values, never derive codes from names. Categories include junk values
-  (`crap`, `notsure`, `redundant`) to filter from any user-facing picker.
+- Reference endpoints return name→code *maps*, not arrays, with typos in five of the 102 names
+  (`"Vietnamise"`, `"United State"`, `"German"`, `"Gahana"`, `"Indonedia"`) — use the values, never
+  derive codes from names, and draw a picker's names through `repairedRegions` /
+  `repairedLanguages` (PROBE-FINDINGS 6a). Categories include junk values (`crap`, `notsure`,
+  `redundant`) to filter from any user-facing picker.
 - The spec names the link field `urls` while responses use `url`; tolerate both. `id` is a UUID
   string despite the spec's `integer`.
 - **Cloudflare returns `403` (`error code: 1010`) to default library User-Agents.** Every call must

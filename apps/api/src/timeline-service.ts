@@ -325,6 +325,14 @@ async function planAndRead(
   // A keyword that folds to no word at all (pure punctuation) is kept as the
   // empty string rather than dropped: dropping it would let a keyword nothing
   // can match quietly widen the search instead of refusing it.
+  //
+  // Load-bearing beyond the reader who typed. `cloudQuery` emits a cloud click's
+  // keywords in the label's OWN spelling rather than the fold, precisely so the
+  // reader is never shown `crisi` — which means the click's own arc is surfaced
+  // only because this line folds those keywords back. It used to hold by
+  // construction (every emitted term came straight out of `profile_tokens`); now
+  // it holds because of this fold. Removing it loses the pill for exactly the
+  // click that produced the search.
   const surfaced = await findSurfacedStorylines(deps.db, {
     keywords: query.keywords.map((keyword) => labelWords(keyword).join(" ")),
     limit: SURFACED_STORYLINE_LIMIT,

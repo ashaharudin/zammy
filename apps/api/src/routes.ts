@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { isStorylineView, TimelineQuery, TrendingQuery } from "@zammy/shared";
 import { countTopicArticles, readCoverage, readTopic } from "@zammy/storage";
-import { repairedRegions } from "@zammy/currents-client";
+import { repairedLanguages, repairedRegions } from "@zammy/currents-client";
 import { canonicalize, type ReferenceCodes } from "./canonical.js";
 import {
   InvalidCursorError,
@@ -123,8 +123,9 @@ export async function registerQueryRoutes(
   app.get("/api/v1/reference", async (_request, reply) => {
     // Verbatim upstream CODES, junk categories included: filtering belongs
     // to the UI picker, because a stored sighting may legitimately carry one.
-    // The region NAMES are spell-checked (`repairedRegions`) — they are display
-    // text and four of them are typed wrong upstream.
+    // The region and language NAMES are spell-checked (`repairedRegions`,
+    // `repairedLanguages`) — they are display text, and five of them are typed
+    // wrong upstream.
     return reply.send(await loadReference(deps));
   });
 
@@ -203,10 +204,18 @@ async function loadReference(deps: TimelineDeps): Promise<ReferenceData> {
   // Names are repaired on the way OUT, not on the way into the cache, and that
   // is the point: `ref:*` holds upstream's body for a day, so repairing before
   // the `set` would leave every already-warm cache — and every fixture bundle —
-  // serving "United State" until tomorrow, and would make the table's next edit
+  // serving "United State" until tomorrow, and would make the tables' next edit
   // wait on a TTL. Codes are untouched, so `referenceCodes` still validates a
   // filter against exactly what upstream accepts (§2).
-  return { ...reference, regions: repairedRegions(reference.regions) };
+  //
+  // The browser caches this response for a day of its own (`useReference`), so a
+  // tab that loaded before a table changed keeps the old name until it reloads.
+  // Server-side is the half this can control.
+  return {
+    ...reference,
+    regions: repairedRegions(reference.regions),
+    languages: repairedLanguages(reference.languages),
+  };
 }
 
 async function fetchReference(deps: TimelineDeps): Promise<ReferenceData> {

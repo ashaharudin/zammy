@@ -103,7 +103,17 @@ export interface LabelMergeCandidate {
 
 /** One component: everything that becomes a single storyline. */
 export interface LabelMergePlan {
-  /** The normalized label the component agreed on — what to log it by. */
+  /**
+   * The component's `labelKey` — what to log it by.
+   *
+   * NOT a label anybody wrote. `sharedLabels` keys its map by `labelKey`, the
+   * service passes that key straight in here, so this is the folded words as a
+   * SORTED BAG: "Q2 2026 Financial Results" arrives as `2026 financial q2
+   * result`. Fine for an operator's log line, which needs a stable handle for a
+   * component rather than a name — and worth spelling out, because "the
+   * normalized label" is what this said and it read like `normalizeLabel`
+   * output.
+   */
   label: string;
   winnerId: string;
   /** Merged into the winner, in the order the service should merge them. */
@@ -112,6 +122,7 @@ export interface LabelMergePlan {
 
 /** A component that agreed on a name and was refused anyway. */
 export interface LabelMergeRefusal {
+  /** A `labelKey` too — see `LabelMergePlan.label`. */
   label: string;
   storylines: number;
   reason: "no grounded name" | "component too large";

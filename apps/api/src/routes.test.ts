@@ -152,23 +152,67 @@ describe("GET /api/v1/timeline", () => {
 });
 
 describe("GET /api/v1/reference", () => {
+  interface ReferenceBody {
+    languages: Record<string, string>;
+    regions: Record<string, string>;
+    categories: string[];
+  }
+
   it("serves the upstream reference values verbatim — junk included", async () => {
     await setup();
 
     const response = await app.inject({ method: "GET", url: "/api/v1/reference" });
 
     expect(response.statusCode).toBe(200);
-    const body = response.json() as {
-      languages: Record<string, string>;
-      regions: Record<string, string>;
-      categories: string[];
-    };
+    const body = response.json() as ReferenceBody;
     expect(body.languages.English).toBe("en");
     expect(Object.values(body.regions)).toContain("US");
     // Junk categories survive the wire layer on purpose: filtering belongs to
     // the UI picker, because a stored sighting may legitimately carry one.
     expect(body.categories).toContain("crap");
     expect(body.categories).toContain("technology");
+  });
+
+  it("spells the names a picker draws, whatever upstream typed", async () => {
+    await setup();
+
+    const body = (
+      await app.inject({ method: "GET", url: "/api/v1/reference" })
+    ).json() as ReferenceBody;
+
+    expect(body.regions["United States"]).toBe("US");
+    expect(body.regions).not.toHaveProperty("United State");
+    expect(body.languages["Vietnamese"]).toBe("vi");
+    expect(body.languages).not.toHaveProperty("Vietnamise");
+    // Codes are the half that travels and the half this must not touch.
+    expect(Object.values(body.regions)).toContain("US");
+    expect(Object.values(body.languages)).toContain("vi");
+  });
+
+  it("repairs the names on the way OUT, so a warm cache is not stuck with them", async () => {
+    await setup();
+
+    // The cache as an instance that deployed BEFORE the fix left it: upstream's
+    // body, typos and all, with 24h still to run. Repairing on the way IN would
+    // pass every other test in this file and serve "United State" until the TTL
+    // expired — which is the whole reason the repair sits where it sits.
+    await harness.deps.redis.set(
+      "ref:regions",
+      JSON.stringify({ Canada: "CA", "United State": "US" }),
+      "PX",
+      60_000,
+    );
+    await harness.deps.redis.set("ref:languages", JSON.stringify({ Vietnamise: "vi" }), "PX", 60_000);
+    await harness.deps.redis.set("ref:categories", JSON.stringify(["technology"]), "PX", 60_000);
+
+    const body = (
+      await app.inject({ method: "GET", url: "/api/v1/reference" })
+    ).json() as ReferenceBody;
+
+    expect(body.regions).toEqual({ Canada: "CA", "United States": "US" });
+    expect(body.languages).toEqual({ Vietnamese: "vi" });
+    // Still the cached body, not a refetch: the repair is a rename, not a reload.
+    expect(body.categories).toEqual(["technology"]);
   });
 });
 

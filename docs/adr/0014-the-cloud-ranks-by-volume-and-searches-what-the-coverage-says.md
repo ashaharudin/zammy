@@ -52,7 +52,8 @@ it. For a four-word label the search returns nothing at all.
 
 **So the cloud searches the searchable part of the label.** `cloudQuery`
 intersects the label's words, folded by `normalizeLabel`'s fold, with the
-storyline's `profile_tokens`, keeps label order, and takes two:
+storyline's `profile_tokens`, keeps label order, and takes two — spelling each
+one the way the LABEL spells it (see the amendment below):
 
 ```
 "Jason Arday plagiarism controversy"  ->  jason arday
@@ -79,7 +80,9 @@ the cloud already read. Three choices inside it are worth stating:
 **The pill is the fallback, and it costs nothing.** `findSurfacedStorylines`
 surfaces storylines whose `profile_tokens` contain every search keyword — and
 every term `cloudQuery` emits is drawn from that same profile, so containment
-holds by construction. The click that spends an upstream call also surfaces the
+holds by construction. (Amended: the terms are now the label's spelling of those
+words rather than the folded spelling, so containment holds by a re-fold instead.
+See the amendment.) The click that spends an upstream call also surfaces the
 arc it came from, out of machinery that already shipped. This is how a reader
 reaches those three Jason Arday articles even on a run where upstream returns
 nothing. Under the old behaviour they got neither: `{jason, arday, plagiarism,
@@ -208,3 +211,44 @@ ADR-0013's two channels were built to escape.
   say a word its own coverage says — and rejected on the grounded path, where
   `cloud-query.test.ts` pins label order precisely so "climate" cannot beat
   "florida".
+
+## Amended 2026-08-26: the query is spelled by the label, not by the fold
+
+The fold is a comparison key, and this ADR spent it as a spelling. `singular`
+drops a bare trailing `s` and nothing more — that is `grouping.ts`'s deliberate
+choice, and its own comment accepts `boxe` on the grounds that both sides map to
+it alike. True of a comparison. Not true of `cloudQuery`'s output, which is not a
+key: it becomes `?q=`, the command bar's value, `searchPlaceholder`'s ghost text,
+and the keywords handed to upstream `/search`. So a storyline named "Gaza Crisis
+Talks" put **`gaza crisi`** on the landing page as a thing to read about, and then
+asked Currents for it. Measured on the dev archive the same day: `nauticu` for
+Nauticus PirateFest, `spaghetti model`, `charge`.
+
+`labelWordForms` now returns each label word as `{surface, folded}` from one walk
+of one label, and `normalizeLabel`/`labelWords` are written on top of it — the
+"one definition of the fold" rule this ADR leans on is intact, the pair simply
+carries both spellings out of it. `cloudQuery` **matches on `folded` and spells
+with `surface`**. De-duplication stays on the fold, or a label saying "State
+States" spends both of its two terms on one word.
+
+**What this costs is the containment argument above.** "Every term `cloudQuery`
+emits is drawn from that same profile, so containment holds by construction" was
+this ADR's reason the pill is free, and a surface term is by definition not in
+`profile_tokens`. Containment still holds — `timeline-service.ts` re-folds every
+keyword before `findSurfacedStorylines` compares, and re-folding a surface always
+recovers the fold it came from — but it holds because another module applies the
+same fold first, not because of the shape of the data. That is now a stated
+dependency in both files rather than a structural guarantee: drop that re-fold, or
+add a caller of `findSurfacedStorylines` that passes raw keywords, and the pill
+vanishes for exactly the click that minted the query.
+
+**The profile-only fallback still shows the fold**, and cannot stop. When no label
+word is grounded there is no surface to read off — `profile_tokens` is stored
+folded — so that branch can still put `crisi` in front of a reader. It is the
+branch for storylines that should not exist, and fixing it needs a surface corpus
+on the cloud's request path (`story_tokens`), which is the cost this ADR declined
+for the ordering question and would decline again for this one.
+
+One consequence worth stating: `q` feeds the topic fingerprint, so a cloud click
+whose query actually changes spelling re-fingerprints once and spends one upstream
+call against a topic the store has under the old spelling.
