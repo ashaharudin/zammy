@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Article, TimelineEntry } from "@zammy/shared";
 import { isTerminalPage } from "@zammy/shared";
 import { ApiError, type TopicQuery } from "./api.js";
@@ -7,6 +7,7 @@ import { isCollapsed, nothingCollapsed, segmentKey, toggle } from "./dayCollapse
 import {
   groupByDay,
   hasLaterCoverage,
+  readerDayKey,
   relativeTime,
   timeLabel,
   type RailSlot,
@@ -48,7 +49,10 @@ export function TimelinePage({
 
   const pages = timeline.data?.pages ?? [];
   const latest = pages.at(-1);
-  const items = pages.flatMap((page) => page.items);
+  // Stable while the query's data is: everything downstream of this list is
+  // memoised on its identity, down to the rail's own grouping, and a fresh array
+  // per render would defeat all of it.
+  const items = useMemo(() => pages.flatMap((page) => page.items), [timeline.data]);
   const { visible, newCount, reveal } = useHeldNewItems(items, JSON.stringify(topic));
   const surfaced = latest?.storylines ?? [];
   // The date qualifier each storyline needs, computed over everything ON SCREEN
@@ -121,10 +125,13 @@ export function TimelinePage({
  *
  * The gate is on SLOTS, and one thing now slips past it: a poll that adds an
  * article to a slot already on screen leaves that slot's own `published` where
- * it was, so the slot passes through — and if the article landed in a later
- * part of the slot's day, the rail draws it as a card of its own above the
- * one the reader is looking at (`RailSlot`). Accepted for now, and only inside
- * the ingest window, where the rail is visibly growing anyway. Closing it
+ * it was, so the slot passes through — and the rail may then draw the article
+ * as a card of its own above the one the reader is looking at, or, if it is the
+ * earliest thing in a part of the day already drawn, take that card's headline
+ * (`RailSlot`). The headline case remounts rather than mutating, since the
+ * card's key carries it. Accepted for now, and only inside the ingest window:
+ * `refetchOnWindowFocus` is off and the poll runs only while ingest is in
+ * progress, so the rail is visibly growing whenever this can happen. Closing it
  * needs a different notion of "seen" than this anchor can carry: an article
  * inside a slot has no position on the slot axis, and the first paint's own
  * coverage is routinely newer than its newest slot — so gating coverage by
@@ -144,19 +151,21 @@ function useHeldNewItems(items: TimelineEntry[], topicKey: string) {
   if (anchor === null && newest !== null) setAnchor(newest);
 
   const effective = anchor ?? newest;
-  const visible =
-    effective === null ? items : items.filter((item) => item.published <= effective);
-  const held = items.slice(0, items.length - visible.length);
-  return {
-    visible,
-    // Articles, not slots: the pill promises "N new articles" and a held slot
-    // can carry several (§14.3) — copies and coverage both count.
-    newCount: held.reduce(
-      (total, entry) => total + 1 + entry.related.length + entry.moreCoverage.length,
-      0,
-    ),
-    reveal: () => setAnchor(newest),
-  };
+  return useMemo(() => {
+    const visible =
+      effective === null ? items : items.filter((item) => item.published <= effective);
+    const held = items.slice(0, items.length - visible.length);
+    return {
+      visible,
+      // Articles, not slots: the pill promises "N new articles" and a held slot
+      // can carry several (§14.3) — copies and coverage both count.
+      newCount: held.reduce(
+        (total, entry) => total + 1 + entry.related.length + entry.moreCoverage.length,
+        0,
+      ),
+      reveal: () => setAnchor(newest),
+    };
+  }, [items, effective, newest]);
 }
 
 /**
@@ -218,6 +227,15 @@ function Rail({
   // segment rules stay testable without a DOM.
   const timeZone = readTimeZone();
   const now = new Date();
+  // Memoised because it is no longer cheap: cutting slots into cards reads the
+  // zone's hour and day for every ARTICLE, not every slot, and `Rail` re-renders
+  // on every collapse click and every 1.5s ingest poll. Measured at 200 slots
+  // carrying 26 rows each, one pass is 16.5ms; nothing about a collapse click
+  // changes its answer. `now` is deliberately not a dependency — the only thing
+  // it decides is which day is called "Today", and `todayKey` is that question
+  // asked directly, so the labels still move at local midnight.
+  const todayKey = readerDayKey(now, timeZone);
+  const days = useMemo(() => groupByDay(items, now, timeZone), [items, timeZone, todayKey]);
 
   if (items.length === 0 && !ingesting) {
     return (
@@ -264,7 +282,7 @@ function Rail({
           </button>
         </RailEntry>
       )}
-      {groupByDay(items, now, timeZone).map((day) => {
+      {days.map((day) => {
         const dayCollapsed = isCollapsed(collapsed, day.key);
         // A day whose coverage all landed in one part of the day gets no
         // segment treatment: a divider that chunks nothing is noise. Read off

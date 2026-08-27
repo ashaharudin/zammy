@@ -102,10 +102,11 @@ Morning, Afternoon, Evening (18:00–24:00). Non-wrapping, so a segment never cr
 always nests inside exactly one day. Presentation only — a coarser timestamp, never a unit anything
 is counted, paged or fetched by, and never a claim about when a story happened. A segment CUTS a
 slot rather than filing it: a storyline covered from breakfast to midnight draws a card in each part
-of the day its coverage reached, headed by the storyline's own representative where the day begins
-and by that part's earliest article elsewhere. Same-story copies never move; coverage that crossed
-the reader's midnight is drawn under the day it actually ran in, which for a reader west of
-`APP_TIMEZONE` is most of it. Cut in the reader's own zone, which is not
+of the day its coverage reached, headed by the storyline's own representative in the part the slot's
+position falls in and by that part's earliest headline elsewhere. What a part holds is a headline
+rather than an article, so one piece's copies stay together and no headline is drawn twice; coverage
+that crossed the reader's midnight is drawn under the day it actually ran in, which for a reader west
+of `APP_TIMEZONE` is most of it. Cut in the reader's own zone, which is not
 `APP_TIMEZONE` (that bounds group drift on the write path) and not the country chip's (that answers
 whose news). A day with coverage in only one of them shows no segment at all.
 _Avoid_: slot, block, bucket, period, part of day

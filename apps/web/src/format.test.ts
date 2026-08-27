@@ -333,6 +333,55 @@ describe("groupByDay", () => {
     expect(afternoon?.items[0]?.moreCoverage.map((a) => a.id)).toEqual(["other"]);
   });
 
+  it("never draws one headline twice, wherever the wire put its copies", () => {
+    // The trap the headline fold exists for: a copy of the REPRESENTATIVE's own
+    // story arrives in `moreCoverage` (a group of one cannot hold it — a title
+    // reducing to fewer than two content tokens never groups at all), hours
+    // after it. Placed on its own it would head a second card, two parts of the
+    // day above the first, under the same headline and the same gutter label.
+    const days = groupByDay(
+      [
+        entry("1", "2026-08-11T15:00:00.000Z", "2026-08-11T15:00:00.000Z", {
+          moreCoverage: [{ ...article("copy", "2026-08-11T21:00:00.000Z"), title: "story 1" }],
+        }),
+      ],
+      now,
+      VANCOUVER,
+    );
+
+    // One card, and the copy is its same story — not a card of its own.
+    expect(partsOf(days)).toEqual(["Morning"]);
+    expect(days[0]?.segments[0]?.items[0]?.related.map((a) => a.id)).toEqual(["copy"]);
+    expect(days[0]?.segments[0]?.items[0]?.moreCoverage).toEqual([]);
+    // And the card stamps the copy, which is the reach it still has.
+    expect(days[0]?.segments[0]?.items[0]?.updatedAt).toBe("2026-08-11T21:00:00.000Z");
+  });
+
+  it("puts a headline where its earliest copy ran, and its later copies with it", () => {
+    // Same trap one level down: two copies of one follow-up, one in each part of
+    // the day. A headline goes where it first ran, and its copies go with it —
+    // otherwise the afternoon and the evening each draw a card called the same
+    // thing.
+    const days = groupByDay(
+      [
+        entry("1", "2026-08-11T14:00:00.000Z", "2026-08-11T14:00:00.000Z", {
+          moreCoverage: [
+            { ...article("evening-copy", "2026-08-12T02:00:00.000Z"), title: "one follow-up" },
+            { ...article("afternoon-copy", "2026-08-11T20:00:00.000Z"), title: "one follow-up" },
+          ],
+        }),
+      ],
+      now,
+      VANCOUVER,
+    );
+
+    expect(partsOf(days)).toEqual(["Afternoon", "Morning"]);
+    const afternoon = days[0]?.segments[0]?.items[0];
+    expect(afternoon?.article.id).toBe("afternoon-copy");
+    expect(afternoon?.related.map((a) => a.id)).toEqual(["evening-copy"]);
+    expect(afternoon?.moreCoverage).toEqual([]);
+  });
+
   it("cuts a slot across every part of the day its coverage reached", () => {
     // Four cards out of one slot, the shape the dev archive's busiest storyline
     // takes: one card per part of the day rather than one card hiding a day.
@@ -421,7 +470,7 @@ describe("groupByDay", () => {
   });
 
   it("keeps the lead where the API paged it, even when nothing visible ran then", () => {
-    // A slot's POSITION is the storyline's earliest article across the whole
+    // A slot's POSITION is that day's earliest article across the whole
     // storyline, while its members are per-topic (`readStorylineTimelinePage`),
     // so on a keyword search `published` can predate everything this reader can
     // see. The cut must not try to correct that — the rail's order has to stay
@@ -542,7 +591,7 @@ describe("groupByDay", () => {
     ]);
   });
 
-  it("keys a slot's entries apart so React cannot reuse one for another", () => {
+  it("keys a slot's cards apart, headline included, so React cannot reuse one", () => {
     const days = groupByDay(
       [
         entry("1", "2026-08-11T15:31:00.000Z", "2026-08-11T15:31:00.000Z", {
@@ -554,8 +603,8 @@ describe("groupByDay", () => {
     );
 
     expect(days[0]?.segments.flatMap((part) => part.items).map((slot) => slot.key)).toEqual([
-      "1:2026-08-11T15:31:00.000Z:2026-08-11·Afternoon",
-      "1:2026-08-11T15:31:00.000Z:2026-08-11·Morning",
+      "1:2026-08-11T15:31:00.000Z:2026-08-11·Afternoon:later",
+      "1:2026-08-11T15:31:00.000Z:2026-08-11·Morning:1",
     ]);
   });
 
