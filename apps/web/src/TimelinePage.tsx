@@ -2,8 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import type { Article, TimelineEntry } from "@zammy/shared";
 import { isTerminalPage } from "@zammy/shared";
 import { ApiError, type TopicQuery } from "./api.js";
-import { isCollapsed, noDaysCollapsed, toggleDay } from "./dayCollapse.js";
-import { groupByDay, hasLaterCoverage, relativeTime, timeLabel } from "./format.js";
+import { readTimeZone } from "./browser.js";
+import { isCollapsed, nothingCollapsed, segmentKey, toggle } from "./dayCollapse.js";
+import {
+  groupByDay,
+  hasLaterCoverage,
+  relativeTime,
+  timeLabel,
+  type Segment,
+} from "./format.js";
 import { storylineQualifiers, visibleStorylines } from "./storylineLabels.js";
 import { collapseCopies, outletLinks } from "./relatedRows.js";
 import { MONO } from "./theme.js";
@@ -189,7 +196,12 @@ function Rail({
   isFetchingNextPage: boolean;
   onLoadOlder: () => void;
 }) {
-  const [collapsed, setCollapsed] = useState(noDaysCollapsed);
+  const [collapsed, setCollapsed] = useState(nothingCollapsed);
+  // The reader's own zone and clock, read once here rather than off a global
+  // deeper down: everything below takes them as arguments so the day and
+  // segment rules stay testable without a DOM.
+  const timeZone = readTimeZone();
+  const now = new Date();
 
   if (items.length === 0 && !ingesting) {
     return (
@@ -236,8 +248,12 @@ function Rail({
           </button>
         </RailEntry>
       )}
-      {groupByDay(items).map((day) => {
+      {groupByDay(items, now, timeZone).map((day) => {
         const dayCollapsed = isCollapsed(collapsed, day.day);
+        // A day whose coverage all landed in one part of the day gets no
+        // segment treatment: a divider that chunks nothing is noise. Read off
+        // the shape groupByDay already produced.
+        const segmented = day.segments.length >= 2;
         return (
           <section key={day.day} aria-label={day.day}>
             <RailEntry
@@ -246,11 +262,7 @@ function Rail({
               // so both states sit on the same line without a nudge.
               marker={dayCollapsed ? "▶" : "●"}
               big
-              toggle={{
-                expanded: !dayCollapsed,
-                label: `${dayCollapsed ? "Expand" : "Collapse"} ${day.day}`,
-                onToggle: () => setCollapsed((days) => toggleDay(days, day.day)),
-              }}
+              toggle={() => setCollapsed((sections) => toggle(sections, day.day))}
             >
               <h2
                 style={{
@@ -260,21 +272,66 @@ function Rail({
                   margin: 0,
                 }}
               >
-                {day.day}
+                {/*
+                  The heading text is the day's control, the same way a
+                  segment's is (SegmentDivider); the dot on the spine is a
+                  pointer shortcut for it. One rule for the whole rail: a
+                  heading collapses what it heads.
+                */}
+                <button
+                  onClick={() => setCollapsed((sections) => toggle(sections, day.day))}
+                  aria-expanded={!dayCollapsed}
+                  style={{
+                    border: "none",
+                    background: "none",
+                    padding: 0,
+                    cursor: "pointer",
+                    // `font: inherit` first: the shorthand would otherwise
+                    // reset the heading's size back to the button default.
+                    // The other three are NOT redundant — the UA stylesheet
+                    // sets `text-transform: none` on form controls, so the
+                    // heading's uppercase stops at the button without this.
+                    font: "inherit",
+                    color: "inherit",
+                    letterSpacing: "inherit",
+                    textTransform: "inherit",
+                  }}
+                >
+                  {day.day}
+                </button>
               </h2>
             </RailEntry>
             {!dayCollapsed &&
-              day.items.map((entry) => (
-                <GroupCard
-                  // NOT `storylineId` alone: under ADR-0011 a storyline takes
-                  // one slot per day it has coverage, so the id repeats down
-                  // the rail and React would reuse one card for several days.
-                  key={`${entry.storylineId}:${entry.published}`}
-                  entry={entry}
-                  onOpenStorylineView={onOpenStorylineView}
-                  qualifiers={qualifiers}
-                />
-              ))}
+              day.segments.map((part) => {
+                const key = segmentKey(day.day, part.segment);
+                const partCollapsed = segmented && isCollapsed(collapsed, key);
+                return (
+                  <div key={key}>
+                    {segmented && (
+                      <SegmentDivider
+                        segment={part.segment}
+                        count={part.items.length}
+                        collapsed={partCollapsed}
+                        onToggle={() => setCollapsed((sections) => toggle(sections, key))}
+                      />
+                    )}
+                    {!partCollapsed &&
+                      part.items.map((entry) => (
+                        <GroupCard
+                          // NOT `storylineId` alone: under ADR-0011 a storyline
+                          // takes one slot per day it has coverage, so the id
+                          // repeats down the rail and React would reuse one
+                          // card for several days.
+                          key={`${entry.storylineId}:${entry.published}`}
+                          entry={entry}
+                          onOpenStorylineView={onOpenStorylineView}
+                          qualifiers={qualifiers}
+                          timeZone={timeZone}
+                        />
+                      ))}
+                  </div>
+                );
+              })}
           </section>
         );
       })}
@@ -354,11 +411,14 @@ function GroupCard({
   entry,
   onOpenStorylineView,
   qualifiers,
+  timeZone,
 }: {
   entry: TimelineEntry;
   onOpenStorylineView: (storylineId: string) => void;
   /** storyline id → the date that separates it from its namesakes on screen. */
   qualifiers: Map<string, string>;
+  /** The reader's zone, so a card's clock agrees with the day it sits under. */
+  timeZone: string;
 }) {
   const [showRelated, setShowRelated] = useState(false);
   const updated = hasLaterCoverage(entry);
@@ -390,6 +450,7 @@ function GroupCard({
             article={entry.article}
             published={entry.published}
             updatedAt={updated ? entry.updatedAt : null}
+            timeZone={timeZone}
           />
         </div>
       }
@@ -422,16 +483,81 @@ function GroupCard({
               }}
             >
               {entry.related.length > 0 && (
-                <RelatedSection label="same story" articles={entry.related} softCap />
+                <RelatedSection
+                  label="same story"
+                  articles={entry.related}
+                  timeZone={timeZone}
+                  softCap
+                />
               )}
               {entry.moreCoverage.length > 0 && (
-                <RelatedSection label="more coverage" articles={entry.moreCoverage} />
+                <RelatedSection
+                  label="more coverage"
+                  articles={entry.moreCoverage}
+                  timeZone={timeZone}
+                />
               )}
             </div>
           )}
         </div>
       )}
     </RailEntry>
+  );
+}
+
+/**
+ * A part of the reader's local day, dividing one day's slots (§8.1).
+ *
+ * Deliberately NOT a `RailEntry`: a marker box masks the spine with the page
+ * background and draws inside the hole it punches, so an entry with no glyph
+ * would be a gap in the rail with nothing in it. The spine runs unbroken past
+ * a segment instead, which gives the rail a grammar — the spine marks slots
+ * and days; segments are typography — and keeps the day/segment hierarchy
+ * legible without a second glyph vocabulary.
+ *
+ * The heading text is the control, since there is no dot to make one of. That
+ * puts the state on the text: `aria-expanded` alone would tell screen readers
+ * and nobody else, and a collapsed segment is otherwise a heading with nothing
+ * beneath it and no visible reason why.
+ *
+ * It needs no offset of its own — it sits inside the container that already
+ * carries the rail's `RAIL_INSET` padding, so it lines up with card content.
+ */
+function SegmentDivider({
+  segment,
+  count,
+  collapsed,
+  onToggle,
+}: {
+  segment: Segment;
+  count: number;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <h3 style={{ margin: "1.1rem 0 0.4rem" }}>
+      <button
+        onClick={onToggle}
+        aria-expanded={!collapsed}
+        style={{
+          border: "none",
+          background: "none",
+          padding: 0,
+          cursor: "pointer",
+          // `font: inherit` first, or the shorthand resets what follows.
+          font: "inherit",
+          fontFamily: MONO,
+          fontSize: "0.7rem",
+          textTransform: "uppercase",
+          letterSpacing: "0.1em",
+          color: collapsed ? "var(--fg-faint)" : "var(--fg)",
+        }}
+      >
+        {segment}
+        {/* The count only where the cards it counts are hidden. */}
+        {collapsed && <span style={{ opacity: 0.7 }}> · {count}</span>}
+      </button>
+    </h3>
   );
 }
 
@@ -510,10 +636,12 @@ const SAME_STORY_CAP = 3;
 function RelatedSection({
   label,
   articles,
+  timeZone,
   softCap,
 }: {
   label: string;
   articles: Article[];
+  timeZone: string;
   softCap?: boolean;
 }) {
   const [showAll, setShowAll] = useState(false);
@@ -592,7 +720,7 @@ function RelatedSection({
                   gap: "0.3rem 0.5rem",
                 }}
               >
-                <time dateTime={article.published}>{timeLabel(article.published)}</time>
+                <time dateTime={article.published}>{timeLabel(article.published, timeZone)}</time>
                 {outletLinks(copies).map((outlet) => (
                   <a
                     key={outlet.article.id}
@@ -639,12 +767,14 @@ function ArticleCard({
   article,
   published,
   updatedAt,
+  timeZone,
 }: {
   article: Article;
   /** The slot's time — the group's, which may predate this article's own. */
   published: string;
   /** Newest coverage in the group, when later than the slot's time. */
   updatedAt: string | null;
+  timeZone: string;
 }) {
   const [open, setOpen] = useState(false);
   const expandable = article.description !== null;
@@ -707,7 +837,7 @@ function ArticleCard({
         }}
       >
         <small style={{ fontSize: "0.7rem", color: "var(--fg-faint)", fontVariantNumeric: "tabular-nums" }}>
-          <time dateTime={published}>{timeLabel(published)}</time>
+          <time dateTime={published}>{timeLabel(published, timeZone)}</time>
         </small>
         {updatedAt && (
           <span style={{ fontSize: "0.7rem", color: "var(--fg-faint)" }}>
@@ -770,8 +900,19 @@ function RailEntry({
   marker: string;
   big?: boolean;
   pulse?: boolean;
-  /** Makes the rail marker itself the control — the day dot collapses its articles. */
-  toggle?: { expanded: boolean; label: string; onToggle: () => void };
+  /**
+   * A pointer shortcut on the rail marker for a control the entry's content
+   * already carries — the day dot collapses its articles, the same thing
+   * clicking the day's heading does.
+   *
+   * Deliberately NOT an accessible control of its own: two buttons for one
+   * disclosure is two things to hear and one thing to do, and of the pair the
+   * heading is the one that says what it collapses. So the dot leaves the a11y
+   * tree and the tab order, and the heading speaks for both. That is also why
+   * this needs no label or expanded state — ARIA on a hidden node says
+   * nothing.
+   */
+  toggle?: () => void;
   /**
    * The part of the entry the marker centres on, for entries that grow
    * downward: `children` then renders below it without moving the glyph.
@@ -803,9 +944,9 @@ function RailEntry({
 
   const glyph = toggle ? (
     <button
-      onClick={toggle.onToggle}
-      aria-expanded={toggle.expanded}
-      aria-label={toggle.label}
+      onClick={toggle}
+      aria-hidden="true"
+      tabIndex={-1}
       style={{
         // `font: inherit` first: the shorthand would otherwise reset the
         // rail's marker size back to the button default.
