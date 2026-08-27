@@ -94,6 +94,10 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: system-ui, -apple-system, sans-serif;
+  /* Without this, dragging down at the top on mobile Chrome triggers the
+     browser's own full-page-reload pull-to-refresh, racing TimelinePage's
+     in-app one (usePullToRefresh). */
+  overscroll-behavior-y: contain;
 }
 
 a {

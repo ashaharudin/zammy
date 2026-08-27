@@ -181,6 +181,26 @@ function useHeldNewItems(items: TimelineEntry[], topicKey: string) {
 const PULL_REFRESH_COOLDOWN_MS = 4000;
 /** How far a touch has to drag down, at the top, before it counts as a pull. */
 const PULL_DOWN_THRESHOLD_PX = 60;
+/** Matches PULL_DOWN_THRESHOLD_PX's deliberateness on the wheel side. */
+const WHEEL_UP_THRESHOLD = 20;
+
+/**
+ * True if `target` sits inside an element with scroll of its own (e.g. the
+ * command bar's `role="listbox"` filter dropdown, FilterChipRow.tsx) — the
+ * page being at scrollY 0 doesn't mean the gesture is meant for the PAGE.
+ * A pull-to-refresh listening on `window` can't otherwise tell "scrolling
+ * the dropdown" from "scrolling the rail" apart.
+ */
+function withinNestedScroll(target: EventTarget | null): boolean {
+  let node = target instanceof Element ? target : null;
+  while (node && node !== document.body) {
+    const style = getComputedStyle(node);
+    const scrollsY = style.overflowY === "auto" || style.overflowY === "scroll";
+    if (scrollsY && node.scrollHeight > node.clientHeight) return true;
+    node = node.parentElement;
+  }
+  return false;
+}
 
 /**
  * Pull-to-refresh: scrolling up (mouse wheel) or dragging down (touch) while
@@ -213,13 +233,19 @@ function usePullToRefresh(onRefresh: () => void, disabled: boolean) {
       onRefreshRef.current();
     };
     const onWheel = (event: WheelEvent) => {
-      if (event.deltaY < 0 && atTop()) trigger();
+      if (event.deltaY < -WHEEL_UP_THRESHOLD && atTop() && !withinNestedScroll(event.target)) {
+        trigger();
+      }
     };
     const onTouchStart = (event: TouchEvent) => {
-      touchStartY.current = atTop() ? (event.touches[0]?.clientY ?? null) : null;
+      // Two+ fingers is a pinch, not a pull — never arm the gesture for one.
+      touchStartY.current =
+        event.touches.length === 1 && atTop() && !withinNestedScroll(event.target)
+          ? (event.touches[0]?.clientY ?? null)
+          : null;
     };
     const onTouchMove = (event: TouchEvent) => {
-      if (touchStartY.current === null) return;
+      if (touchStartY.current === null || event.touches.length !== 1) return;
       const y = event.touches[0]?.clientY;
       if (y !== undefined && y - touchStartY.current > PULL_DOWN_THRESHOLD_PX && atTop()) {
         trigger();
