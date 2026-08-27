@@ -69,8 +69,7 @@ export const CLOUD_QUERY_TERMS = 2;
  * What the query SPELLS, though, is the label's own word rather than the folded
  * one, and that distinction is the whole reason `labelWordForms` returns a pair.
  * This string is not an internal key: it becomes `?q=`, the command bar's value,
- * the hero placeholder's ghost text (`searchPlaceholder`), and the keywords
- * handed to upstream `/search`. `singular` drops a bare trailing `s` and nothing
+ * and the keywords handed to upstream `/search`. `singular` drops a bare trailing `s` and nothing
  * more, so a folded query put "gaza crisi" on the landing page and then asked
  * Currents for it. The misspelling shown to the reader is the measured half; that
  * `crisi` also matches upstream body text less often than `crisis` is UNMEASURED

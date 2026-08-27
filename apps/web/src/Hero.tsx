@@ -3,9 +3,10 @@ import type { TopicFilters } from "./api.js";
 import { cloudLanguage } from "./cloudLanguage.js";
 import { FilterChipRow, useFilterDefaults } from "./FilterChipRow.js";
 import { MONO } from "./theme.js";
-import { TrendingCloud, useTrending } from "./TrendingCloud.js";
-import { searchPlaceholder } from "./searchPlaceholder.js";
+import { TrendingCloud } from "./TrendingCloud.js";
 import { useReference } from "./useTimeline.js";
+
+const SEARCH_PLACEHOLDER = "Search for a timeline of when it happens...";
 
 /**
  * The empty state: the rolling 24-hour wordcloud — the storylines the window
@@ -40,8 +41,6 @@ export function Hero({
   const [q, setQ] = useState("");
   const reference = useReference();
   const language = cloudLanguage(filters.language);
-  // Same query key as the cloud below, so this costs no extra request.
-  const trending = useTrending(language);
 
   useFilterDefaults(filters, reference.data, "english", onFilters);
 
@@ -79,7 +78,7 @@ export function Hero({
             autoFocus
             value={q}
             onChange={(event) => setQ(event.target.value)}
-            placeholder={searchPlaceholder(trending.data?.storylines ?? [])}
+            placeholder={SEARCH_PLACEHOLDER}
             aria-label="Search topics"
             style={{
               width: "100%",
