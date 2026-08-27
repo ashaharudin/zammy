@@ -124,6 +124,50 @@ interface PlacedWord {
   size: number;
 }
 
+const GLYPH_SIDE = 4;
+// Diagonal stagger (row+col) so the ripple travels corner-to-corner rather than
+// row-by-row — reads as one wave instead of a scan line.
+const GLYPH_CELLS = Array.from({ length: GLYPH_SIDE * GLYPH_SIDE }, (_, i) => ({
+  key: i,
+  delay: (Math.floor(i / GLYPH_SIDE) + (i % GLYPH_SIDE)) * 0.09,
+}));
+
+/**
+ * The cloud's own "still gathering" mark: a 4×4 relative of `SizeGlyph`
+ * (StorylinePills) — same currentColor squares on a CSS grid — but animated
+ * rather than a static fill level, since there is no count yet to show.
+ */
+function CloudLoadingGlyph() {
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        top: "50%",
+        left: "50%",
+        transform: "translate(-50%, -50%)",
+        display: "grid",
+        gridTemplateColumns: `repeat(${GLYPH_SIDE}, 8px)`,
+        gridTemplateRows: `repeat(${GLYPH_SIDE}, 8px)`,
+        gap: "3px",
+        color: "var(--fg-faint)",
+      }}
+    >
+      {GLYPH_CELLS.map((cell) => (
+        <span
+          key={cell.key}
+          className="cloud-loading-cell"
+          style={{
+            background: "currentColor",
+            borderRadius: "2px",
+            animationDelay: `${cell.delay}s`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 /** Deterministic per language (see layoutSeed): no reshuffle per poll. */
 function seededRandom(seed: string): () => number {
   let h = 2166136261;
@@ -260,11 +304,9 @@ export function TrendingCloud({
             still has the search box, and silence over an empty board reads as
             a cloud that failed to draw. */}
         <span>
-          {warming
-            ? "gathering the latest news…"
-            : data !== undefined && storylines.length === 0
-              ? "no storylines have moved in this language yet"
-              : ""}
+          {data !== undefined && !warming && storylines.length === 0
+            ? "no storylines have moved in this language yet"
+            : ""}
         </span>
         {storylines.length > 0 && (
           <button
@@ -356,9 +398,7 @@ export function TrendingCloud({
               </button>
             ))}
           </div>
-          {warming && placed.length === 0 && (
-            <div className="shimmer" style={{ height: "100%" }} />
-          )}
+          {(warming || data === undefined) && placed.length === 0 && <CloudLoadingGlyph />}
         </div>
       )}
 
