@@ -80,6 +80,7 @@ function TopicApp() {
         filters={route.filters}
         onFilters={setFilters}
         onSearch={(q) => navigate({ q, filters: route.filters })}
+        onOpenStoryline={(storylineId) => navigate(openStorylineView(route, storylineId))}
       />
     );
   }
