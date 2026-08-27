@@ -67,11 +67,19 @@ build rather than the code that exists today:
   one. Production kept its Upstash database; the preview pair (Supabase
   project and Upstash database both) was decommissioned, along with the
   Preview-scoped Vercel env vars and the per-PR `migrate (preview)` CI job.
-  **Completed 2026-08-27**: the retirement missed the git integration, which
+  **Completed 2026-08-26**: the retirement missed the git integration, which
   kept building an env-less preview on every PR-branch push — a deployment that
-  answered `/readyz` with a 503 and hung a meaningless green check on the PR.
-  `vercel.json`'s `git.deploymentEnabled` now limits automatic deploys to
-  `main`. See [deploy/vercel/README.md](../../deploy/vercel/README.md).
+  answered `/readyz` with a 503, so the green Vercel check it hung on the PR
+  said nothing about whether the app worked. `vercel.json`'s
+  `git.deploymentEnabled` now limits automatic deploys to `main`.
+  This is a real trade, not a pure win: those previews bundled all five
+  Functions, and that was the only PR-time exercise of `vercel.json`'s
+  `functions` block — `verify` never runs `vercel build`. A function that stops
+  bundling, or a `includeFiles` glob that stops matching, now surfaces on the
+  production deploy rather than on the PR. Accepted because an env-less preview
+  could not verify behaviour either, and a `vercel build` step in `verify`
+  restores the bundling check whenever that becomes worth its minute.
+  See [deploy/vercel/README.md](../../deploy/vercel/README.md).
 - **The quota governor ships burst-window-only** (plus the Currents
   observed-snapshot write), **fail-open** to in-process counting when Redis is
   unreachable. The day-rolling local ledger exists for headerless providers;

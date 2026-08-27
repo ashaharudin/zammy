@@ -637,7 +637,7 @@ knowing:
   preview has nothing stable to point at and was left at the template default. The branch alias
   (`zammy-git-<branch>-<scope>.vercel.app`) was the stable answer, but it is moot now — §4's
   retirement left the git integration still building an env-less preview per PR push, and
-  `vercel.json` turned automatic branch deploys off (2026-08-27), so `main` is the only branch
+  `vercel.json` turned automatic branch deploys off (2026-08-26), so `main` is the only branch
   the integration deploys.
 - **pnpm 11 needs `ENABLE_EXPERIMENTAL_COREPACK=1`**, after which Vercel reads `packageManager` from
   the root manifest and applies it across the workspace. The build command must build the packages
