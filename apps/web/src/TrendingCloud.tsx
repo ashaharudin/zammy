@@ -6,6 +6,7 @@ import { fetchTrending } from "./api.js";
 import { cloudDetail, windowPhrase } from "./cloudLabels.js";
 import { FONT_MIN, fontSizes } from "./cloudFont.js";
 import { layoutSeed } from "./layoutSeed.js";
+import { LoadingGlyph } from "./LoadingGlyph.js";
 import { MONO } from "./theme.js";
 
 /**
@@ -129,50 +130,6 @@ interface PlacedWord {
   x: number;
   y: number;
   size: number;
-}
-
-const GLYPH_SIDE = 4;
-// Diagonal stagger (row+col) so the ripple travels corner-to-corner rather than
-// row-by-row — reads as one wave instead of a scan line.
-const GLYPH_CELLS = Array.from({ length: GLYPH_SIDE * GLYPH_SIDE }, (_, i) => ({
-  key: i,
-  delay: (Math.floor(i / GLYPH_SIDE) + (i % GLYPH_SIDE)) * 0.09,
-}));
-
-/**
- * The cloud's own "still gathering" mark: a 4×4 relative of `SizeGlyph`
- * (StorylinePills) — same currentColor squares on a CSS grid — but animated
- * rather than a static fill level, since there is no count yet to show.
- */
-function CloudLoadingGlyph() {
-  return (
-    <div
-      aria-hidden="true"
-      style={{
-        position: "absolute",
-        top: "50%",
-        left: "50%",
-        transform: "translate(-50%, -50%)",
-        display: "grid",
-        gridTemplateColumns: `repeat(${GLYPH_SIDE}, 8px)`,
-        gridTemplateRows: `repeat(${GLYPH_SIDE}, 8px)`,
-        gap: "3px",
-        color: "var(--fg-faint)",
-      }}
-    >
-      {GLYPH_CELLS.map((cell) => (
-        <span
-          key={cell.key}
-          className="cloud-loading-cell"
-          style={{
-            background: "currentColor",
-            borderRadius: "2px",
-            animationDelay: `${cell.delay}s`,
-          }}
-        />
-      ))}
-    </div>
-  );
 }
 
 /** Deterministic per language (see layoutSeed): no reshuffle per poll. */
@@ -405,7 +362,20 @@ export function TrendingCloud({
               </button>
             ))}
           </div>
-          {(warming || data === undefined) && placed.length === 0 && <CloudLoadingGlyph />}
+          {(warming || data === undefined) && placed.length === 0 && (
+            <div
+              aria-hidden="true"
+              style={{
+                position: "absolute",
+                top: "50%",
+                left: "50%",
+                transform: "translate(-50%, -50%)",
+                color: "var(--fg-faint)",
+              }}
+            >
+              <LoadingGlyph />
+            </div>
+          )}
         </div>
       )}
 

@@ -12,6 +12,7 @@ import {
   type Segment,
 } from "./format.js";
 import { storylineQualifiers, visibleStorylines } from "./storylineLabels.js";
+import { LoadingGlyph } from "./LoadingGlyph.js";
 import { collapseCopies, outletLinks } from "./relatedRows.js";
 import { MONO } from "./theme.js";
 import { CommandBar } from "./CommandBar.js";
@@ -934,14 +935,12 @@ function ArticleCard({
 function RailEntry({
   marker,
   big,
-  pulse,
   toggle,
   head,
   children,
 }: {
   marker: string;
   big?: boolean;
-  pulse?: boolean;
   /**
    * A pointer shortcut on the rail marker for a control the entry's content
    * already carries — the day dot collapses its articles, the same thing
@@ -970,9 +969,7 @@ function RailEntry({
     left: markerLeft("1.4rem"),
     width: "1.4rem",
     textAlign: "center",
-    // Pulsing marks work in flight, the same thing the ingest animation marks,
-    // so it takes the activity colour rather than amber's "pay attention".
-    color: pulse ? "var(--activity)" : "var(--fg)",
+    color: "var(--fg)",
     background: "var(--bg)",
     fontSize: big ? "0.9rem" : "0.75rem",
     // Day markers anchor to their heading's line. Everything else centres on
@@ -1013,7 +1010,7 @@ function RailEntry({
       {marker}
     </span>
   ) : (
-    <span aria-hidden="true" className={pulse ? "shimmer" : undefined} style={markerStyle}>
+    <span aria-hidden="true" style={markerStyle}>
       {marker}
     </span>
   );
@@ -1137,23 +1134,19 @@ function IngestStatus({ pendingJobs }: { pendingJobs: number }) {
   );
 }
 
-/** Progressive-fill shimmer: a short first paint reads as "more coming" (§8.2). */
-function ShimmerRows({ count }: { count: number }) {
-  return (
-    <>
-      {Array.from({ length: count }, (_, i) => (
-        <RailEntry key={i} marker="○" pulse>
-          <div className="shimmer" style={{ height: "3.4rem", maxWidth: "640px" }} />
-        </RailEntry>
-      ))}
-    </>
-  );
-}
-
+/** Same mark as the trending cloud's own "still gathering" state (§8.2). */
 function SkeletonRail() {
   return (
-    <div style={{ position: "relative", paddingLeft: RAIL_INSET }} aria-label="Loading timeline">
-      <ShimmerRows count={6} />
+    <div
+      aria-label="Loading timeline"
+      style={{
+        display: "flex",
+        justifyContent: "center",
+        padding: "3rem 0",
+        color: "var(--fg-faint)",
+      }}
+    >
+      <LoadingGlyph />
     </div>
   );
 }
