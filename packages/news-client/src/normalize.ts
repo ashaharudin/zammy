@@ -156,8 +156,36 @@ export function deriveSightingId(provider: string, providerSightingId: string): 
   ].join("-");
 }
 
-/** Query parameters that identify a referral, never a document. */
-const TRACKING_PARAMS = new Set(["fbclid", "gclid", "msclkid", "igshid", "mc_eid"]);
+/**
+ * Query parameters that identify a referral, never a document.
+ *
+ * A parameter earns a place here only on evidence from outside our own
+ * guesswork that it does not select content — a name that merely *looks* like a
+ * tracker is not enough, because over-collapsing is the worse error (see
+ * `canonicalizeUrl` below). The standard is the publisher's own
+ * `<link rel="canonical">`: fetch a real article with and without the
+ * parameter, and add it only if the page declares the bare URL canonical both
+ * times.
+ *
+ * `share_id`: verified 2026-08-27. Production held two `articles` rows for one
+ * Common Dreams story differing only by `?share_id=983848`; fetched both ways,
+ * the page declares `rel="canonical"` as the bare
+ * `commondreams.org/news/trump-belgium-ring-bribe` and serves the same article
+ * (the id survives only inside a share-widget payload, alongside `post_id` and
+ * `override_device`). Confirmed on a second host on the same platform,
+ * honest-broker.com, which likewise canonicalizes the parameter away.
+ *
+ * Matched case-insensitively by the strip loop, so one lowercase entry also
+ * covers `SHARE_ID` and `Share_Id`.
+ */
+const TRACKING_PARAMS = new Set([
+  "fbclid",
+  "gclid",
+  "msclkid",
+  "igshid",
+  "mc_eid",
+  "share_id",
+]);
 
 /**
  * Canonical form of a sighting's link, used BOTH as the stored `url` and as the

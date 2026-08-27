@@ -38,6 +38,25 @@ describe("canonicalizeUrl", () => {
     ).toBe("https://example.com/story?id=7");
   });
 
+  it("collapses a share link's ?share_id= onto the bare article", () => {
+    // Two production rows for one Common Dreams story differed only by this
+    // parameter; the page declares the bare URL canonical either way.
+    const shared = canonicalizeUrl(
+      "https://www.commondreams.org/news/trump-belgium-ring-bribe?share_id=983848",
+    )!;
+    const bare = canonicalizeUrl(
+      "https://www.commondreams.org/news/trump-belgium-ring-bribe",
+    )!;
+    expect(shared).toBe(bare);
+    expect(deriveDedupKey(shared)).toBe(deriveDedupKey(bare));
+  });
+
+  it("strips ?share_id= whatever its casing", () => {
+    expect(canonicalizeUrl("https://example.com/story?SHARE_ID=1&id=7")).toBe(
+      "https://example.com/story?id=7",
+    );
+  });
+
   it("drops a dangling question mark once the last tracking param goes", () => {
     expect(canonicalizeUrl("https://example.com/story?utm_source=x")).toBe(
       "https://example.com/story",
