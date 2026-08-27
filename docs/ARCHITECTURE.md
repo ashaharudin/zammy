@@ -22,9 +22,10 @@ for decisions and the alternatives they beat.
   actual use, not a scheduled watchlist (§9).
 - **A landing-page wordcloud of the storylines the last 24 hours updated** (§10): each word a
   storyline's label, sized by unique articles gained inside the window, coloured by recency,
-  clickable to run that name as a search. The window rolls continuously. Vocabulary: a **storyline**
-  is one arc of one event and its **label** names it; a **topic** is a saved canonical query. They
-  meet when a click turns one into the other.
+  clickable to open the storyline it names. The window rolls continuously. Vocabulary: a
+  **storyline** is one arc of one event and its **label** names it; a **topic** is a saved canonical
+  query. They meet when a search — typed into the box the cloud sits above — turns one into the
+  other.
 - A clean, fast front end; keywords in, timeline out.
 
 **Non-goals for v1**
@@ -893,13 +894,12 @@ keywords in, timeline out.
 - **Storyline label** — every slot of a labelled storyline hangs its label in the gutter on the far
   side of the rail; clicking opens the **storyline view**: the timeline filtered to that UUID, the
   label as a dismissible chip, the search box empty, typing exits (ADR-0011). The label's words are
-  never executed as a search here — labels are non-unique, so only the UUID identifies the story.
-  The landing-page cloud is the one place that runs them (§10.5, ADR-0013), because it has no
-  UUID-shaped job: it mints topics for a reader who has not typed anything. When two same-label
-  storylines are on screen together, a quiet date qualifier separates them at the coarsest precision
-  that works: month, escalating to day. A provisional storyline-of-one carries no label and renders
-  as the plain article slot. Left of the spine on purpose: the right-hand column is the reader's
-  present, and the label is a way out of it.
+  never executed as a search — labels are non-unique, so only the UUID identifies the story — and
+  the landing-page cloud is no exception (§10.5, ADR-0016): a cloud word opens its storyline the
+  same way. When two same-label storylines are on screen together, a quiet date qualifier separates
+  them at the coarsest precision that works: month, escalating to day. A provisional storyline-of-one
+  carries no label and renders as the plain article slot. Left of the spine on purpose: the
+  right-hand column is the reader's present, and the label is a way out of it.
 - **Surfaced storylines** — a search never narrows to a storyline; it surfaces the ones whose own
   vocabulary contains every keyword, as pills inside the sticky command bar under the `asOf`
   stamp, each a size-bucket glyph plus the label. In the chrome rather than the results, because
@@ -1159,8 +1159,8 @@ Making spend user-triggered means users can drive spend:
 
 The storylines the last 24 hours **updated**, busiest and freshest first, each word that storyline's
 label — "Fort Hood Crash", not "fort hood" — sized by articles gained inside the window, coloured by
-recency, clicking a word running a search built from that arc's own coverage. It doubles as the
-cold-start answer (§9.3): the landing page is never blank.
+recency, clicking a word opening that storyline by UUID (ADR-0016). It doubles as the cold-start
+answer (§9.3): the landing page is never blank.
 
 **The window rolls; it does not reset.** The cloud covers `TREND_WINDOW_HOURS` (default 24) back
 from now ([ADR-0008](adr/0008-the-cloud-rolls-over-a-weighted-24-hour-window.md)), which retired the
@@ -1416,17 +1416,17 @@ apart see the same cloud.
   blue. Ranked in `rankColors` from `lastUpdated` rather than read off array position, which is what
   the response order used to be (§10.3). Decorative — the cloud is `aria-hidden` — and colour never
   carries meaning alone.
-- Each word is a real `<button>` navigating to `/?q=<query>`, so the cloud feeds demand-driven
-  ingestion and browsing populates topics. **The one place a label is executed as a search** — pills
-  and gutter open the storyline by UUID. The reversal and its cost (keyword match over headlines,
-  not the arc) is ADR-0013.
-- **What it searches is not the label it draws.** `query` is the label's own words that the arc's
-  coverage actually says, capped at two terms — "Jason Arday plagiarism controversy" clicks through
-  as `jason arday` (ADR-0014). Running the label verbatim made a 2–5 word label into that many
-  conjunctive upstream terms, matched against body text the response never includes
-  (PROBE-FINDINGS 3), and returned empty timelines for arcs already in the store. Because every term
-  comes from `profile_tokens`, the search's keywords are a subset of them by construction, so
-  `findSurfacedStorylines` (§7.3) surfaces the arc as a pill even when upstream returns nothing.
+- Each word is a real `<button>` navigating to `/?storyline=<uuid>`, opening the **storyline view**
+  the same way the timeline gutter and surfaced pills do (ADR-0011). ADR-0013 had made the cloud the
+  one place a label ran as a search instead; ADR-0016 retracted that — the cost (a keyword match over
+  headlines, not the arc, landing on an empty timeline often enough to matter) outweighed what it
+  bought the demand-driven loop.
+- **`query` still exists on the wire but no longer drives the click.** It is the label's own words
+  that the arc's coverage actually says, capped at two terms — "Jason Arday plagiarism controversy"
+  grounds to `jason arday` (ADR-0014) — and now feeds `searchPlaceholder`'s ghost text: ADR-0014's
+  reason for grounding rather than running the label verbatim (a 2–5 word label as that many
+  conjunctive upstream terms, matched against body text the response never includes, PROBE-FINDINGS 3)
+  still applies to that placeholder, which suggests something worth actually typing.
 - **Accessibility is not optional.** A wordcloud is near-unusable for screen readers and keyboard
   users, so the same data renders as an ordered `<ol>` of labels with counts and update times —
   visually hidden by default, toggleable for everyone. Size and colour are decorative; the numbers
