@@ -33,8 +33,8 @@ export function hasLaterCoverage(slot: { published: string; updatedAt: string })
  * coarser timestamp, never a claim about what happened when — a slot's LEAD
  * sits at its storyline's EARLIEST article that day, so a headline that ran
  * at 07:00 is filed under Morning however long the day's coverage went on.
- * Where that coverage reached a later part of the day it is drawn there
- * instead of under the headline (`RailSlot`).
+ * Coverage that ran in another part of the day is drawn there rather than under
+ * the headline, and in another of the reader's days under that day (`RailSlot`).
  *
  * Four rather than three, and non-wrapping. Measured on the dev archive, a
  * 00:00–12:00 Morning held 254 of 325 slots against Afternoon's 12: the block
@@ -52,6 +52,14 @@ const SEGMENTS: readonly { from: number; name: Segment }[] = [
   { from: 12, name: "Afternoon" },
   { from: 18, name: "Evening" },
 ];
+
+/** A day and a part of it, as one string. Both halves are fixed-shape, so `·`
+ * cannot appear in either and the join is unambiguous by construction. Shares
+ * its shape with `dayCollapse`'s collapse keys, deliberately: a card's bucket
+ * and the section the reader collapses are the same division of the rail. */
+function segmentKey(day: string, segment: Segment): string {
+  return `${day}·${segment}`;
+}
 
 /** The rail's own order: the newest part of a day first, the way the column runs. */
 const SEGMENTS_DESC: readonly Segment[] = [...SEGMENTS].reverse().map((segment) => segment.name);
@@ -182,9 +190,19 @@ export function timeLabel(iso: string, timeZone: string): string {
  * near-simultaneous by nature (`UPDATE_GAP_MS`), so cutting them off the
  * headline would scatter one story down the rail to say nothing. Only
  * `moreCoverage` — the storyline's OTHER groups, which are different pieces —
- * is separate enough to stand in a part of the day of its own.
+ * is separate enough to stand in a part of the day of its own. It arrives
+ * flattened, though, so a promoted headline can have copies of its own among
+ * the rows beside it; those become the new card's `related`, not its coverage.
  *
- * A slot that never reached a second part of the day yields exactly one of
+ * A slot's coverage is filed by the article's OWN day as well as its own part
+ * of the day. A storyline's day is bounded in `APP_TIMEZONE`, which is never
+ * the reader's, so for a reader west of it half a slot's coverage routinely
+ * belongs to the next of their days — and a card can therefore open a day the
+ * page has no slot in. Never a day BELOW the last one, though: an article is
+ * never earlier than the slot it belongs to, so coverage only ever moves a card
+ * up the rail.
+ *
+ * A slot whose coverage stayed in one part of one day yields exactly one of
  * these, every field the same as the entry it came from, so the common case is
  * the card it always was.
  */
@@ -215,127 +233,153 @@ export interface DayGroup {
 }
 
 /**
- * Bucket timeline slots by calendar day, each day holding its parts of day and
- * each part its rail entries (`RailSlot`).
+ * Bucket a page of timeline slots into the rail: days, their parts of day, and
+ * the cards each part holds (`RailSlot`).
  *
- * The DAY comes from the slot's own `published` — the group's earliest member
- * (§14.3), which is where the slot sits — never from the headline article's,
- * which can be hours later and would file the slot under the wrong divider.
- * The input is already in timeline order (published DESC — §7), so day
- * adjacency is all this needs and a day cannot recur non-adjacently.
+ * A slot's LEAD is filed by the slot's own `published` — the position §7.3
+ * pages by — never by its headline article's, which can be hours later and
+ * would file it under the wrong divider. Its wider coverage is filed by each
+ * article's OWN time, day and part alike, and that is the whole point: a
+ * storyline's day is bounded in `APP_TIMEZONE`, which is never the reader's, so
+ * for a reader west of it half a slot's coverage routinely belongs to the next
+ * of their days. Leaving it with the lead put morning rows inside a card filed
+ * under the previous evening — the same misfiling one level up.
  *
- * Segments are NOT read off adjacency, because a slot no longer belongs to
- * exactly one: its coverage can open a segment that a later slot's lead then
- * also lands in, so parts are collected per day and ordered here — newest part
- * first, the direction the whole column runs — with each part's entries sorted
- * by what they hold rather than by which slot contributed them.
+ * Nothing is read off adjacency any more, at either level. A slot no longer
+ * belongs to exactly one part of one day, so days and parts are collected and
+ * then ordered — newest first, the direction the whole column runs — with each
+ * part's cards sorted by their own earliest article rather than by which slot
+ * contributed them. Since every card's day and part are derived from its own
+ * time, and parts do not wrap midnight, the rail comes out in strict published
+ * order all the same.
  *
- * A day whose coverage all landed in ONE segment gets no segment treatment,
- * and that rule lives in this shape rather than in the renderer: such a day
- * simply has one entry in `segments`.
+ * Coverage can only ever move a card UP the rail: an article is never earlier
+ * than the slot it belongs to, so no card can appear below the "load older"
+ * frontier. It can appear above cards already on screen, which §8.1 records.
+ *
+ * A day whose coverage all landed in ONE part gets no part treatment, and that
+ * rule lives in this shape rather than in the renderer: such a day simply has
+ * one entry in `segments`.
  */
 export function groupByDay(items: TimelineEntry[], now: Date, timeZone: string): DayGroup[] {
   const todayKey = dayKey(now.toISOString(), timeZone);
-  const days: { key: string; day: string; parts: Map<Segment, RailSlot[]> }[] = [];
+  // `at` is any instant inside the day, kept only to format its label — every
+  // card in the group shares the day, so the first one to arrive will do.
+  const days = new Map<string, { at: string; parts: Map<Segment, RailSlot[]> }>();
   for (const item of items) {
-    const key = dayKey(item.published, timeZone);
-    let day = days[days.length - 1];
-    if (!day || day.key !== key) {
-      day = { key, day: labelFor(key, item.published, todayKey, timeZone), parts: new Map() };
-      days.push(day);
-    }
-    for (const { segment, slot } of railSlots(item, key, timeZone)) {
-      const part = day.parts.get(segment);
+    for (const { day, segment, slot } of railSlots(item, timeZone)) {
+      let group = days.get(day);
+      if (!group) {
+        group = { at: slot.published, parts: new Map() };
+        days.set(day, group);
+      }
+      const part = group.parts.get(segment);
       if (part) part.push(slot);
-      else day.parts.set(segment, [slot]);
+      else group.parts.set(segment, [slot]);
     }
   }
-  return days.map(({ key, day, parts }) => ({
-    key,
-    day,
-    segments: SEGMENTS_DESC.flatMap((segment) => {
-      const part = parts.get(segment);
-      if (!part) return [];
-      // Newest first, the timeline's own order. The slots arrived that way but
-      // the cards cut out of them need not: a card heading a later part of the
-      // day sits at its own headline, which can be later than the headline of a
-      // slot above it.
-      return [{ segment, items: [...part].sort((a, b) => at(b) - at(a)) }];
-    }),
-  }));
+  return (
+    [...days]
+      // `YYYY-MM-DD` sorts lexicographically exactly as it sorts in time.
+      .sort(([a], [b]) => (a < b ? 1 : a > b ? -1 : 0))
+      .map(([key, group]) => ({
+        key,
+        day: labelFor(key, group.at, todayKey, timeZone),
+        segments: SEGMENTS_DESC.flatMap((segment) => {
+          const part = group.parts.get(segment);
+          return part ? [{ segment, items: [...part].sort((a, b) => at(b) - at(a)) }] : [];
+        }),
+      }))
+  );
 }
 
-/** One slot, cut into the parts of its day it actually reaches. */
+/** One slot, cut into the days and parts of day its coverage actually reaches. */
 function railSlots(
   entry: TimelineEntry,
-  day: string,
   timeZone: string,
-): { segment: Segment; slot: RailSlot }[] {
+): { day: string; segment: Segment; slot: RailSlot }[] {
+  const leadDay = dayKey(entry.published, timeZone);
   const leadSegment = segmentOf(entry.published, timeZone);
   const here: Article[] = [];
-  const later = new Map<Segment, Article[]>();
+  const later = new Map<string, { day: string; segment: Segment; articles: Article[] }>();
   for (const article of entry.moreCoverage) {
-    // Coverage that fell on another of the READER's days stays with the lead.
-    // The day a slot sits under is the slot's — the unit the API pages by
-    // (§7.3) — so an article moved to a different divider could land in a day
-    // this page has not loaded, or below the "load older" frontier. Only the
-    // cut INSIDE the slot's own day is the rail's to make. Reachable at all
-    // only because the reader's zone need not be `APP_TIMEZONE`, whose day
-    // bounds the slot.
-    const segment =
-      dayKey(article.published, timeZone) === day
-        ? segmentOf(article.published, timeZone)
-        : leadSegment;
-    if (segment === leadSegment) {
+    const day = dayKey(article.published, timeZone);
+    const segment = segmentOf(article.published, timeZone);
+    if (day === leadDay && segment === leadSegment) {
       here.push(article);
       continue;
     }
-    const part = later.get(segment);
-    if (part) part.push(article);
-    else later.set(segment, [article]);
+    // Keyed by both halves, because a slot can reach the same PART of two
+    // different days — an `APP_TIMEZONE` day is 24 hours wherever it starts.
+    const bucket = later.get(segmentKey(day, segment));
+    if (bucket) bucket.articles.push(article);
+    else later.set(segmentKey(day, segment), { day, segment, articles: [article] });
   }
 
-  const slots: { segment: Segment; slot: RailSlot }[] = [
+  const slots: { day: string; segment: Segment; slot: RailSlot }[] = [
     {
+      day: leadDay,
       segment: leadSegment,
       slot: {
         ...entry,
-        key: slotKey(entry, leadSegment),
+        key: slotKey(entry, leadDay, leadSegment),
         moreCoverage: here,
         // Recomputed rather than taken from the wire, where `updatedAt` is the
         // newest member of the WHOLE slot: a card must not stamp itself updated
-        // from coverage now drawn in its own part of the day further up the
-        // rail. `published` needs no such treatment — the article that defines
-        // it is in this part by construction.
+        // from coverage now drawn elsewhere on the rail.
+        //
+        // `published` is left alone — it is the slot's POSITION (§7.3's keyset
+        // axis), and the rail's order has to be the one the API paged by. It is
+        // also the storyline's earliest across the whole storyline while
+        // members are per-topic (`readStorylineTimelinePage`), so on a keyword
+        // search it can predate every article this reader can see, and the part
+        // of the day it files the lead under is then a part holding nothing
+        // else. That predates this cut and is §14.3's own trade; what the cut
+        // must not do is move a slot's coverage away and leave the position's
+        // card claiming rows it no longer has.
         updatedAt: latestPublished([entry.article, ...entry.related, ...here], entry.published),
       },
     },
   ];
-  for (const [segment, articles] of later) {
+  for (const { day, segment, articles } of later.values()) {
     // Earliest as the hero, and the rest is the coverage around it. The list
     // arrives newest first (§14.3) and stays that way once the hero is out.
     const hero = earliestIndex(articles);
+    const headline = articles[hero]!;
+    // The hero's OWN syndication copies, told apart by an identical headline.
+    //
+    // `moreCoverage` is every non-lead group's members flattened, so a part of
+    // the day holding one group that three outlets ran holds three articles of
+    // one piece: promote the first and the other two are the same story as the
+    // card they sit under, not coverage around it. Exact title is the signal
+    // `collapseCopies` already folds rows by — near-identical wire variants
+    // stay separate, which is honest about what the outlets printed — and it is
+    // the only one left here, the group ids having been spent upstream.
+    const copies: Article[] = [];
+    const coverage: Article[] = [];
+    for (const [index, article] of articles.entries()) {
+      if (index === hero) continue;
+      (article.title === headline.title ? copies : coverage).push(article);
+    }
     slots.push({
+      day,
       segment,
       slot: {
         ...entry,
-        key: slotKey(entry, segment),
-        article: articles[hero]!,
-        published: articles[hero]!.published,
-        updatedAt: latestPublished(articles, articles[hero]!.published),
-        // Nothing here is the same story as the hero: every article in a part
-        // of the day came from a group of its own, the lead group's copies
-        // having stayed with the lead.
-        related: [],
-        moreCoverage: articles.filter((_, index) => index !== hero),
+        key: slotKey(entry, day, segment),
+        article: headline,
+        published: headline.published,
+        updatedAt: latestPublished(articles, headline.published),
+        related: copies,
+        moreCoverage: coverage,
       },
     });
   }
   return slots;
 }
 
-function slotKey(entry: TimelineEntry, segment: Segment): string {
-  return `${entry.storylineId}:${entry.published}:${segment}`;
+function slotKey(entry: TimelineEntry, day: string, segment: Segment): string {
+  return `${entry.storylineId}:${entry.published}:${segmentKey(day, segment)}`;
 }
 
 /** Sort key. Parsed, not compared as strings: `.000Z` and `Z` both spell one instant. */

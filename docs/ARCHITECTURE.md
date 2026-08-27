@@ -864,44 +864,56 @@ keywords in, timeline out.
   Multi-term keywords *narrow* results upstream, so the UI hints "all terms must match" rather than
   letting a 1-result response read as a bug. The date picker caps at **30 days back** — a disabled
   control beats a 400.
-- **Timeline** — a single reverse-chronological column with day dividers ("Today", "Yesterday",
-  dates), each day subdivided into the **parts of the reader's own day** it has coverage in: Night
-  (00:00–06:00), Morning, Afternoon, Evening (18:00–24:00). Non-wrapping, so a segment never spans
-  midnight and the rail's nesting stays exact — inside a day the column runs newest-first, and a
-  "night" reaching back past midnight would render as two blocks of the same name. Four rather than
-  three because a 12-hour Morning held 254 of 325 slots on the dev archive against Afternoon's 12:
-  the block that most needed chunking was the one being chunked least. The zone is the READER's, from
-  `Intl.DateTimeFormat().resolvedOptions().timeZone` — not the country chip (that answers "whose
-  news"), and not `APP_TIMEZONE`, which bounds group drift on the write path (§7.4, ADR-0005) and has
-  never been the reader's. A slot is CUT by these dividers rather than placed between them: a
-  storyline's coverage of one day lands hours apart, so each part of the day the slot reaches gets
-  its own card — the storyline's own headline where the day begins, and elsewhere the earliest
-  article that part holds, with the rest of that part's coverage behind its own disclosure. That is
-  the rule a storyline day already follows (its earliest as the hero) applied one level down, and
-  the wire carries no group structure below the slot to apply a better one; it is safe on §14.3's
-  count because a slot's members are already scoped to the topic that asked, so a promoted row is
-  never a headline the reader's keywords did not find. Same-story copies never move — syndication is
-  near-simultaneous, so cutting a copy off its headline would scatter one story down the rail to say
-  nothing — and neither does coverage that fell on another of the reader's days, since the day a
-  slot sits under is the one the API pages by (§7.3) and a row moved to another divider could land
-  in a day the page has not loaded. A day whose coverage all landed in one segment shows no segment divider, since a divider that chunks
-  nothing is noise; the cost is that loading older coverage can turn a bare day into a segmented one
-  and insert a heading above cards already on screen. Both dividers collapse — the day is the outer
-  switch and leaves its segments as the reader left them — and a segment's heading text is its own
-  control, with no glyph on the spine: a marker box masks the rail and draws inside the hole it
-  punches, so the spine runs unbroken past a segment. The rail's grammar is that the spine marks
-  slots and days, and segments are typography. Each card: headline, source chip + relative time,
-  description snippet, thumbnail when `image_url` is non-null; whole card links out, `target="_blank" rel="noopener"`.
-  One card = one **group** — usually one article; where several outlets ran the same story, the
-  group's headline article with the rest behind a "N related" disclosure (§14.3). The card is
-  timestamped by the earliest article it HOLDS, with an "updated <relative time>" stamp when
-  later members exist — the two are the same figure for an uncut slot, and a cut one stamps only
-  what it still holds, since a stamp measuring rows drawn further up the rail points at nothing the
-  reader can open there — a 3-hours-ago headline below rows from five hours ago reads as a bug. The
-  stamp needs a real gap (an hour): syndication is near-simultaneous, and stamping "updated" on wire
-  copies seconds apart claims a story developed when nothing did. Where `sighting_count > 1` (a
-  continuously-updated post) the card shows the same quiet treatment from `latest_seen`. This is the
-  user-visible half of §7.4; without it, over half of a typical timeline is one post repeated.
+- **Timeline** — a single reverse-chronological column with day dividers ("Today", "Yesterday", dates), each
+  day subdivided into the **parts of the reader's own day** it has coverage in: Night (00:00–06:00), Morning,
+  Afternoon, Evening (18:00–24:00). Non-wrapping, so a segment never spans midnight and the rail's nesting
+  stays exact — inside a day the column runs newest-first, and a "night" reaching back past midnight would
+  render as two blocks of the same name. Four rather than three because a 12-hour Morning held 254 of 325
+  slots on the dev archive against Afternoon's 12: the block that most needed chunking was the one being
+  chunked least. The zone is the READER's, from `Intl.DateTimeFormat().resolvedOptions().timeZone` — not the
+  country chip (that answers "whose news"), and not `APP_TIMEZONE`, which bounds group drift on the write path
+  (§7.4, ADR-0005) and has never been the reader's. A slot is CUT by these dividers rather than placed between
+  them: a storyline's coverage of one day lands hours apart, so each part of the day the slot reaches gets its
+  own card — the slot's own position keeps the service's representative, and elsewhere the earliest article
+  that part holds heads it, with the rest of that part's coverage behind its own disclosure. That is the rule
+  a storyline day already follows (its earliest as the hero) applied one level down, and the wire carries no
+  group structure below the slot to apply a better one; it is safe on §14.3's count because a slot's members
+  are already scoped to the topic that asked, so a promoted row is never a headline the reader's keywords did
+  not find. A promoted headline's own syndication copies come with it as "same story", told apart by an
+  identical headline — the fold `collapseCopies` already uses — since `moreCoverage` arrives as every non-lead
+  group's members flattened. Same-story copies never move: syndication is near-simultaneous, so cutting a copy
+  off its headline would scatter one story down the rail to say nothing. Coverage is filed by its own DAY as
+  well as its own part of the day, and that half earns its keep the most: a storyline's day is bounded in
+  `APP_TIMEZONE` — UTC in every environment — so for a reader west of it half a slot's coverage belongs to the
+  next of THEIR days, and leaving it with the lead put morning rows inside a card filed under the previous
+  evening. A card may therefore open a day the page holds no slot in, but never a day below the last: an
+  article is never earlier than the slot it belongs to, so coverage only ever moves a card up the rail, never
+  past the "load older" frontier. The LEAD's part of the day comes from the slot's position, which is the
+  storyline's earliest across the whole storyline while its members are per-topic, so on a keyword search a
+  lead card can sit in a part of the day where nothing the reader can see ran; that predates the cut and is
+  §14.3's own trade, and correcting it would mean rendering the rail in a different order from the one the
+  keyset paged by. A day whose coverage all landed in one segment shows no segment divider, since a divider
+  that chunks nothing is noise; the cost is that loading older coverage can turn a bare day into a segmented
+  one, inserting a heading — or, when the appended slot's coverage reached a later part of the day, or a later
+  day, than the slot itself, a whole card — above cards the reader is already looking at. The same slips past
+  the "N new articles" gate (§8.2): that gate holds back SLOTS, so an article a poll adds to a slot already on
+  screen can draw a card of its own inside its day. Both are bounded to the ingest window, where the rail is
+  visibly growing; closing the second needs a record of the article ids already rendered, which the gate's
+  single timestamp cannot carry. Both dividers collapse — the day is the outer switch and leaves its segments
+  as the reader left them — and a segment's heading text is its own control, with no glyph on the spine: a
+  marker box masks the rail and draws inside the hole it punches, so the spine runs unbroken past a segment.
+  The rail's grammar is that the spine marks slots and days, and segments are typography. Each card: headline,
+  source chip + relative time, description snippet, thumbnail when `image_url` is non-null; whole card links
+  out, `target="_blank" rel="noopener"`. One card = one **group** — usually one article; where several outlets
+  ran the same story, the group's headline article with the rest behind a "N related" disclosure (§14.3). The
+  card is timestamped by the **slot's** earliest published — for a card cut out of a later part of the day, by
+  its own headline — with an "updated <relative time>" stamp when later members exist. The stamp measures only
+  what the CARD holds: one reaching rows drawn further up the rail would point at nothing the reader can open
+  there, and a 3-hours-ago headline below rows from five hours ago reads as a bug. The stamp needs a real gap
+  (an hour): syndication is near-simultaneous, and stamping "updated" on wire copies seconds apart claims a
+  story developed when nothing did. Where `sighting_count > 1` (a continuously-updated post) the card shows
+  the same quiet treatment from `latest_seen`. This is the user-visible half of §7.4; without it, over half of
+  a typical timeline is one post repeated.
 - **Storyline label** — every slot of a labelled storyline hangs its label in the gutter on the far
   side of the rail; clicking opens the **storyline view**: the timeline filtered to that UUID, the
   label as a dismissible chip, the search box empty, typing exits (ADR-0011). The label's words are

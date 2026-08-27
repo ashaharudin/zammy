@@ -118,6 +118,20 @@ export function TimelinePage({
  * The anchor is the published timestamp of the newest item first shown for
  * this topic. Progressive fill is unaffected — it appends OLDER items, which
  * pass straight through (§6.5 point 3).
+ *
+ * The gate is on SLOTS, and one thing now slips past it: a poll that adds an
+ * article to a slot already on screen leaves that slot's own `published` where
+ * it was, so the slot passes through — and if the article landed in a later
+ * part of the slot's day, the rail draws it as a card of its own above the
+ * one the reader is looking at (`RailSlot`). Accepted for now, and only inside
+ * the ingest window, where the rail is visibly growing anyway. Closing it
+ * needs a different notion of "seen" than this anchor can carry: an article
+ * inside a slot has no position on the slot axis, and the first paint's own
+ * coverage is routinely newer than its newest slot — so gating coverage by
+ * this timestamp would hold back content that arrived WITH the first response.
+ * What it would take is the set of article ids already rendered, narrowed to
+ * slots already seen so that an appended older page still paints straight
+ * through.
  */
 function useHeldNewItems(items: TimelineEntry[], topicKey: string) {
   const [anchor, setAnchor] = useState<string | null>(null);
@@ -454,11 +468,14 @@ function GroupCard({
       head={
         <div style={{ maxWidth: "640px" }}>
           {/*
-            The gutter holds the storyline's label, on every slot of a labelled
+            The gutter holds the storyline's label, on every CARD of a labelled
             storyline — universal, where ADR-0010's phrase appeared only on
             slots with wider coverage, because a label is an identity rather
-            than a lucky bigram. An unlabelled storyline leaves the gutter
-            empty, which is what "invisible as a storyline" looks like.
+            than a lucky bigram. A slot cut across parts of the day repeats it
+            per card, which is the point rather than a cost: a card headed by a
+            promoted follow-up has nothing else on it to say which story it
+            continues. An unlabelled storyline leaves the gutter empty, which is
+            what "invisible as a storyline" looks like.
           */}
           {entry.storyline?.label && (
             <StorylineLabel
@@ -820,9 +837,13 @@ function ArticleCard({
   timeZone,
 }: {
   article: Article;
-  /** The slot's time — the group's, which may predate this article's own. */
+  /**
+   * The card's time: for a lead card the slot's own, which may predate this
+   * article's; for one cut out of a later part of the day, this article's own
+   * (it heads that part because it is the earliest thing in it).
+   */
   published: string;
-  /** Newest coverage in the group, when later than the slot's time. */
+  /** Newest article in the CARD, when later than the card's time. */
   updatedAt: string | null;
   timeZone: string;
 }) {
