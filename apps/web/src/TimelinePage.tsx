@@ -64,6 +64,15 @@ export function TimelinePage({
   const ingesting = latest?.meta.ingest.state === "in_progress";
   const terminal = latest !== undefined && !timeline.hasNextPage && isTerminalPage(latest);
 
+  // Plain refetch(), same as ErrorState's retry: v5 dropped per-page refetch
+  // filtering for infinite queries, so this re-runs every loaded page rather
+  // than just the newest — matching what the ingest poll already does on
+  // its own timer (useTimeline.ts refetchInterval).
+  usePullToRefresh(
+    () => void timeline.refetch(),
+    timeline.isPending || timeline.isFetching,
+  );
+
   return (
     <>
       <CommandBar
@@ -166,6 +175,97 @@ function useHeldNewItems(items: TimelineEntry[], topicKey: string) {
       reveal: () => setAnchor(newest),
     };
   }, [items, effective, newest]);
+}
+
+/** Ignore further pull gestures for this long after one fires a refetch. */
+const PULL_REFRESH_COOLDOWN_MS = 4000;
+/** How far a touch has to drag down, at the top, before it counts as a pull. */
+const PULL_DOWN_THRESHOLD_PX = 60;
+/** Matches PULL_DOWN_THRESHOLD_PX's deliberateness on the wheel side. */
+const WHEEL_UP_THRESHOLD = 20;
+
+/**
+ * True if `target` sits inside an element with scroll of its own (e.g. the
+ * command bar's `role="listbox"` filter dropdown, FilterChipRow.tsx) — the
+ * page being at scrollY 0 doesn't mean the gesture is meant for the PAGE.
+ * A pull-to-refresh listening on `window` can't otherwise tell "scrolling
+ * the dropdown" from "scrolling the rail" apart.
+ */
+function withinNestedScroll(target: EventTarget | null): boolean {
+  let node = target instanceof Element ? target : null;
+  while (node && node !== document.body) {
+    const style = getComputedStyle(node);
+    const scrollsY = style.overflowY === "auto" || style.overflowY === "scroll";
+    if (scrollsY && node.scrollHeight > node.clientHeight) return true;
+    node = node.parentElement;
+  }
+  return false;
+}
+
+/**
+ * Pull-to-refresh: scrolling up (mouse wheel) or dragging down (touch) while
+ * already at the top of the page re-queries page 0 for new articles — the
+ * same check the ingest poll runs on a timer, fired instead by the reader's
+ * own gesture. Results land behind the existing "N new articles" pill
+ * (useHeldNewItems) rather than splicing in, same as any other arrival.
+ *
+ * `onRefresh` and `disabled` are read through refs rather than as effect
+ * deps: both change on every render (a fresh closure, timeline.isFetching
+ * ticking through a poll), and re-subscribing window listeners on every
+ * render is pure churn for a callback the trigger only needs at the moment
+ * a gesture fires.
+ */
+function usePullToRefresh(onRefresh: () => void, disabled: boolean) {
+  const onRefreshRef = useRef(onRefresh);
+  onRefreshRef.current = onRefresh;
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
+
+  useEffect(() => {
+    const lastTriggered = { current: 0 };
+    const touchStartY = { current: null as number | null };
+    const atTop = () => window.scrollY <= 0;
+    const trigger = () => {
+      if (disabledRef.current) return;
+      const now = Date.now();
+      if (now - lastTriggered.current < PULL_REFRESH_COOLDOWN_MS) return;
+      lastTriggered.current = now;
+      onRefreshRef.current();
+    };
+    const onWheel = (event: WheelEvent) => {
+      if (event.deltaY < -WHEEL_UP_THRESHOLD && atTop() && !withinNestedScroll(event.target)) {
+        trigger();
+      }
+    };
+    const onTouchStart = (event: TouchEvent) => {
+      // Two+ fingers is a pinch, not a pull — never arm the gesture for one.
+      touchStartY.current =
+        event.touches.length === 1 && atTop() && !withinNestedScroll(event.target)
+          ? (event.touches[0]?.clientY ?? null)
+          : null;
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      if (touchStartY.current === null || event.touches.length !== 1) return;
+      const y = event.touches[0]?.clientY;
+      if (y !== undefined && y - touchStartY.current > PULL_DOWN_THRESHOLD_PX && atTop()) {
+        trigger();
+      }
+    };
+    const onTouchEnd = () => {
+      touchStartY.current = null;
+    };
+
+    window.addEventListener("wheel", onWheel, { passive: true });
+    window.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchmove", onTouchMove, { passive: true });
+    window.addEventListener("touchend", onTouchEnd, { passive: true });
+    return () => {
+      window.removeEventListener("wheel", onWheel);
+      window.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", onTouchEnd);
+    };
+  }, []);
 }
 
 /**
