@@ -130,8 +130,10 @@ describe("subtractCoverage", () => {
 
   it("keeps the plan slack longer than the delivery budget it is sized for", () => {
     // The derivation, pinned where changing either side breaks. The last
-    // delivery of a failing message lands at +610s; the remainder absorbs the
-    // gap between planning a segment and publishing it.
+    // delivery of a failing message is two redeliveries out — +600s by the
+    // lease constant this asserts against, +610s at the redelivery actually
+    // measured (305s, five past the lease). The remainder absorbs the gap
+    // between planning a segment and publishing it.
     //
     // Note what this does NOT claim. `DRAIN_MIN_AGE_MS` is the message TTL
     // exactly, so the drain route consumes this whole slack by construction,

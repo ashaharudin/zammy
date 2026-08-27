@@ -35,6 +35,15 @@ export interface Span {
  * `LOOKBACK_CLAMP_MARGIN_MS`, or the client narrows below the span
  * `processSegmentJob` just clamped to and the silent-coverage failure returns.
  *
+ * That second pin is necessary rather than sufficient, and the difference is
+ * the headroom between the two: `slack - margin` (840s) is how long a job may
+ * spend between its clamp and its LAST upstream call before the client starts
+ * narrowing again. `vercel.json` caps the consumer and the drain at 300s, so
+ * production cannot reach it. The in-process BullMQ consumer has no such cap —
+ * a maximally wide legacy job is 25 calls at up to 24.6s each, ~615s, which
+ * fits but not by much. Vercel is production (ADR-0015); this is the number to
+ * revisit if that stops being true.
+ *
  * **This slack is an optimization, NOT the correctness mechanism, and the
  * difference matters.** No fixed number can bound the delay, because two paths
  * reset the clock:
