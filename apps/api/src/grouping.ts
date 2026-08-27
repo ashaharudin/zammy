@@ -171,6 +171,13 @@ const MIN_SHARED_TOKENS = 2;
  *     improves is mostly the label layer (grounding, agreement, `cloudQuery`),
  *     and `--restart` discards the label inventory to get it.
  *
+ * **Where the chain runs.** Locally, the four commands above against
+ * `DATABASE_URL`. For PRODUCTION it is the `repair (production)` job in
+ * `.github/workflows/ci.yml`, dispatched by hand: the credential lives there, and
+ * the alternative is pulling a live database URL onto a laptop to run a bulk
+ * write. Deploy first, then step 1 — see version 8's note on why those belong
+ * together in that order.
+ *
  * A LEXICON change reaching the tokenizer at all is the coupling version 6
  * introduced and did not say out loud: the peel decides what a title's last
  * segment is partly by asking the ADR-0006 lexicon whether it states
