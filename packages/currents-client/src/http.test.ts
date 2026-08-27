@@ -105,7 +105,11 @@ describe("query construction", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("pulls a start date forward to the 30-day lookback limit", async () => {
+  it("pulls a start date forward to just INSIDE the 30-day lookback limit", async () => {
+    // A minute inside, not onto the edge: the wire format below drops the
+    // milliseconds, which floors the value and would push a boundary timestamp
+    // back out of the window before it was even sent. See
+    // `LOOKBACK_CLAMP_MARGIN_MS`.
     const { fetch, calls } = stubFetch([{ body: okBody(), headers: quotaHeaders() }]);
     const now = Date.UTC(2026, 7, 4, 12, 0, 0);
     const client = makeClient({ fetch, now: () => now });
@@ -113,7 +117,29 @@ describe("query construction", () => {
     const result = await client.search({ startDate: new Date(Date.UTC(2026, 0, 1)) });
 
     const url = new URL(calls[0]!.url);
-    expect(url.searchParams.get("start_date")).toBe("2026-07-05T12:00:00+00:00");
+    expect(url.searchParams.get("start_date")).toBe("2026-07-05T12:01:00+00:00");
+    expect(result.adjustments.join(" ")).toMatch(/30-day lookback/);
+  });
+
+  it("pulls a start date ABOVE the raw boundary forward too", async () => {
+    // The 400 observed in production 2026-08-26. The old clamp compared against
+    // the raw horizon, so a start date a few hundred milliseconds newer than it
+    // passed untouched — and then `toCurrentsDate` floored the milliseconds off,
+    // landing the sent value BELOW the horizon. Upstream answered
+    // `date_range: Max lookback is 30 days` to a request our pre-flight had
+    // just approved.
+    const { fetch, calls } = stubFetch([{ body: okBody(), headers: quotaHeaders() }]);
+    const now = Date.UTC(2026, 7, 4, 12, 0, 0, 500);
+    const client = makeClient({ fetch, now: () => now });
+
+    // 250ms newer than `now - 30d`: inside the window by the old test, outside
+    // it by the time the seconds-granular wire format is done with it.
+    const result = await client.search({
+      startDate: new Date(now - 30 * 86_400_000 + 250),
+    });
+
+    const url = new URL(calls[0]!.url);
+    expect(url.searchParams.get("start_date")).toBe("2026-07-05T12:01:00+00:00");
     expect(result.adjustments.join(" ")).toMatch(/30-day lookback/);
   });
 

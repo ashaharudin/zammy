@@ -6,7 +6,11 @@ import {
   type IngestHandler,
   type IngestQueue,
 } from "./ingest-queue.js";
-import { MAX_INGEST_DELIVERIES, shouldRetryDelivery } from "./ingest-queue-vercel.js";
+import {
+  MAX_INGEST_DELIVERIES,
+  isPermanentIngestFailure,
+  shouldRetryDelivery,
+} from "./ingest-queue-vercel.js";
 import { waitForRedis } from "./redis-ready.js";
 import { buildServices, ingestDispatch, type ServiceLogger, type Services } from "./server.js";
 
@@ -95,6 +99,33 @@ export function createMessageHandler(
     try {
       await drainable.dispatch(job);
     } catch (error) {
+      if (isPermanentIngestFailure(error)) {
+        // Settle and drop on the FIRST delivery. The retry budget exists for a
+        // world that might have changed by +305s; a revoked key and a
+        // fingerprint ban are not that, so spending three deliveries and ~610s
+        // of latency on one buys nothing and hides the cause behind two more
+        // identical failures in the log. The bar for landing on that list is
+        // high and the reasoning for it is in `isPermanentIngestFailure` — in
+        // particular why a 400 is NOT on it.
+        //
+        // Settling matters as much as dropping: an unsettled entry holds the
+        // topic at `in_progress` until the fifteen-minute stale prune, so a
+        // reader is told the fill is still coming when nothing will attempt it
+        // again.
+        await drainable.queue.settle(job);
+        logger.warn(
+          {
+            messageId: metadata.messageId,
+            deliveryCount: metadata.deliveryCount,
+            job: ingestJobId(job),
+            err: error.message,
+            kind: error.kind,
+            provider: error.provider,
+          },
+          "ingest job failed for a reason no redelivery can fix; dropping",
+        );
+        return;
+      }
       if (shouldRetryDelivery(metadata.deliveryCount)) {
         // Rethrow, which answers 500 and leaves the message unacknowledged —
         // what at-least-once is built on. The redelivery arrives ~305 s later,

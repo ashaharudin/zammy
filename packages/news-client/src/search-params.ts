@@ -33,6 +33,38 @@ export interface ClampLimits {
 }
 
 /**
+ * How far INSIDE the lookback window the clamp lands, rather than exactly on
+ * its edge.
+ *
+ * The edge is not a safe place to sit, and production proved it: on 2026-08-26
+ * (deployment `dpl_GJ9xwKPDw9J7ZQDNpwqpmyMpeHfv`) a start date clamped to
+ * exactly `now - 30d` was still answered with 400 `date_range: Max lookback is
+ * 30 days`. Three things move a boundary value after we compute it, and all
+ * three move it the same way — OLDER, i.e. out of the window:
+ *
+ *   - **The wire encoding truncates.** Currents wants whole seconds, so the
+ *     adapter strips the milliseconds — which for any real timestamp is a
+ *     floor, moving it up to 999ms older. A boundary value is already outside
+ *     the window before it is sent, on 999 requests in 1000.
+ *   - **The request takes time.** Up to 24.6s of it: three attempts at the
+ *     transport's 8s timeout, plus full-jitter backoff capped at 200ms and
+ *     400ms between them, every attempt re-sending the start date computed
+ *     once, here, before the first.
+ *   - **Their clock is not our clock.** Any skew in the "upstream is ahead"
+ *     direction narrows their window relative to ours by that much.
+ *
+ * A minute absorbs all three with room to spare, and what it costs is a minute
+ * at the oldest edge of a 30-day archive — sixty seconds of month-old news that
+ * upstream is about to drop anyway. This is the LAST line of defence, not the
+ * first: the planner leaves its own, much larger slack so a segment queued now
+ * is still fetchable when a consumer dequeues it minutes later (see
+ * `LOOKBACK_PLAN_SLACK_MS` in the API's `coverage-gaps.ts`). The margin here is
+ * what keeps the promise below true for every OTHER caller — a top-up, a job
+ * enqueued by an older deploy, a re-sliced span read back out of the queue.
+ */
+export const LOOKBACK_CLAMP_MARGIN_MS = 60_000;
+
+/**
  * Pre-flight clamp, so the tier's limits are enforced locally instead of learned
  * from a 400 (ARCHITECTURE 11: pre-flight validation should make upstream 400s
  * unreachable). Every clamp here corresponds to an error Currents actually
@@ -81,7 +113,14 @@ export function clampSearchParams(
   }
 
   if (params.startDate) {
-    const earliest = new Date(now.getTime() - limits.maxLookbackDays * 86_400_000);
+    // Note the `+ margin`: the clamp target is inside the window, not on it.
+    // The comparison uses that same target, so a start date sitting a few
+    // hundred milliseconds ABOVE the raw boundary — untouched by the old
+    // `< boundary` test, then floored below it by the wire encoding — is pulled
+    // to safety too. That case was the observed 400.
+    const earliest = new Date(
+      now.getTime() - limits.maxLookbackDays * 86_400_000 + LOOKBACK_CLAMP_MARGIN_MS,
+    );
     if (params.startDate < earliest) {
       adjustments.push(
         `startDate ${params.startDate.toISOString()} → ${earliest.toISOString()} ` +

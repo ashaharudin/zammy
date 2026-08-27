@@ -53,13 +53,35 @@ and method in [PROBE-FINDINGS.md](./PROBE-FINDINGS.md). Several contradict the O
 | `page_size` | supported, **max 20** (Free tier) |
 | `page_number` | supported, **1-indexed**; past-end → `200` + empty array |
 | **Max retrievable results** | **100 per query** (5 pages) |
-| **Max lookback** | **30 days** |
+| **Max lookback** | **30 days**, and the edge MOVES (see below) |
 | **Max date range per call** | **7 days** (drift: observed 2026-08-11; the 2026-08-04 probe's single 30-day call now 400s — `date_range: Max range is 7 days`) |
 | **`start_date`/`end_date` bounds** | **both INCLUSIVE** — a closed `[start, end]` interval, honoured to the second (PROBE §6e) |
 | Default sort | `published` DESC (undocumented, but consistent and page-stable) |
 | `domain` | supported |
 | `offset`, `sort_by` | silently ignored — no sort control exists |
 | Unknown params | silently ignored |
+
+**The lookback edge cannot be sat on.** 30 days back from *now*, and `now` is theirs, not ours.
+A request whose `start_date` is exactly the boundary is rejected — observed in production
+2026-08-26 (`dpl_GJ9xwKPDw9J7ZQDNpwqpmyMpeHfv`), on the oldest segment of a cold search, as
+`400 date_range: Max lookback is 30 days`. Three things push a boundary value out of the window
+after we compute it, all in the same direction: the wire format is second-precision so encoding
+FLOORS the timestamp by up to 999ms; the request itself takes up to 24.6s across retries, all
+re-sending a start date computed before the first attempt; and any clock skew narrows their window
+against ours. So nothing aims at the edge: `LOOKBACK_PLAN_SLACK_MS` (15 min) holds the planner off
+it, and `LOOKBACK_CLAMP_MARGIN_MS` (60s) holds the pre-flight clamp off it. The cost is the oldest
+fifteen minutes of a 30-day window, never fetched; it ages out before any later read could plan it.
+
+**Slack alone is not enough, and a bigger constant would be worse than the 400.** No fixed number
+bounds the delay between planning a segment and fetching it: `DRAIN_MIN_AGE_MS` equals the message
+TTL exactly, so the drain route only ever touches entries that have already consumed the whole
+slack, and `onTruncated` re-enqueues remainders under a fresh TTL that keep the original lower edge.
+Left there, the clamp in `clampSearchParams` would silently narrow the request and `fillSegment`
+would record coverage for the span it *asked* for — days marked fetched that nobody fetched, with
+no error anywhere, which is the failure the per-call range ceiling refuses to permit by throwing.
+So `processSegmentJob` re-clamps against the live horizon at FETCH time and fills the clamped span;
+a job that sank entirely below the edge records nothing at all. The slack is a latency
+optimization; the fetch-time clamp is the correctness mechanism.
 
 **Rate-limit headers are present on every response** — `x-ratelimit-limit`, `-remaining`,
 `-burst-limit`, `-burst-remaining`, `-reset-time` — so quota can be *observed* rather than guessed

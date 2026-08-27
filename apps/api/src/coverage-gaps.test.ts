@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { subtractCoverage, type Span } from "./coverage-gaps.js";
+import { LOOKBACK_PLAN_SLACK_MS, subtractCoverage, type Span } from "./coverage-gaps.js";
+import {
+  MAX_INGEST_DELIVERIES,
+  OBSERVED_REDELIVERY_LEASE_SECONDS,
+} from "./ingest-queue-vercel.js";
+import { LOOKBACK_CLAMP_MARGIN_MS } from "@zammy/news-client";
 
 /**
  * Coverage-gap math (ARCHITECTURE 6.3 step 3): requested window − covered
@@ -71,12 +76,73 @@ describe("subtractCoverage", () => {
   it("clamps to the lookback horizon — never spend a call to learn a 400", () => {
     // Upstream rejects anything older than 30 days (§6.3 step 3). The window
     // may ask; the gap plan must not.
+    //
+    // The horizon sits `LOOKBACK_PLAN_SLACK_MS` INSIDE the 30-day edge (12:00
+    // + 15 min), which is the difference between a segment that is fetchable
+    // now and one that is still fetchable when the queue gets to it.
     const gaps = subtractCoverage(
       span("2026-06-01T00:00:00Z", "2026-08-09T00:00:00Z"),
       [],
       bounds,
     );
-    expect(iso(gaps)).toEqual(["2026-07-11T12:00:00.000Z/2026-08-09T00:00:00.000Z"]);
+    expect(iso(gaps)).toEqual(["2026-07-11T12:15:00.000Z/2026-08-09T00:00:00.000Z"]);
+  });
+
+  it("leaves the oldest segment fetchable for the queue's whole retry budget", () => {
+    // The 400 observed in production 2026-08-26: the oldest segment of a cold
+    // search started exactly ON the horizon, and the consumer dequeued it
+    // seconds to minutes later, by which time the edge had moved past it —
+    // `date_range: Max lookback is 30 days` on every cold search.
+    //
+    // Asserted as a property rather than a literal: replan the same window at
+    // the last delivery a failing message gets, and the oldest segment must
+    // still be STRICTLY above the live edge. Strictly — an earlier version of
+    // this test measured against the message TTL instead and passed by exact
+    // equality, i.e. it asserted the segment sits precisely ON the edge, which
+    // is the condition the slack exists to eliminate.
+    const window = span("2026-06-01T00:00:00Z", "2026-08-09T00:00:00Z");
+    const oldest = subtractCoverage(window, [], bounds).at(-1)!;
+
+    const lastDeliveryMs =
+      (MAX_INGEST_DELIVERIES - 1) * OBSERVED_REDELIVERY_LEASE_SECONDS * 1000;
+    const liveEdge = NOW.getTime() + lastDeliveryMs - 30 * 86_400_000;
+
+    expect(oldest.from.getTime()).toBeGreaterThan(liveEdge);
+  });
+
+  it("keeps the plan horizon above the client's own clamp — the correctness pin", () => {
+    // THE inequality the fetch-time clamp rests on, and the one nothing else
+    // would catch. `processSegmentJob` raises a stale segment to
+    // `planHorizon(now)` and records coverage for what it fetches; that is only
+    // honest while `clampSearchParams` leaves that span alone. The client
+    // clamps to `now - lookback + LOOKBACK_CLAMP_MARGIN_MS`, so the moment the
+    // margin exceeds the slack it narrows BELOW the span we just clamped to,
+    // `fillSegment` records the span it asked for, and days nobody fetched are
+    // marked fetched — silently, with every other test still green.
+    //
+    // The two constants live in different packages and are read by different
+    // code, so this is the only place the relationship is stated at all. The
+    // headroom between them (840s) also bounds how long one `processSegmentJob`
+    // invocation may run before the same narrowing reappears; `vercel.json`
+    // caps the consumer and the drain at 300s, well inside it.
+    expect(LOOKBACK_PLAN_SLACK_MS).toBeGreaterThan(LOOKBACK_CLAMP_MARGIN_MS);
+  });
+
+  it("keeps the plan slack longer than the delivery budget it is sized for", () => {
+    // The derivation, pinned where changing either side breaks. The last
+    // delivery of a failing message is two redeliveries out — +600s by the
+    // lease constant this asserts against, +610s at the redelivery actually
+    // measured (305s, five past the lease). The remainder absorbs the gap
+    // between planning a segment and publishing it.
+    //
+    // Note what this does NOT claim. `DRAIN_MIN_AGE_MS` is the message TTL
+    // exactly, so the drain route consumes this whole slack by construction,
+    // and `onTruncated` re-enqueues remainders under a fresh TTL that keep the
+    // original lower edge — no constant here can bound either. What makes those
+    // safe is the fetch-time re-clamp in `processSegmentJob`.
+    expect(LOOKBACK_PLAN_SLACK_MS).toBeGreaterThan(
+      (MAX_INGEST_DELIVERIES - 1) * OBSERVED_REDELIVERY_LEASE_SECONDS * 1000,
+    );
   });
 
   it("clamps to now — the future is not a gap", () => {

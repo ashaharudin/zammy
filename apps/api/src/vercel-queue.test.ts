@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  NewsAuthError,
+  NewsCircuitOpenError,
+  NewsInvalidQueryError,
+} from "@zammy/news-client";
 import { createMessageHandler, drainableFrom, type DeliveryMetadata } from "./vercel-queue.js";
 import { MAX_INGEST_DELIVERIES } from "./ingest-queue-vercel.js";
 import type { IngestJob, SegmentJob } from "./ingest-queue.js";
@@ -113,6 +118,62 @@ describe("createMessageHandler", () => {
     // is no pending entry it could correspond to.
     expect(settled).toEqual([]);
     expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("drops a revoked key on the first delivery instead of spending the budget", async () => {
+    // Three deliveries over ~610s cannot make a wrong API key right, and the two
+    // repeats bury the cause in the log. An operator fixes this on a timescale
+    // no retry budget reaches.
+    const { settled, drainable: d } = drainable(async () => {
+      throw new NewsAuthError("upstream rejected the API key (401)");
+    });
+    const warn = vi.fn();
+
+    await expect(
+      createMessageHandler(d, { info: () => {}, warn })(
+        segment,
+        delivery({ deliveryCount: 1 }),
+      ),
+    ).resolves.toBeUndefined();
+
+    // Settled, not just swallowed: an unsettled entry nobody will attempt again
+    // holds the topic at `in_progress` until the fifteen-minute stale prune.
+    expect(settled).toEqual([segment]);
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("keeps retrying a 400, which heals across deliveries", async () => {
+    // The production case of 2026-08-26, and the reason `invalid_query` is not
+    // on the drop list despite `retryable: false`. `clampSearchParams` runs per
+    // request against a fresh `now`, so that lookback violation really did
+    // succeed on its second delivery — dropping it would convert a self-healing
+    // retry into permanent loss. It is also the 4xx catch-all, so a proxy's 408
+    // arrives wearing this kind.
+    const { settled, drainable: d } = drainable(async () => {
+      throw new NewsInvalidQueryError("upstream rejected our query (400)", {
+        date_range: "Max lookback is 30 days",
+      });
+    });
+
+    await expect(
+      createMessageHandler(d, silent)(segment, delivery({ deliveryCount: 1 })),
+    ).rejects.toThrow("upstream rejected our query");
+    expect(settled).toEqual([]);
+  });
+
+  it("keeps retrying an open circuit, which the retryable flag would have dropped", async () => {
+    // The reason the consumer reads a kind list and not `retryable`.
+    // `NewsCircuitOpenError` is flagged non-retryable because an IMMEDIATE
+    // retry is pointless — the cooldown is 30s and a redelivery is 305s away,
+    // so it is one of the retries the budget exists for.
+    const { settled, drainable: d } = drainable(async () => {
+      throw new NewsCircuitOpenError("circuit open", new Date("2026-08-26T00:00:30Z"));
+    });
+
+    await expect(
+      createMessageHandler(d, silent)(segment, delivery({ deliveryCount: 1 })),
+    ).rejects.toThrow("circuit open");
+    expect(settled).toEqual([]);
   });
 
   it("routes a sample to the same dispatch a segment takes", async () => {

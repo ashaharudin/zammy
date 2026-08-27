@@ -28,7 +28,7 @@ import {
   type StorylineSlot,
 } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
-import { sliceSpan, subtractCoverage, type Span } from "./coverage-gaps.js";
+import { planHorizon, sliceSpan, subtractCoverage, type Span } from "./coverage-gaps.js";
 import {
   freshnessTier,
   freshnessTtlMs,
@@ -607,8 +607,23 @@ export async function processSegmentJob(deps: TimelineDeps, job: SegmentJob): Pr
   const topic = await readTopic(deps.db, job.fingerprint);
   if (!topic) throw new Error(`segment job for unknown topic ${job.fingerprint}`);
 
-  const segment: Span = { from: new Date(job.from), to: new Date(job.to) };
-  const lockKey = refreshLockKey(job.fingerprint, segment);
+  // The lock key is derived from the span as ENQUEUED, not from the clamped one
+  // below, so it is stable across redeliveries of the same message. The clamp
+  // moves with the clock; the identity of the message does not.
+  //
+  // It does NOT follow that this key matches whatever the interactive path
+  // holds for "the same" gap, and for the OLDEST gap it provably cannot:
+  // `subtractCoverage` starts that gap at `planHorizon(now)`, which strictly
+  // increases, so a re-plan a minute later mints a different span and therefore
+  // a different key. Two fetchers can hold two keys over spans that clamp to
+  // nearly the same interval and both spend a call. That predates the clamp —
+  // before it, `clampSearchParams` collapsed the two spans downstream just the
+  // same — and keying on the clamped span would not close it either, since the
+  // two clamps happen at different instants. Recorded rather than fixed: the
+  // cost is a duplicate fetch on one segment, and the collapse makes it
+  // idempotent.
+  const requested: Span = { from: new Date(job.from), to: new Date(job.to) };
+  const lockKey = refreshLockKey(job.fingerprint, requested);
   const token = await tryAcquire(deps.redis, lockKey, 30_000);
   // Held by someone else: fail so BullMQ redelivers after backoff, by which
   // time the other fetcher has either finished (re-run is idempotent and
@@ -616,6 +631,39 @@ export async function processSegmentJob(deps: TimelineDeps, job: SegmentJob): Pr
   if (!token) throw new Error(`segment ${lockKey} is locked; retrying later`);
 
   try {
+    // Re-clamp to the lookback horizon as it stands NOW, not as it stood when
+    // this job was planned. The plan leaves slack (`LOOKBACK_PLAN_SLACK_MS`),
+    // but nothing bounds the delay: the drain route only looks at entries
+    // already `DRAIN_MIN_AGE_MS` old — the whole slack, by construction — and
+    // `onTruncated` re-enqueues remainders that keep the original `from` under
+    // a fresh retention, so a truncation chain walks the same lower edge
+    // forward indefinitely.
+    //
+    // Clamping HERE rather than letting `clampSearchParams` do it downstream is
+    // the difference between honest coverage and silent loss: the client's
+    // clamp narrows the request and returns an adjustment nobody on this path
+    // reads, while `fillSegment` would go on to record coverage for the span it
+    // ASKED for. The narrowed remainder would be marked fetched forever. This is
+    // the same reasoning that makes the per-call range ceiling throw instead of
+    // narrowing (see `clampSearchParams`).
+    const horizon = planHorizon(deps.now(), deps.config.lookbackDays);
+    const segment: Span =
+      requested.from.getTime() >= horizon.getTime()
+        ? requested
+        : { from: horizon, to: requested.to };
+
+    if (segment.from.getTime() >= segment.to.getTime()) {
+      // The whole span aged out of the archive while it sat in the queue.
+      // Nothing to fetch and nothing to record: recording it would claim
+      // coverage over articles no call ever saw, and the next planner clamps
+      // this span out of the window anyway, so it cannot re-plan forever.
+      deps.log?.warn(
+        { fingerprint: job.fingerprint, from: job.from, to: job.to },
+        "segment job fell below the lookback horizon before it was fetched; dropping",
+      );
+      return;
+    }
+
     const query: CanonicalQuery = {
       fingerprint: topic.fingerprint,
       keywords: topic.keywords,
@@ -636,6 +684,14 @@ export async function processSegmentJob(deps: TimelineDeps, job: SegmentJob): Pr
         slice,
         { deadline: Number.POSITIVE_INFINITY, maxCalls: Number.POSITIVE_INFINITY, callsUsed: 0 },
         // The resume page belongs to the slice the deadline actually cut.
+        //
+        // A stored page number survives the clamp above because upstream sorts
+        // `published` DESC (PROBE-FINDINGS §1, verified monotonic): raising a
+        // span's lower edge drops articles from the TAIL of that ordering, so
+        // pages 1..N-1 hold the same newest articles either way and the
+        // narrowed query simply runs out of pages sooner. Resuming at N then
+        // reads a short or empty page, which is the honest end-of-results
+        // signal for the clamped span — everything in it was already seen.
         index === 0 ? job.startPage : 1,
         // No reader is waiting: draw only what the interactive reserve spares
         // (§9.4). A refusal fails the job; BullMQ's backoff is the retry pacing.

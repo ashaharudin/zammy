@@ -24,7 +24,7 @@ returning a byte-identical result set** — so "no change" reliably means "not s
 | `page_size` | works; **max 20 on Free tier** | 400: `"Max page_size for Free tier is 20"` |
 | `page_number` | works; **1-indexed** | 400 on `0`: `"Min value: 1"` |
 | **Max retrievable results** | **100 per query (5 pages)** | 400: `"Max retrievable results for Free tier is 100"` |
-| **Max lookback** | **30 days** | 29d → 200; 31d → 400 `"Max lookback is 30 days"` |
+| **Max lookback** | **30 days**, edge is live | 29d → 200; 31d → 400 `"Max lookback is 30 days"`; **exactly 30d also 400s** (prod 2026-08-26 — second-precision encoding floors it back out) |
 | Past-end page | `200` + `{"status":"ok","news":[]}` | clean end-of-results signal |
 | Default page size | 20 | |
 | Default sort | `published` DESC, verified monotonic | undocumented but consistent |

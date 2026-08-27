@@ -1,5 +1,6 @@
 import { Redis } from "ioredis";
 import { QueueClient } from "@vercel/queue";
+import { isNewsError } from "@zammy/news-client";
 import {
   PendingSet,
   STALE_PENDING_MS,
@@ -138,6 +139,66 @@ export const INGEST_RETENTION_SECONDS =
  */
 export function shouldRetryDelivery(deliveryCount: number): boolean {
   return deliveryCount < MAX_INGEST_DELIVERIES;
+}
+
+/**
+ * Failure kinds no redelivery and no re-plan can fix, so the retry budget above
+ * should not be spent on them.
+ *
+ * Deliberately a KIND LIST rather than the taxonomy's own `retryable` flag.
+ * `retryable` answers "should the HTTP transport try again immediately", on a
+ * 30s breaker cooldown and a 2s backoff — a different question from "is this
+ * worth another delivery 305s from now". `NewsCircuitOpenError` is where the two
+ * answers diverge: `retryable: false`, because an immediate retry is known to be
+ * pointless, yet a redelivery lands long after the cooldown has elapsed and is
+ * one of the retries the budget is FOR. Reading the flag would drop exactly the
+ * work most likely to succeed on the next attempt.
+ *
+ * The bar is high, because dropping is not as cheap as it looks. The give-up
+ * path's "the next reader re-plans the gap" recovery does not apply for the
+ * whole `INGEST_RETENTION_SECONDS` window: `enqueueSegment` publishes under a
+ * content-derived idempotency key, so a re-plan inside that window is
+ * deduplicated against this very message and never sees a delivery — it only
+ * re-adds the pending entry, and the topic reads `in_progress` against work
+ * nothing will perform. Dropping early therefore BUYS nothing unless no
+ * attempt could have helped.
+ *
+ * Two kinds clear that bar, both mapped from a specific status rather than
+ * inferred. The statuses below are CURRENTS' mapping — mapping is per-adapter
+ * by design (see the taxonomy in `errors.ts`), and GNews for instance reads 403
+ * as a spent daily budget and never emits `blocked` at all. It is the KINDS
+ * that are the contract here; the statuses are named only to show that neither
+ * is a catch-all:
+ *
+ *   - `auth` — Currents' 401, or a JSON 403. The key is missing, wrong, or
+ *     revoked, and an operator fixes that on a timescale no retry budget here
+ *     reaches.
+ *   - `blocked` — Currents' non-JSON 403, i.e. a Cloudflare fingerprint ban on
+ *     our User-Agent. Same remedy, same timescale.
+ *
+ * **`invalid_query` is deliberately NOT here**, and the production 400 of
+ * 2026-08-26 is the reason rather than a counter-example. Two things rule it
+ * out. First, it is the 4xx CATCH-ALL — `mapErrorResponse` returns it for any
+ * status it does not otherwise recognise, so a 408 from an intermediary, a 409,
+ * a 425 or a 451 all arrive wearing this kind, and those are precisely the
+ * transient faults the budget exists for. Second, even the real thing can heal:
+ * `clampSearchParams` runs per request against a fresh `now`, so the lookback
+ * violation observed in production genuinely succeeded on its second delivery.
+ * Dropping it on the first would have converted a self-healing retry into
+ * permanent loss. What that 400 cost is fixed by not GENERATING it — see
+ * `LOOKBACK_PLAN_SLACK_MS` and the fetch-time clamp in `processSegmentJob` —
+ * not by discarding the message that reports it.
+ *
+ * Structural check via `isNewsError`, not `instanceof`: these errors cross a
+ * package boundary, and a duplicated `@zammy/news-client` in the graph would
+ * make `instanceof` quietly false.
+ */
+const PERMANENT_FAILURE_KINDS: ReadonlySet<string> = new Set(["auth", "blocked"]);
+
+export function isPermanentIngestFailure(
+  error: unknown,
+): error is Error & { kind: string; provider: string } {
+  return isNewsError(error) && PERMANENT_FAILURE_KINDS.has(error.kind);
 }
 
 /** The publish half of the SDK, narrowed to what this needs so it can be faked. */
