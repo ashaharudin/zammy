@@ -17,8 +17,16 @@ import { createHash } from "node:crypto";
  */
 const MAX_KEYWORD_TERMS = 8;
 
-/** Cache-key alignment grid for the window (§6.2 step 4). */
-const SNAP_MS = 15 * 60 * 1000;
+/**
+ * Cache-key alignment grid for the window (§6.2 step 4).
+ *
+ * Exported because it is not only a cache-key grid any more: a background
+ * refresh whose span reaches `now` has to land on the same grid or its job's
+ * content address moves every millisecond and the queue's dedup stops working
+ * (`queueStorylineRefresh`). Same grid, one definition — two grids a quarter of
+ * an hour apart would be worse than either.
+ */
+export const WINDOW_SNAP_MS = 15 * 60 * 1000;
 
 export interface TimelineRequestInput {
   /** Raw keyword input. */
@@ -118,11 +126,11 @@ export function canonicalize(
   // never narrow it — a narrowed window would silently hide articles the user
   // explicitly requested.
   const to = new Date(
-    Math.ceil((input.to ?? options.now).getTime() / SNAP_MS) * SNAP_MS,
+    Math.ceil((input.to ?? options.now).getTime() / WINDOW_SNAP_MS) * WINDOW_SNAP_MS,
   );
   const defaultFrom = options.now.getTime() - options.lookbackDays * 86_400_000;
   const from = new Date(
-    Math.floor((input.from?.getTime() ?? defaultFrom) / SNAP_MS) * SNAP_MS,
+    Math.floor((input.from?.getTime() ?? defaultFrom) / WINDOW_SNAP_MS) * WINDOW_SNAP_MS,
   );
   if (from.getTime() >= to.getTime()) {
     errors.from = "from must be earlier than to";

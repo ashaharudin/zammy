@@ -13,6 +13,7 @@ import {
   readGroupStorylines,
   readStoryline,
   readStorylineDays,
+  readStorylineLanguage,
   readStorylineStats,
   refreshStoryline,
   resolveStoryline,
@@ -59,6 +60,8 @@ describe("storylines in storage", () => {
     storyTokens: string[];
     /** Omit to leave it a group of one — the trigger seeds it to its own id. */
     groupId?: string;
+    /** Omit for English; `null` for the empty field upstream often sends. */
+    language?: string | null;
   }): Promise<string> => {
     counter += 1;
     const row = await harness.db
@@ -70,7 +73,7 @@ describe("storylines in storage", () => {
         description: null,
         author: null,
         image_url: null,
-        language: "en",
+        language: input.language === undefined ? "en" : input.language,
         categories: [],
         source_category: [],
         source_domain: "fixture.example",
@@ -919,6 +922,60 @@ describe("storylines in storage", () => {
       // K bridges merge a pair, so bridges accumulate first and the arc sizes
       // follow. §2.6's runaway showed 1,913 → 10,282 bridges.
       expect(stats.bridges).toBe(1);
+    });
+  });
+
+  describe("the language an arc is written in", () => {
+    /**
+     * Read by the storyline-opened refresh (ADR-0017), which asks upstream for
+     * what the arc's own coverage says — its language included, because the
+     * reader's language chip can name one the arc is not in.
+     */
+    const arcWithLanguages = async (languages: Array<string | null>): Promise<string> => {
+      const first = await article({
+        published: "2026-03-01T12:00:00Z",
+        storyTokens: ["fausto"],
+        ...(languages[0] === undefined ? {} : { language: languages[0] }),
+      });
+      const storyline = await createProvisionalStoryline(harness.db, {
+        groupId: first,
+        timeZone: ZONE,
+      });
+      for (const language of languages.slice(1)) {
+        const next = await article({
+          published: "2026-03-01T13:00:00Z",
+          storyTokens: ["fausto"],
+          ...(language === undefined ? {} : { language }),
+        });
+        await attachGroup(harness.db, {
+          storylineId: storyline.id,
+          groupId: next,
+          timeZone: ZONE,
+        });
+      }
+      return storyline.id;
+    };
+
+    it("is the commonest one its member articles carry", async () => {
+      const storylineId = await arcWithLanguages(["ms", "en", "en"]);
+
+      // Modal, not the earliest article's: one mislabelled sighting must not
+      // decide what language the refresh asks in.
+      expect(await readStorylineLanguage(harness.db, storylineId)).toBe("en");
+    });
+
+    it("ignores the articles upstream left languageless", async () => {
+      const storylineId = await arcWithLanguages([null, null, "ms"]);
+
+      // A "no language" majority is a fact about upstream's metadata, not about
+      // the story, and the caller's own default is a better answer than none.
+      expect(await readStorylineLanguage(harness.db, storylineId)).toBe("ms");
+    });
+
+    it("is null when no member article names one at all", async () => {
+      const storylineId = await arcWithLanguages([null, null]);
+
+      expect(await readStorylineLanguage(harness.db, storylineId)).toBeNull();
     });
   });
 });

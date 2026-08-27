@@ -1,10 +1,16 @@
 import type { FastifyInstance } from "fastify";
-import { isStorylineView, TimelineQuery, TrendingQuery } from "@zammy/shared";
+import {
+  isStorylineView,
+  STORYLINE_UUID,
+  TimelineQuery,
+  TrendingQuery,
+} from "@zammy/shared";
 import { countTopicArticles, readCoverage, readTopic } from "@zammy/storage";
 import { repairedLanguages, repairedRegions } from "@zammy/currents-client";
 import { canonicalize, type ReferenceCodes } from "./canonical.js";
 import {
   InvalidCursorError,
+  queueStorylineRefresh,
   readStorylineView,
   readTimeline,
   type TimelineDeps,
@@ -119,6 +125,78 @@ export async function registerQueryRoutes(
       throw error;
     }
   });
+
+  /**
+   * POST /api/v1/storylines/:id/refresh (§9.1, ADR-0017) — opening a storyline
+   * queues one background top-up of the topic its own coverage names.
+   *
+   * A POST because it mints a topic and publishes to the queue, and a route of
+   * its own rather than a flag on the timeline read because the two answer
+   * different questions: the storyline view reads day slots by UUID and must
+   * not wait on ingestion, and this asks for ingestion and has nothing to
+   * render. The caller is fire-and-forget (`refreshStoryline` in the browser),
+   * so the body is for operators and tests — nothing on the page reads it.
+   *
+   * **A UUID is the whole request**: no keywords, no filters, no window. The
+   * planner derives every part of the ask from the arc's own coverage, and the
+   * reason it must is in `queueStorylineRefresh`. What is left here is the one
+   * thing the planner cannot do — validating the derived language against the
+   * reference lists, since only the route holds them (`loadReference`). A 400
+   * from that is therefore not a bad request at all but an arc whose stored
+   * language upstream no longer lists, which is worth surfacing rather than
+   * silently searching in the wrong language.
+   */
+  app.post<{ Params: { id: string } }>(
+    "/api/v1/storylines/:id/refresh",
+    async (request, reply) => {
+      const { id } = request.params;
+      if (!STORYLINE_UUID.test(id)) {
+        return reply.status(400).send({
+          error: { message: "invalid query", fields: { id: "must be a storyline UUID" } },
+        });
+      }
+
+      const reference = await loadReference(deps);
+      const codes = referenceCodes(reference);
+      const outcome = await queueStorylineRefresh(deps, {
+        storylineId: id,
+        // The window is the default lookback ending now — no `from`/`to` is
+        // accepted, because a background refresh is about the leading edge and
+        // an arbitrary window would let a caller aim the queue at any span of
+        // the archive it liked.
+        canonicalize: ({ keywords, language }) =>
+          canonicalize(
+            { q: keywords, language },
+            {
+              reference: codes,
+              defaultLanguage: options.defaultLanguage,
+              lookbackDays: deps.config.lookbackDays,
+              now: deps.now(),
+            },
+          ),
+      });
+
+      if (outcome.status === "unknown") {
+        return reply.status(404).send({ error: { message: "unknown storyline" } });
+      }
+      if (outcome.status === "invalid") {
+        return reply
+          .status(400)
+          .send({ error: { message: "invalid query", fields: outcome.errors } });
+      }
+      // 202 for every outcome that reached the planner, `fresh` included: the
+      // request was accepted and what it cost is a fact about coverage, not a
+      // different kind of answer. `queued: false` is the honest report of a
+      // storyline whose trailing edge is already inside the staleness tier.
+      return reply.status(202).send({
+        storyline: outcome.storylineId,
+        queued: outcome.status === "queued",
+        ...(outcome.status === "no_keywords"
+          ? { keywords: [] }
+          : { keywords: outcome.keywords, fingerprint: outcome.fingerprint }),
+      });
+    },
+  );
 
   app.get("/api/v1/reference", async (_request, reply) => {
     // Verbatim upstream CODES, junk categories included: filtering belongs

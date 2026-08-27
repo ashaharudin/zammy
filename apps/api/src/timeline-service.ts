@@ -20,6 +20,8 @@ import {
   readStorylineArticleCount,
   readStorylineTimelinePage,
   type StorylineSlotMember,
+  readStoryline,
+  readStorylineLanguage,
   resolveStoryline,
   readTopic,
   recordCoverage,
@@ -27,7 +29,8 @@ import {
   type Database,
   type StorylineSlot,
 } from "@zammy/storage";
-import type { CanonicalQuery } from "./canonical.js";
+import { WINDOW_SNAP_MS, type CanonicalizeResult, type CanonicalQuery } from "./canonical.js";
+import { storylineKeywords } from "./cloud-query.js";
 import { planHorizon, sliceSpan, subtractCoverage, type Span } from "./coverage-gaps.js";
 import {
   freshnessTier,
@@ -593,6 +596,224 @@ function earliest(members: readonly StorylineSlotMember[]): number {
     if (t < min) min = t;
   }
   return min;
+}
+
+/**
+ * What opening a storyline queued, as the route reports it (ADR-0017).
+ *
+ * A discriminated union rather than a boolean, because only two of the five are
+ * errors — a UUID nobody holds is a 404, a language upstream no longer lists is
+ * a 400 — and the other three are all a 202 that says what it did or did not
+ * spend. `fresh` in particular is not a failure: it is the freshness gate
+ * working.
+ */
+export type StorylineRefreshOutcome =
+  /** No such storyline, alias chain followed. A stale link, not a bad request. */
+  | { status: "unknown" }
+  /** Nothing the coverage says: no label and an empty profile (`storylineKeywords`). */
+  | { status: "no_keywords"; storylineId: string }
+  /** The derived keywords did not canonicalize — a bad FILTER, since the
+   * keywords are ours. Carries `canonicalize`'s own field errors. */
+  | { status: "invalid"; storylineId: string; errors: Record<string, string> }
+  /** Coverage reaches inside the staleness tier already: nothing to ask for. */
+  | { status: "fresh"; storylineId: string; fingerprint: string; keywords: string[] }
+  | {
+      status: "queued";
+      storylineId: string;
+      fingerprint: string;
+      keywords: string[];
+      job: SegmentJob;
+    };
+
+/**
+ * Opening a storyline queues one background top-up of the topic its own
+ * coverage names (§9.1, ADR-0017).
+ *
+ * This is the §6.3 planner with the reader taken out of it: mint the topic,
+ * diff the window against coverage, hand the newest gap to the queue, and
+ * return. No page is read, no cache is written, and — the load-bearing part —
+ * **no upstream call happens on this request path**. A click must not wait on
+ * ingestion it is not going to be shown; the caller is a fire-and-forget POST
+ * beside a route transition (`App.openStoryline`), and everything it enqueues is
+ * fetched at `"background"` priority behind the interactive reserve (§9.4).
+ *
+ * **At most ONE job per click**, and which one is the whole of the judgment:
+ *
+ *  - **A warm topic** — coverage reaching to within the staleness tier — queues
+ *    nothing. `freshnessTtlMs` is 60 s on a window ending now, so a storyline
+ *    two readers open in the same minute costs one enqueue, and the second
+ *    click is a Redis read and a 202.
+ *  - **A stale trailing edge** queues the §6.4 top-up, deduplicated by its
+ *    leading edge alone — the identity that exists precisely because a repeated
+ *    ask re-reads "now" and must not mint a fresh job each time.
+ *  - **A cold or gappy topic** queues the NEWEST gap slice and nothing else,
+ *    which is §9.4's "backfill is never automatic" applied to a click: an arc
+ *    with 30 days of missing history is worth one 7-day slice of freshness, not
+ *    five calls the reader never asked for. Deeper history is what searching
+ *    the words is for.
+ *
+ * **A segment's span is snapped onto the window grid, and that is not
+ * cosmetic.** `subtractCoverage` clamps its newest gap to `now` exactly and
+ * `sliceSpan` measures every boundary back from that edge, so the same coverage
+ * planned a second later yields different span endpoints — and `ingestJobId`
+ * derives a job's content address from exactly those endpoints. Unsnapped, every
+ * click mints a distinct job and spends its own upstream call, the queue's dedup
+ * defeated on precisely the surface most likely to be clicked twice. Snapped, a
+ * quarter-hour of clicks on one arc is one job. It costs at most the freshest
+ * quarter-hour of a cold topic's first fetch, which the next reader's own
+ * interactive fill covers anyway.
+ *
+ * Only this path needs it. The read path plans against the live clock and is
+ * right to — the reader is waiting on the newest gap, and what it defers is
+ * bounded by a deadline rather than by a click rate. The top-up branch needs no
+ * snapping either: its identity omits its upper edge by construction, for this
+ * same reason one layer down (§6.4). And FRESHNESS is judged against the real
+ * clock throughout — how stale a trailing edge is has nothing to do with a grid,
+ * and planning the sliver test on a snapped clock would have hidden every
+ * staleness younger than the last grid line.
+ *
+ * **Every part of the ask comes off the arc's own coverage, and none of it off
+ * the reader.** The keywords are what its label and profile say
+ * (`storylineKeywords`); the language is what its member articles are actually
+ * written in (`readStorylineLanguage`); there is no country and no category,
+ * because a storyline is not defined by either. Passing the reader's filter
+ * chips instead was the obvious shape and it is the wrong one: the cloud is
+ * built for English alone (§10.1), so a reader whose chip says Malay clicking an
+ * English cloud word would mint a Malay topic that cannot match the arc, and a
+ * background call that cannot match anything is exactly the spend §9.4 exists to
+ * refuse. It also means this route needs no request body and no query string —
+ * a UUID is the whole of the ask.
+ *
+ * `canonicalize` arrives as a callback because the ordering demands it: neither
+ * the keywords nor the language is known until the storyline is read, and
+ * validating a language against the reference lists is the route's job
+ * (`loadReference`) rather than the planner's. One trip through here keeps the
+ * sequence — resolve, derive, canonicalize, plan — in one place instead of
+ * splitting it across the route.
+ */
+export async function queueStorylineRefresh(
+  deps: TimelineDeps,
+  input: {
+    storylineId: string;
+    /**
+     * `language` is what the arc's coverage says, and `undefined` when it says
+     * nothing — which the route reads as "use the configured default", the same
+     * meaning an omitted `?language=` has on the timeline read.
+     */
+    canonicalize: (input: {
+      keywords: string;
+      language: string | undefined;
+    }) => CanonicalizeResult;
+  },
+): Promise<StorylineRefreshOutcome> {
+  // Aliases first: a merged-away UUID is still on every page that was rendered
+  // before the merge, and the arc worth refreshing is the survivor. Its own row
+  // is the one holding a profile — `mergeStorylines` empties the loser's.
+  const storylineId = await resolveStoryline(deps.db, input.storylineId);
+  if (storylineId === null) return { status: "unknown" };
+  const storyline = await readStoryline(deps.db, storylineId);
+  if (storyline === undefined) return { status: "unknown" };
+
+  const keywords = storylineKeywords({
+    label: storyline.label,
+    profileTokens: storyline.profileTokens,
+  });
+  if (keywords === null) {
+    deps.metrics?.storylineRefresh("no_keywords");
+    return { status: "no_keywords", storylineId };
+  }
+
+  const language = await readStorylineLanguage(deps.db, storylineId);
+  const canonical = input.canonicalize({ keywords, language: language ?? undefined });
+  if (!canonical.ok) {
+    deps.metrics?.storylineRefresh("invalid");
+    return { status: "invalid", storylineId, errors: canonical.errors };
+  }
+  const query = canonical.query;
+  const now = deps.now();
+
+  // The topic exists from here on, for the same reason the read path mints it
+  // before planning: a queued segment carries only the fingerprint, and the
+  // topic row is where the consumer recovers what it means (§9.1). It also
+  // counts the hit, which is the honest record — a click IS demand, and it is
+  // what keeps this topic ahead of retention's idle cutoff (§7.5).
+  await upsertTopic(deps.db, {
+    fingerprint: query.fingerprint,
+    keywords: query.keywords,
+    language: query.language,
+    country: query.country,
+    category: query.category,
+  });
+
+  const maxSpanMs = deps.currents.limits.maxRangeDays * 86_400_000;
+  const covered = await readCoverage(deps.db, query.fingerprint);
+
+  const settled = {
+    storylineId,
+    fingerprint: query.fingerprint,
+    keywords: query.keywords,
+  };
+
+  // Pre-sliced for the sliver test, exactly as the read path plans it (§6.4):
+  // the shape "one gap starting at max(coverage.upper)" only means staleness
+  // when that gap fits a single call. A fortnight of missing trailing history
+  // arrives as several slices, fails the test, and is treated as the missing
+  // HISTORY it is rather than as a stale edge — which here means one newest
+  // slice below rather than a top-up job the consumer would fan out into three
+  // upstream calls off one click.
+  const sliced = subtractCoverage(query.window, covered, {
+    now,
+    lookbackDays: deps.config.lookbackDays,
+    maxSpanMs,
+  });
+  const sliver = trailingSliver(query.window, sliced, covered, now);
+  if (sliver) {
+    if (now.getTime() - sliver.from.getTime() <= freshnessTtlMs(query.window.to, now)) {
+      deps.metrics?.storylineRefresh("fresh");
+      return { status: "fresh", ...settled };
+    }
+    const job: SegmentJob = {
+      ...segmentJob(query.fingerprint, sliver, 1),
+      kind: "topup",
+    };
+    await deps.queue.enqueueSegment(job);
+    deps.metrics?.storylineRefresh("queued");
+    return { status: "queued", ...settled, job };
+  }
+
+  // The newest gap UNSLICED, which is the only version of it whose lower edge is
+  // a fact about coverage: `sliceSpan` counts back from `now`, so a slice's own
+  // `from` moves with the clock even when nothing about the coverage did.
+  const [gap] = subtractCoverage(query.window, covered, {
+    now,
+    lookbackDays: deps.config.lookbackDays,
+  });
+  if (gap === undefined) {
+    // Nothing to ask for: the window is covered to the present. Not reachable
+    // through the sliver branch above, which needs a gap to test the shape of.
+    deps.metrics?.storylineRefresh("fresh");
+    return { status: "fresh", ...settled };
+  }
+
+  // Onto the grid, and BOTH edges — the note above says why. `to` snaps down to
+  // the last grid line; `from` is then measured back from it, so a cold topic's
+  // 7-day slice has two fixed endpoints instead of two that follow the clock.
+  // The gap's own start still wins where it is later, or the ask would reach
+  // below the gap into coverage already recorded.
+  const to = new Date(Math.floor(gap.to.getTime() / WINDOW_SNAP_MS) * WINDOW_SNAP_MS);
+  const from = new Date(Math.max(gap.from.getTime(), to.getTime() - maxSpanMs));
+  if (to.getTime() <= from.getTime()) {
+    // The gap does not reach back past the last grid line — an interior hole
+    // narrower than the grid, or a trailing edge the sliver test declined. The
+    // first click past the next grid line asks for it.
+    deps.metrics?.storylineRefresh("fresh");
+    return { status: "fresh", ...settled };
+  }
+
+  const job = segmentJob(query.fingerprint, { from, to }, 1);
+  await deps.queue.enqueueSegment(job);
+  deps.metrics?.storylineRefresh("queued");
+  return { status: "queued", ...settled, job };
 }
 
 /**

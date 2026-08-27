@@ -148,3 +148,41 @@ function dedupeBy<T>(items: readonly T[], key: (item: T) => string): T[] {
     return true;
   });
 }
+
+/**
+ * The keywords a storyline is worth SEARCHING for, for a caller that has a
+ * storyline row rather than a cloud word — the storyline-opened refresh
+ * (ARCHITECTURE 9.1, ADR-0017).
+ *
+ * `cloudQuery` above is the whole of the judgment and this adds none: the two
+ * words a label's own coverage says are as good an ask for a background top-up
+ * as for a click, and deriving them twice by two rules would let the topic a
+ * click mints drift away from the topic the cloud's own placeholder proposes —
+ * the same fingerprint is the point (§6.2).
+ *
+ * What it adds is the case the cloud cannot reach: a **label-less** storyline.
+ * The cloud filters those out — an unlabelled arc has no word to draw — but the
+ * timeline gutter renders one label-less rather than not at all (ADR-0011,
+ * Labels), so it is clickable, and a click that queues nothing is a click that
+ * lets exactly the arcs whose labelling failed go stale. With no label there is
+ * no naming to ground, so the profile's own tokens are the whole vocabulary:
+ * two of them, ARBITRARILY which two (`refreshProfileTokens` stores the profile
+ * alphabetically), for the reason `cloudQuery`'s own profile-only fallback
+ * tolerates the same arbitrariness — there is no subject to name, and any two
+ * tokens the coverage says beat asking upstream for nothing.
+ *
+ * `null` — never an empty string — for a storyline with neither: no label, and
+ * a profile that is empty because the arc was merged away (`mergeStorylines`
+ * clears it) or never promoted. Nothing to ask upstream, and `canonicalize`
+ * would answer a 400 on a keyword the caller did not choose.
+ */
+export function storylineKeywords(input: {
+  label: string | null;
+  profileTokens: readonly string[];
+}): string | null {
+  if (input.label !== null) {
+    return cloudQuery({ label: input.label, profileTokens: input.profileTokens });
+  }
+  const tokens = [...new Set(input.profileTokens)].slice(0, CLOUD_QUERY_TERMS);
+  return tokens.length > 0 ? tokens.join(" ") : null;
+}

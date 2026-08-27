@@ -99,6 +99,53 @@ export async function fetchTimeline(
   return TimelinePage.parse(await response.json());
 }
 
+/**
+ * Where a storyline's background refresh is asked for (ADR-0017).
+ *
+ * A UUID and nothing else, and that absence is the point worth pinning: no
+ * keywords and no filter chips travel. Both are facts about the ARC that only
+ * the server holds — the headline vocabulary its label has to be grounded
+ * against (the reason `TrendingStoryline.query` is on the wire at all), and the
+ * language its articles are actually written in. The reader's own chips would be
+ * the wrong ask: the cloud is English-only, so a Malay chip clicking an English
+ * word would aim the refresh at a language the arc is not in.
+ */
+export function storylineRefreshPath(storylineId: string): string {
+  return `/api/v1/storylines/${encodeURIComponent(storylineId)}/refresh`;
+}
+
+/**
+ * Ask for one background top-up of what this storyline's coverage says, and do
+ * not wait for it (§9.1, ADR-0017).
+ *
+ * **Fire-and-forget, deliberately, in both directions.** Nothing on the page
+ * reads the response: opening a storyline renders stored day slots by UUID, and
+ * whatever this fetches lands in the archive for the NEXT read rather than in
+ * the view the reader is about to see. So there is no await here, no state, no
+ * spinner, and — the part that matters — no failure that a reader should ever
+ * be shown. A 404 on a stale UUID, a 429 from the per-IP ceiling, an offline
+ * tab: all of them mean the arc goes un-refreshed, which is exactly what
+ * happened before this existed.
+ *
+ * `keepalive` because the click that triggers this is also a route transition,
+ * and a reader who closes the tab in the same breath should still have asked.
+ *
+ * Not memoized per storyline, on purpose. The freshness decision belongs to the
+ * server, which is the only side that knows the topic's coverage: it answers
+ * `queued: false` inside the staleness tier (60 s on a live window), and the
+ * queue deduplicates by job identity behind that. A client-side "already asked"
+ * set would have to guess that TTL, and would guess it wrong the moment a
+ * reader comes back to a storyline an hour later.
+ */
+export function refreshStoryline(storylineId: string): void {
+  void fetch(storylineRefreshPath(storylineId), {
+    method: "POST",
+    keepalive: true,
+  }).catch(() => {
+    // See above: an un-refreshed arc is the status quo, never a reader's problem.
+  });
+}
+
 export async function fetchTrending(
   language: string,
   signal: AbortSignal,

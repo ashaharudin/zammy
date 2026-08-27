@@ -71,6 +71,13 @@ export class Metrics {
     registers: [this.registry],
   });
 
+  private readonly storylineRefreshes = new Counter({
+    name: "zammy_storyline_refreshes_total",
+    help: "Storyline opens by what the background refresh queued (ADR-0017)",
+    labelNames: ["result"] as const,
+    registers: [this.registry],
+  });
+
   constructor(options: { quota?: () => Promise<QuotaView> } = {}) {
     const quota = options.quota;
     if (quota) {
@@ -116,6 +123,21 @@ export class Metrics {
 
   truncatedSegment(): void {
     this.truncatedSegments.inc();
+  }
+
+  /**
+   * What a storyline click contributed to the demand-driven loop (ADR-0017).
+   *
+   * The ratio to watch is `queued / (queued + fresh)`: this exists because
+   * ADR-0016 took the loop's cold-start contribution away and this gave it back,
+   * so "how often does an open actually spend a call" is the question. All
+   * `fresh` means the freshness gate is doing its job on a warm archive; all
+   * `queued` on a live window would mean the gate is not holding and every
+   * click is buying an upstream call. `no_keywords` is a labelling failure
+   * surfacing here — an arc with neither a label nor a profile.
+   */
+  storylineRefresh(result: "queued" | "fresh" | "no_keywords" | "invalid"): void {
+    this.storylineRefreshes.inc({ result });
   }
 }
 

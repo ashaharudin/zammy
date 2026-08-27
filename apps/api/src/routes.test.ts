@@ -151,6 +151,60 @@ describe("GET /api/v1/timeline", () => {
   });
 });
 
+describe("POST /api/v1/storylines/:id/refresh", () => {
+  interface RefreshBody {
+    storyline: string;
+    queued: boolean;
+    keywords: string[];
+    fingerprint?: string;
+  }
+
+  const refresh = (id: string): string => `/api/v1/storylines/${id}/refresh`;
+
+  it("accepts a storyline a reader opened and says what it queued", async () => {
+    await setup();
+    // A read is how storylines come to exist here: grouping and its storyline
+    // layer run on the write path (§14.3), so the fixture's own articles are
+    // what a reader would have clicked.
+    const read = await app.inject({ method: "GET", url: `${TIMELINE}?q=climate&${QS}` });
+    const storylineId = (TimelinePage.parse(read.json()).items[0] as { storylineId: string })
+      .storylineId;
+
+    const response = await app.inject({ method: "POST", url: refresh(storylineId) });
+
+    expect(response.statusCode).toBe(202);
+    const body = response.json() as RefreshBody;
+    expect(body.storyline).toBe(storylineId);
+    // Whatever it decided, it decided it from the arc's own vocabulary — the
+    // request carried a UUID and nothing else.
+    expect(body.keywords.length).toBeGreaterThan(0);
+    expect(body.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("is a 404 for a UUID this database has never held", async () => {
+    await setup();
+
+    const response = await app.inject({
+      method: "POST",
+      url: refresh("1b671a64-40d5-491e-99b0-da01ff1f3341"),
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("refuses anything that is not a storyline UUID", async () => {
+    await setup();
+
+    // `?storyline=` stopped accepting a bigint with migration 0012 and so does
+    // this: a label's words are never an identity (ADR-0011, ADR-0016).
+    const response = await app.inject({ method: "POST", url: refresh("12345") });
+
+    expect(response.statusCode).toBe(400);
+    const body = response.json() as { error: { fields?: Record<string, string> } };
+    expect(body.error.fields?.id).toBeDefined();
+  });
+});
+
 describe("GET /api/v1/reference", () => {
   interface ReferenceBody {
     languages: Record<string, string>;
