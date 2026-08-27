@@ -47,8 +47,14 @@
   }
 }
 
+/*
+ * Dark tokens apply either when the OS prefers dark and the reader has not
+ * overridden it (the media query, guarded against an explicit light choice),
+ * or when the reader has explicitly picked dark via the toggle (ThemeToggle,
+ * data-theme set by ThemeProvider) regardless of what the OS prefers.
+ */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #121212;
     --surface: #1c1c1c;
     --surface-translucent: rgba(28, 28, 28, 0.93);
@@ -62,6 +68,21 @@
     --activity: #56c4c6;
     --shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: #121212;
+  --surface: #1c1c1c;
+  --surface-translucent: rgba(28, 28, 28, 0.93);
+  --border: #2a2a2a;
+  --fg: #ececec;
+  --fg-muted: #b0b0b0;
+  --fg-faint: #7a7a7a;
+  --chip-bg: #262626;
+  --rail: #3a3a3a;
+  --amber: #caa53d;
+  --activity: #56c4c6;
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
 }
 
 * {

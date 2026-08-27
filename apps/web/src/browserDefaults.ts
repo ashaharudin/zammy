@@ -49,10 +49,11 @@ export function defaultCountry(
 }
 
 /**
- * Where the language default comes from. The timeline follows the reader's own
- * browser; the hero is fixed to English, because the cloud beneath its chips is
- * built from English coverage and would go thin the moment it followed a
- * browser upstream barely covers.
+ * Where the language default comes from: the reader's own browser's most
+ * preferred supported language, or fixed to English regardless of it. Both the
+ * hero and the command bar are fixed to English for now — there is no chip to
+ * pick a language with — but the browser-following policy stays here for when
+ * one returns.
  */
 export type LanguagePolicy = "browser" | "english";
 

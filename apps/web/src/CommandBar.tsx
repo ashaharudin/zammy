@@ -9,7 +9,7 @@ import { upstreamHealthRecord } from "./upstreamHealth.js";
 /**
  * The persistent chrome once a topic is open: prompt + query, and underneath a
  * meta row carrying the response's asOf stamp (§8.1) followed by the topic's
- * filter chips — location, language, category.
+ * filter chips — location and category.
  *
  * The chips replaced a flag icon and a servedFrom/degraded/stale readout. The
  * icon said less than a word does, and the freshness readout was operational
@@ -57,14 +57,15 @@ export function CommandBar({
   }, [topic]);
 
   useUpstreamHealthLog(page);
-  // The reader's own browser, on a topic whose URL states no filters (§8.1).
+  // The reader's own browser for country, English for language (§8.1), on a
+  // topic whose URL states no filters.
   //
   // NOT in the storyline view, which has no filters to default: it is one
   // storyline's own coverage, and narrowing it by language would hide part of
   // the story. Found by typing into the view and watching the search not
   // happen — the hook was navigating (replace) to add `lang`/`country`, which
   // changed `topic`, which reset the input from under the reader mid-keystroke.
-  useFilterDefaults(view ? null : topic, reference, "browser", (filters) =>
+  useFilterDefaults(view ? null : topic, reference, "english", (filters) =>
     onSearch({ ...topic, ...filters }, { replace: true }),
   );
 

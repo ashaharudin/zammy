@@ -1,15 +1,14 @@
 import type { Reference, TopicFilters } from "./api.js";
 
 /**
- * The command bar's filter chips (§8.1): the topic's location, language and
- * category, each a label to show and the list it can be changed to.
+ * The command bar's filter chips (§8.1): the topic's location and category,
+ * each a label to show and the list it can be changed to.
  *
  * Codes travel, names are shown (§2) — but only where a name helps. "CA" says
- * nothing to a reader, so the location chip reads "Canada"; the language chip
- * keeps the code, which is short, familiar and what the URL carries.
+ * nothing to a reader, so the location chip reads "Canada".
  */
 
-export type ChipKind = "country" | "language" | "category";
+export type ChipKind = "country" | "category";
 
 export interface ChipOption {
   /** undefined is the unfiltered choice: any country, any language, any category. */
@@ -35,15 +34,6 @@ export function filterChips(topic: TopicFilters, reference: Reference | undefine
       label: topic.country ? (nameByCode.get(topic.country) ?? topic.country) : ANY_COUNTRY,
       code: topic.country,
       options: named(ANY_COUNTRY, regions),
-    },
-    {
-      kind: "language",
-      label:
-        topic.language === undefined || topic.language === ANY_LANGUAGE
-          ? "any language"
-          : topic.language,
-      code: topic.language,
-      options: named("any language", reference?.languages ?? {}, ANY_LANGUAGE),
     },
     {
       kind: "category",
