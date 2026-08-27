@@ -1,5 +1,5 @@
 import { singular } from "./grouping.js";
-import { trimWordPunctuation } from "./headline-tokens.js";
+import { foldDiacritics, trimWordPunctuation } from "./headline-tokens.js";
 
 /**
  * The label-agreement merge (ADR-0011's merge repair, reached through the name
@@ -189,7 +189,11 @@ export function labelWordForms(label: string): LabelWord[] {
     .split(/\s+/)
     .map(trimWordPunctuation)
     .filter((word) => word.length > 0)
-    .map((surface) => ({ surface, folded: singular(surface) }));
+    // `foldDiacritics` on the corpus side only, never on the surface: the corpus
+    // spelling has to meet `story_tokens`, which drops accents (the labeler
+    // writes "Nino" where the headlines say "Niño"), while the surface is read
+    // by a reader and sent upstream, so it keeps the label's own spelling.
+    .map((surface) => ({ surface, folded: singular(foldDiacritics(surface)) }));
 }
 
 /** The words of a label, folded the way `normalizeLabel` folds them. */

@@ -4,6 +4,7 @@ import { RawSighting, normalizeSightings } from "@zammy/currents-client";
 import {
   contentTokenPairs,
   contentTokens,
+  foldDiacritics,
   isVerb,
   properNounEvidence,
   stripSourceAttribution,
@@ -114,6 +115,46 @@ describe("a typographic apostrophe does not split a contraction (issue #101)", (
 
   it("keeps a curly-quoted name whole (Xi'an)", () => {
     expect(contentTokens("Xi’an protest grows")).toEqual(["xi'an", "protest", "grows"]);
+  });
+});
+
+describe("a Latin accent does not split a name from itself (tokenizer version 8)", () => {
+  // Measured on the dev archive (2026-08-27): 519 of 32,279 titles carry a
+  // Latin mark, and the corpus held `niño` on 96 articles while thirteen live
+  // arcs were labelled "El Nino ..." — a name that could not reach its own
+  // coverage.
+  it("folds the corpus spelling to the one a keyboard produces", () => {
+    expect(contentTokens("Super El Niño hits US states")).toEqual(
+      contentTokens("Super El Nino hits US states"),
+    );
+    expect(contentTokens("When will super El Niño hit")).toContain("nino");
+  });
+
+  it("folds every mark on one letter, not just the first", () => {
+    // Vietnamese stacks two: base + circumflex + acute. A single-mark strip
+    // would leave the second behind and the token still would not match.
+    expect(foldDiacritics("tiếng")).toBe("tieng");
+  });
+
+  it("leaves a name's INTERNAL punctuation alone while folding its accent", () => {
+    // "Pied-à-Terre" is one token by the identifier rule (§10.2) and the fold
+    // must not become a second reason to shred it.
+    expect(foldDiacritics("pied-à-terre")).toBe("pied-a-terre");
+  });
+
+  it("touches no non-Latin script, where a mark is not decoration", () => {
+    // Devanagari's virama is \p{Mn} and changes what a word SAYS; Hangul
+    // decomposes into jamo that are not marks at all, so a fold that forgot to
+    // recompose would hand back a different string than it was given.
+    expect(foldDiacritics("हिन्दी")).toBe("हिन्दी");
+    expect(foldDiacritics("한국")).toBe("한국");
+    expect(foldDiacritics("العربية")).toBe("العربية");
+  });
+
+  it("is idempotent, so a re-derived row is a stable row", () => {
+    // `regroup --tokens-only` re-runs this over rows it may have folded before.
+    const once = foldDiacritics("québécois");
+    expect(foldDiacritics(once)).toBe(once);
   });
 });
 

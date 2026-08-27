@@ -66,7 +66,8 @@ try {
   );
 
   console.log(
-    `stale: ${result.stale}  re-tokenized: ${result.retokenized}  regrouped: ${result.regrouped}  ` +
+    `stale: ${result.stale}  re-tokenized: ${result.retokenized}  ` +
+      `profiles refreshed: ${result.refreshed}  regrouped: ${result.regrouped}  ` +
       `merged: ${result.merged}`,
   );
 } finally {

@@ -1,7 +1,7 @@
 import { singular } from "./grouping.js";
 import { storyTokens } from "./storyline.js";
 import { bigramLabel } from "./bigram-label.js";
-import { trimWordPunctuation } from "./headline-tokens.js";
+import { foldDiacritics, trimWordPunctuation } from "./headline-tokens.js";
 
 /**
  * The storyline LABEL, decided (ADR-0011, "Labels").
@@ -179,12 +179,16 @@ export function validateLabel(
     members.flatMap((member) => storyTokens(member.title, member.description)),
   );
   // `vocabulary` is folded the way `contentTokens` folds a corpus word: edge
-  // punctuation and a possessive `'s` stripped, THEN singularized. Folding
-  // with `singular` alone leaves a stranded apostrophe — `singular("dillard's")`
-  // is `"dillard'"` — so a possessive proper noun could never ground a label.
+  // punctuation and a possessive `'s` stripped and Latin diacritics dropped,
+  // THEN singularized. Folding with `singular` alone leaves a stranded
+  // apostrophe — `singular("dillard's")` is `"dillard'"` — so a possessive
+  // proper noun could never ground a label; leaving the accents on lets the
+  // model's "Nino" miss a corpus that says `niño`, which grounds or refuses a
+  // label on whatever its OTHER words happen to be (`foldDiacritics`).
   const grounded = words.some(
     (word) =>
-      /^\p{Lu}/u.test(word) && vocabulary.has(singular(trimWordPunctuation(word.toLowerCase()))),
+      /^\p{Lu}/u.test(word) &&
+      vocabulary.has(singular(foldDiacritics(trimWordPunctuation(word.toLowerCase())))),
   );
   if (!grounded) return null;
 

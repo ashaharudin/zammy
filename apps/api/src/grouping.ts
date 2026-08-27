@@ -77,16 +77,30 @@ const MIN_SHARED_TOKENS = 2;
  *       reads too. `isAttribution` refuses a trailing segment holding a verb
  *       form, so `homer` entering the lexicon stops "Andrea Cline Obituary -
  *       Homer Glen, IL" being peeled and the town survives into the tokens.
+ *   8 — Latin diacritics dropped (`foldDiacritics`), so a name the corpus
+ *       accents and a label that does not are one word. Rows below 8 hold
+ *       `niño`, `türkiye`, `montréal`; a label saying "Nino" could not reach
+ *       any of them, which cost `cloudQuery` the arc's own naming word, cost a
+ *       reader typing "nino" the arc entirely, and split the label-agreement
+ *       merge on an accent the labeler applies inconsistently to the same name.
  *
- * `pnpm regroup --tokens-only` is not the whole repair for 6, because that
- * version changed `story_tokens` rather than only `title_tokens`. Three steps,
+ * `pnpm regroup --tokens-only` is not the whole repair for 6 or 8, because both
+ * versions changed `story_tokens` rather than only `title_tokens`. Four steps,
  * in order, and each one's absence is silent:
  *
- *   1. `pnpm regroup --tokens-only` — re-derives the stored tokens.
+ *   1. `pnpm regroup --tokens-only` — re-derives the stored tokens, and (since
+ *      version 8) the `profile_tokens` of every arc holding a retokenized row,
+ *      which is materialized from them and which nothing else recomputes
+ *      without a membership change.
  *   2. `pnpm story:df --rebuild` — `recordGrouping` writes `story_tokens` but
  *      never `story_token_days` (docs/TRAILING-CORPUS.md), so every df the
  *      linker reads still counts the peeled tokens until this runs.
- *   3. `pnpm backfill:storylines --restart` — ADR-0011 refuses to split an
+ *   3. `pnpm backfill:label-words` — `label_words` is materialized from `label`
+ *      through the same fold, so a fold change leaves it behind and the
+ *      label half of the surfacing test (ADR-0011, amended) keeps the old
+ *      spelling. Non-destructive: it recomputes a derivation and touches no
+ *      label text and no membership.
+ *   4. `pnpm backfill:storylines --restart` — ADR-0011 refuses to split an
  *      existing arc, so arcs already built on the old vocabulary can only be
  *      replayed. `--restart` mints new UUIDs and discards the label inventory
  *      with them; the cloud is empty until a label campaign runs, and the
@@ -94,12 +108,51 @@ const MIN_SHARED_TOKENS = 2;
  *
  * **Version 7 pays step 1 only, deliberately.** Its backlog is ONE article of
  * 28,294 distinct titles — the measured delta, not an estimate. Step 2 would be
- * a rounding error on three tokens' df, and step 3 is not payable at all:
+ * a rounding error on three tokens' df, and step 4 is not payable at all:
  * `--restart` discards the label inventory, which is the thing version 7 was
  * made to improve. It is versioned anyway because the rule above is what keeps
  * a materialized derivation honest, and a row nobody counted is the failure the
  * version exists to prevent. Say which steps a bump pays for; do not leave the
  * chain looking whole when it was not run.
+ *
+ * **Version 8 pays steps 1–3 and declines step 4**, measured against the dev
+ * archive on 2026-08-27 (32,279 articles, 14,670 live storylines):
+ *
+ *   - step 1 — **513 rows' `story_tokens`** and **257 rows' `title_tokens`**
+ *     change; 519 titles or descriptions carry a Latin mark at all. 287 distinct
+ *     tokens fold, led by `niño` (96 articles), `türkiye` (27) and `fréchette`
+ *     (26). It also refreshes the **188 arcs whose `profile_tokens` change** —
+ *     which is why the refresh had to join this step rather than wait for a
+ *     membership change: with `story_tokens` folded and a profile not, an
+ *     accented search that used to match an arc would have stopped matching it.
+ *
+ *     **The number that makes the case is 108.** Of the 287 folding tokens, 108
+ *     fold onto a spelling the corpus ALREADY HOLDS — `atlético`/`atletico`,
+ *     `julián`/`julian`, `álvarez`/`alvarez`, `sánchez`/`sanchez`,
+ *     `québec`/`quebec`, `türkiye`/`turkiye`, `bogotá`/`bogota` — so the split
+ *     was never only "the labeler versus the corpus". A hundred and eight names
+ *     are two words INSIDE the vocabulary today, which means grouping's Jaccard,
+ *     the linker's link mass and the df below all count them as unrelated.
+ *
+ *     And **nothing is lost**: of 45,982 distinct story tokens, zero fold into a
+ *     stopword or into anything `keepable` refuses. That was the risk worth
+ *     measuring rather than reasoning about — a fold that quietly deleted
+ *     vocabulary would be worse than the split it repairs.
+ *   - step 2 — the split df is the reason, not the volume: `niño` and `nino`
+ *     counted as two words each understate the other's document frequency, and
+ *     rarity is exactly what the anchor rule reads.
+ *   - step 3 — **22 arcs' `label_words`** change, and **20 label words are
+ *     regained**: words the arc's own profile held only in accented form, so
+ *     grounding could not see them. Thirteen are El Niño arcs; the rest are
+ *     "Volker Türk UN", "Sánchez Ceuta Crisis", "Pokémon TCG Deals", "Quebec
+ *     Missing Woman", "Gonzalez Mexico Cartel Bounty", "Mamdani Pied-à-Terre
+ *     Tax". That last one is also the whole case for the fold in one line: it
+ *     stands beside "Mamdani Pied-a-Terre Tax", a second arc the model named
+ *     identically without the accent, and the two do not agree today. Label
+ *     agreement goes from 21 components over 51 arcs to 22 over 53.
+ *   - step 4 — declined for version 7's reason, only more so: what this fold
+ *     improves is mostly the label layer (grounding, agreement, `cloudQuery`),
+ *     and `--restart` discards the label inventory to get it.
  *
  * A LEXICON change reaching the tokenizer at all is the coupling version 6
  * introduced and did not say out loud: the peel decides what a title's last
@@ -107,7 +160,7 @@ const MIN_SHARED_TOKENS = 2;
  * something. Anything touching verb-lexicon.ts therefore has to be diffed
  * against the archive's titles before it can claim to be label-only.
  */
-export const TOKENIZER_VERSION = 7;
+export const TOKENIZER_VERSION = 8;
 
 /**
  * The distinct content-bearing tokens of a headline (§10.2's tokenizer),

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { singular } from "./grouping.js";
 import { properNounEvidence } from "./headline-tokens.js";
 import {
+  labelKey,
+  labelWordForms,
   labelWords,
   normalizeLabel,
   planLabelMerge,
@@ -62,6 +64,24 @@ describe("normalizeLabel", () => {
       "hormuz",
       "crisi",
     ]);
+  });
+
+  it("folds a Latin accent, so the labeler's inconsistency is not a disagreement", () => {
+    // The measured missed merge (dev archive, 2026-08-27): two live arcs the
+    // model named identically apart from one grave accent, which no comparison
+    // in the system could see through. Agreement went 21 components/51 arcs to
+    // 22/53 on this pair alone.
+    expect(labelKey("Mamdani Pied-à-Terre Tax")).toBe(labelKey("Mamdani Pied-a-Terre Tax"));
+    expect(normalizeLabel("El Niño Quiet")).toBe(normalizeLabel("El Nino Quiet"));
+  });
+
+  it("folds the CORPUS spelling and keeps the reader's", () => {
+    // The other half of the "gaza crisi" lesson: `folded` meets `story_tokens`,
+    // `surface` is shown in the hero placeholder and sent upstream as a search
+    // term. A placeholder proposing "nino" for an arc whose every headline says
+    // Niño is the same mistake one step smaller.
+    const [word] = labelWordForms("Niño");
+    expect(word).toEqual({ surface: "niño", folded: "nino" });
   });
 });
 

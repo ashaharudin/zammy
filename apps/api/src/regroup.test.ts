@@ -1,9 +1,16 @@
 import { randomBytes } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { deriveDedupKey, type Sighting } from "@zammy/currents-client";
-import { ingestSightings, recordGrouping, upsertTopic } from "@zammy/storage";
+import {
+  createProvisionalStoryline,
+  ingestSightings,
+  readStoryline,
+  recordGrouping,
+  upsertTopic,
+} from "@zammy/storage";
 import { regroup } from "./regroup.js";
-import { TOKENIZER_VERSION } from "./grouping.js";
+import { headlineTokens, TOKENIZER_VERSION } from "./grouping.js";
+import { storyTokens } from "./storyline.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
 
 /**
@@ -108,6 +115,68 @@ describe("regroup", () => {
       expect(row.title_tokens).toContain("killer"); // was `killers`
       expect(row.title_tokens).not.toContain("killers");
     }
+  });
+
+  it("re-derives the profile of every arc holding a retokenized row", async () => {
+    // Version 8's fold made `story_tokens` say `nino` where they said `niño`,
+    // and `profile_tokens` is materialized from them. Nothing else recomputes
+    // it without a membership change, so a fold that stopped at the article
+    // layer left the two disagreeing — and an accented search that used to
+    // match an arc would have stopped matching it.
+    const ids = await seedStaleRows();
+    const [first] = await groupsOf(ids);
+    const arc = await createProvisionalStoryline(harness.deps.db, {
+      groupId: first!.group_id,
+      timeZone: "UTC",
+    });
+    // The profile as an older vocabulary left it: the word the fold changes.
+    await harness.deps.db
+      .updateTable("storylines")
+      .set({ profile_tokens: ["killers"] })
+      .where("id", "=", arc.id)
+      .execute();
+
+    const result = await regroup(deps(), { days: 1, tokensOnly: true, now: () => NOW });
+
+    expect(result.refreshed).toBeGreaterThan(0);
+    const profile = (await readStoryline(harness.deps.db, arc.id))?.profileTokens ?? [];
+    expect(profile).toContain("killer");
+    expect(profile).not.toContain("killers");
+  });
+
+  it("refreshes nothing when a bumped row's tokens come out identical", async () => {
+    // A version bump marks the WHOLE window stale while a fold moves a fraction
+    // of it (version 8: 513 rows of 32,279). Refreshing a profile per row looked
+    // at rather than per row moved cost 14,670 rebuilds to repair 188.
+    harness = await createTestHarness({}, NOW);
+    const fingerprint = randomBytes(32).toString("hex");
+    await upsertTopic(harness.deps.db, { fingerprint, keywords: ["harper"], language: "en" });
+    const ingested = await ingestSightings(harness.deps.db, {
+      timeZone: "UTC",
+      fingerprint,
+      sightings: [sighting("bbc.co.uk", BBC, "2026-08-11T21:21:00.000Z")],
+    });
+    // Behind the version clock, but tokenized by the CURRENT rules — the shape
+    // every row in the window has after a bump that does not touch its words.
+    for (const article of ingested.createdArticles) {
+      await recordGrouping(harness.deps.db, {
+        articleId: article.id,
+        titleTokens: headlineTokens(article.title),
+        storyTokens: storyTokens(article.title, article.description),
+        tokensVersion: TOKENIZER_VERSION - 1,
+        groupId: null,
+      });
+    }
+    const [row] = await groupsOf(ingested.createdArticles.map((a) => a.id));
+    await createProvisionalStoryline(harness.deps.db, {
+      groupId: row!.group_id,
+      timeZone: "UTC",
+    });
+
+    const result = await regroup(deps(), { days: 1, tokensOnly: true, now: () => NOW });
+
+    expect(result.retokenized).toBe(1);
+    expect(result.refreshed).toBe(0);
   });
 
   it("changes no groupings at all in --tokens-only mode", async () => {

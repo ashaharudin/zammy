@@ -3,8 +3,10 @@ import {
   countStaleTokenArticles,
   mergeGroups,
   readGroupCandidates,
+  readGroupStorylines,
   readStaleTokenArticles,
   recordGrouping,
+  refreshStorylineDerivations,
   type Database,
   type StoredArticle,
 } from "@zammy/storage";
@@ -20,7 +22,12 @@ import { storyTokens } from "./storyline.js";
  *
  *  1. **re-derive tokens** for every row behind `TOKENIZER_VERSION` — headline
  *     AND story tokens, one version clock for both — so candidates stop being
- *     compared against the vocabulary of an older tokenizer;
+ *     compared against the vocabulary of an older tokenizer, and then
+ *     **re-derive the profile** of every storyline holding a row whose tokens
+ *     actually MOVED, because `profile_tokens` is a materialized function of
+ *     `story_tokens` that nothing else recomputes on a fold — compared rather
+ *     than assumed, since a version bump marks the whole window stale while a
+ *     fold moves a fraction of it;
  *  2. **re-run the grouping decision** for articles that are still a group of
  *     one, which can only be worth doing once (1) has given everything the
  *     same vocabulary;
@@ -29,7 +36,19 @@ import { storyTokens } from "./storyline.js";
  *     proves the split should not exist. This is what heals splits that
  *     locked in before merging existed, which pass 2 cannot touch (its
  *     subjects are singletons; these are not);
- * Storylines are NOT rebuilt here, and that is the cutover's doing: the
+ * Storylines are NOT rebuilt here — MEMBERSHIP is what that means, and the
+ * profile refresh in pass 1 is not an exception to it: no group joins or leaves
+ * an arc, the same rows are re-derived from the same place `ingestSightings`
+ * re-derives them from, and the judgement about what belongs with what is
+ * untouched. It is in pass 1 rather than behind the `--tokens-only` gate
+ * because that gate exists to change no GROUPINGS, and a profile left holding
+ * the old vocabulary after its articles moved to the new one is not a
+ * conservative half-step but a disagreement: version 8's fold made
+ * `story_tokens` say `nino` while a stale profile still said `niño`, so a
+ * reader typing the accented spelling would have started missing an arc that
+ * used to match. The narrower repair is worse than either end of it.
+ *
+ * Storylines are otherwise not rebuilt here, and that is the cutover's doing: the
  * day-clustered pass this used to run had a canonical answer it could
  * recompute from one day's groups, and ADR-0011's linker does not — it is
  * order-dependent over the whole archive, so its canonical answer is a
@@ -59,6 +78,12 @@ export interface RegroupResult {
   /** Rows whose tokens were behind the current tokenizer when we started. */
   stale: number;
   retokenized: number;
+  /**
+   * Storylines whose `profile_tokens` and day slots were re-derived because a
+   * member article was retokenized. Distinct arcs, not visits — one arc holding
+   * fifty retokenized articles is refreshed once.
+   */
+  refreshed: number;
   /** Groups of one that found a group under the current rules. */
   regrouped: number;
   /** Groups merged away on bridge evidence (ADR-0009). */
@@ -79,10 +104,15 @@ export async function regroup(
   const result: RegroupResult = {
     stale: await countStaleTokenArticles(deps.db, { version: TOKENIZER_VERSION, from }),
     retokenized: 0,
+    refreshed: 0,
     regrouped: 0,
     merged: 0,
   };
 
+  // The groups whose vocabulary moved, collected as the batches go by: the
+  // arcs to refresh are whatever holds them, and reading that per batch would
+  // refresh a busy arc once per batch it appears in.
+  const retokenizedGroups = new Set<string>();
   for (;;) {
     const batch = await readStaleTokenArticles(deps.db, {
       version: TOKENIZER_VERSION,
@@ -92,12 +122,39 @@ export async function regroup(
     if (batch.length === 0) break;
 
     for (const article of batch) {
-      await retokenize(deps, article);
+      // The comparison, not the version clock, decides whose profile is stale.
+      // A bump marks every row in the window; a fold moves a fraction of them
+      // (version 8: 513 of 32,279), and the profiles worth rebuilding are the
+      // ones built on rows that actually moved. Compared as SETS, because
+      // `refreshProfileTokens` reads the tokens as a set — a pure reordering
+      // changes no profile.
+      const derived = storyTokens(article.title, article.description);
+      await retokenize(deps, article, derived);
+      if (!sameTokens(article.storyTokens, derived)) retokenizedGroups.add(article.groupId);
       result.retokenized += 1;
     }
     deps.log?.warn(
       { retokenized: result.retokenized, of: result.stale },
       "regroup: re-deriving headline and story tokens",
+    );
+  }
+
+  // Pass 1b — the storyline layer's half of the same fold. Distinct arcs, so an
+  // arc holding many retokenized articles is refreshed once.
+  const staleArcs = new Set<string>();
+  for (const groupId of retokenizedGroups) {
+    for (const storylineId of await readGroupStorylines(deps.db, groupId)) {
+      staleArcs.add(storylineId);
+    }
+  }
+  for (const storylineId of staleArcs) {
+    await refreshStorylineDerivations(deps.db, storylineId, deps.config.timeZone);
+    result.refreshed += 1;
+  }
+  if (result.refreshed > 0) {
+    deps.log?.warn(
+      { refreshed: result.refreshed, groups: retokenizedGroups.size },
+      "regroup: re-deriving storyline profiles over the new vocabulary",
     );
   }
 
@@ -134,18 +191,27 @@ export async function regroup(
 }
 
 /** Re-derive one row's tokens — both derivations, one version — touching
- * nothing else about it. */
+ * nothing else about it. The story tokens arrive already derived, because the
+ * caller has to compare them against the stored ones anyway. */
 async function retokenize(
   deps: GroupingDeps,
   article: StoredArticle,
+  derivedStoryTokens: string[],
 ): Promise<void> {
   await recordGrouping(deps.db, {
     articleId: article.id,
     titleTokens: headlineTokens(article.title),
-    storyTokens: storyTokens(article.title, article.description),
+    storyTokens: derivedStoryTokens,
     tokensVersion: TOKENIZER_VERSION,
     groupId: null, // null means "leave the grouping alone", not "ungroup"
   });
+}
+
+/** Same vocabulary, whatever the order. */
+function sameTokens(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const seen = new Set(a);
+  return b.every((token) => seen.has(token));
 }
 
 /**

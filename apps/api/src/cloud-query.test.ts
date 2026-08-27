@@ -128,6 +128,21 @@ describe("cloudQuery", () => {
     ).toBe("kelowna wildfire");
   });
 
+  it("reaches a name the coverage accents and the labeler does not", () => {
+    // The live arc that exposed the fold (dev archive, 2026-08-27): the profile
+    // is quoted verbatim, `niño` and all, and the label is the one the model
+    // wrote. Before tokenizer version 8 the naming word could not ground, so
+    // the arc searched for its two weakest words and `nino` was dropped.
+    const arc = {
+      label: "El Niño Hurricane Season",
+      profileTokens: ["el", "hurricane", "nino", "season", "storm"],
+    };
+    expect(cloudQuery(arc)).toBe("el niño");
+    // ...and the ASCII label the model wrote for a neighbouring arc grounds
+    // against the same profile, which is what the fold bought.
+    expect(cloudQuery({ ...arc, label: "El Nino Hurricane Season" })).toBe("el nino");
+  });
+
   it("falls back to the label when there is no profile at all", () => {
     // Unreachable through the read (a labelled, promoted storyline has a
     // profile, and merged-away ones are excluded before this runs), but an
