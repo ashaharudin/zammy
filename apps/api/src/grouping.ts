@@ -88,10 +88,12 @@ const MIN_SHARED_TOKENS = 2;
  * versions changed `story_tokens` rather than only `title_tokens`. Four steps,
  * in order, and each one's absence is silent:
  *
- *   1. `pnpm regroup --tokens-only` — re-derives the stored tokens, and (since
- *      version 8) the `profile_tokens` of every arc holding a retokenized row,
- *      which is materialized from them and which nothing else recomputes
- *      without a membership change.
+ *   1. `pnpm regroup --tokens-only --days=<retention>` — re-derives the stored
+ *      tokens, and (since version 8) the `profile_tokens` of every arc holding a
+ *      retokenized row, which is materialized from them and which nothing else
+ *      recomputes without a membership change. **`--days` defaults to 1**, so
+ *      the bare command repairs today and leaves every older row behind; pass
+ *      the retention window (90) to mean the archive.
  *   2. `pnpm story:df --rebuild` — `recordGrouping` writes `story_tokens` but
  *      never `story_token_days` (docs/TRAILING-CORPUS.md), so every df the
  *      linker reads still counts the peeled tokens until this runs.
@@ -114,6 +116,17 @@ const MIN_SHARED_TOKENS = 2;
  * a materialized derivation honest, and a row nobody counted is the failure the
  * version exists to prevent. Say which steps a bump pays for; do not leave the
  * chain looking whole when it was not run.
+ *
+ * **Version 8 is the first bump whose step 1 is not optional**, and that is a
+ * difference from 6 and 7 worth stating before the numbers. Every earlier
+ * version made stored rows STALE — they kept comparing with an older vocabulary,
+ * silently, which is decay. This one makes them WRONG in a way that is worse
+ * than before the change: `labelWords` now folds the reader's keyword, so
+ * between deploying this and running step 1 a search for `niño` folds to `nino`
+ * and misses a `profile_tokens` that still says `niño` — a search that DID match
+ * before. Both spellings fail until step 1 has run, and new ingestion in that
+ * window groups El Niño articles apart from the ones already stored. Deploy and
+ * step 1 belong together.
  *
  * **Version 8 pays steps 1–3 and declines step 4**, measured against the dev
  * archive on 2026-08-27 (32,279 articles, 14,670 live storylines):

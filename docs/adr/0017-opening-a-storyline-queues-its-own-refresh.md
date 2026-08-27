@@ -40,9 +40,13 @@ generates.
   one case the cloud never reaches. The label's own words that the arc's
   coverage actually says, capped at two; for a **label-less** arc, which the
   timeline gutter renders and therefore lets a reader click, the profile's own
-  tokens instead. One rule and not two, so the topic a click mints is the topic
-  the cloud's own placeholder proposes for the same arc — same fingerprint,
-  same accumulating topic (§6.2).
+  tokens instead. One rule and not two, so a click asks for the same WORDS the
+  cloud's own placeholder proposes for that arc. Not necessarily the same
+  fingerprint: a topic's identity also holds the language, country and category
+  (§6.2), and this refresh always uses the arc's modal language with neither of
+  the other two, while a reader executing the placeholder carries whatever chips
+  are set. The words are the half that decides whether the ask can match the arc
+  at all, which is why they are worth deriving once.
 - **Language** — the commonest one the arc's member articles carry
   (`readStorylineLanguage`), falling back to `DEFAULT_LANGUAGE`. The reader's
   language chip was the obvious source and is the wrong one: the cloud is built
@@ -64,10 +68,29 @@ generates.
   one Redis read.
 - **A stale trailing edge** queues the §6.4 top-up, deduplicated by its leading
   edge alone.
-- **A cold or gappy topic** queues the newest gap and nothing else — §9.4's
-  "backfill is never automatic on first search" applied to a click. An arc with
-  30 days of missing history is worth one 7-day slice of freshness, not five
+- **A cold topic** queues the newest gap and nothing else, bounded to one call —
+  §9.4's "backfill is never automatic on first search" applied to a click. An arc
+  with 30 days of missing history is worth one 7-day slice of freshness, not five
   calls nobody asked for. Deeper history is still what typing the words is for.
+- **An interior hole under a covered present** queues nothing. That is missing
+  history rather than staleness, and by the previous bullet a click does not buy
+  history.
+
+**Freshness is asked of `max(coverage.upper)` directly, not through
+`trailingSliver`.** That is the one thing here a review caught and reasoning did
+not, so it belongs in the record rather than only in a code comment.
+`trailingSliver` additionally requires the whole window to reduce to ONE sliced
+gap, which is right for the read path — there it separates "stale edge, repair
+behind the reader" from "missing history, take the synchronous fill" — and wrong
+for this one, because a topic minted here is multi-gap from its first click
+onward by construction: the click fills the newest 7 days of a 30-day window and
+never reaches the rest. Under the shape test the edge was therefore never a
+sliver, the freshness gate above was unreachable, and what a click actually did
+depended on where the clock sat inside the quarter-hour — measured, an arc whose
+edge was 45 SECONDS old got a 15-second segment job and an upstream call, while
+the same arc a few minutes earlier got nothing. There is no synchronous fill on
+this path for the shape test to be choosing between, so the only question an edge
+poses here is how stale it is.
 
 A **segment's span is snapped onto the 15-minute window grid**, which is the
 one non-obvious mechanism here. `subtractCoverage` clamps its newest gap to
@@ -102,3 +125,16 @@ the per-IP rate limit already covers `/api/v1/*` (§9.4).
   keywords are derived server-side from the row the click names, so
   `StorylineRef`, `SurfacedStoryline` and `TrendingStoryline` are all as they
   were.
+- **Only a CLICK queues anything.** A shared link, a bookmark, a reload or
+  browser back/forward into `?storyline=<uuid>` renders the view and asks for
+  nothing, because the trigger is `App.openStoryline` and none of those reach it.
+  Named as a limit rather than defended: the most common way to re-open an arc is
+  arguably not a click, and refreshing on the VIEW would serve this ADR's own
+  premise better. It is a different trigger model, though — every reload would
+  ask, and what makes that safe is the same freshness gate — so it is a decision
+  to take on its own evidence rather than fold in here.
+- **An arc whose own language upstream will not accept as a filter is refreshed
+  in the configured default**, not refused. `articles.language` and
+  `/available/languages` are not the same vocabulary — the reference table holds
+  `{"Malay": "msa"}` against ISO-639-1 everywhere else (PROBE-FINDINGS 6) — and a
+  400 there would be silent by construction and permanent for that arc.

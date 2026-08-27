@@ -325,6 +325,54 @@ describe("how much a click may queue", () => {
     expect(harness.counting.searchCalls).toBe(0);
   });
 
+  it("gates freshness on a topic in the shape this endpoint actually produces", async () => {
+    // The shape above — one contiguous span covering the whole window bar its
+    // edge — is NOT what a click leaves behind. A click fills the newest 7 days
+    // of a 30-day window and never reaches the rest, so from its first click
+    // onward the topic is four slices plus an edge. `trailingSliver` requires
+    // the window to reduce to ONE sliced gap, so under that test the edge was
+    // never a sliver, the gate above was unreachable, and an arc whose edge was
+    // 45 SECONDS old took an upstream call. Worse: whether it did depended on
+    // where the clock sat inside the quarter-hour, since the only thing that
+    // stopped it was the sub-grid guard.
+    // A clock just PAST a grid line, which is where the bug was visible: with
+    // `now` before the line the sub-grid guard hid it by accident, so a test
+    // anchored anywhere in the quarter-hour would have passed over it.
+    const pastGrid = new Date(GRID.getTime() + WINDOW_SNAP_MS + 30_000);
+    const storylineId = await seedStoryline();
+    const cold = await refresh(storylineId, pastGrid);
+    if (cold.status !== "queued") throw new Error(cold.status);
+    // What that click's job leaves behind: the newest 7 days, edge 45s old.
+    await recordCoverage(db, cold.fingerprint, {
+      from: new Date(pastGrid.getTime() - 7 * 86_400_000),
+      to: new Date(pastGrid.getTime() - 45_000),
+    });
+
+    const outcome = await refresh(storylineId, pastGrid);
+
+    expect(outcome.status).toBe("fresh");
+    expect(harness.counting.searchCalls).toBe(0);
+  });
+
+  it("leaves an interior hole alone when the present is covered", async () => {
+    const storylineId = await seedStoryline();
+    const cold = await refresh(storylineId);
+    if (cold.status !== "queued") throw new Error(cold.status);
+    // Covered to now, with a hole ten days back. Nothing about the arc is stale;
+    // the hole is missing HISTORY, and §9.4 says a click does not buy history.
+    await recordCoverage(db, cold.fingerprint, {
+      from: new Date(NOW.getTime() - 31 * 86_400_000),
+      to: new Date(NOW.getTime() - 11 * 86_400_000),
+    });
+    await recordCoverage(db, cold.fingerprint, {
+      from: new Date(NOW.getTime() - 9 * 86_400_000),
+      to: NOW,
+    });
+
+    expect((await refresh(storylineId)).status).toBe("fresh");
+    expect(harness.counting.searchCalls).toBe(0);
+  });
+
   it("queues a leading-edge top-up once the trailing edge goes stale", async () => {
     const storylineId = await seedStoryline();
     const cold = await refresh(storylineId);
@@ -339,7 +387,8 @@ describe("how much a click may queue", () => {
     if (outcome.status !== "queued") throw new Error(outcome.status);
 
     // A top-up, not a segment: its identity omits the upper edge, so a click a
-    // minute later asks for the same thing (§6.4).
+    // minute later asks for the same thing (§6.4). Reached through the
+    // multi-gap shape a click leaves, which is the point of the test above.
     expect(outcome.job.kind).toBe("topup");
     expect(new Date(outcome.job.from).getTime()).toBe(coverageUpper.getTime());
     const later = await refresh(storylineId, new Date(NOW.getTime() + 60_000));

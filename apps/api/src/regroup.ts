@@ -4,6 +4,7 @@ import {
   mergeGroups,
   readGroupCandidates,
   readGroupStorylines,
+  markStorylinesLinkDirty,
   readStaleTokenArticles,
   recordGrouping,
   refreshStorylineDerivations,
@@ -27,7 +28,8 @@ import { storyTokens } from "./storyline.js";
  *     actually MOVED, because `profile_tokens` is a materialized function of
  *     `story_tokens` that nothing else recomputes on a fold — compared rather
  *     than assumed, since a version bump marks the whole window stale while a
- *     fold moves a fraction of it;
+ *     fold moves a fraction of it — and MARK those arcs `link_dirty_at`, the
+ *     debt every caller of that re-derivation carries (migration 0017);
  *  2. **re-run the grouping decision** for articles that are still a group of
  *     one, which can only be worth doing once (1) has given everything the
  *     same vocabulary;
@@ -151,6 +153,18 @@ export async function regroup(
     await refreshStorylineDerivations(deps.db, storylineId, deps.config.timeZone);
     result.refreshed += 1;
   }
+  // And the marker every caller of that re-derivation owes (migration 0017):
+  // `linkGroup` READS an arc's profile, so a profile that moved is an answer
+  // that could have moved, and `link_dirty_at` is what makes the late-candidate
+  // sweep re-offer it (`storyline-changed-set.ts`).
+  //
+  // This pass earns it more than any other writer of the marker, which is why
+  // omitting it was worth catching: a fold's whole argument is that names which
+  // were two words become one — 108 of them on the dev archive — so these are
+  // precisely the arcs whose profile now overlaps groups it could not reach
+  // before. Unmarked, that benefit waits for an unrelated attach or merge to
+  // dirty the arc, which for a quiet arc is never.
+  await markStorylinesLinkDirty(deps.db, [...staleArcs]);
   if (result.refreshed > 0) {
     deps.log?.warn(
       { refreshed: result.refreshed, groups: retokenizedGroups.size },
@@ -207,11 +221,25 @@ async function retokenize(
   });
 }
 
-/** Same vocabulary, whatever the order. */
+/**
+ * Same vocabulary, whatever the order — as MULTISETS, not as sets.
+ *
+ * `storyTokens` dedupes its own output, so today a set comparison would agree on
+ * every input this can be handed. Written as the stronger comparison anyway,
+ * because the weaker one calls `["x","y"]` and `["x","x"]` equal and the failure
+ * that would cause is a profile refresh silently skipped — invisible until
+ * somebody wonders why an arc still speaks the old vocabulary.
+ */
 function sameTokens(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
-  const seen = new Set(a);
-  return b.every((token) => seen.has(token));
+  const counts = new Map<string, number>();
+  for (const token of a) counts.set(token, (counts.get(token) ?? 0) + 1);
+  for (const token of b) {
+    const left = counts.get(token);
+    if (left === undefined || left === 0) return false;
+    counts.set(token, left - 1);
+  }
+  return true;
 }
 
 /**

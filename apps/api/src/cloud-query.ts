@@ -156,9 +156,16 @@ function dedupeBy<T>(items: readonly T[], key: (item: T) => string): T[] {
  *
  * `cloudQuery` above is the whole of the judgment and this adds none: the two
  * words a label's own coverage says are as good an ask for a background top-up
- * as for a click, and deriving them twice by two rules would let the topic a
- * click mints drift away from the topic the cloud's own placeholder proposes —
- * the same fingerprint is the point (§6.2).
+ * as for a click, and deriving them twice by two rules would let a click's ask
+ * drift away from what the cloud's own placeholder proposes for the same arc.
+ *
+ * The KEYWORDS, precisely — not the fingerprint. A topic's identity also holds
+ * the language, country and category (§6.2), and the refresh always uses the
+ * arc's own modal language with no country and no category, while a reader
+ * executing the placeholder carries whatever chips are set. So the two coincide
+ * exactly when the chips happen to agree, and one rule for the words is worth
+ * having either way: it is the half that decides whether the ask can match the
+ * arc at all.
  *
  * What it adds is the case the cloud cannot reach: a **label-less** storyline.
  * The cloud filters those out — an unlabelled arc has no word to draw — but the

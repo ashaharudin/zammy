@@ -612,8 +612,13 @@ export type StorylineRefreshOutcome =
   | { status: "unknown" }
   /** Nothing the coverage says: no label and an empty profile (`storylineKeywords`). */
   | { status: "no_keywords"; storylineId: string }
-  /** The derived keywords did not canonicalize — a bad FILTER, since the
-   * keywords are ours. Carries `canonicalize`'s own field errors. */
+  /**
+   * `canonicalize` refused, which for this caller is defensive rather than
+   * expected: the keywords are ours and at most two words, and the route drops a
+   * language the reference lists do not hold rather than passing it on to be
+   * refused. Carries `canonicalize`'s own field errors so a future rule that
+   * does refuse something says which.
+   */
   | { status: "invalid"; storylineId: string; errors: Record<string, string> }
   /** Coverage reaches inside the staleness tier already: nothing to ask for. */
   | { status: "fresh"; storylineId: string; fingerprint: string; keywords: string[] }
@@ -639,18 +644,21 @@ export type StorylineRefreshOutcome =
  *
  * **At most ONE job per click**, and which one is the whole of the judgment:
  *
- *  - **A warm topic** — coverage reaching to within the staleness tier — queues
+ *  - **A warm topic** — its trailing edge inside the staleness tier — queues
  *    nothing. `freshnessTtlMs` is 60 s on a window ending now, so a storyline
  *    two readers open in the same minute costs one enqueue, and the second
  *    click is a Redis read and a 202.
  *  - **A stale trailing edge** queues the §6.4 top-up, deduplicated by its
  *    leading edge alone — the identity that exists precisely because a repeated
  *    ask re-reads "now" and must not mint a fresh job each time.
- *  - **A cold or gappy topic** queues the NEWEST gap slice and nothing else,
- *    which is §9.4's "backfill is never automatic" applied to a click: an arc
- *    with 30 days of missing history is worth one 7-day slice of freshness, not
- *    five calls the reader never asked for. Deeper history is what searching
+ *  - **A cold topic** queues the NEWEST gap and nothing else, bounded to one
+ *    call, which is §9.4's "backfill is never automatic" applied to a click: an
+ *    arc with 30 days of missing history is worth one 7-day slice of freshness,
+ *    not five calls the reader never asked for. Deeper history is what searching
  *    the words is for.
+ *  - **An interior hole under a covered present** queues nothing. It is missing
+ *    history rather than staleness, and by the previous bullet a click does not
+ *    buy history.
  *
  * **A segment's span is snapped onto the window grid, and that is not
  * cosmetic.** `subtractCoverage` clamps its newest gap to `now` exactly and
@@ -754,33 +762,6 @@ export async function queueStorylineRefresh(
     keywords: query.keywords,
   };
 
-  // Pre-sliced for the sliver test, exactly as the read path plans it (§6.4):
-  // the shape "one gap starting at max(coverage.upper)" only means staleness
-  // when that gap fits a single call. A fortnight of missing trailing history
-  // arrives as several slices, fails the test, and is treated as the missing
-  // HISTORY it is rather than as a stale edge — which here means one newest
-  // slice below rather than a top-up job the consumer would fan out into three
-  // upstream calls off one click.
-  const sliced = subtractCoverage(query.window, covered, {
-    now,
-    lookbackDays: deps.config.lookbackDays,
-    maxSpanMs,
-  });
-  const sliver = trailingSliver(query.window, sliced, covered, now);
-  if (sliver) {
-    if (now.getTime() - sliver.from.getTime() <= freshnessTtlMs(query.window.to, now)) {
-      deps.metrics?.storylineRefresh("fresh");
-      return { status: "fresh", ...settled };
-    }
-    const job: SegmentJob = {
-      ...segmentJob(query.fingerprint, sliver, 1),
-      kind: "topup",
-    };
-    await deps.queue.enqueueSegment(job);
-    deps.metrics?.storylineRefresh("queued");
-    return { status: "queued", ...settled, job };
-  }
-
   // The newest gap UNSLICED, which is the only version of it whose lower edge is
   // a fact about coverage: `sliceSpan` counts back from `now`, so a slice's own
   // `from` moves with the clock even when nothing about the coverage did.
@@ -789,23 +770,74 @@ export async function queueStorylineRefresh(
     lookbackDays: deps.config.lookbackDays,
   });
   if (gap === undefined) {
-    // Nothing to ask for: the window is covered to the present. Not reachable
-    // through the sliver branch above, which needs a gap to test the shape of.
     deps.metrics?.storylineRefresh("fresh");
     return { status: "fresh", ...settled };
   }
 
-  // Onto the grid, and BOTH edges — the note above says why. `to` snaps down to
-  // the last grid line; `from` is then measured back from it, so a cold topic's
-  // 7-day slice has two fixed endpoints instead of two that follow the clock.
-  // The gap's own start still wins where it is later, or the ask would reach
-  // below the gap into coverage already recorded.
+  // Is the newest gap the TRAILING EDGE — the stretch time itself opened since
+  // the last fetch — or is it missing history with the present already covered?
+  //
+  // Asked directly of `max(coverage.upper)` rather than through
+  // `trailingSliver`, and that is the correction that matters here.
+  // `trailingSliver` additionally requires the whole window to reduce to ONE
+  // sliced gap, which is right for the read path — there it separates "stale
+  // edge, repair behind the reader" from "missing history, take the synchronous
+  // fill" — and wrong for this one. A topic minted here is multi-gap from its
+  // first click onward BY CONSTRUCTION: the click fills the newest 7 days of a
+  // 30-day window and never reaches the rest, so the window is permanently four
+  // slices plus an edge. Under the shape test the edge was therefore never a
+  // sliver, the freshness gate below was unreachable, and what a click actually
+  // did depended on where the clock sat inside the quarter-hour: measured, an
+  // arc whose edge was 45 SECONDS old got a 15-second segment job and one
+  // upstream call, while the same arc a few minutes earlier got nothing. There
+  // is no synchronous fill on this path for the shape test to be choosing
+  // between, so the only question the edge poses is how stale it is.
+  const coverageUpper = covered.at(-1)?.to;
+  const trailing =
+    coverageUpper !== undefined && gap.from.getTime() === coverageUpper.getTime();
+
+  if (!trailing && coverageUpper !== undefined) {
+    // Coverage reaches the present and the newest gap is an interior hole. Not a
+    // freshness question at all, and §9.4 says a click does not buy history:
+    // left for a reader who searches the words.
+    deps.metrics?.storylineRefresh("fresh");
+    return { status: "fresh", ...settled };
+  }
+
+  if (trailing) {
+    if (now.getTime() - gap.from.getTime() <= freshnessTtlMs(query.window.to, now)) {
+      deps.metrics?.storylineRefresh("fresh");
+      return { status: "fresh", ...settled };
+    }
+    // A stale edge narrow enough to fetch in one call is the §6.4 top-up, whose
+    // identity omits its upper bound — so a click a minute later asks for the
+    // same thing rather than minting a fresh job, and no snapping is needed. An
+    // edge WIDER than one call is not an edge any more; it falls through to the
+    // bounded, grid-snapped segment below rather than becoming a top-up the
+    // consumer would fan out into several calls off one click.
+    if (gap.to.getTime() - gap.from.getTime() <= maxSpanMs) {
+      const job: SegmentJob = {
+        ...segmentJob(query.fingerprint, gap, 1),
+        kind: "topup",
+      };
+      await deps.queue.enqueueSegment(job);
+      deps.metrics?.storylineRefresh("queued");
+      return { status: "queued", ...settled, job };
+    }
+  }
+
+  // A cold topic, or a trailing edge too wide to top up. Onto the grid, and BOTH
+  // edges — the note above says why. `to` snaps down to the last grid line;
+  // `from` is then measured back from it, so a cold topic's 7-day slice has two
+  // fixed endpoints instead of two that follow the clock. The gap's own start
+  // still wins where it is later, or the ask would reach below the gap into
+  // coverage already recorded.
   const to = new Date(Math.floor(gap.to.getTime() / WINDOW_SNAP_MS) * WINDOW_SNAP_MS);
   const from = new Date(Math.max(gap.from.getTime(), to.getTime() - maxSpanMs));
   if (to.getTime() <= from.getTime()) {
-    // The gap does not reach back past the last grid line — an interior hole
-    // narrower than the grid, or a trailing edge the sliver test declined. The
-    // first click past the next grid line asks for it.
+    // The gap does not reach back past the last grid line. Only reachable for a
+    // cold topic in the first quarter-hour of its window, since a trailing edge
+    // narrower than the grid is a top-up above; the next click asks for it.
     deps.metrics?.storylineRefresh("fresh");
     return { status: "fresh", ...settled };
   }

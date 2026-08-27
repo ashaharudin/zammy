@@ -140,11 +140,10 @@ export async function registerQueryRoutes(
    * **A UUID is the whole request**: no keywords, no filters, no window. The
    * planner derives every part of the ask from the arc's own coverage, and the
    * reason it must is in `queueStorylineRefresh`. What is left here is the one
-   * thing the planner cannot do — validating the derived language against the
-   * reference lists, since only the route holds them (`loadReference`). A 400
-   * from that is therefore not a bad request at all but an arc whose stored
-   * language upstream no longer lists, which is worth surfacing rather than
-   * silently searching in the wrong language.
+   * thing the planner cannot do — checking the derived language against the
+   * reference lists, since only the route holds them (`loadReference`) — and see
+   * the callback below for why a language they do not list is DROPPED rather
+   * than refused. A 400 is therefore about the UUID's shape and nothing else.
    */
   app.post<{ Params: { id: string } }>(
     "/api/v1/storylines/:id/refresh",
@@ -164,16 +163,37 @@ export async function registerQueryRoutes(
         // accepted, because a background refresh is about the leading edge and
         // an arbitrary window would let a caller aim the queue at any span of
         // the archive it liked.
-        canonicalize: ({ keywords, language }) =>
-          canonicalize(
-            { q: keywords, language },
+        canonicalize: ({ keywords, language }) => {
+          // An arc's own language is an ARTICLE's `language` field, and that is
+          // not drawn from the same vocabulary as `/available/languages`, which
+          // is what a query may be narrowed by. The reference table is mostly
+          // ISO-639-1 but not entirely — `{"Malay": "msa"}`, three letters,
+          // recorded in PROBE-FINDINGS 6 with the warning never to derive a code
+          // — so an article saying `ms` names a language upstream will not
+          // accept as a filter.
+          //
+          // Dropped rather than passed on to be refused. A 400 here would be
+          // silent by construction (the caller is fire-and-forget with no error
+          // path) and permanent for that arc, which is the worst available
+          // outcome: a refresh in the configured default is worth more than no
+          // refresh for as long as the arc exists.
+          const filter = language !== undefined && codes.languages.has(language);
+          if (language !== undefined && !filter) {
+            deps.log?.warn(
+              { storyline: id, language },
+              "storyline refresh: the arc's own language is not a query code; falling back to the default",
+            );
+          }
+          return canonicalize(
+            { q: keywords, ...(filter ? { language } : {}) },
             {
               reference: codes,
               defaultLanguage: options.defaultLanguage,
               lookbackDays: deps.config.lookbackDays,
               now: deps.now(),
             },
-          ),
+          );
+        },
       });
 
       if (outcome.status === "unknown") {

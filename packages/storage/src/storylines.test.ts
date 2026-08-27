@@ -972,6 +972,16 @@ describe("storylines in storage", () => {
       expect(await readStorylineLanguage(harness.db, storylineId)).toBe("ms");
     });
 
+    it("breaks a tie alphabetically, so a bilingual arc answers the same thing twice", async () => {
+      const storylineId = await arcWithLanguages(["ms", "en"]);
+
+      // The determinism argument, not an aesthetic one: the answer becomes part
+      // of a topic fingerprint, and one that moved between two clicks would mint
+      // a second topic rather than deepen the first.
+      expect(await readStorylineLanguage(harness.db, storylineId)).toBe("en");
+      expect(await readStorylineLanguage(harness.db, storylineId)).toBe("en");
+    });
+
     it("is null when no member article names one at all", async () => {
       const storylineId = await arcWithLanguages([null, null]);
 

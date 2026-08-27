@@ -1,6 +1,8 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
+import { sql } from "kysely";
 import { encodeCursor, TimelinePage, TrendingResponse } from "@zammy/shared";
+import { readTopic } from "@zammy/storage";
 import { canonicalize } from "./canonical.js";
 import { registerMetricsRoute } from "./metrics.js";
 import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
@@ -179,6 +181,30 @@ describe("POST /api/v1/storylines/:id/refresh", () => {
     // request carried a UUID and nothing else.
     expect(body.keywords.length).toBeGreaterThan(0);
     expect(body.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("refreshes in the default language when the arc's own is not a query code", async () => {
+    await setup();
+    const read = await app.inject({ method: "GET", url: `${TIMELINE}?q=climate&${QS}` });
+    const storylineId = (TimelinePage.parse(read.json()).items[0] as { storylineId: string })
+      .storylineId;
+    // `articles.language` is upstream's ARTICLE field and `/available/languages`
+    // is what a query may be narrowed BY; they are not the same vocabulary (the
+    // reference table holds {"Malay": "msa"} against ISO-639-1 elsewhere,
+    // PROBE-FINDINGS 6). A 400 here would be silent — the caller has no error
+    // path — and permanent for the arc, so the language is dropped instead.
+    await sql`
+      update articles set language = 'zz-not-a-code'
+      where group_id in (select group_id from storyline_groups where storyline_id = ${storylineId}::uuid)
+    `.execute(harness.deps.db);
+
+    const response = await app.inject({ method: "POST", url: refresh(storylineId) });
+
+    expect(response.statusCode).toBe(202);
+    const body = response.json() as RefreshBody;
+    expect(body.keywords.length).toBeGreaterThan(0);
+    const topic = await readTopic(harness.deps.db, body.fingerprint!);
+    expect(topic?.language).toBe("en"); // the route's defaultLanguage
   });
 
   it("is a 404 for a UUID this database has never held", async () => {
