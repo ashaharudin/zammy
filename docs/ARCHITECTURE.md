@@ -161,8 +161,11 @@ plans are superseded. Moving between targets has always been an infrastructure r
 application rewrite.
 
 Docker Compose is the **local development
-environment**, not a deployment target — built as a faithful rehearsal of production. The **same
-images** run in both, differing only by environment variables. No code path may branch on
+environment**, not a deployment target — the same source and the same environment-variable-driven
+config run in both, differing only by the values. **The api's container image itself does not**:
+`apps/api/Dockerfile` exists for Compose, but Vercel builds straight from source (`vercel.json`'s
+`buildCommand` is plain `pnpm build`) and never touches it — a container-image rehearsal was a
+property of the earlier AWS/OCI persistent-host plans, not of Vercel. No code path may branch on
 environment; the moment one does, local development stops predicting production.
 
 The two places local and production genuinely differ, needing explicit configuration:

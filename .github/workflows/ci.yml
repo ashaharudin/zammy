@@ -1,12 +1,17 @@
-# CI — verify, and build the deploy artifact to prove it still builds.
+# CI — verify, then run the discrete migration step Vercel has no hook for.
 #
-# Deployment moved to Vercel + Supabase + Upstash (ADR-0015). This workflow no
-# longer publishes a deploy image anywhere.
+# Deployment moved to Vercel + Supabase + Upstash (ADR-0015): `vercel build`
+# builds straight from source (vercel.json's buildCommand is plain `pnpm
+# build`), so there is no container image in the deploy path for this
+# workflow to prove out. `apps/api/Dockerfile` still exists for local dev
+# (`docker compose --profile app up --build`) but is no longer built here —
+# it is exercised, if at all, by whoever runs Compose locally.
 #
-# ⚠️ arm64 is a leftover from an earlier, abandoned deploy target and is not a
-# current requirement. `ubuntu-24.04-arm` is a native arm64 runner (2 vCPU,
-# free-minutes eligible), so this is not costing us QEMU, and flipping
-# architecture on the way out would be churn on a guess.
+# ⚠️ arm64 is a leftover from an earlier, abandoned deploy target, kept
+# because it is free of downsides rather than because it is still required:
+# `ubuntu-24.04-arm` matches the x64 standard runner's spec (2 vCPU) on this
+# private repo and is billed slightly cheaper per minute, so there is no QEMU
+# cost and no reason to churn it on a guess.
 
 name: CI
 
@@ -86,42 +91,6 @@ jobs:
       - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm test
-
-  # Proves the deploy artifact still builds. Runs on BOTH events on purpose.
-  #
-  # It used to run on pull requests only, because the push-to-main `image` job
-  # covered main and wrote the layer cache this job reads. Removing that job took
-  # both away with it, so this job absorbs them: without the main-push run a
-  # Dockerfile regression could land unbuilt, and without `cache-to` nothing
-  # would ever populate the cache `cache-from` reads, quietly turning every PR
-  # build cold. Same topology as before, minus the registry.
-  dockerfile:
-    name: dockerfile builds (arm64)
-    # No `needs: verify` — it runs alongside verify for faster feedback. The old
-    # publish job gated on verify so it could not push something unverified;
-    # nothing is pushed now, so the gate would only serialise two jobs that have
-    # no reason to wait for each other.
-    runs-on: ubuntu-24.04-arm
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: docker/setup-buildx-action@v4
-
-      - uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: apps/api/Dockerfile
-          platforms: linux/arm64
-          # Never pushed — there is no registry and no deploy target. This job
-          # exists to fail when the Dockerfile breaks, nothing more.
-          push: false
-          provenance: false
-          sbom: false
-          cache-from: type=gha
-          # Write the cache from main only. Letting every PR write it invites
-          # concurrent branches thrashing each other's entries for no gain.
-          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
   # ─── Migrations ────────────────────────────────────────────────────────────
   #
