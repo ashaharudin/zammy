@@ -8,6 +8,7 @@ import * as labelDrift from "./migrations/0010-storyline-label-drift.js";
 import * as labelSource from "./migrations/0011-storyline-label-source.js";
 import * as formationRefusals from "./migrations/0015-storyline-formation-refusals.js";
 import * as dropTermCloud from "./migrations/0014-drop-term-cloud.js";
+import * as rowLevelSecurity from "./migrations/0019-enable-row-level-security.js";
 import { createTestDatabase, type TestDatabase } from "./test-support.js";
 
 /**
@@ -77,6 +78,64 @@ describe("migrateToLatest", () => {
     for (const gone of ["trending_terms", "term_snapshots", "term_baseline"]) {
       expect(tables).not.toContain(gone);
     }
+
+    // And every table standing must have row-level security ON (migration 0019).
+    //
+    // This is the assertion that keeps 0019's convention — *a migration that
+    // creates a table enables RLS on it, in the same `up`* — from being a
+    // comment nobody reads. 0019 itself is a one-time sweep over what existed
+    // when it shipped; it cannot cover a table added after it, so without this
+    // check the next `CREATE TABLE` silently reopens the Data API hole 0019
+    // closed. On Supabase, `public` is the schema PostgREST exposes and a
+    // project's default grants reach `anon`, so a table with RLS off is a table
+    // the internet can read with a key that ships in public.
+    //
+    // It lives in THIS test, not its own, on purpose: the revert/re-apply tests
+    // below drop and recreate tables — which legitimately come back without RLS
+    // — so the invariant only holds on the freshly-migrated schema this test
+    // asserts about.
+    const { rows: unprotected } = await sql<{ relname: string }>`
+      select c.relname
+        from pg_class c join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'public' and c.relkind = 'r'
+         and pg_get_userbyid(c.relowner) = current_user
+         and not c.relrowsecurity
+       order by c.relname
+    `.execute(harness.db);
+    expect(unprotected.map((row) => row.relname)).toEqual([]);
+  });
+
+  it("reverts and re-applies row-level security cleanly", async () => {
+    // 0019 is the one migration in here that changes no schema, so its
+    // revert/re-apply is a statement about a table PROPERTY rather than about
+    // tables existing. Worth the check for the same reason as the others: its
+    // `up` and `down` are both blanket sweeps resolved at run time, and a sweep
+    // whose predicate stopped matching would be indistinguishable from a sweep
+    // that ran — silently doing nothing, in the direction that reopens the Data
+    // API. Runs before the tests below drop and recreate tables, so "every
+    // table" still means the freshly-migrated set.
+    const rlsOff = async () => {
+      const { rows } = await sql<{ n: string }>`
+        select count(*) as n
+          from pg_class c join pg_namespace n on n.oid = c.relnamespace
+         where n.nspname = 'public' and c.relkind = 'r'
+           and pg_get_userbyid(c.relowner) = current_user
+           and not c.relrowsecurity
+      `.execute(harness.db);
+      return Number(rows[0]?.n ?? 0);
+    };
+
+    expect(await rlsOff()).toBe(0);
+    await rowLevelSecurity.down(migrationDb());
+    expect(await rlsOff()).toBeGreaterThan(0);
+    await rowLevelSecurity.up(migrationDb());
+    expect(await rlsOff()).toBe(0);
+
+    // And `up` is safe to run against a database that already has it, which is
+    // what a re-run of the deploy step does and what production — where this was
+    // enabled by hand before it was a migration — sees the first time.
+    await rowLevelSecurity.up(migrationDb());
+    expect(await rlsOff()).toBe(0);
   });
 
   it("reverts and re-applies the storyline tables cleanly", async () => {
