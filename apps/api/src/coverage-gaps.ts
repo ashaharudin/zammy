@@ -24,22 +24,48 @@ export interface Span {
  * — which is precisely what production did on 2026-08-26 for the oldest segment
  * of every cold search.
  *
- * Fifteen minutes is not a guess, it is the message's whole lifetime:
- * `INGEST_RETENTION_SECONDS` (900s) is when the queue deletes a message, so no
- * delivery can happen more than 900s after the plan that produced it. Slack
- * equal to that bounds every delivery that can still exist, with the +610s
- * final attempt comfortably inside. `coverage-gaps.test.ts` pins the two
- * together, since the relationship is the reason for the number.
+ * Fifteen minutes covers the delivery budget with room: the last attempt on a
+ * failing message lands at +610s (`(MAX_INGEST_DELIVERIES - 1)` leases), and the
+ * rest absorbs the gap between planning a segment and publishing it — the sync
+ * fill runs first, and its floor-of-one call can spend ~25s on transport
+ * retries before the deferred jobs are enqueued. `coverage-gaps.test.ts` pins
+ * that inequality.
+ *
+ * **This slack is an optimization, NOT the correctness mechanism, and the
+ * difference matters.** No fixed number can bound the delay, because two paths
+ * reset the clock:
+ *
+ *   - `DRAIN_MIN_AGE_MS` is `INGEST_RETENTION_SECONDS` exactly, so the drain
+ *     route only ever looks at entries ALREADY 900s old — it would consume this
+ *     entire slack by construction, on every job it touches.
+ *   - `onTruncated` re-enqueues a remainder that keeps the ORIGINAL `from` under
+ *     a fresh 900s retention, so a truncation chain walks the same lower edge
+ *     forward indefinitely.
+ *
+ * What makes those safe is that `processSegmentJob` re-clamps against this
+ * horizon at FETCH time and fills the clamped span, so coverage is recorded for
+ * what was actually fetched. Without that, a slack big enough to survive the
+ * clamp in `clampSearchParams` would be worse than the 400 it replaced: the
+ * fetch would silently narrow and the planner would record coverage over days
+ * nobody fetched — the exact failure the range ceiling below refuses to permit.
  *
  * **What it costs** is the oldest fifteen minutes of a 30-day window, never
  * fetched: the horizon only moves forward, so that sliver ages out of the
  * window before any later read could plan it. Fifteen minutes of month-old news
- * at the exact edge upstream is about to drop it — against a guaranteed 400 and
- * a five-minute delay on every cold search. One horizon for both paths, rather
- * than a second one for queued segments only: coverage is recorded for the span
- * we ASKED for, and two horizons is two chances to record a span nobody fetched.
+ * at the exact edge upstream is about to drop it, against a five-minute delay on
+ * every cold search.
  */
 export const LOOKBACK_PLAN_SLACK_MS = 15 * 60 * 1000;
+
+/**
+ * Where the lookback edge will still be once a segment planned now is actually
+ * fetched. The single definition of that horizon: the planner subtracts against
+ * it, and `processSegmentJob` re-clamps against it with a fresh `now` before
+ * spending a call, so the two cannot drift apart.
+ */
+export function planHorizon(now: Date, lookbackDays: number): Date {
+  return new Date(now.getTime() - lookbackDays * 86_400_000 + LOOKBACK_PLAN_SLACK_MS);
+}
 
 export function subtractCoverage(
   window: Span,
@@ -65,8 +91,7 @@ export function subtractCoverage(
   // still be once the segment is actually fetched rather than where it is at
   // this instant. Sitting on the live edge produced a 400 on every cold search
   // (see the constant).
-  const horizon =
-    bounds.now.getTime() - bounds.lookbackDays * 86_400_000 + LOOKBACK_PLAN_SLACK_MS;
+  const horizon = planHorizon(bounds.now, bounds.lookbackDays).getTime();
   const from = Math.max(window.from.getTime(), horizon);
   const to = Math.min(window.to.getTime(), bounds.now.getTime());
   if (from >= to) return [];

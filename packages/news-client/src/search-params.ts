@@ -43,12 +43,13 @@ export interface ClampLimits {
  * three move it the same way — OLDER, i.e. out of the window:
  *
  *   - **The wire encoding truncates.** Currents wants whole seconds, so the
- *     adapter drops the milliseconds — flooring the timestamp by up to 999ms.
- *     A boundary value is already outside the window before it is sent, on
- *     999 requests in 1000.
- *   - **The request takes time.** Up to ~28s of it: three attempts at an 8s
- *     timeout with backoff between them, every one re-sending the start date
- *     computed once, here, before the first attempt.
+ *     adapter strips the milliseconds — which for any real timestamp is a
+ *     floor, moving it up to 999ms older. A boundary value is already outside
+ *     the window before it is sent, on 999 requests in 1000.
+ *   - **The request takes time.** Up to 24.6s of it: three attempts at the
+ *     transport's 8s timeout, plus full-jitter backoff capped at 200ms and
+ *     400ms between them, every attempt re-sending the start date computed
+ *     once, here, before the first.
  *   - **Their clock is not our clock.** Any skew in the "upstream is ahead"
  *     direction narrows their window relative to ours by that much.
  *

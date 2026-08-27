@@ -101,17 +101,17 @@ export function createMessageHandler(
     } catch (error) {
       if (isPermanentIngestFailure(error)) {
         // Settle and drop on the FIRST delivery. The retry budget exists for a
-        // world that might have changed by +305s; a malformed query, a revoked
-        // key and a fingerprint ban are not that, so spending three deliveries
-        // and ~610s of latency on one buys nothing and hides the cause behind
-        // two more identical failures in the log.
+        // world that might have changed by +305s; a revoked key and a
+        // fingerprint ban are not that, so spending three deliveries and ~610s
+        // of latency on one buys nothing and hides the cause behind two more
+        // identical failures in the log. The bar for landing on that list is
+        // high and the reasoning for it is in `isPermanentIngestFailure` — in
+        // particular why a 400 is NOT on it.
         //
         // Settling matters as much as dropping: an unsettled entry holds the
         // topic at `in_progress` until the fifteen-minute stale prune, so a
         // reader is told the fill is still coming when nothing will attempt it
-        // again. The gap the job named is re-planned by the next reader who
-        // finds it unfilled — the same recovery the give-up path below relies
-        // on, reached sooner.
+        // again.
         await drainable.queue.settle(job);
         logger.warn(
           {
@@ -120,7 +120,10 @@ export function createMessageHandler(
             job: ingestJobId(job),
             err: error.message,
             kind: error.kind,
-            provider: error.provider,
+            // Read defensively: `isNewsError` is a structural check that claims
+            // `provider` in its return type without ever testing for it, and
+            // this line is the only diagnosis a dropped job ever gets.
+            provider: (error as { provider?: unknown }).provider ?? "unknown",
           },
           "ingest job failed for a reason no redelivery can fix; dropping",
         );

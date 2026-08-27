@@ -196,11 +196,7 @@ describe("parseIngestJob", () => {
 });
 
 describe("isPermanentIngestFailure", () => {
-  it("drops the failures the message itself causes", () => {
-    // `invalid_query` is the one production produced (2026-08-26): a lookback
-    // violation on the oldest segment of a cold search, three deliveries and
-    // ~610s spent on a 400 that could not become a 200.
-    expect(isPermanentIngestFailure(new NewsInvalidQueryError("400"))).toBe(true);
+  it("drops only the credential failures, which no timescale here reaches", () => {
     expect(isPermanentIngestFailure(new NewsAuthError("401"))).toBe(true);
     expect(isPermanentIngestFailure(new NewsBlockedError("cloudflare 1010"))).toBe(true);
   });
@@ -209,6 +205,16 @@ describe("isPermanentIngestFailure", () => {
     expect(isPermanentIngestFailure(new NewsUpstreamError("502", 502))).toBe(false);
     expect(isPermanentIngestFailure(new NewsQuotaError("429"))).toBe(false);
     expect(isPermanentIngestFailure(new NewsTimeoutError("deadline"))).toBe(false);
+  });
+
+  it("keeps a 400, which is the 4xx catch-all and heals across deliveries", () => {
+    // `mapErrorResponse` returns `invalid_query` for any status it does not
+    // otherwise recognise, so an intermediary's 408 wears this kind — and even
+    // a real one can heal, because `clampSearchParams` recomputes against a
+    // fresh `now` on every delivery. Both reasons point the same way.
+    const error = new NewsInvalidQueryError("400");
+    expect(error.retryable).toBe(false);
+    expect(isPermanentIngestFailure(error)).toBe(false);
   });
 
   it("keeps an open circuit, whose `retryable: false` means something else", () => {

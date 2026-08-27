@@ -208,6 +208,8 @@ export class CountingClient implements CurrentsClient {
   priorities: Array<CallOpts["priority"]> = [];
   /** Date span of each search call, ms — the per-call range ceiling's witness. */
   ranges: number[] = [];
+  /** Start date of each search call — the lookback horizon's witness. */
+  starts: Date[] = [];
   /**
    * Artificial per-call latency, for exercising the wall-clock deadline. It is
    * charged to the harness clock rather than slept through: the fill's deadline
@@ -228,6 +230,7 @@ export class CountingClient implements CurrentsClient {
   async search(params: SearchParams, opts?: CallOpts): Promise<SearchResult> {
     this.searchCalls += 1;
     this.priorities.push(opts?.priority);
+    if (params.startDate) this.starts.push(params.startDate);
     if (params.startDate && params.endDate) {
       this.ranges.push(params.endDate.getTime() - params.startDate.getTime());
     }

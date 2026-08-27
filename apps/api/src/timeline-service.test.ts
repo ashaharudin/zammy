@@ -10,7 +10,7 @@ import {
 import type { TimelineEntry } from "@zammy/shared";
 import { hexToBytea, readCoverage, recordCoverage, upsertTopic } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
-import { subtractCoverage } from "./coverage-gaps.js";
+import { planHorizon, subtractCoverage } from "./coverage-gaps.js";
 import { refreshLockKey, tryAcquire } from "./single-flight.js";
 import { processSegmentJob, readTimeline } from "./timeline-service.js";
 import { storyTokens } from "./storyline.js";
@@ -656,6 +656,75 @@ describe("the 7-day per-call range ceiling (observed live 2026-08-11)", () => {
     for (const range of harness.counting.ranges) {
       expect(range).toBeLessThanOrEqual(7 * DAY);
     }
+  });
+});
+
+describe("the lookback edge moves while a job waits in the queue", () => {
+  const DAY = 86_400_000;
+
+  it("a job that aged past the lookback edge covers only what it could fetch", async () => {
+    // The drain route only looks at entries already `DRAIN_MIN_AGE_MS` old —
+    // the whole plan slack, by construction — and `onTruncated` re-enqueues
+    // remainders under a fresh TTL that keep the original lower edge. So a job
+    // WILL reach the consumer with a `from` below the live horizon, and the
+    // question is only whether that is honest or silent.
+    //
+    // It must never be silent: the client's clamp would narrow the request and
+    // return an adjustment nobody on this path reads, and `fillSegment` would
+    // then record coverage for the span it ASKED for — marking days nobody
+    // fetched as fetched, permanently.
+    harness = await createTestHarness({}, NOW);
+    await upsertTopic(harness.deps.db, {
+      fingerprint: climateFingerprint,
+      keywords: ["climate"],
+      language: "en",
+      country: null,
+      category: null,
+    });
+
+    const horizon = planHorizon(NOW, 30);
+    // Enqueued when its `from` was still above the edge; dequeued after it sank.
+    const staleFrom = new Date(horizon.getTime() - 6 * 60 * 60 * 1000);
+    await processSegmentJob(harness.deps, {
+      fingerprint: climateFingerprint,
+      from: staleFrom.toISOString(),
+      to: new Date(horizon.getTime() + DAY).toISOString(),
+      startPage: 1,
+    });
+
+    // Nothing below the horizon was asked for...
+    for (const from of harness.counting.starts) {
+      expect(from.getTime()).toBeGreaterThanOrEqual(horizon.getTime());
+    }
+    // ...and nothing below it was claimed as covered.
+    const covered = await readCoverage(harness.deps.db, climateFingerprint);
+    expect(covered).not.toHaveLength(0);
+    expect(covered[0]!.from.getTime()).toBeGreaterThanOrEqual(horizon.getTime());
+  });
+
+  it("drops a job that sank entirely below the edge rather than covering it", async () => {
+    // No call is possible and no coverage is honest, so the only correct
+    // outcome is to record nothing. Safe because the next planner clamps this
+    // span out of the window too, so it cannot re-plan forever.
+    harness = await createTestHarness({}, NOW);
+    await upsertTopic(harness.deps.db, {
+      fingerprint: climateFingerprint,
+      keywords: ["climate"],
+      language: "en",
+      country: null,
+      category: null,
+    });
+
+    const horizon = planHorizon(NOW, 30);
+    await processSegmentJob(harness.deps, {
+      fingerprint: climateFingerprint,
+      from: new Date(horizon.getTime() - 2 * DAY).toISOString(),
+      to: new Date(horizon.getTime() - DAY).toISOString(),
+      startPage: 1,
+    });
+
+    expect(harness.counting.ranges).toHaveLength(0);
+    expect(await readCoverage(harness.deps.db, climateFingerprint)).toEqual([]);
   });
 });
 

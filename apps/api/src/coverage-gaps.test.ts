@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { LOOKBACK_PLAN_SLACK_MS, subtractCoverage, type Span } from "./coverage-gaps.js";
-import { INGEST_RETENTION_SECONDS } from "./ingest-queue-vercel.js";
+import {
+  MAX_INGEST_DELIVERIES,
+  OBSERVED_REDELIVERY_LEASE_SECONDS,
+} from "./ingest-queue-vercel.js";
 
 /**
  * Coverage-gap math (ARCHITECTURE 6.3 step 3): requested window − covered
@@ -91,24 +94,34 @@ describe("subtractCoverage", () => {
     // `date_range: Max lookback is 30 days` on every cold search.
     //
     // Asserted as a property rather than a literal: replan the same window at
-    // the latest instant any delivery of that plan can still happen, and the
-    // oldest segment must STILL be above the live edge.
+    // the last delivery a failing message gets, and the oldest segment must
+    // still be STRICTLY above the live edge. Strictly — an earlier version of
+    // this test measured against the message TTL instead and passed by exact
+    // equality, i.e. it asserted the segment sits precisely ON the edge, which
+    // is the condition the slack exists to eliminate.
     const window = span("2026-06-01T00:00:00Z", "2026-08-09T00:00:00Z");
     const oldest = subtractCoverage(window, [], bounds).at(-1)!;
 
-    const atLastDelivery = new Date(NOW.getTime() + INGEST_RETENTION_SECONDS * 1000);
-    const liveEdge = atLastDelivery.getTime() - 30 * 86_400_000;
+    const lastDeliveryMs =
+      (MAX_INGEST_DELIVERIES - 1) * OBSERVED_REDELIVERY_LEASE_SECONDS * 1000;
+    const liveEdge = NOW.getTime() + lastDeliveryMs - 30 * 86_400_000;
 
-    expect(oldest.from.getTime()).toBeGreaterThanOrEqual(liveEdge);
+    expect(oldest.from.getTime()).toBeGreaterThan(liveEdge);
   });
 
-  it("keeps the plan slack at least as long as a message can live", () => {
-    // The derivation of the constant, pinned where changing either side breaks.
-    // A message is deleted at `INGEST_RETENTION_SECONDS`, so no delivery can
-    // happen later than that — slack equal to it bounds every delivery that can
-    // still exist. Shrink the slack below the retention and the oldest segment
-    // of a cold search goes back to 400ing on its last attempts.
-    expect(LOOKBACK_PLAN_SLACK_MS).toBeGreaterThanOrEqual(INGEST_RETENTION_SECONDS * 1000);
+  it("keeps the plan slack longer than the delivery budget it is sized for", () => {
+    // The derivation, pinned where changing either side breaks. The last
+    // delivery of a failing message lands at +610s; the remainder absorbs the
+    // gap between planning a segment and publishing it.
+    //
+    // Note what this does NOT claim. `DRAIN_MIN_AGE_MS` is the message TTL
+    // exactly, so the drain route consumes this whole slack by construction,
+    // and `onTruncated` re-enqueues remainders under a fresh TTL that keep the
+    // original lower edge — no constant here can bound either. What makes those
+    // safe is the fetch-time re-clamp in `processSegmentJob`.
+    expect(LOOKBACK_PLAN_SLACK_MS).toBeGreaterThan(
+      (MAX_INGEST_DELIVERIES - 1) * OBSERVED_REDELIVERY_LEASE_SECONDS * 1000,
+    );
   });
 
   it("clamps to now — the future is not a gap", () => {
