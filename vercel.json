@@ -5,7 +5,7 @@
   "outputDirectory": "apps/web/dist",
   "git": {
     "deploymentEnabled": {
-      "*": false,
+      "**": false,
       "main": true
     }
   },
