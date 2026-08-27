@@ -227,6 +227,24 @@ select {
   }
 }
 
+/* Trending cloud's "still gathering" mark (TrendingCloud.tsx CloudLoadingGlyph):
+   a 4×4 grid of SizeGlyph-style squares, rippling corner-to-corner via each
+   cell's own animation-delay rather than row-by-row. */
+.cloud-loading-cell {
+  animation: cloud-loading-cell 1.6s ease-in-out infinite;
+}
+@keyframes cloud-loading-cell {
+  0%,
+  100% {
+    opacity: 0.18;
+    transform: scale(0.7);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+}
+
 /* Motion is the whole message here, so the reduced-motion fallback has to hold
    every part still in a state that still reads as "something is pending". */
 @media (prefers-reduced-motion: reduce) {
@@ -235,7 +253,8 @@ select {
   .ingest-charge,
   .ingest-ghost-marker,
   .ingest-ghost,
-  .ingest-sweep {
+  .ingest-sweep,
+  .cloud-loading-cell {
     animation: none;
   }
   .ingest-ring {
@@ -247,6 +266,9 @@ select {
     opacity: 1;
   }
   .ingest-ghost {
+    opacity: 0.6;
+  }
+  .cloud-loading-cell {
     opacity: 0.6;
   }
 }
