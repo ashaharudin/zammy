@@ -38,6 +38,22 @@ describe("canonicalizeUrl", () => {
     ).toBe("https://example.com/story?id=7");
   });
 
+  it("collapses a feed's ?cmp= link onto the same article as the bare URL", () => {
+    // Every CBC feed link carries `?cmp=rss`, so without this one outlet's whole
+    // output would land as two articles per story — one from the feed, one from
+    // Currents. The Guardian spells the same parameter `CMP`, hence both cases.
+    const bare = canonicalizeUrl("https://www.cbc.ca/news/world/story-9.7322947")!;
+    expect(canonicalizeUrl("https://www.cbc.ca/news/world/story-9.7322947?cmp=rss")).toBe(
+      bare,
+    );
+    expect(
+      canonicalizeUrl("https://www.cbc.ca/news/world/story-9.7322947?CMP=share_btn_url"),
+    ).toBe(bare);
+    expect(deriveDedupKey(canonicalizeUrl("https://x.test/a?cmp=rss")!)).toBe(
+      deriveDedupKey(canonicalizeUrl("https://x.test/a")!),
+    );
+  });
+
   it("drops a dangling question mark once the last tracking param goes", () => {
     expect(canonicalizeUrl("https://example.com/story?utm_source=x")).toBe(
       "https://example.com/story",

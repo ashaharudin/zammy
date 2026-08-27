@@ -156,8 +156,27 @@ export function deriveSightingId(provider: string, providerSightingId: string): 
   ].join("-");
 }
 
-/** Query parameters that identify a referral, never a document. */
-const TRACKING_PARAMS = new Set(["fbclid", "gclid", "msclkid", "igshid", "mc_eid"]);
+/**
+ * Query parameters that identify a referral, never a document.
+ *
+ * Matched case-insensitively by the loop below, which is load-bearing for `cmp`:
+ * CBC spells it `?cmp=rss` and the Guardian spells it `?CMP=share_btn_url`, and
+ * one entry covers both.
+ *
+ * `cmp` earns its place on the publishers' own evidence rather than on the name
+ * looking like "campaign". Both outlets' `rel="canonical"` tags omit it — fetched
+ * with and without it, 2026-08-27, each page declared the bare URL canonical — so
+ * stripping it agrees with what the publisher says the document is. That matters
+ * because the CBC feeds append `?cmp=rss` to *every* link, so without this the
+ * same story reaching us from a feed and from Currents canonicalizes two ways and
+ * becomes two `articles` rows — the failure `dedupKey` exists to prevent, on 100%
+ * of one outlet's articles.
+ *
+ * The bar is deliberately this high. `canonicalizeUrl` treats over-collapsing as
+ * the worse error (see below), so a parameter joins this set only when something
+ * outside our own guesswork says it does not select content.
+ */
+const TRACKING_PARAMS = new Set(["fbclid", "gclid", "msclkid", "igshid", "mc_eid", "cmp"]);
 
 /**
  * Canonical form of a sighting's link, used BOTH as the stored `url` and as the
