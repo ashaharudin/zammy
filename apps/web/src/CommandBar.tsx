@@ -159,7 +159,7 @@ export function CommandBar({
           color: "var(--fg-faint)",
         }}
       >
-        <span>{page ? <AsOf iso={page.meta.asOf} /> : "searching…"}</span>
+        {page && <AsOf iso={page.meta.asOf} />}
         {/* The storyline view is not a search, so there is nothing to narrow. */}
         {!view && (
           <FilterChipRow
