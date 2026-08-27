@@ -82,8 +82,9 @@ export interface RegroupResult {
   retokenized: number;
   /**
    * Storylines whose `profile_tokens` and day slots were re-derived because a
-   * member article was retokenized. Distinct arcs, not visits — one arc holding
-   * fifty retokenized articles is refreshed once.
+   * member article's tokens actually MOVED — not merely because it was
+   * retokenized, which under a version bump is every row in the window. Distinct
+   * arcs, not visits: one arc holding fifty moved articles is refreshed once.
    */
   refreshed: number;
   /** Groups of one that found a group under the current rules. */

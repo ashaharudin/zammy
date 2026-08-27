@@ -76,21 +76,37 @@ generates.
   history rather than staleness, and by the previous bullet a click does not buy
   history.
 
-**Freshness is asked of `max(coverage.upper)` directly, not through
-`trailingSliver`.** That is the one thing here a review caught and reasoning did
-not, so it belongs in the record rather than only in a code comment.
-`trailingSliver` additionally requires the whole window to reduce to ONE sliced
-gap, which is right for the read path — there it separates "stale edge, repair
-behind the reader" from "missing history, take the synchronous fill" — and wrong
-for this one, because a topic minted here is multi-gap from its first click
-onward by construction: the click fills the newest 7 days of a 30-day window and
-never reaches the rest. Under the shape test the edge was therefore never a
-sliver, the freshness gate above was unreachable, and what a click actually did
+**Which branch a click takes is decided by the GAP, in two questions, and the
+route to that shape is worth the record because two review rounds were spent on
+it and each intermediate answer was wrong in its own way.**
+
+The questions the code now asks, in order: does the newest gap reach
+`min(window.to, now)` — if not, coverage sits above it and this is an interior
+hole, so nothing is queued — and does that gap start where coverage inside the
+window stops, which makes it a trailing edge to be judged on age.
+
+*Not* `trailingSliver`, which is what the read path uses. That additionally
+requires the whole window to reduce to ONE sliced gap, which is right there —
+it separates "stale edge, repair behind the reader" from "missing history, take
+the synchronous fill" — and wrong here, because a topic minted by a click is
+multi-gap from its first click onward by construction: the click fills the newest
+7 days of a 30-day window and never reaches the rest. Under the shape test the
+edge was never a sliver, the freshness gate was unreachable, and what a click did
 depended on where the clock sat inside the quarter-hour — measured, an arc whose
 edge was 45 SECONDS old got a 15-second segment job and an upstream call, while
 the same arc a few minutes earlier got nothing. There is no synchronous fill on
-this path for the shape test to be choosing between, so the only question an edge
-poses here is how stale it is.
+this path for a shape test to choose between, so the only question an edge poses
+here is how stale it is.
+
+*And not `max(coverage.upper)` either*, which was the first attempt at replacing
+the shape test and is the more instructive mistake. "The newest gap does not start
+at `max(coverage.upper)`" is not the same claim as "the present is covered":
+`readCoverage` is unfiltered by window, so a topic whose whole coverage has aged
+BELOW the lookback horizon satisfies the first while contradicting the second. It
+read `fresh` on every click, forever, with nothing else in the system to advance
+it — the quiet-arc failure this ADR exists to fix, reintroduced at its centre.
+The gap's own upper edge cannot make that mistake, because below the horizon
+there is no coverage inside the window at all and the gap runs to the clamp.
 
 A **segment's span is snapped onto the 15-minute window grid**, which is the
 one non-obvious mechanism here. `subtractCoverage` clamps its newest gap to
@@ -115,6 +131,16 @@ every timeline page; at `RATE_LIMIT_PER_MINUTE` 60 those 38 POSTs fit inside one
 minute from one IP, with no keywords and no body. What it costs is the deferred
 backfill of every real search for the rest of the day — readers are unaffected,
 because the interactive reserve is what they draw on.
+
+**Dormancy is deliberately not consulted.** `queueStorylineRefresh` reads the
+storyline row and never looks at `status`, so a dormant arc — quiet since March,
+still clickable from the gutter and from surfaced pills (ADR-0011) — has cold
+coverage and therefore spends on its first click where a live arc is gated
+`fresh`. That inverts which arcs cost the most, and it is still right: a top-up
+over the present is exactly how a dormant arc would be SEEN to revive, and
+refusing to ask is refusing to find out. It is also self-limiting rather than
+recurring, because the first click's own job advances that topic's coverage to
+the present and every later click meets the same 60-second gate as any other arc.
 
 Accepted rather than fixed, and the reason is that this is not a new class: one
 keyword search plans five segments, so the same IP can drive the same drain

@@ -316,7 +316,9 @@ async function planAndRead(
   //
   // `labelWords` is that fold and is deliberately the same function the label
   // side is written with: one definition, used on both sides of the comparison.
-  // It matters that it is BOTH halves — `trimWordPunctuation` and then
+  // It matters that it is ALL THREE steps — `trimWordPunctuation`, then
+  // `foldDiacritics` (version 8, so a keyword typed `nino` reaches a corpus that
+  // wrote `niño`), then
   // `singular`. `canonicalize` lowercases and splits on whitespace and stops
   // there, so a keyword still carries its punctuation, and `singular` alone
   // strands the apostrophe: "dillard's" becomes `dillard'`, which no corpus and
@@ -777,12 +779,11 @@ export async function queueStorylineRefresh(
   // Is the newest gap the TRAILING EDGE — the stretch time itself opened since
   // the last fetch — or is it missing history with the present already covered?
   //
-  // Asked directly of `max(coverage.upper)` rather than through
-  // `trailingSliver`, and that is the correction that matters here.
-  // `trailingSliver` additionally requires the whole window to reduce to ONE
-  // sliced gap, which is right for the read path — there it separates "stale
-  // edge, repair behind the reader" from "missing history, take the synchronous
-  // fill" — and wrong for this one. A topic minted here is multi-gap from its
+  // Asked of the GAP rather than through `trailingSliver`, which is what the read
+  // path uses. `trailingSliver` additionally requires the whole window to reduce
+  // to ONE sliced gap, which is right there — it separates "stale edge, repair
+  // behind the reader" from "missing history, take the synchronous fill" — and
+  // wrong for this one. A topic minted here is multi-gap from its
   // first click onward BY CONSTRUCTION: the click fills the newest 7 days of a
   // 30-day window and never reaches the rest, so the window is permanently four
   // slices plus an edge. Under the shape test the edge was therefore never a
@@ -819,8 +820,22 @@ export async function queueStorylineRefresh(
   // At the leading edge. Is it a TRAILING EDGE — coverage running right up to
   // where the gap starts — or is the window simply uncovered from the horizon
   // forward, which is a cold topic however old its rows are?
-  const coverageUpper = covered.at(-1)?.to;
-  if (coverageUpper !== undefined && gap.from.getTime() === coverageUpper.getTime()) {
+  //
+  // The highest coverage bound AT OR BELOW the leading edge, not `covered.at(-1)`.
+  // Those are the same row except when coverage reaches past `now`, which the app
+  // cannot write (`processSegmentJob` clamps its own span) but two replicas on
+  // skewed clocks can: an island at `now+1h` above a stale edge at `now-1h` makes
+  // the global max disagree with the gap's start, and the edge silently stops
+  // being a top-up. It still gets one bounded job, so nothing runs away — but a
+  // segment's identity carries its upper bound, so every quarter-hour of clicks
+  // would mint a fresh one and spend its own call, which is the dedup the
+  // snapping note above exists to protect.
+  const leadingEdgeCoverage = covered.reduce<number | undefined>((highest, span) => {
+    const upper = span.to.getTime();
+    if (upper > leadingEdgeMs) return highest;
+    return highest === undefined || upper > highest ? upper : highest;
+  }, undefined);
+  if (leadingEdgeCoverage !== undefined && gap.from.getTime() === leadingEdgeCoverage) {
     if (now.getTime() - gap.from.getTime() <= freshnessTtlMs(query.window.to, now)) {
       deps.metrics?.storylineRefresh("fresh");
       return { status: "fresh", ...settled };

@@ -179,10 +179,16 @@ function dedupeBy<T>(items: readonly T[], key: (item: T) => string): T[] {
  * tokens the coverage says beat asking upstream for nothing.
  *
  * `null` — never an empty string — for an arc with **no profile**, whatever its
- * label says. An empty `profile_tokens` means the arc has no coverage vocabulary
- * to ask about: it was merged away (`mergeStorylines` clears the loser's) or
- * never promoted. Nothing to ask upstream, and `canonicalize` would answer a 400
- * on a keyword no caller chose.
+ * label says: no coverage vocabulary means nothing to ask about, and
+ * `canonicalize` would answer a 400 on a keyword no caller chose.
+ *
+ * What such an arc IS, since the answer decides where to look when
+ * `zammy_storyline_refreshes_total{result="no_keywords"}` moves: a LIVE arc whose
+ * majority-support profile came out empty — every member's `story_tokens` empty,
+ * or a hand-built or provisional arc nobody labelled. Not a merged-away one,
+ * whose profile `mergeStorylines` also clears: `queueStorylineRefresh` resolves
+ * the alias chain BEFORE reading the row, so it only ever sees a survivor. So a
+ * count here is a tokenization or labelling problem, never a merge one.
  *
  * The profile guard comes FIRST, before the label, and that ordering is the whole
  * of the difference from `cloudQuery`. `cloudQuery`'s last resort returns the

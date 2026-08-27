@@ -90,8 +90,12 @@ const MIN_SHARED_TOKENS = 2;
  *
  *   1. `pnpm regroup --tokens-only --days=<retention>` — re-derives the stored
  *      tokens, and (since version 8) the `profile_tokens` of every arc holding a
- *      retokenized row, which is materialized from them and which nothing else
- *      recomputes without a membership change. **`--days` defaults to 1**, so
+ *      row whose tokens actually MOVED, which is materialized from them and which
+ *      nothing else recomputes without a membership change. Moved, not merely
+ *      re-derived: a bump marks the whole window stale while a fold changes a
+ *      fraction of it, so `refreshed` is rightly far smaller than `re-tokenized`
+ *      (188 against 32,279 below) and a run is not under-reporting when it says
+ *      so. **`--days` defaults to 1**, so
  *      the bare command repairs today and leaves every older row behind; pass
  *      the retention window (90) to mean the archive.
  *   2. `pnpm story:df --rebuild` — `recordGrouping` writes `story_tokens` but

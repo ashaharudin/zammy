@@ -7,7 +7,7 @@ import { sql, type Kysely } from "kysely";
  *
  * A column and not an expression index, because the fold is not expressible in
  * SQL and must not be re-expressed there. Label words are folded by
- * `normalizeLabel` — `trimWordPunctuation` and then `singular`, the same two
+ * `normalizeLabel` — `trimWordPunctuation`, then `foldDiacritics`, then `singular`, the same three
  * steps in the same order the corpus ran on its way into `story_tokens` — and
  * that is the whole point: `profile_tokens` and `label_words` reach the SAME
  * SPELLING for the same word, so surfacing compares one folded keyword against

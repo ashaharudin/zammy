@@ -136,9 +136,11 @@ describe("a Latin accent does not split a name from itself (tokenizer version 8)
     expect(foldDiacritics("tiếng")).toBe("tieng");
   });
 
-  it("leaves a name's INTERNAL punctuation alone while folding its accent", () => {
-    // "Pied-à-Terre" is one token by the identifier rule (§10.2) and the fold
-    // must not become a second reason to shred it.
+  it("folds a hyphenated name without shredding it", () => {
+    // "Pied-à-Terre" is one token by the identifier rule (§10.2). The fold only
+    // ever deletes marks, so it cannot split a token whatever the implementation
+    // — this is documentation of the shape rather than a falsifiable guard. The
+    // real witness for the fold's boundary is the non-Latin case below.
     expect(foldDiacritics("pied-à-terre")).toBe("pied-a-terre");
   });
 

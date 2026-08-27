@@ -273,7 +273,11 @@ describe("what a click asks for", () => {
 
     await refresh(storylineId);
 
-    // The whole point of queueing: the click is a route transition, not a wait.
+    // A forward guard rather than a witness: no branch of the planner can reach
+    // `currents.search` today, so this cannot fail as written — it exists to fail
+    // the day someone adds a synchronous fill here. The claim's real witness is
+    // the route test with the reference cache cold, which is where the spend
+    // actually leaked in (`cachedReference`).
     expect(harness.counting.searchCalls).toBe(0);
   });
 });

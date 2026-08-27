@@ -129,7 +129,8 @@ export interface LabelMergeRefusal {
 }
 
 /**
- * Fold a label to its comparison form: case, spacing and plurals.
+ * Fold a label to its comparison form: case, spacing, Latin diacritics and
+ * plurals.
  *
  * Deliberately NOT stopword-elided. "Strait of Hormuz Crisis" and "Strait Hormuz
  * Crisis" stay two labels here, even though ADR-0010's cloud phrasing would
@@ -169,7 +170,7 @@ export function normalizeLabel(label: string): string {
 export interface LabelWord {
   /** The label's own spelling, lowercased, minus the punctuation that WRAPS a word. */
   surface: string;
-  /** The corpus spelling: `surface` under `singular`. */
+  /** The corpus spelling: `surface` under `foldDiacritics` and then `singular`. */
   folded: string;
 }
 
