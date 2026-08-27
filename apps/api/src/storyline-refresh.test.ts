@@ -354,6 +354,29 @@ describe("how much a click may queue", () => {
     expect(harness.counting.searchCalls).toBe(0);
   });
 
+  it("treats a topic whose coverage aged below the horizon as the cold one it is", async () => {
+    // Read as "fresh" forever for one round of review: the newest gap does not
+    // start at max(coverage.upper), which is not the same claim as "the present
+    // is covered". The arc this describes — searched 40 days ago and untouched
+    // since — is precisely the one ADR-0017 exists for, and nothing else in the
+    // system would ever have advanced it.
+    const storylineId = await seedStoryline();
+    const cold = await refresh(storylineId);
+    if (cold.status !== "queued") throw new Error(cold.status);
+    await recordCoverage(db, cold.fingerprint, {
+      from: new Date(NOW.getTime() - 47 * 86_400_000),
+      to: new Date(NOW.getTime() - 40 * 86_400_000),
+    });
+
+    const outcome = await refresh(storylineId);
+
+    expect(outcome.status).toBe("queued");
+    if (outcome.status !== "queued") return;
+    // The newest 7 days, on the grid — the cold shape, not a top-up.
+    expect(outcome.job.kind).toBeUndefined();
+    expect(new Date(outcome.job.to).getTime()).toBe(GRID.getTime());
+  });
+
   it("leaves an interior hole alone when the present is covered", async () => {
     const storylineId = await seedStoryline();
     const cold = await refresh(storylineId);
@@ -387,8 +410,9 @@ describe("how much a click may queue", () => {
     if (outcome.status !== "queued") throw new Error(outcome.status);
 
     // A top-up, not a segment: its identity omits the upper edge, so a click a
-    // minute later asks for the same thing (§6.4). Reached through the
-    // multi-gap shape a click leaves, which is the point of the test above.
+    // minute later asks for the same thing (§6.4). One contiguous coverage span
+    // here, so this pins the top-up itself; the shape a click actually leaves is
+    // the previous test's subject.
     expect(outcome.job.kind).toBe("topup");
     expect(new Date(outcome.job.from).getTime()).toBe(coverageUpper.getTime());
     const later = await refresh(storylineId, new Date(NOW.getTime() + 60_000));

@@ -1009,7 +1009,7 @@ All triggers originate from a user request:
 | **Breadth sample** — first landing-page visit after the last `/latest-news` snapshot staled (§10.1) | queued, background | `SAMPLE_PAGES` calls/sample (default 2), ≤48/day per language |
 | **Deferred backfill** — gap segments and subdivisions §6.3 didn't have budget for | queued, background | metered |
 | **Refresh-on-read** — stale coverage noticed while serving (§6.4) | queued, background | ~1 call |
-| **Storyline opened** — a label clicked anywhere: the cloud, the gutter, a pill (ADR-0017) | queued, background | 0 or 1 call, freshness-gated |
+| **Storyline opened** — a label clicked anywhere: the cloud, the gutter, a pill (ADR-0017) | queued, background | 0 or 1 call, freshness-gated; ~38 distinct arcs is a day's background budget (ADR-0017) |
 
 The worker also handles coverage-span merging and a daily `/available/*` refresh (3 calls).
 

@@ -207,6 +207,28 @@ describe("POST /api/v1/storylines/:id/refresh", () => {
     expect(topic?.language).toBe("en"); // the route's defaultLanguage
   });
 
+  it("spends no upstream call, even with the reference cache cold", async () => {
+    await setup();
+    const read = await app.inject({ method: "GET", url: `${TIMELINE}?q=climate&${QS}` });
+    const storylineId = (TimelinePage.parse(read.json()).items[0] as { storylineId: string })
+      .storylineId;
+    // A cold `ref:*` is the ordinary state, not an exotic one — dev Redis evicts
+    // under volatile-lru. `loadReference` answers a miss with three INTERACTIVE
+    // upstream calls, which on a path advertised as spending nothing would let a
+    // reader clicking through the cloud drain the day's quota invisibly, at the
+    // same moment the per-IP limiter fails open. So this path reads the cache and
+    // stops there.
+    await harness.redis.del("ref:languages", "ref:regions", "ref:categories");
+    const calls = harness.counting.searchCalls;
+    const reference = harness.counting.referenceCalls;
+
+    const response = await app.inject({ method: "POST", url: refresh(storylineId) });
+
+    expect(response.statusCode).toBe(202);
+    expect(harness.counting.searchCalls).toBe(calls);
+    expect(harness.counting.referenceCalls).toBe(reference);
+  });
+
   it("is a 404 for a UUID this database has never held", async () => {
     await setup();
 

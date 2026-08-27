@@ -241,9 +241,10 @@ function tokenRuns(text: string): string[][] {
   for (const segment of segments) {
     let run: string[] = [];
     for (const chunk of segment.split(/\s+/u)) {
-      // The corpus spelling, which is a folded one by definition: nothing reads
-      // a `story_tokens` entry back to a reader, so an accent here can only ever
-      // be a way for the same name to fail to match itself (`foldDiacritics`).
+      // The corpus spelling, which is a folded one: an accent here is a way for
+      // the same name to fail to match itself, and almost nothing reads a token
+      // back to a reader (`foldDiacritics` names the one thing that does — the
+      // bigram fallback label — and why that trade is taken).
       const token = foldDiacritics(trimWordPunctuation(chunk));
       if (token.length > 0) {
         run.push(token);
@@ -338,6 +339,22 @@ export function trimWordPunctuation(token: string): string {
  * crisi" lesson behind it), and a placeholder proposing `nino` for an arc whose
  * headlines all say Niño is the same class of mistake one step smaller. The
  * corpus spelling folds; the surface does not.
+ *
+ * **One reader does see the folded spelling, and it is worth naming rather than
+ * leaving the sentence above sounding absolute.** `bigramLabel` draws its
+ * candidates from `contentTokenPairs` — these tokens — and Title Cases them into
+ * `storylines.label`, so the DETERMINISTIC fallback label of an accented-name arc
+ * reads "Turkiye Ankara" where the headlines say Türkiye. The model's own labels
+ * are untouched (they arrive as text and keep their accents through
+ * `LabelWord.surface`), so this is the arcs the model could not name.
+ *
+ * Left as-is, deliberately. Undoing it needs a surface corpus on the labelling
+ * path — `story_tokens` carries one spelling per word and it is the folded one —
+ * which is the cost ADR-0014 declined for the ordering question and would decline
+ * again for a diacritic on a fallback label. Weighed against it: 108 names in the
+ * archive stop being two words. Recorded because the placement above was argued
+ * from "nothing reads a `story_tokens` entry back to a reader", and that premise
+ * is false rather than merely imprecise.
  */
 export function foldDiacritics(token: string): string {
   return token

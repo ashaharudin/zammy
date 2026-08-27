@@ -31,6 +31,13 @@ export interface QueryRouteOptions {
 /** 24h, matching the upstream refresh cadence in §9.1. */
 const REFERENCE_TTL_MS = 24 * 60 * 60 * 1000;
 
+/** What a caller validates against when the cached reference is not there. */
+const EMPTY_REFERENCE_CODES: ReferenceCodes = {
+  languages: new Set(),
+  regions: new Set(),
+  categories: new Set(),
+};
+
 interface ReferenceData {
   languages: Record<string, string>;
   regions: Record<string, string>;
@@ -155,8 +162,10 @@ export async function registerQueryRoutes(
         });
       }
 
-      const reference = await loadReference(deps);
-      const codes = referenceCodes(reference);
+      // The CACHED reference only — never `loadReference`, which spends three
+      // interactive upstream calls on a cold cache. See `cachedReference`.
+      const cached = await cachedReference(deps);
+      const codes = cached === null ? null : referenceCodes(cached);
       const outcome = await queueStorylineRefresh(deps, {
         storylineId: id,
         // The window is the default lookback ending now — no `from`/`to` is
@@ -177,17 +186,21 @@ export async function registerQueryRoutes(
           // path) and permanent for that arc, which is the worst available
           // outcome: a refresh in the configured default is worth more than no
           // refresh for as long as the arc exists.
-          const filter = language !== undefined && codes.languages.has(language);
+          const filter =
+            language !== undefined && codes !== null && codes.languages.has(language);
           if (language !== undefined && !filter) {
             deps.log?.warn(
-              { storyline: id, language },
+              { storyline: id, language, cachedReference: codes !== null },
               "storyline refresh: the arc's own language is not a query code; falling back to the default",
             );
           }
           return canonicalize(
             { q: keywords, ...(filter ? { language } : {}) },
             {
-              reference: codes,
+              // An empty set on a cache miss, which costs nothing: the only field
+              // being validated is the language, and `filter` above has already
+              // dropped it. Country and category are never sent from here.
+              reference: codes ?? EMPTY_REFERENCE_CODES,
               defaultLanguage: options.defaultLanguage,
               lookbackDays: deps.config.lookbackDays,
               now: deps.now(),
@@ -316,10 +329,31 @@ async function loadReference(deps: TimelineDeps): Promise<ReferenceData> {
   };
 }
 
-async function fetchReference(deps: TimelineDeps): Promise<ReferenceData> {
-  const keys = ["ref:languages", "ref:regions", "ref:categories"] as const;
+/**
+ * The cached reference, or `null` — for the one caller that must not spend an
+ * upstream call to learn a language code (`/storylines/:id/refresh`).
+ *
+ * `fetchReference` below falls through a cold or faulted cache to three
+ * `interactive` upstream calls, which on a request path advertised as spending
+ * nothing is the worst shape available: the reference load exists there only to
+ * decide whether to KEEP the arc's own language, and the route is already willing
+ * to drop it. A cold `ref:*` (dev Redis evicts under `volatile-lru`) or an
+ * Upstash blip would therefore have turned every label click into three calls at
+ * the moment the per-IP limiter also fails open (`skipOnError`) — a reader
+ * clicking through the cloud draining a day's quota, invisibly, since the caller
+ * has no error path.
+ *
+ * So a miss means "no codes", which means the language is dropped and the
+ * configured default is used. Same answer the route already gives a language the
+ * table does not list, reached without asking anyone.
+ */
+async function cachedReference(deps: TimelineDeps): Promise<ReferenceData | null> {
   try {
-    const [languages, regions, categories] = await deps.redis.mget(...keys);
+    const [languages, regions, categories] = await deps.redis.mget(
+      "ref:languages",
+      "ref:regions",
+      "ref:categories",
+    );
     if (languages && regions && categories) {
       return {
         languages: JSON.parse(languages) as Record<string, string>,
@@ -328,8 +362,15 @@ async function fetchReference(deps: TimelineDeps): Promise<ReferenceData> {
       };
     }
   } catch {
-    // Redis down → fetch through the client; degraded, not down (§11).
+    // Redis down — a miss, same as a cold key. Never an upstream call here.
   }
+  return null;
+}
+
+async function fetchReference(deps: TimelineDeps): Promise<ReferenceData> {
+  const keys = ["ref:languages", "ref:regions", "ref:categories"] as const;
+  const cached = await cachedReference(deps);
+  if (cached) return cached;
 
   const [languages, regions, categories] = await Promise.all([
     deps.currents.availableLanguages(),

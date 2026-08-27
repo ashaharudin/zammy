@@ -142,6 +142,17 @@ describe("regroup", () => {
     const profile = (await readStoryline(harness.deps.db, arc.id))?.profileTokens ?? [];
     expect(profile).toContain("killer");
     expect(profile).not.toContain("killers");
+    // And the marker the re-derivation owes (migration 0017): `linkGroup` READS
+    // an arc's profile, so a profile that moved is an answer that could have
+    // moved, and without this the late-candidate sweep never re-offers it — for
+    // a quiet arc, never. Asserted because omitting the call was a review
+    // finding once already.
+    const marked = await harness.deps.db
+      .selectFrom("storylines")
+      .select("link_dirty_at")
+      .where("id", "=", arc.id)
+      .executeTakeFirstOrThrow();
+    expect(marked.link_dirty_at).not.toBeNull();
   });
 
   it("refreshes nothing when a bumped row's tokens come out identical", async () => {

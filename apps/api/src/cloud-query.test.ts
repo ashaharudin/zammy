@@ -172,10 +172,17 @@ describe("storylineKeywords", () => {
     ).toBe("kelowna wildfire");
   });
 
-  it("has nothing to ask for when there is neither a label nor a profile", () => {
+  it("has nothing to ask for when the arc has no profile, label or not", () => {
     // A merged-away arc: `mergeStorylines` clears the loser's profile. Null
     // rather than "", because an empty query is a 400 from canonicalize about a
     // keyword no caller chose.
     expect(storylineKeywords({ label: null, profileTokens: [] })).toBeNull();
+    // And with a label, which is where the two functions must diverge:
+    // `cloudQuery` returns the label VERBATIM here, which is the right string to
+    // SHOW and the wrong one to SEND — four conjunctive terms is the query
+    // ADR-0014 measured at zero results.
+    const label = "Hurricane Fausto Hawaii Landfall";
+    expect(cloudQuery({ label, profileTokens: [] })).toBe(label);
+    expect(storylineKeywords({ label, profileTokens: [] })).toBeNull();
   });
 });

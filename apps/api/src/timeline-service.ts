@@ -792,19 +792,35 @@ export async function queueStorylineRefresh(
   // upstream call, while the same arc a few minutes earlier got nothing. There
   // is no synchronous fill on this path for the shape test to be choosing
   // between, so the only question the edge poses is how stale it is.
-  const coverageUpper = covered.at(-1)?.to;
-  const trailing =
-    coverageUpper !== undefined && gap.from.getTime() === coverageUpper.getTime();
-
-  if (!trailing && coverageUpper !== undefined) {
-    // Coverage reaches the present and the newest gap is an interior hole. Not a
-    // freshness question at all, and §9.4 says a click does not buy history:
-    // left for a reader who searches the words.
+  // Does the newest gap REACH the present? `subtractCoverage` clamps its upper
+  // bound to min(window.to, now) and pushes a trailing gap only if the sweep did
+  // not already run past it, so a gap ending at that clamp is the leading edge
+  // and a gap ending earlier is a hole with coverage above it.
+  //
+  // Asked of the gap rather than of `max(coverage.upper)`, which is what this
+  // read instead for one round of review and got wrong: "the newest gap does not
+  // start at max(coverage.upper)" is not the same claim as "the present is
+  // covered", and a topic whose whole coverage has aged BELOW the lookback
+  // horizon satisfies the first while contradicting the second. Such a topic —
+  // one searched 40 days ago and untouched since, which is exactly the arc this
+  // ADR exists for — read `fresh` on every click, forever, with nothing else in
+  // the system to advance it. Reading the gap's own upper edge cannot make that
+  // mistake: below the horizon there is no coverage inside the window at all, so
+  // the gap runs to the clamp and the topic is treated as the cold one it is.
+  const leadingEdgeMs = Math.min(query.window.to.getTime(), now.getTime());
+  if (gap.to.getTime() !== leadingEdgeMs) {
+    // An interior hole under a covered present. Not a freshness question at all,
+    // and §9.4 says a click does not buy history: left for a reader who searches
+    // the words.
     deps.metrics?.storylineRefresh("fresh");
     return { status: "fresh", ...settled };
   }
 
-  if (trailing) {
+  // At the leading edge. Is it a TRAILING EDGE — coverage running right up to
+  // where the gap starts — or is the window simply uncovered from the horizon
+  // forward, which is a cold topic however old its rows are?
+  const coverageUpper = covered.at(-1)?.to;
+  if (coverageUpper !== undefined && gap.from.getTime() === coverageUpper.getTime()) {
     if (now.getTime() - gap.from.getTime() <= freshnessTtlMs(query.window.to, now)) {
       deps.metrics?.storylineRefresh("fresh");
       return { status: "fresh", ...settled };

@@ -178,18 +178,33 @@ function dedupeBy<T>(items: readonly T[], key: (item: T) => string): T[] {
  * tolerates the same arbitrariness — there is no subject to name, and any two
  * tokens the coverage says beat asking upstream for nothing.
  *
- * `null` — never an empty string — for a storyline with neither: no label, and
- * a profile that is empty because the arc was merged away (`mergeStorylines`
- * clears it) or never promoted. Nothing to ask upstream, and `canonicalize`
- * would answer a 400 on a keyword the caller did not choose.
+ * `null` — never an empty string — for an arc with **no profile**, whatever its
+ * label says. An empty `profile_tokens` means the arc has no coverage vocabulary
+ * to ask about: it was merged away (`mergeStorylines` clears the loser's) or
+ * never promoted. Nothing to ask upstream, and `canonicalize` would answer a 400
+ * on a keyword no caller chose.
+ *
+ * The profile guard comes FIRST, before the label, and that ordering is the whole
+ * of the difference from `cloudQuery`. `cloudQuery`'s last resort returns the
+ * label VERBATIM when the profile is empty, which is right for what it feeds — a
+ * placeholder is a string to show, and ADR-0013's behaviour is the best available
+ * one. It is wrong for what this feeds: these words become `?q=` and the keywords
+ * handed to upstream `/search`, so a four-word label arrives as four conjunctive
+ * terms — exactly the query ADR-0014 measured at zero results across every
+ * label-shaped search in the archive. `cloudQuery` calls that branch unreachable
+ * for a promoted, labelled arc and is right, but this route accepts any UUID the
+ * `storylines` table holds, so the reachability argument was doing more work here
+ * than it was written for. Better to spend nothing than to spend a call on a
+ * query already known to return nothing.
  */
 export function storylineKeywords(input: {
   label: string | null;
   profileTokens: readonly string[];
 }): string | null {
+  const tokens = [...new Set(input.profileTokens)];
+  if (tokens.length === 0) return null;
   if (input.label !== null) {
     return cloudQuery({ label: input.label, profileTokens: input.profileTokens });
   }
-  const tokens = [...new Set(input.profileTokens)].slice(0, CLOUD_QUERY_TERMS);
-  return tokens.length > 0 ? tokens.join(" ") : null;
+  return tokens.slice(0, CLOUD_QUERY_TERMS).join(" ");
 }

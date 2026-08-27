@@ -106,6 +106,25 @@ Below that, nothing is new. Queued jobs fetch at `"background"` priority behind
 the interactive reserve, the per-topic daily cap binds before every call, and
 the per-IP rate limit already covers `/api/v1/*` (§9.4).
 
+**Per arc those guards bind; across arcs nothing does, and the arithmetic is
+small enough to write down.** Every storyline is its own topic with its own
+20-call cap, and the background allowance is `CURRENTS_DAILY_CALL_LIMIT −
+INTERACTIVE_RESERVE` — 750 on today's settings. So roughly **38 distinct
+storyline UUIDs is the whole day's background budget**, and UUIDs are public on
+every timeline page; at `RATE_LIMIT_PER_MINUTE` 60 those 38 POSTs fit inside one
+minute from one IP, with no keywords and no body. What it costs is the deferred
+backfill of every real search for the rest of the day — readers are unaffected,
+because the interactive reserve is what they draw on.
+
+Accepted rather than fixed, and the reason is that this is not a new class: one
+keyword search plans five segments, so the same IP can drive the same drain
+through `/timeline` with about a fifth as many requests. A click is a materially
+CHEAPER trigger, which is the honest new fact here, and §9.4's answer to
+user-driven spend — per-topic cap, per-IP ceiling, interactive reserve — is the
+answer to it too. A global daily ceiling on click-driven refresh is the fix if
+this ever bites; it is a new mechanism with its own tuning and no evidence yet
+asking for it.
+
 ## Consequences
 
 - **Topic rows now exist that nobody searched for.** One per clicked arc, with
