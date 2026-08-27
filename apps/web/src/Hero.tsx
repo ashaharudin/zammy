@@ -6,7 +6,7 @@ import { MONO } from "./theme.js";
 import { TrendingCloud } from "./TrendingCloud.js";
 import { useReference } from "./useTimeline.js";
 
-const SEARCH_PLACEHOLDER = "Search for a timeline of when it happens...";
+const SEARCH_PLACEHOLDER = "Search for a timeline for when news happens...";
 
 /**
  * The empty state: the rolling 24-hour wordcloud — the storylines the window
