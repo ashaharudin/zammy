@@ -164,12 +164,17 @@ export function shouldRetryDelivery(deliveryCount: number): boolean {
  * attempt could have helped.
  *
  * Two kinds clear that bar, both mapped from a specific status rather than
- * inferred:
+ * inferred. The statuses below are CURRENTS' mapping — mapping is per-adapter
+ * by design (see the taxonomy in `errors.ts`), and GNews for instance reads 403
+ * as a spent daily budget and never emits `blocked` at all. It is the KINDS
+ * that are the contract here; the statuses are named only to show that neither
+ * is a catch-all:
  *
- *   - `auth` — 401, or a JSON 403. The key is missing, wrong, or revoked, and an
- *     operator fixes that on a timescale no 610s budget reaches.
- *   - `blocked` — a non-JSON 403, i.e. a Cloudflare fingerprint ban on our
- *     User-Agent. Same remedy, same timescale.
+ *   - `auth` — Currents' 401, or a JSON 403. The key is missing, wrong, or
+ *     revoked, and an operator fixes that on a timescale no retry budget here
+ *     reaches.
+ *   - `blocked` — Currents' non-JSON 403, i.e. a Cloudflare fingerprint ban on
+ *     our User-Agent. Same remedy, same timescale.
  *
  * **`invalid_query` is deliberately NOT here**, and the production 400 of
  * 2026-08-26 is the reason rather than a counter-example. Two things rule it
@@ -190,7 +195,9 @@ export function shouldRetryDelivery(deliveryCount: number): boolean {
  */
 const PERMANENT_FAILURE_KINDS: ReadonlySet<string> = new Set(["auth", "blocked"]);
 
-export function isPermanentIngestFailure(error: unknown): error is Error & { kind: string } {
+export function isPermanentIngestFailure(
+  error: unknown,
+): error is Error & { kind: string; provider: string } {
   return isNewsError(error) && PERMANENT_FAILURE_KINDS.has(error.kind);
 }
 

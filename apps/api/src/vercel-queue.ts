@@ -120,10 +120,7 @@ export function createMessageHandler(
             job: ingestJobId(job),
             err: error.message,
             kind: error.kind,
-            // Read defensively: `isNewsError` is a structural check that claims
-            // `provider` in its return type without ever testing for it, and
-            // this line is the only diagnosis a dropped job ever gets.
-            provider: (error as { provider?: unknown }).provider ?? "unknown",
+            provider: error.provider,
           },
           "ingest job failed for a reason no redelivery can fix; dropping",
         );

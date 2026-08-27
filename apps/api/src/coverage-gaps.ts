@@ -24,12 +24,16 @@ export interface Span {
  * — which is precisely what production did on 2026-08-26 for the oldest segment
  * of every cold search.
  *
- * Fifteen minutes covers the delivery budget with room: the last attempt on a
- * failing message lands at +610s (`(MAX_INGEST_DELIVERIES - 1)` leases), and the
- * rest absorbs the gap between planning a segment and publishing it — the sync
- * fill runs first, and its floor-of-one call can spend ~25s on transport
- * retries before the deferred jobs are enqueued. `coverage-gaps.test.ts` pins
- * that inequality.
+ * Fifteen minutes covers the delivery budget with room. The last attempt on a
+ * failing message is `MAX_INGEST_DELIVERIES - 1` redeliveries out: +600s by
+ * `OBSERVED_REDELIVERY_LEASE_SECONDS`, or +610s at the redelivery actually
+ * measured (305s, five seconds past the lease). The rest absorbs the gap
+ * between planning a segment and publishing it — the sync fill runs first, and
+ * its floor-of-one call can spend ~25s on transport retries before the deferred
+ * jobs are enqueued. `coverage-gaps.test.ts` pins that inequality, and pins the
+ * one the fetch-time clamp actually depends on: this slack must stay above
+ * `LOOKBACK_CLAMP_MARGIN_MS`, or the client narrows below the span
+ * `processSegmentJob` just clamped to and the silent-coverage failure returns.
  *
  * **This slack is an optimization, NOT the correctness mechanism, and the
  * difference matters.** No fixed number can bound the delay, because two paths

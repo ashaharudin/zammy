@@ -608,9 +608,20 @@ export async function processSegmentJob(deps: TimelineDeps, job: SegmentJob): Pr
   if (!topic) throw new Error(`segment job for unknown topic ${job.fingerprint}`);
 
   // The lock key is derived from the span as ENQUEUED, not from the clamped one
-  // below: it must be stable across redeliveries of the same message and must
-  // match the key the interactive path takes for the same gap. The clamp moves
-  // with the clock; the identity of the work does not.
+  // below, so it is stable across redeliveries of the same message. The clamp
+  // moves with the clock; the identity of the message does not.
+  //
+  // It does NOT follow that this key matches whatever the interactive path
+  // holds for "the same" gap, and for the OLDEST gap it provably cannot:
+  // `subtractCoverage` starts that gap at `planHorizon(now)`, which strictly
+  // increases, so a re-plan a minute later mints a different span and therefore
+  // a different key. Two fetchers can hold two keys over spans that clamp to
+  // nearly the same interval and both spend a call. That predates the clamp —
+  // before it, `clampSearchParams` collapsed the two spans downstream just the
+  // same — and keying on the clamped span would not close it either, since the
+  // two clamps happen at different instants. Recorded rather than fixed: the
+  // cost is a duplicate fetch on one segment, and the collapse makes it
+  // idempotent.
   const requested: Span = { from: new Date(job.from), to: new Date(job.to) };
   const lockKey = refreshLockKey(job.fingerprint, requested);
   const token = await tryAcquire(deps.redis, lockKey, 30_000);
@@ -673,6 +684,14 @@ export async function processSegmentJob(deps: TimelineDeps, job: SegmentJob): Pr
         slice,
         { deadline: Number.POSITIVE_INFINITY, maxCalls: Number.POSITIVE_INFINITY, callsUsed: 0 },
         // The resume page belongs to the slice the deadline actually cut.
+        //
+        // A stored page number survives the clamp above because upstream sorts
+        // `published` DESC (PROBE-FINDINGS §1, verified monotonic): raising a
+        // span's lower edge drops articles from the TAIL of that ordering, so
+        // pages 1..N-1 hold the same newest articles either way and the
+        // narrowed query simply runs out of pages sooner. Resuming at N then
+        // reads a short or empty page, which is the honest end-of-results
+        // signal for the clamped span — everything in it was already seen.
         index === 0 ? job.startPage : 1,
         // No reader is waiting: draw only what the interactive reserve spares
         // (§9.4). A refusal fails the job; BullMQ's backoff is the retry pacing.

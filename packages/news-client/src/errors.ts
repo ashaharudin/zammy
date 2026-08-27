@@ -182,6 +182,12 @@ export function isNewsError(
   return (
     value instanceof Error &&
     typeof (value as { kind?: unknown }).kind === "string" &&
-    typeof (value as { retryable?: unknown }).retryable === "boolean"
+    typeof (value as { retryable?: unknown }).retryable === "boolean" &&
+    // Checked, not merely asserted. Every `NewsError` carries `provider` from
+    // its field initializer, so this costs real errors nothing — but callers
+    // read it straight off the narrowed type into log lines that are sometimes
+    // the only diagnosis a failure gets, and an unchecked assertion logs
+    // `undefined` at exactly that moment.
+    typeof (value as { provider?: unknown }).provider === "string"
   );
 }

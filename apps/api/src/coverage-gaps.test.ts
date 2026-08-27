@@ -4,6 +4,7 @@ import {
   MAX_INGEST_DELIVERIES,
   OBSERVED_REDELIVERY_LEASE_SECONDS,
 } from "./ingest-queue-vercel.js";
+import { LOOKBACK_CLAMP_MARGIN_MS } from "@zammy/news-client";
 
 /**
  * Coverage-gap math (ARCHITECTURE 6.3 step 3): requested window − covered
@@ -107,6 +108,24 @@ describe("subtractCoverage", () => {
     const liveEdge = NOW.getTime() + lastDeliveryMs - 30 * 86_400_000;
 
     expect(oldest.from.getTime()).toBeGreaterThan(liveEdge);
+  });
+
+  it("keeps the plan horizon above the client's own clamp — the correctness pin", () => {
+    // THE inequality the fetch-time clamp rests on, and the one nothing else
+    // would catch. `processSegmentJob` raises a stale segment to
+    // `planHorizon(now)` and records coverage for what it fetches; that is only
+    // honest while `clampSearchParams` leaves that span alone. The client
+    // clamps to `now - lookback + LOOKBACK_CLAMP_MARGIN_MS`, so the moment the
+    // margin exceeds the slack it narrows BELOW the span we just clamped to,
+    // `fillSegment` records the span it asked for, and days nobody fetched are
+    // marked fetched — silently, with every other test still green.
+    //
+    // The two constants live in different packages and are read by different
+    // code, so this is the only place the relationship is stated at all. The
+    // headroom between them (840s) also bounds how long one `processSegmentJob`
+    // invocation may run before the same narrowing reappears; `vercel.json`
+    // caps the consumer and the drain at 300s, well inside it.
+    expect(LOOKBACK_PLAN_SLACK_MS).toBeGreaterThan(LOOKBACK_CLAMP_MARGIN_MS);
   });
 
   it("keeps the plan slack longer than the delivery budget it is sized for", () => {
