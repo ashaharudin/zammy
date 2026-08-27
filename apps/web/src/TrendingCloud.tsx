@@ -13,7 +13,7 @@ import { MONO } from "./theme.js";
  * The landing-page wordcloud (ARCHITECTURE 10.5): the STORYLINES the last 24
  * hours updated, drawn as their labels — sized by how many articles each gained
  * inside the window, coloured by how recently it moved, each word a real
- * <button> that runs the search.
+ * <button> that opens the storyline it names.
  *
  * Two channels, one question each (ADR-0013). Size answers "how much is
  * happening", colour answers "how recently" — and keeping them independent is
@@ -22,18 +22,11 @@ import { MONO } from "./theme.js";
  * position is no longer a recency signal; taking colour off the index is what
  * stops both channels from answering the same question.
  *
- * The click runs a SEARCH rather than opening the storyline, and this is the one
- * place in the app that does. Everywhere else a label opens its storyline by
- * UUID (ADR-0010, ADR-0011, and `StorylinePills`), because a label names one
- * specific arc and the UUID is exact. The cloud is the exception on purpose: it
- * is also the cold-start answer (§9.3), and a click that opens a storyline mints
- * no topic and feeds the demand-driven loop nothing.
- *
- * What it searches is `storyline.query`, not the label the button draws — the
- * label's own words that its coverage actually says, resolved by the API
- * (`cloudQuery`). Drawing one string and searching another is a real cost, and
- * it buys the thing the cloud existed for: a four-word label run verbatim is
- * four conjunctive upstream terms and returns an empty timeline (ADR-0014).
+ * The click opens the storyline by UUID (ADR-0016, retracting ADR-0013's
+ * search-not-UUID exception) — the same thing a label does everywhere else in
+ * the app (ADR-0010, ADR-0011, and `StorylinePills`), because a label names
+ * one specific arc and the UUID is exact, and a keyword search over its own
+ * words routinely landed on an empty timeline instead of the arc it named.
  *
  * Accessibility is not optional here (§10.5): a wordcloud is close to unusable
  * for screen readers, so the same data renders as an ordered list — always
@@ -148,11 +141,11 @@ function seededRandom(seed: string): () => number {
 
 export function TrendingCloud({
   language,
-  onSearch,
+  onOpenStoryline,
 }: {
   /** The cloud's language, already made concrete (see cloudLanguage). */
   language: string;
-  onSearch: (q: string) => void;
+  onOpenStoryline: (storylineId: string) => void;
 }) {
   const trending = useTrending(language);
   const [asList, setAsList] = useState(false);
@@ -340,7 +333,7 @@ export function TrendingCloud({
               <button
                 key={word.storyline.id}
                 tabIndex={-1}
-                onClick={() => onSearch(word.storyline.query)}
+                onClick={() => onOpenStoryline(word.storyline.id)}
                 title={cloudDetail(word.storyline, bounds)}
                 style={{
                   position: "absolute",
@@ -404,7 +397,7 @@ export function TrendingCloud({
           {storylines.map((storyline) => (
             <li key={storyline.id} style={{ marginBottom: "0.3rem" }}>
               <button
-                onClick={() => onSearch(storyline.query)}
+                onClick={() => onOpenStoryline(storyline.id)}
                 style={{
                   border: "none",
                   background: "none",

@@ -28,11 +28,14 @@ export function Hero({
   filters,
   onFilters,
   onSearch,
+  onOpenStoryline,
 }: {
   filters: TopicFilters;
   /** A chip pick, which the URL holds until a search adopts it. */
   onFilters: (filters: TopicFilters) => void;
   onSearch: (q: string) => void;
+  /** A cloud word opens its storyline by UUID (ADR-0016), not a search. */
+  onOpenStoryline: (storylineId: string) => void;
 }) {
   const [q, setQ] = useState("");
   const reference = useReference();
@@ -54,7 +57,7 @@ export function Hero({
         padding: "3rem 1rem",
       }}
     >
-      <TrendingCloud language={language} onSearch={onSearch} />
+      <TrendingCloud language={language} onOpenStoryline={onOpenStoryline} />
       <form
         onSubmit={(event) => {
           event.preventDefault();

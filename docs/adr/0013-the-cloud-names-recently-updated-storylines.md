@@ -1,5 +1,5 @@
 ---
-status: partly superseded by ADR-0014 (the unit, the exclusions and the search-not-UUID click stand; the arc-wide breadth gate, the pure-recency ordering and running the label verbatim do not)
+status: partly superseded by ADR-0014 (the unit and the exclusions stand; the arc-wide breadth gate, the pure-recency ordering and running the label verbatim do not) and by ADR-0016 (the search-not-UUID click no longer stands — see "The click, which reverses a documented rule")
 ---
 
 # The cloud names recently updated storylines

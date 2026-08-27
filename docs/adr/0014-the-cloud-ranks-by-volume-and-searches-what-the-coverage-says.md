@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: partly superseded by ADR-0016 ("A click searches the label's grounded words, not the label" and "The click returned nothing, and it was never going to" no longer describe what a cloud click does — see ADR-0016; `cloudQuery` itself survives, now feeding `searchPlaceholder` instead)
 ---
 
 # The cloud ranks by volume and searches what the coverage says
