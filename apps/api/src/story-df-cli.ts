@@ -13,6 +13,17 @@ import { createConfiguredDb } from "./wiring.js";
  * reports the window as the linker would see it: corpus size, vocabulary size,
  * and the df of the tokens rarity decisions actually turn on.
  *
+ * **`--days` defaults to the prune's span, not to a constant.** The nightly
+ * retention chore deletes `day < storyDfDay(now - (windowDays + 1))`
+ * (`chores.ts`), so every bucket a rebuild writes outside that span is a row
+ * the linker cannot reach and the next night deletes. A hardcoded default is
+ * how the two disagreed: at `--days=31` against the 14-day window, the
+ * 2026-08-27 tokenizer-v8 repair left 108,725 unreadable rows — 58% of
+ * `story_token_days`, and with them 17 MB of index bloat that stood until the
+ * next night's prune and reindex. Deriving the default from the same knob the
+ * prune reads is what makes that disagreement unrepresentable; an operator who
+ * wants the wider span still passes `--days` and means it.
+ *
  * The report is the point. A df table nobody has looked at is a threshold
  * nobody has measured, and this repo's rule is that no threshold ships
  * unmeasured (§14.3's post-mortem).
@@ -23,13 +34,16 @@ const flag = (name: string): string | undefined =>
   args.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
 const rebuild = args.includes("--rebuild");
 
-const days = Number(flag("days") ?? 31);
+const config = loadConfig();
+
+// After `loadConfig`, because the default is the prune's span rather than a
+// constant: `windowDays + 1`, the same expression `runRetentionChore` cuts at.
+const days = Number(flag("days") ?? config.STORYLINE_DF_WINDOW_DAYS + 1);
 if (!Number.isInteger(days) || days < 1) {
   console.error("--days must be a positive integer");
   process.exit(1);
 }
 
-const config = loadConfig();
 const language = flag("language") ?? config.DEFAULT_LANGUAGE;
 const dfConfig = {
   windowDays: config.STORYLINE_DF_WINDOW_DAYS,

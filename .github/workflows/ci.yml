@@ -240,6 +240,14 @@ jobs:
       - run: pnpm regroup --tokens-only --days=${{ inputs.days }}
 
       # Step 2: the trailing df corpus, which `recordGrouping` never writes.
+      #
+      # No `--days` here, deliberately, and NOT because the span does not matter
+      # — because the CLI now derives it from `STORYLINE_DF_WINDOW_DAYS`, which
+      # is the same knob the nightly prune cuts at. Passing the workflow's
+      # `days` input (90, the regroup window) would be the intuitive thing and
+      # is wrong: buckets outside the linker's window are rows nothing reads and
+      # the next night deletes. Step 1's window is the retention archive; this
+      # step's is the linker's, and they are different spans on purpose.
       - if: inputs.story_df
         run: pnpm story:df --rebuild
 
