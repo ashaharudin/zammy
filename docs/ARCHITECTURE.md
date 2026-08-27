@@ -863,9 +863,25 @@ keywords in, timeline out.
   Multi-term keywords *narrow* results upstream, so the UI hints "all terms must match" rather than
   letting a 1-result response read as a bug. The date picker caps at **30 days back** — a disabled
   control beats a 400.
-- **Timeline** — a single reverse-chronological column with sticky day dividers ("Today",
-  "Yesterday", dates). Each card: headline, source chip + relative time, description snippet,
-  thumbnail when `image_url` is non-null; whole card links out, `target="_blank" rel="noopener"`.
+- **Timeline** — a single reverse-chronological column with day dividers ("Today", "Yesterday",
+  dates), each day subdivided into the **parts of the reader's own day** it has coverage in: Night
+  (00:00–06:00), Morning, Afternoon, Evening (18:00–24:00). Non-wrapping, so a segment never spans
+  midnight and the rail's nesting stays exact — inside a day the column runs newest-first, and a
+  "night" reaching back past midnight would render as two blocks of the same name. Four rather than
+  three because a 12-hour Morning held 254 of 325 slots on the dev archive against Afternoon's 12:
+  the block that most needed chunking was the one being chunked least. The zone is the READER's, from
+  `Intl.DateTimeFormat().resolvedOptions().timeZone` — not the country chip (that answers "whose
+  news"), and not `APP_TIMEZONE`, which bounds group drift on the write path (§7.4, ADR-0005) and has
+  never been the reader's. A slot is placed by its own `published` — the storyline's earliest that
+  day — so a segment is a coarser timestamp and never a claim about when a story happened. A day
+  whose coverage all landed in one segment shows no segment divider, since a divider that chunks
+  nothing is noise; the cost is that loading older coverage can turn a bare day into a segmented one
+  and insert a heading above cards already on screen. Both dividers collapse — the day is the outer
+  switch and leaves its segments as the reader left them — and a segment's heading text is its own
+  control, with no glyph on the spine: a marker box masks the rail and draws inside the hole it
+  punches, so the spine runs unbroken past a segment. The rail's grammar is that the spine marks
+  slots and days, and segments are typography. Each card: headline, source chip + relative time,
+  description snippet, thumbnail when `image_url` is non-null; whole card links out, `target="_blank" rel="noopener"`.
   One card = one **group** — usually one article; where several outlets ran the same story, the
   group's headline article with the rest behind a "N related" disclosure (§14.3). The card is
   timestamped by the **group's** earliest published, with an "updated <relative time>" stamp when

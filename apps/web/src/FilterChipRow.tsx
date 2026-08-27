@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Reference, TopicFilters } from "./api.js";
+import { readBrowser } from "./browser.js";
 import { defaultedFilters, type LanguagePolicy } from "./browserDefaults.js";
 import { filterChips, type Chip, type ChipOption } from "./filterChips.js";
 
@@ -57,14 +58,6 @@ export function useFilterDefaults(
     const next = defaultedFilters(filters, readBrowser(), reference, language);
     if (next.language !== filters.language || next.country !== filters.country) onApply(next);
   }, [filters, reference, language, onApply]);
-}
-
-/** The one place that reads the browser's own settings. */
-function readBrowser(): { locales: readonly string[]; timeZone: string | undefined } {
-  return {
-    locales: navigator.languages?.length ? navigator.languages : [navigator.language],
-    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-  };
 }
 
 function FilterChip({
