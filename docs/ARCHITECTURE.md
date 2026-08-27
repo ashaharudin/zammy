@@ -724,6 +724,18 @@ for requested and segment windows. Write it explicitly (`tstzrange(from, to, '[)
 date bounds are *closed* (§2), and §6.3 explains why the mismatch is the safe direction and must not
 be "fixed" here.
 
+**Every table here has row-level security ON and no policies** (migration 0019), and **a migration
+that creates a table enables RLS on it in the same `up`**. Nothing in this project reads Postgres
+through PostgREST — there is no `supabase-js` dependency and no anon key in `Config` — but on
+Supabase `public` is the schema the Data API exposes and a project's default grants reach `anon`, so
+a table with RLS off is a table the internet can read, and write, with a key that ships publicly.
+Zero policies is the end state, not a stub: there are no users and no per-tenant rows, so there is
+no visibility rule to express. It costs the app nothing because RLS never applies to a table's owner
+— which is the role both `DATABASE_URL` and `DATABASE_SESSION_URL` connect as — and for that same
+reason **moving the app to a least-privilege non-owner role is a breaking change**: every query
+starts returning zero rows until that role has policies. `migrator.test.ts` fails if any table
+reaches the current schema with RLS off.
+
 ### 7.3 Timeline reads — keyset pagination over storyline-days
 
 ```sql
