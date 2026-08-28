@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sql, type Kysely } from "kysely";
+import { deriveAltKey } from "@zammy/news-client";
 import { migrateToLatest } from "./migrator.js";
 import * as storylineTables from "./migrations/0007-storyline-tables.js";
 import * as storyTokenDf from "./migrations/0008-story-token-df.js";
@@ -9,6 +10,7 @@ import * as labelSource from "./migrations/0011-storyline-label-source.js";
 import * as formationRefusals from "./migrations/0015-storyline-formation-refusals.js";
 import * as dropTermCloud from "./migrations/0014-drop-term-cloud.js";
 import * as rowLevelSecurity from "./migrations/0019-enable-row-level-security.js";
+import * as articleAltKey from "./migrations/0020-article-alt-key.js";
 import { createTestDatabase, type TestDatabase } from "./test-support.js";
 
 /**
@@ -136,6 +138,137 @@ describe("migrateToLatest", () => {
     // enabled by hand before it was a migration — sees the first time.
     await rowLevelSecurity.up(migrationDb());
     expect(await rlsOff()).toBe(0);
+  });
+
+  /**
+   * The fallback identity (ADR-0018), which is the one migration in here that
+   * has to run over EXISTING ROWS and get a different answer for different ones.
+   *
+   * Three things can go wrong and none of them raises on its own: the partial
+   * unique index could fail to build because the archive it is added to already
+   * contains collisions; the backfill could key a colliding row and merge two
+   * stories; or it could key nothing at all and leave the feature silently off
+   * for history. So the seed below deliberately contains all three cases, and
+   * the `up` has to survive it.
+   */
+  describe("the fallback article identity", () => {
+    const DAY = "2026-08-27T09:00:00.000Z";
+    const seed = async (rows: Array<{ url: string; title: string; domain: string }>) => {
+      for (const row of rows) {
+        await sql`
+          insert into articles (dedup_key, url, title, source_domain, published, latest_seen)
+          values (digest(${row.url}, 'sha256'), ${row.url}, ${row.title}, ${row.domain},
+                  ${DAY}::timestamptz, ${DAY}::timestamptz)
+        `.execute(harness.db);
+      }
+    };
+
+    const altKeyOf = async (url: string): Promise<string | null> => {
+      const { rows } = await sql<{ hex: string | null }>`
+        select encode(alt_key, 'hex') as hex from articles where url = ${url}
+      `.execute(harness.db);
+      return rows[0]?.hex ?? null;
+    };
+
+    beforeAll(async () => {
+      // `digest()` for the seed's dedup keys — the column is NOT NULL and
+      // unique, and the values are irrelevant to what is under test here.
+      await sql`create extension if not exists pgcrypto`.execute(harness.db);
+    });
+
+    afterAll(async () => {
+      await sql`delete from articles`.execute(harness.db);
+    });
+
+    it("builds its unique index over an archive that already contains collisions", async () => {
+      await articleAltKey.down(migrationDb());
+      await seed([
+        // Two URLs, one story — the 1.1% of production this exists for. Both
+        // fold to one key, so the backfill must decline to key EITHER: keying
+        // one and not the other would be arbitrary, and keying both cannot be
+        // done at all under a unique index.
+        { url: "https://ansa.it/sport/zelensky-serbia", title: "Zelensky visits Serbia", domain: "ansa.it" },
+        { url: "https://ansa.it/mondo/zelensky-serbia", title: "Zelensky visits Serbia", domain: "ansa.it" },
+        // Unique, and therefore keyed.
+        { url: "https://ansa.it/mondo/budget", title: "Budget passes second reading", domain: "ansa.it" },
+        // No key to compute: the source truncated its own title.
+        { url: "https://hkexnews.hk/1", title: "[00232.HK] Disclosure of...", domain: "hkexnews.hk" },
+      ]);
+
+      // The assertion that matters most: this does not throw. A non-partial
+      // unique index, or a backfill that keyed the colliding pair, would fail
+      // here — and would fail in production, mid-deploy, against a live archive.
+      await articleAltKey.up(migrationDb());
+
+      const { rows: indexes } = await sql<{ indexdef: string }>`
+        select indexdef from pg_indexes
+         where tablename = 'articles' and indexname = 'articles_alt_key_idx'
+      `.execute(harness.db);
+      expect(indexes).toHaveLength(1);
+      expect(indexes[0]!.indexdef).toContain("UNIQUE");
+      // The partial predicate is what lets every unkeyed row coexist.
+      expect(indexes[0]!.indexdef).toContain("WHERE (alt_key IS NOT NULL)");
+    });
+
+    it("keys the rows whose key is unique and leaves the colliding ones NULL", async () => {
+      // Forward-only, deliberately. Merging the colliding rows would mean
+      // DELETING article rows, and `group_id` is a bigint article id carrying no
+      // foreign key (migrations 0003 and 0007) — so a merge would dangle group
+      // seeds and orphan storyline attachments with nothing raising.
+      expect(await altKeyOf("https://ansa.it/sport/zelensky-serbia")).toBeNull();
+      expect(await altKeyOf("https://ansa.it/mondo/zelensky-serbia")).toBeNull();
+      expect(await altKeyOf("https://hkexnews.hk/1")).toBeNull();
+
+      // And the keyed row carries exactly what the ingest path would compute for
+      // it — the property that makes backfilled history foldable at all. A
+      // backfill that computed the fold its own way would leave rows no future
+      // sighting could ever match, and nothing would say so.
+      expect(await altKeyOf("https://ansa.it/mondo/budget")).toBe(
+        deriveAltKey("ansa.it", "Budget passes second reading", DAY),
+      );
+    });
+
+    it("refuses a second row claiming a key that is already taken", async () => {
+      const taken = deriveAltKey("ansa.it", "Budget passes second reading", DAY)!;
+      await expect(
+        sql`
+          insert into articles (dedup_key, url, title, source_domain, alt_key, published, latest_seen)
+          values (digest('dupe', 'sha256'), 'https://ansa.it/other/budget', 'Budget passes second reading',
+                  'ansa.it', decode(${taken}, 'hex'), ${DAY}::timestamptz, ${DAY}::timestamptz)
+        `.execute(harness.db),
+      ).rejects.toThrow();
+    });
+
+    it("reverts and re-applies cleanly, taking its index with it", async () => {
+      const columnExists = async () => {
+        const { rows } = await sql<{ n: string }>`
+          select count(*) as n from information_schema.columns
+          where table_schema = 'public' and table_name = 'articles' and column_name = 'alt_key'
+        `.execute(harness.db);
+        return Number(rows[0]!.n) === 1;
+      };
+      const indexExists = async () => {
+        const { rows } = await sql<{ n: string }>`
+          select count(*) as n from pg_indexes
+          where tablename = 'articles' and indexname = 'articles_alt_key_idx'
+        `.execute(harness.db);
+        return Number(rows[0]!.n) === 1;
+      };
+
+      expect(await columnExists()).toBe(true);
+      expect(await indexExists()).toBe(true);
+
+      await articleAltKey.down(migrationDb());
+      // The index goes with the column rather than being left behind for the
+      // next `up` to trip over — the failure mode a hand-written `down` buys us
+      // the ability to check (ADR-0003).
+      expect(await columnExists()).toBe(false);
+      expect(await indexExists()).toBe(false);
+
+      await articleAltKey.up(migrationDb());
+      expect(await columnExists()).toBe(true);
+      expect(await indexExists()).toBe(true);
+    });
   });
 
   it("reverts and re-applies the storyline tables cleanly", async () => {
