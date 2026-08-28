@@ -456,20 +456,24 @@ wrapper plus one new table:
   **Corrected 2026-08-28, and measured.** The 40–60 counts *pacing only*, and the bullet's own
   sentence names the term it then drops: `labelPass` is sequential — it sleeps the spacing and
   *then* awaits the call — so a label costs spacing **plus** latency, and Phase 0 deliberately did
-  not make the model calls (§1: "its wall clock is pacing, not compute"). Latency measured against
-  the live API on the dev key, real dev-archive prompts, pacer off: `gemini-3.1-flash-lite` answers
-  in **~0.9 s** (median of 5; one 33 s outlier), and `gemma-4-26b-a4b-it` — config's default since
-  2026-08-27 — in **20.6–43.4 s** (median 23.8 s of 3, and only with the timeout raised to see it
-  at all). So at today's 30 rpm the 2 s of spacing is noise, the window is **~11 labels**, and
-  `CHORE_MAX_LABELS=50` is 4–5× its ceiling.
+  not make the model calls (§1: "its wall clock is pacing, not compute"). That correction stands on
+  its own — a count bounds a clock only if a label costs what the count was sized against — but it
+  does **not** yield a replacement figure, and none is asserted here.
 
-  It is **left at 50 regardless**, because the same measurement found the label path is not
-  returning labels on that key at all: `gemini.ts` joins the model's *thought* parts into the
-  answer, and a real prompt spends the entire 2,048-token budget thinking (`finishReason:
-  MAX_TOKENS`, 2,046 thought tokens, no answer). Sizing a bound against a path that returns nothing
-  fits a number to a defect — re-derive after the repair. The overrun is soft meanwhile (the pass
-  is resumable), and what a truncated night costs is the `chore_runs` row and the passes ordered
-  after the label one. See `.env.example`, `CHORE_MAX_LABELS`.
+  **Measuring one on 2026-08-28 found an outage instead.** Dev key, real dev-archive prompts, pacer
+  off: every `gemma-4-26b-a4b-it` call came back failing the label contract, because `gemini.ts`
+  joined the model's *thought* parts into its answer, and each burned a full generation to
+  `finishReason: MAX_TOKENS` (2,046 thought tokens, no answer) taking **20.6–43.4 s**. Those seconds
+  time a call that produced nothing; they are not what a working label costs, and the ~11-label
+  window they imply is not a figure to size anything against. `gemini-3.1-flash-lite`, for scale on
+  the same prompts, answered in ~0.9 s.
+
+  So `CHORE_MAX_LABELS` stays at 50. The parsing fix landed in #177, together with
+  `CHORE_LABEL_BUDGET_MS` — the wall-clock bound this bullet should have asked for in the first
+  place, and what now keeps the pass inside the function. Re-measure latency on calls that
+  *answer*, then re-derive the count from that. The overrun is soft meanwhile (the pass is
+  resumable), and what a truncated night costs is the `chore_runs` row and the passes ordered after
+  the label one. See `.env.example`, `CHORE_MAX_LABELS`.
 - **The late-candidate sweep is the phase that actually blows the ceiling.** Measured at
   **41 ms × 12,338 groups ≈ 506 s** — 1.7× Hobby's 300 s, every night, on loopback Postgres. It is
   one query: `readCandidateStorylines` is 34 of the 41 ms, and its cost tracks profile width, from

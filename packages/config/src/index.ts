@@ -525,26 +525,31 @@ const EnvSchema = z
      * the daily quota, and what a truncated night loses is not latency but the
      * `chore_runs` row and the passes ordered after the label one.
      *
-     * **The window is spacing PLUS latency, and 50 does not fit it.** Phase 0's
-     * 40-60 (findings §2, the source of this 50) counted pacing alone — 75 x 4 s
-     * at the old 15 rpm — but `labelPass` is sequential: it sleeps the spacing
-     * and THEN awaits the call, so the two add. Measured 2026-08-28 against the
-     * live API on the dev key, with real dev-archive prompts and the pacer off:
-     * `gemini-3.1-flash-lite` answers in ~0.9 s (median of 5; one 33 s outlier),
-     * which at 15 rpm made the old window ~60 labels; `gemma-4-26b-a4b-it`,
-     * today's default, answers in **20.6-43.4 s** (median 23.8 s of 3, with the
-     * timeout raised to see it at all), which at 2 s of spacing puts the window
-     * near **11**. So the number is 4-5x its ceiling.
+     * **The window is spacing PLUS latency, which is why a COUNT is a poor
+     * bound on a CLOCK.** Phase 0's 40-60 (findings §2, the source of this 50)
+     * counted pacing alone — 75 x 4 s at the old 15 rpm — but `labelPass` is
+     * sequential: it sleeps the spacing and THEN awaits the call, so the two
+     * add. That holds whatever the model does; what it does not do is yield a
+     * replacement number, and this comment will not invent one.
      *
-     * **Left at 50 anyway, deliberately.** The same measurement found the label
-     * path is not currently producing labels on that key at all — see
-     * `gemini.ts`, where thought parts are joined into the answer, and the
-     * 2048-token budget that a real prompt spends entirely on thinking. Sizing
-     * this bound against a path that returns nothing would be fitting a number
-     * to a defect. Re-derive it once a label call is a label again. The bound
-     * costs nothing durable meanwhile: the pass is resumable across nights — it
-     * selects the storylines whose labels are missing or drifted — so a bound
-     * defers labels rather than dropping them.
+     * **Measuring it on 2026-08-28 found an outage instead.** Dev key, real
+     * dev-archive prompts, pacer off: every `gemma-4-26b-a4b-it` call came back
+     * failing the label contract, because `gemini.ts` joined the model's THOUGHT
+     * parts into its answer, and each burned a full generation to `MAX_TOKENS`
+     * (2,046 thought tokens, no answer) taking 20.6-43.4 s. **Those seconds time
+     * a call that produced nothing.** They are not what a working label costs,
+     * and the ~11-label window they imply is not a figure to size anything
+     * against. `gemini-3.1-flash-lite`, for scale on the same prompts, answered
+     * in ~0.9 s.
+     *
+     * **So 50 stays.** The parsing fix landed in #177, together with
+     * `CHORE_LABEL_BUDGET_MS` — a wall-clock bound, which is the right shape for
+     * this and the reason this count is no longer what keeps the pass inside the
+     * function. Re-measure latency on calls that ANSWER, then re-derive this
+     * from that. The bound costs nothing durable
+     * meanwhile: the pass is resumable across nights — it selects the storylines
+     * whose labels are missing or drifted — so a bound defers labels rather than
+     * dropping them.
      *
      * `--max-labels` still overrides it, which is what an operator draining a
      * backlog against a clone wants. The default moved from "unbounded" to this
