@@ -389,8 +389,22 @@ silent, no error, no retry. Therefore:
   and `/readyz.upstream.providers`.
 
 Accepted cost: GNews coverage is opportunistic, so a GNews-only article inside an already-covered
-span may never be fetched. Per-provider coverage is the eventual fix. Reasoning: ADR-0012; code:
-`packages/news-providers/src/composite.ts`.
+span may never be fetched. Reasoning: ADR-0012; code: `packages/news-providers/src/composite.ts`.
+
+**Read the two bullets above as a property of THIS PLAN, not of the providers.**
+[ADR-0019](adr/0019-a-fetch-carries-its-own-reason-and-its-own-coverage.md) retired the provider
+ranking: coverage is `(subject, provider, span)`, and each provider records only the spans it
+actually walked. What survives is the arrangement inside the composite's one shared page plan —
+`isLastPage` still comes from the primary, `recordCoverage` still writes `'currents'`, and the
+supplement still cannot end that walk. What no longer follows from it is that Currents is the
+system's coverage-bearer: the deepening plane (§9.1a) plans its own spans against
+`storyline_coverage` and records them under its own provider, and no completion of either stands
+for the other's.
+
+The per-provider coverage this section called "the eventual fix" is therefore half arrived —
+`topic_coverage.provider` and `storyline_coverage` exist (migration 0021) and the deepening plane
+writes them, while the composite's fan-out has not been re-planned per provider and still shares
+one page plan.
 
 Two consequences worth knowing before a third provider:
 
@@ -419,7 +433,7 @@ Accepts front-end requests and turns them into the right upstream query — or, 
 | `GET /api/v1/timeline` | The main read. Keywords + filters → time-ordered page of articles. |
 | `GET /api/v1/reference` | Cached `/available/*` values, for front-end filter controls. Languages and regions only — the category taxonomy is no longer served, because nothing can pick from it (ADR-0020). |
 | `GET /api/v1/topics/:fingerprint` | Topic metadata: coverage window, article count, freshness, summary. |
-| `POST /api/v1/storylines/:id/refresh` | Fire-and-forget: queue one background top-up of what this arc's coverage says (§9.1, ADR-0017). A UUID is the whole request — the keywords and the language are derived from the arc, never sent. 202 with `{ queued }`; nothing on the page reads it. |
+| `POST /api/v1/storylines/:id/refresh` | Fire-and-forget: queue one background top-up of what this arc's coverage says (§9.1, ADR-0017), and — separately planned, against the arc itself — one deepening fetch (§9.1a, ADR-0019). A UUID is the whole request; the keywords and the language are derived from the arc, never sent. 202 with `{ queued, deepening: { status, queued } }`; nothing on the page reads it. |
 | `GET /healthz` · `GET /readyz` | Liveness, and dependency checks for Postgres/Redis/upstream. |
 
 `GET /api/v1/timeline` request:
@@ -1065,8 +1079,35 @@ All triggers originate from a user request:
 | **Deferred backfill** — gap segments and subdivisions §6.3 didn't have budget for | queued, background | metered |
 | **Refresh-on-read** — stale coverage noticed while serving (§6.4) | queued, background | ~1 call |
 | **Storyline opened** — a label clicked anywhere: the cloud, the gutter, a pill (ADR-0017) | queued, background | 0 or 1 call, freshness-gated; ~38 distinct arcs is a day's background budget (ADR-0017) |
+| **Storyline deepened** — the same click, planned again for the deepening provider (§9.1a) | queued, background | 0 or 1 call, freshness-gated and grounding-gated; only with a deepening provider configured |
 
 The worker also handles coverage-span merging and a daily `/available/*` refresh (3 calls).
+
+#### 9.1a The deepening plane
+
+One click, two plans. The refresh above asks a TOPIC of the discovery provider and records
+`topic_coverage`; the deepening fetch asks the ARC itself of the deepening provider and records
+`storyline_coverage` (migration 0021). Neither completion stands for the other's, which is
+[ADR-0019](adr/0019-a-fetch-carries-its-own-reason-and-its-own-coverage.md)'s "providers stop sharing
+a plan" — they will disagree about whether an arc is fresh, and that is the point rather than a
+defect.
+
+Three things are different about it, and each is a decision rather than an implementation detail:
+
+- **The query is the arc's whole label.** `cloudQuery` shortens a label because Currents ANDs terms
+  against body text we never receive; the deepening provider does not, and the full label measurably
+  out-performs the grounded pair there (100 items / 63 domains against 92 / 55, probed 2026-08-27).
+- **The grounding is a confidence gate.** A label that shares no word with its arc's own
+  `profile_tokens` spends nothing. `storylineKeywords` keeps its fallbacks on the topic path, where
+  a bad ask costs a call; here it would cost an attachment.
+- **Attachment is by provenance and nothing forms a storyline.** What the fetch SEEDS joins the arc
+  that fetched it; nothing is offered to the linker. Left on the ordinary path, one arc's 100 items
+  become groups, groups become provisional storylines, and the arc inventory the cloud reads fills
+  with storylines nobody asked for — and every deepening article that formed one would then be
+  feeding the ranking that chose the arc (§3a of the design doc).
+
+Off unless a deepening provider is configured (`GOOGLE_NEWS_ENABLED`), in which case the route
+answers `deepening: {status: "unavailable"}` and spends nothing.
 
 **The nightly chores are not in this process.** Retention (§7.5) and the storyline lifecycle pass
 (ADR-0011) are one-shot runs on the platform's scheduler, reached two ways that share everything

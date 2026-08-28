@@ -71,10 +71,18 @@ chosen by `CURRENTS_MODE` / `GNEWS_MODE` and by which providers are enabled. Not
 package branches on the mode or on which upstream answered — that rule is what makes offline
 development predict production.
 
-With `GNEWS_ENABLED=false` (the default) you get the Currents client bare. Switched on, calls fan
-out to both and merge — but Currents is *coverage-bearing* and GNews is best-effort breadth, so a
-GNews outage narrows results without ever failing a call or ending a walk
+With `GNEWS_ENABLED=false` (the default) you get the Currents client bare. Switched on, calls fan out
+to both and merge — and inside that one shared page plan the primary's `isLastPage` is what ends the
+walk, so a GNews outage narrows results without ever failing a call or ending a walk
 ([ADR-0012](docs/adr/0012-a-second-provider-adds-breadth-but-never-coverage.md)).
+
+**That is a property of the plan, not a ranking of the providers**, and the difference has been
+load-bearing since
+[ADR-0019](docs/adr/0019-a-fetch-carries-its-own-reason-and-its-own-coverage.md) replaced ADR-0012.
+Coverage is `(subject, provider, span)`: each provider records only the spans it actually walked, and
+nothing is *the* coverage-bearer. The composite's asymmetry survives because its two providers still
+share one page plan; the deepening plane does not share it, and records its own spans against
+`storyline_coverage`.
 
 ```ts
 const client = await createNewsClient(config);
@@ -90,14 +98,17 @@ if (all.stoppedBy === "cap") {
 `stoppedBy` matters: `end_of_results` means upstream is out of articles; `cap` means it is not, and
 only a narrower time window will reach the rest.
 
-A third adapter, `@zammy/google-news-client`, exists but is **not part of that fan-out** — it has no
-offset parameter at all, so it cannot share a page plan with anything. It was built for the
-deepening plane, reaching ~18 months back over arcs Currents already found against Currents' 30 days
+A third adapter, `@zammy/google-news-client`, is **not part of that fan-out** — it has no offset
+parameter at all, so it cannot share a page plan with anything. It serves the **deepening plane**,
+reaching ~18 months back over arcs Currents already found against Currents' 30 days
 ([the design](docs/DESIGN-DISCOVERY-AND-DEEPENING.md)), and it is meant to serve search and breadth
-too. That is what retired ADR-0012's provider ranking: under
-[ADR-0019](docs/adr/0019-a-fetch-carries-its-own-reason-and-its-own-coverage.md) coverage is
-per `(subject, provider, span)` and what a fetch may feed the ranker is decided by *why the call was
-made*, not by who answered.
+too. That is what retired ADR-0012's provider ranking: what a fetch may feed the ranker is decided by
+*why the call was made* (`sightings.plane`), not by who answered.
+
+Set `GOOGLE_NEWS_ENABLED=true` and opening a storyline deepens it: the arc's whole label goes to
+Google News, the span is planned against `storyline_coverage`, and what comes back joins that arc by
+provenance and forms no new one. Left false — the default and what production runs — the client is
+never built and the path answers `unavailable` having spent nothing.
 
 It is off by default and unreachable while it is: `createGoogleNewsClient` refuses to build anything
 with `GOOGLE_NEWS_ENABLED=false`, and nothing calls it. The two guards it waited on — `alt_key`

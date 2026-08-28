@@ -49,7 +49,8 @@
  *     display name and `deriveAltKey` peels it only when it collapses to the
  *     domain stem. The committed fixtures fold 110 of 120, but that corpus is
  *     one finance query and unrepresentative — the four measurements and their
- *     spread are in `fixture-client.test.ts`.
+ *     spread are in `fixture-client.test.ts`. Fixing it is a change of its own,
+ *     and it is what has to land before this flag goes on.
  *   - **`source_domain` from `<source url>`, not from the URL**, and a null
  *     `description`. All four departures from the other adapters are argued at
  *     their site in `normalize.ts`.
@@ -65,13 +66,19 @@
  *     or the reverse-engineered `batchexecute` RPC, per article, at 100
  *     articles a slice. `alt_key` (G1) is the design's answer instead.
  *   - It does not strip the trailing ` - Outlet` from titles, though 100 of 101
- *     carry one and it is the single most damaging thing about this feed. That
- *     strip is shared-tokenizer work and costs a `TOKENIZER_VERSION` bump plus
- *     a repair run: it is G0, not this.
+ *     carry one. It does not have to: the TOKENIZER has peeled that suffix since
+ *     v6 (`stripSourceAttribution`), and G0 widened it to mastheads with an
+ *     interior function word.
+ *
+ *     Stripping it HERE would still be wrong, for the reason `normalize.ts`
+ *     gives: an adapter editing a headline makes the stored title disagree with
+ *     what the provider said it was, which `sightings.raw` exists to prevent.
+ *     The IDENTITY half is a separate strip inside `deriveAltKey`.
  *
  * **Off by default** (`GOOGLE_NEWS_ENABLED`), and unreachable while it is —
- * `createGoogleNewsClient` refuses to build anything. See `factory.ts` for the
- * two guards that have to land before it can be switched on.
+ * `createGoogleNewsClient` refuses to build anything. Every guard it waited on
+ * has landed; G5 wired it to a caller, and turning the flag on is what makes
+ * opening a storyline deepen it. See `factory.ts`.
  *
  * **One thing to read before switching it on that is not a technical concern.**
  * The feed's own `<copyright>` element names it as being for "personal,

@@ -36,19 +36,28 @@ export interface GoogleNewsClientConfig {
    *     title — see `normalize.ts`, which also drops any item that cannot carry
    *     one rather than minting a row keyed on the redirect.
    *   - **The cloud would have measured its own fetching.** G2 landed the
-   *     ranker restriction. ADR-0019 then reshaped it: the honest predicate is
-   *     on a fetch's reason (`plane <> 'deepening'`), not on which provider
-   *     answered, because this provider is expected to serve search and breadth
-   *     too and no provider-level test can be right about both at once. The
-   *     shipped form is still `DISCOVERY_PROVIDERS`, correct today and carrying
-   *     its own shelf life; G5 replaces it.
+   *     ranker restriction and G5 moved it onto the honest column: the shipped
+   *     predicate is `plane is distinct from 'deepening'` (migration 0022), a
+   *     property of the FETCH rather than of whoever answered, because this
+   *     provider is expected to serve search and breadth too and no
+   *     provider-level test can be right about both at once.
    *
-   * What is still missing is not a hazard but a destination: `storyline_coverage`
-   * (G3) does not exist yet, and nothing calls this factory at all — G5 writes
-   * the attachment rules and does the wiring. So the flag stays false, and it
-   * stays enforced HERE rather than only at a future call site, because "off"
-   * has to mean unreachable: an unwired guard is satisfied by doing nothing and
-   * stops being satisfied the moment someone adds the import.
+   * **The destination exists now too**, which is what changed with G5:
+   * `storyline_coverage` landed with G3 (migration 0021) and
+   * `queueStorylineDeepening` plans against it.
+   *
+   * One thing is still outstanding and it is a REASON NOT TO SET THIS YET rather
+   * than a hazard in the code: the fold above reaches an outlet only when its
+   * display name collapses to its domain stem, and Google writes display names,
+   * so a Google item and its Currents twin still mint two rows for a large
+   * minority of outlets. Widening that fold is its own change, with its own
+   * corpus and its own re-key migration.
+   *
+   * So the flag is a real switch rather than a placeholder, and what turning it
+   * on costs is stated where an operator will read it (`.env.example`). It stays
+   * enforced HERE rather than only at the call site, because "off" has to mean
+   * unreachable: an unwired guard is satisfied by doing nothing and stops being
+   * satisfied the moment someone adds the import.
    */
   GOOGLE_NEWS_ENABLED: boolean;
   GOOGLE_NEWS_MODE: "live" | "fixture";
@@ -102,9 +111,11 @@ export async function createGoogleNewsClient(
   if (!config.GOOGLE_NEWS_ENABLED) {
     throw new Error(
       "GOOGLE_NEWS_ENABLED is false; refusing to build a Google News client. " +
-        "G1 (alt_key) and G2 (ranker isolation) have landed; this provider stays " +
-        "off until G3 (storyline_coverage) exists and G5 wires it to a caller — " +
-        "see DISCOVERY-DEEPENING-PLAN.md.",
+        "Every guard is in place and G5 wired this provider to the deepening " +
+        "plane, so this is now a deliberate off rather than a not-yet: turning " +
+        "it on makes a storyline open spend an upstream call and add rows. See " +
+        ".env.example for what that costs, and DISCOVERY-DEEPENING-PLAN.md G6 " +
+        "for the yield question it exists to answer.",
     );
   }
 

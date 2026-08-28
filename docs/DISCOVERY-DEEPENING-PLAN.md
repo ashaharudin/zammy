@@ -55,11 +55,16 @@ G8 retire category ─────┘                                 kill crite
 ```
 
 G1–G4 and G8 are mutually independent and can run in any order or in parallel.
-**G5 is gated on all five, and all five have landed** — G1 (#170), G2 (#169),
-G3 (#172), G4 (#173) and G8 (ADR-0020). **G5's gate is open.** Only G1 and G8
-carry a **Landed** note in their own sections; G2–G4 are on `main` regardless,
-and this line is the one to trust for the gate. G7 is gated on G6 returning a
-yield worth having.
+**G5 was gated on all five and all five had landed** — G1 (#170), G2 (#169),
+G3 (#172), G4 (#173) and G8 (ADR-0020). **G5 has now landed too**, with
+migrations `0022` and `0023`; see its section for the four decisions that
+departed from what it assumed. G6 is next and is a decision gate. G7 is gated on
+G6 returning a yield worth having.
+
+**G0 has landed too** (#176) and was never on the gate for anything — it is
+independent by construction. What it turned out to be worth to the deepening
+plane is measured in G5's answer to its own open question, and it is a good deal
+more than G0's own section measured on the Currents archive.
 
 ---
 
@@ -67,6 +72,7 @@ yield worth having.
 
 **Depends on**: nothing. Independent of the rest of this plan and worth doing
 on its own.
+
 
 **Why**: we have measured the damage. `" | Globalnews.ca"` leaked
 `winnipeg`/`globalnew`/`ca` into `story_tokens` and pre-loaded **19.6 of the
@@ -368,9 +374,21 @@ Changes:
 - **Coverage goes to `storyline_coverage`**, not to a synthetic topic.
 - **Attachment is by provenance.** An article fetched for storyline X joins
   storyline X. Deepening-plane articles **never form new storylines** — without
-  this, 100 articles per arc become groups, groups become provisional
-  storylines, and every promotion demands a model label against a 500/day
-  quota that already has a backlog. Label demand must stay flat at zero.
+  this, 100 articles per arc become groups and groups become provisional
+  storylines.
+
+  **The quota argument this bullet used to make is withdrawn, and the constraint
+  survives it.** It read "every promotion demands a model label against a 500/day
+  quota that already has a backlog", which is a figure for a labeler config no
+  longer runs: the default is `gemma-4-26b-a4b-it` and `gemini.ts` records its
+  published free-tier figure as **30 requests per minute**, so the binding limit
+  is pace rather than a daily budget, and a burst of labels is a latency problem
+  for the reader who clicked. Two reasons remain and neither moves when a quota
+  does: **the endogenous loop** — ADR-0019 argues it on its own terms, and a
+  deepening article that formed an arc would be feeding the ranking that chose it
+  — and **arc inventory**, since dozens of provisional storylines per click
+  pollute the table the cloud reads, the linker scans and the merge pass judges,
+  whatever labelling costs.
 
 - **Add `sightings.plane`** (`search` | `breadth` | `deepening`) and move the
   ranker's guard onto it, replacing G2's provider list. This is the phase that
@@ -387,19 +405,17 @@ request" holds — a click is still the trigger. G7 is where that is traded.
 
 **A known limitation of `alt_key`, carried forward from G1 and load-bearing
 here.** The fold's suffix strip fires only when the outlet's display name IS its
-domain stem — so it takes ` - The Guardian` off `theguardian.com`, and does NOT
-take ` - The New York Times` off `nytimes.com`, ` - Times of India` off
-`indiatimes.com`, ` - BBC News` off `bbc.co.uk`, or ` - The Wall Street Journal`
-off `wsj.com`. Measured over a 12-outlet probe: 5 strip, 7 do not. This is inert
-under one provider — one spelling of the suffix gives a stable key either way —
-but **Google News writes the display name**, so for every outlet in that second
-class a Google item and its Currents twin fold to different keys and mint two
-rows. That is the exact failure `alt_key` exists to prevent, and it lands on this
-phase. The fix is a display-name-to-domain map, deliberately deferred to here
-because it needs a corpus of Google News titles to be built against and measured
-on; ADR-0018 records it as an accepted cost of G1. **Budget for it in this phase
-rather than discovering it in G6's yield numbers**, where it would read as
-"Google News duplicates everything" rather than as one fixable mapping.
+domain stem, and **Google News writes the display name**, so a Google item and
+its Currents twin fold to different keys and mint two rows — the exact failure
+`alt_key` exists to prevent, landing on this phase.
+
+**Not fixed here. It is the subject of its own change**, because the fix needs a
+corpus of Google News titles to be built against and measured on, and that
+corpus plus the rules it justifies plus the re-key migration they owe are a
+reviewable unit on their own. Nothing in THIS change depends on it: the
+deepening plane works with the fold as it stands and simply duplicates more than
+it needs to. What does depend on it is the flag — see the ordering note under
+**Done when**.
 
 **The open question this phase must answer**: how a deepening-plane article
 appears in a day slot. `alt_key` shrinks the problem a long way — a Google item
@@ -411,10 +427,75 @@ first to keep the suffix out of `story_tokens`, or (b) attach them as loose
 storyline-day members rendered below the groups. Pick the smallest thing that
 works, and let G6's numbers drive any richer answer.
 
+**Answered: (a), and G0 does not gate it.** A deepening article is grouped
+normally — `story_tokens` written, an existing group joined where the headline
+matches — and what it SEEDS is attached to the arc that fetched it, with nothing
+offered to the linker. That is (a) plus the attachment rule, and it needs no new
+rendering.
+
+**The G0 dependency in this sentence was never real, and G0's own Landed note is
+why.** The clause reads "needs G0 landed first to keep the suffix out of
+`story_tokens`", and the trailing ` - Outlet` / ` | Outlet` strip has been in the
+tokenizer since **v6**, as `stripSourceAttribution`. G0 did not add it; G0
+widened it to mastheads carrying a function word inside them. So option (a) was
+safe under v8 as well, and this open question was gated on nothing.
+
+Where the residual still lands, for G6 to price: `groupArticle`'s headline match
+and `story_token_df`, not the linker — nothing on this path consults the linker,
+since seeded groups are attached by provenance and joined groups inherit their
+existing arcs.
+
+**Seeded groups ONLY.** An article that JOINED an existing group already has a
+home, and attaching its group here would drag every other article in it into
+this arc on the strength of one keyword match — precisely the judgement the
+linker exists to make and this path is refusing to make. Nothing is orphaned by
+that: `linkSeededGroups` would have given a seed a storyline of its own, so a
+joined group already has one.
+
 **Done when**: a click on a storyline deepens it from Google News; no new
 storyline is created by the deepening plane; the cloud is unchanged by the
 fetch (G2 holding under real conditions, verified — not assumed); and
 `storyline_coverage` records only spans actually fetched.
+
+**Two ordering constraints on turning the flag on, and neither is on this
+change.** The first is the display-name fold above: until it lands, a Google item
+and its Currents twin mint two rows for a quarter of the outlets Google names, so
+G6's yield number would count duplicates as new articles. The second is on a
+database rather than on code. G0's owed repair steps have run on dev only; production is a
+separate hand dispatch (see G0's Landed note). Enabling the deepening plane
+before that dispatch mixes v9 vocabulary from its new articles with v8
+vocabulary in the history they are matched against, which biases `groupArticle`
+and `story_token_df` in exactly the direction G6 would read as yield. It is
+recorded in `.env.example` beside the flag, which is where an operator will be
+standing.
+
+**Landed**, as migration `0022` (`sightings.plane`, nullable, with a CHECK).
+Three decisions worth carrying forward, all of them departures from what this
+section assumed — and one deliberate omission, the display-name fold, which is
+its own change and carries its own measurements:
+
+- **The plane column is NULLABLE, not `NOT NULL DEFAULT 'search'`.** This
+  section asked for "every existing sighting backfilled to a non-deepening
+  plane"; the archive disproves the obvious form of that. 1,791 of the dev
+  archive's 32,279 articles are members of a keyword-less topic and of nothing
+  else, and the keyword-less topic is the breadth sample's own fingerprint — so
+  `'search'` is a claim one query refutes. Splitting the backfill does not work
+  either, because `topic_articles` is per ARTICLE and cannot say which of an
+  article's sightings came from which fetch. NULL is what a database says for
+  "not recorded", and the predicate is `plane is distinct from 'deepening'`
+  accordingly. **The byte-identical proof this section asked for holds**: 136
+  storylines under both the provider list and the new predicate over a 168h
+  window on the dev archive — and 0 under a bare `<>`, which is why the spelling
+  is load-bearing.
+- **The open question below is answered (a), and G0 turned out not to gate it.**
+  See its own note.
+- **The topic row survives even though its coverage does not.** "Coverage goes to
+  `storyline_coverage`, not to a synthetic topic" is taken as the claim it is
+  about: nothing writes `topic_coverage` on this path. The topic ROW is still
+  minted, because `topic_articles` is what claims an article against retention
+  and a storyline is not a claimant that table knows about. Cost: one `topics`
+  row per deepened arc, one `topic_articles` row per article, and a `hit_count`
+  bump on a fetch rather than on a reader.
 
 ## G6 — Measure per-provider yield. Decision gate.
 
