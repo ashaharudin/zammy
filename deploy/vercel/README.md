@@ -64,7 +64,7 @@ What differs from a Compose `.env`:
 | `REDIS_URL` | Upstash |
 | `INGEST_QUEUE_DRIVER` | `vercel` — the default is `bullmq`, and leaving it there publishes to a Redis queue nothing drains |
 | `CRON_SECRET` | a long random string — gates `/api/drain`, `/api/chores` and `/api/keepalive`; unset disables all three, **including the pause guard** |
-| `CHORE_MAX_LABELS` | `50` (the default) — a count, and a count bounds the clock only if a label costs what it was sized against |
+| `CHORE_MAX_LABELS` | `50` (the default) — a count, and a count bounds the clock only if a label costs what it was sized against; `.env.example` carries the arithmetic |
 | `CHORE_LABEL_BUDGET_MS` | `240000` (the default) — the bound that matches `api/chores.ts`'s 300 s `maxDuration`, leaving 60 s for the label-merge and graph passes after it. Unset on a deployment means the pass can be killed mid-night, which loses the `chore_runs` row and everything ordered after it |
 | `CURRENTS_MODE` | `live` (needs `CURRENTS_API_KEY`) |
 | `FIXTURES_DIR` | irrelevant |

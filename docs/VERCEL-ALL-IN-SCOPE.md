@@ -452,6 +452,18 @@ wrapper plus one new table:
   300 s well before it exceeds Gemini's daily quota. The pass is resumable across nights, so a bound
   costs latency, not labels. **Phase 0 puts the figure at 40–60**: 75 labels is the entire 300 s
   window, against a default of 500 ([chores.ts:394](../apps/api/src/chores.ts)).
+
+  **Corrected 2026-08-28.** The 40–60 counts *pacing only*, and the bullet's own sentence names the
+  term it then drops: `labelPass` is sequential — it sleeps the spacing and *then* awaits the call —
+  so a label costs spacing **plus** latency, and Phase 0 deliberately did not make the model calls
+  (§1: "its wall clock is pacing, not compute"). At the ~7.1–8 s measured on flash-lite the old
+  15 rpm window was **~25–27 labels, not 75**. `GEMINI_MAX_RPM` is 30 since the model moved to
+  `gemma-4-26b-a4b-it` (2026-08-27), which halves the pacing floor to 2 s and moves the window to
+  **~30–33** — a ~20% gain, not a doubling, because pacing was never the binding term.
+  `CHORE_MAX_LABELS` is still 50 and is therefore above the window; it has not been re-derived,
+  because gemma's per-call latency is unmeasured. The overrun is soft (the pass is resumable), and what a truncated
+  night costs is the `chore_runs` row and the passes ordered after the label one. See
+  `.env.example`, `CHORE_MAX_LABELS`.
 - **The late-candidate sweep is the phase that actually blows the ceiling.** Measured at
   **41 ms × 12,338 groups ≈ 506 s** — 1.7× Hobby's 300 s, every night, on loopback Postgres. It is
   one query: `readCandidateStorylines` is 34 of the 41 ms, and its cost tracks profile width, from

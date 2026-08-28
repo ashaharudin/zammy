@@ -75,8 +75,9 @@ previous step just changed:
    changed nothing" and "did not run" are different facts and a report that conflates them is how a
    flag left off by accident survives a month of clean-looking logs.
 4. [`runStorylineLabelChore`](../apps/api/src/chores.ts:527) — ADR-0011's drift trigger. The one pass
-   that costs money per call, bounded by `--max-labels` (40–60 fits) and paced at
-   `GEMINI_MAX_RPM`.
+   that costs money per call, bounded by `--max-labels` (`CHORE_MAX_LABELS` is the
+   deployment default; `.env.example` has the corrected 300 s arithmetic — nearer 30
+   than the 40–60 Phase 0 derived from pacing alone) and paced at `GEMINI_MAX_RPM`.
 5. [`runLabelMergeChore`](../apps/api/src/chores.ts:496) — **last**, because it is the only pass
    whose input is a label: a storyline named tonight should be a merge candidate tonight. This is
    what makes the whole thing converge, each night's labels being the next night's candidates.

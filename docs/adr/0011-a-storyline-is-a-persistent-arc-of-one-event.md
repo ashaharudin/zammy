@@ -203,6 +203,22 @@ extractor cannot reliably produce "names the event at a glance" — it runs at
 storyline volume (births and drifts), not article volume, and every call has a
 deterministic fallback.
 
+**Amended 2026-08-28 (the tier changed on 2026-08-27; the decision did not).**
+"Flash tier" above is now historical: labelling runs on `gemma-4-26b-a4b-it`, config's
+default. What the paragraph actually asked for was the cheapest tier that can
+read ten headlines and name the event, and Gemma 4 26B meets it while
+publishing **double the free-tier rate — 30 requests a minute against
+flash-lite's 15, and 14,400 a day (confirmed 2026-08-28) against the 500-a-day
+ceiling the coherence-gate paragraph above reasons from**. It is served from
+the same endpoint, so the client did not change; two things about the model
+did. It has no `thinkingLevel`/`thinkingBudget` knob at all — the API 400s on
+either — so unlike the flash families its thinking cannot be capped, only
+budgeted for (`maxOutputTokens`, raised 256 → 2048 against the live API). And
+its per-call latency has never been measured, which is the gap the
+`CHORE_MAX_LABELS` arithmetic in `.env.example` names. Everything else here
+stands: presentation not identity, the three triggers, the bigram fallback, and
+the label-agreement merge's model-labels-only rule.
+
 ## The timeline
 
 - The paginated unit is the **storyline-day**: keyset over

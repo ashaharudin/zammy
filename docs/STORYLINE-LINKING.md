@@ -443,15 +443,18 @@ conclusion and offers the decline, and `readCoherenceReply`, which returns
 | `unusable` | unavailable, timed out, out of quota, contract broken | keep the storyline; bigram fallback — today's behaviour, unchanged |
 
 The three-way split is the whole safety argument, and it is not theoretical:
-the dev key is free tier, ceiling **500 requests per day per model**, and the
-labelling campaign exhausts it — this investigation hit the wall mid-run. An
-implementation that read silence as a refusal would dissolve the archive on a
-quiet Tuesday.
+the dev key is free tier, ceiling **500 requests per day per model** at the
+time of writing, and the labelling campaign exhausts it — this investigation hit
+the wall mid-run. (The configured model moved to `gemma-4-26b-a4b-it` on
+2026-08-27, whose free tier publishes 14,400/day; the argument is unchanged —
+"out of quota" is still `unusable` and must never read as a refusal — but the
+wall is much further out.) An implementation that read silence as a refusal
+would dissolve the archive on a quiet Tuesday.
 
 ### The verdict, measured (2026-08-18)
 
-Run on **`gemini-3.1-flash-lite`, the configured model**, once the free-tier
-day rolled over:
+Run on **`gemini-3.1-flash-lite`, then the configured model**, once the
+free-tier day rolled over:
 
 ```bash
 pnpm measure:storyline-coherence --size=2 --per-set=88   # resumable; 500/day/model
@@ -513,7 +516,10 @@ flatter the gate.
 `incoherent` cannot be re-scored offline. The transcript now carries the reply
 (`Row.raw`) so the next reader change can be replayed for free, but that helps
 only runs from this change onward. Correcting the cells above needs a real
-rerun: one model call per candidate against a 500/day/model free-tier ceiling.
+rerun: one model call per candidate against a 500/day/model free-tier ceiling
+— **which is no longer the binding cost**: since 2026-08-27 the configured model
+is `gemma-4-26b-a4b-it` at 14,400/day, so the rerun is bounded by rate (30/min)
+and wall clock rather than by quota.
 
 **Second-order finding, the more important one.** If ~26% of the sampled
 two-group *named* storylines are piles, the reported failure is materially
