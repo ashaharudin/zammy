@@ -22,6 +22,25 @@ import { ResponseMeta } from "./timeline.js";
  * burst). ADR-0013 asked that over the whole arc and ADR-0014 moved it to the
  * window; `sourceCount` is the arc's own breadth, which stays as a fact the
  * response reports rather than as the thing it gates on.
+ *
+ * **The window fields and the arc fields count different corpora, and that is
+ * deliberate.** Everything describing the window counts only articles a
+ * DISCOVERY-plane provider saw — the rule that the plane which measures is the
+ * plane that is not steered (`DISCOVERY_PROVIDERS` in `@zammy/storage`) — while
+ * `size` and `sourceCount` describe the arc as the store actually holds it,
+ * because they are what a click delivers.
+ *
+ * The two corpora are identical today, and for a checkable reason rather than
+ * by luck: every provider that has ever recorded a sighting is a discovery
+ * provider (Currents and GNews both arrive by fan-out on a reader's own query,
+ * ADR-0012), and ingest deletes any article left with no sighting at all. So
+ * every field here still agrees with every other. They diverge on the day a
+ * provider fetches because the cloud named a storyline, which is what the split
+ * is on the wire ahead of.
+ *
+ * No field here distinguishes "articles we have" in the window from "articles
+ * that voted" — if that ever needs saying, it is a new field and a
+ * `PAGE_SHAPE_VERSION` bump, not a redefinition of one of these.
  */
 export const TrendingStoryline = z.object({
   /** The storyline's UUID — identity, and the only stable key here (ADR-0011). */
@@ -49,15 +68,27 @@ export const TrendingStoryline = z.object({
    * offer and can still hand over a folded token.
    */
   query: z.string().min(1),
-  /** Distinct member ARTICLES published inside the window — the size input. */
+  /** Distinct discovery-plane articles published inside the window — the size input. */
   windowArticles: z.int().min(1),
-  /** Distinct source domains inside the window. The gate: >= 2. */
+  /**
+   * Distinct discovery-plane source domains inside the window. The gate: >= 2.
+   *
+   * The floor still holds under the plane restriction, and by the same argument
+   * as before: the gate and this field are one expression over one corpus, so
+   * anything that appears cleared 2.
+   */
   windowSources: z.int().min(2),
-  /** Distinct member articles over the whole arc, all time. */
+  /** Distinct member articles over the whole arc, all time, every plane. */
   size: z.int().min(1),
-  /** Distinct source domains over the whole arc. Reported, not the gate. */
+  /**
+   * Distinct source domains over the whole arc, every plane. Reported, not the gate.
+   *
+   * Still >= 2: the window's discovery-plane domains are a subset of the arc's
+   * domains over every plane, so clearing the gate on the narrower corpus
+   * clears this floor on the wider one.
+   */
   sourceCount: z.int().min(2),
-  /** The newest member article inside the window — the recency channel (§10.3). */
+  /** The newest discovery-plane article inside the window — the recency channel (§10.3). */
   lastUpdated: z.iso.datetime(),
 });
 export type TrendingStoryline = z.infer<typeof TrendingStoryline>;
