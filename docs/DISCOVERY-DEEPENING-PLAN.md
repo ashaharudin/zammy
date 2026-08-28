@@ -55,7 +55,11 @@ G8 retire category ─────┘                                 kill crite
 ```
 
 G1–G4 and G8 are mutually independent and can run in any order or in parallel.
-**G5 is gated on all five.** G8 has landed (ADR-0020). G7 is gated on G6 returning a yield worth having.
+**G5 is gated on all five, and all five have landed** — G1 (#170), G2 (#169),
+G3 (#172), G4 (#173) and G8 (ADR-0020). **G5's gate is open.** Only G1 and G8
+carry a **Landed** note in their own sections; G2–G4 are on `main` regardless,
+and this line is the one to trust for the gate. G7 is gated on G6 returning a
+yield worth having.
 
 ---
 

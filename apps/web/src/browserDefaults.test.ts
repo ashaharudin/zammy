@@ -118,9 +118,11 @@ describe("defaultedFilters", () => {
     // suppress the country default; the parameter is not parsed now, so the
     // link states nothing and is defaulted like any bare `?q=`.
     //
-    // Both halves of that are pinned here because the pair is the promise —
-    // re-adding `category` to `PARAM_KEYS` OR to the gate breaks this, and
-    // either would go unnoticed by a test of one file.
+    // What this actually pins, stated exactly: THE GATE. Forcing `untouched`
+    // false fails it. It does NOT pin "nobody re-adds the parameter" — putting
+    // `category` back in `PARAM_KEYS` alone leaves this green, because
+    // `TopicFilters` has no field for `parseRoute` to surface it through. The
+    // type system is the first guard there and this test is the second.
     const stale = defaultedFilters(
       parseRoute("?q=housing&category=technology").filters,
       CANADIAN,
@@ -128,7 +130,9 @@ describe("defaultedFilters", () => {
       "browser",
     );
 
-    expect(stale).toEqual(defaultedFilters(parseRoute("?q=housing").filters, CANADIAN, REFERENCE, "browser"));
+    expect(stale).toEqual(
+      defaultedFilters(parseRoute("?q=housing").filters, CANADIAN, REFERENCE, "browser"),
+    );
     expect(stale).toEqual({ language: "en", country: "CA" });
     // The change this makes to that reader's saved link, stated rather than
     // implied: it used to keep "any country" and now takes theirs. Defensible —

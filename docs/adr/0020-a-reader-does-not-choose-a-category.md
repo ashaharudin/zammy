@@ -126,9 +126,24 @@ asking for them — two upstream calls on a cold cache rather than three.
 
 `availableCategories()` stays on the `NewsClient` interface, and the Currents
 adapter still parses the taxonomy out of a recorded 400 body. Removing that is a
-much larger change than removing the chip, it is explicitly out of this phase,
-and §10.1's breadth sample still sends categories upstream — what changed is
-that no *reader* picks one.
+much larger change than removing the chip — it means deleting an interface
+method across `composite`, `http`, `fixture-client` and `test-support` while
+`SearchParams.category` stays on the same seam, which is incoherent — and it is
+explicitly out of this phase.
+
+**Say plainly what that leaves: `availableCategories()` now has zero callers.**
+It is kept, not used. Anyone finding it should keep the 400-body parse rather
+than clear it as dead code: that parse documents a real upstream quirk (the
+reference endpoints answer a *400* with the taxonomy in the body), and the
+quirk outlives the method.
+
+And it cannot be rescued into a caller by pointing it at the breadth sample,
+which is the obvious idea and is wrong. `SAMPLE_CATEGORIES` are **v2** values,
+pre-flighted against `V2_CATEGORY_SET` in `latestNews`; `availableCategories()`
+returns the **v1** `/available/categories` list, and the two taxonomies are
+disjoint (ARCHITECTURE §10.1). `latestNews`'s own error string says as much —
+"v1 names and /available/categories values do not apply". So §10.1's hardcoded
+list never had a guard from this method and never could have.
 
 What the offer costs, kept, is the next person: a list of pickable-looking
 values on the wire is an invitation to build the control back, and the control
