@@ -12,6 +12,7 @@ import * as dropTermCloud from "./migrations/0014-drop-term-cloud.js";
 import * as rowLevelSecurity from "./migrations/0019-enable-row-level-security.js";
 import * as articleAltKey from "./migrations/0020-article-alt-key.js";
 import * as providerCoverage from "./migrations/0021-provider-and-storyline-coverage.js";
+import * as sightingPlane from "./migrations/0022-sighting-plane.js";
 import { createTestDatabase, type TestDatabase } from "./test-support.js";
 
 /**
@@ -461,6 +462,80 @@ describe("migrateToLatest", () => {
     await sql`delete from topics where fingerprint = decode(repeat('a', 64), 'hex')`.execute(
       harness.db,
     );
+  });
+
+  it("reverts and re-applies the sighting plane cleanly, constraint included", async () => {
+    // Migration 0022, both directions. The `down` drops a CHECK and a column and
+    // has to do them in that order — a rollback that dropped only the column
+    // would leave a constraint naming a column that no longer exists, and the
+    // next `up` would fail on a duplicate constraint name.
+    const shape = async () => {
+      const { rows: columns } = await sql<{ is_nullable: string; column_default: string | null }>`
+        select is_nullable, column_default from information_schema.columns
+        where table_schema = 'public' and table_name = 'sightings' and column_name = 'plane'
+      `.execute(harness.db);
+      const { rows: checks } = await sql<{ n: string }>`
+        select count(*) as n from pg_constraint where conname = 'sightings_plane_check'
+      `.execute(harness.db);
+      return { column: columns[0] ?? null, checks: Number(checks[0]!.n) };
+    };
+
+    // Nullable and DEFAULT-less, which is the decision this migration argues at
+    // length: no single value describes history — 1,791 of the dev archive's
+    // articles belong only to the breadth sample's keyword-less topic, which
+    // disproves `'search'` — so the honest value for a row minted before the
+    // column existed is no value at all.
+    expect(await shape()).toEqual({
+      column: { is_nullable: "YES", column_default: null },
+      checks: 1,
+    });
+
+    await sightingPlane.down(migrationDb());
+    expect(await shape()).toEqual({ column: null, checks: 0 });
+
+    await sightingPlane.up(migrationDb());
+    expect(await shape()).toEqual({
+      column: { is_nullable: "YES", column_default: null },
+      checks: 1,
+    });
+  });
+
+  describe("the plane a fetch was made on", () => {
+    // A sighting needs an article to hang off, and `articles` is emptied by the
+    // alt-key block above, so this seeds its own.
+    const seedSighting = (plane: string | null) => sql`
+      with a as (
+        insert into articles (dedup_key, url, title, source_domain, published, latest_seen)
+        values (digest(${`https://plane.example/${plane ?? "null"}`}, 'sha256'),
+                ${`https://plane.example/${plane ?? "null"}`}, 'Plane fixture', 'plane.example',
+                now(), now())
+        returning id
+      )
+      insert into sightings (id, article_id, dedup_key, published, provider, plane, raw)
+      select gen_random_uuid(), a.id, digest('s', 'sha256'), now(), 'currents',
+             ${plane}::text, '{}'::jsonb
+        from a
+    `.execute(harness.db);
+
+    afterAll(async () => {
+      await sql`delete from articles where source_domain = 'plane.example'`.execute(harness.db);
+    });
+
+    it("admits the three ADR-0019 planes and NULL, and nothing else", async () => {
+      // The CHECK exists for a failure that is silent in one direction only.
+      // `readTrendingStorylines` reads `plane is distinct from 'deepening'`,
+      // which is TRUE of every misspelling — so a typo does not fail closed, it
+      // joins the discovery plane and re-opens the endogenous loop with nothing
+      // raising. This constraint is what turns that into a failed insert, and
+      // until now nothing asserted it.
+      for (const plane of ["search", "breadth", "deepening", null]) {
+        await expect(seedSighting(plane)).resolves.toBeDefined();
+      }
+
+      await expect(seedSighting("deepning")).rejects.toThrow(/sightings_plane_check/);
+      await expect(seedSighting("DEEPENING")).rejects.toThrow(/sightings_plane_check/);
+      await expect(seedSighting("")).rejects.toThrow(/sightings_plane_check/);
+    });
   });
 
   it("is a no-op the second time", async () => {

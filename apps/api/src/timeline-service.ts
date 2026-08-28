@@ -27,6 +27,7 @@ import {
   recordCoverage,
   upsertTopic,
   type Database,
+  type SightingPlane,
   type StorylineSlot,
 } from "@zammy/storage";
 import { WINDOW_SNAP_MS, type CanonicalizeResult, type CanonicalQuery } from "./canonical.js";
@@ -234,7 +235,7 @@ async function planAndRead(
     if (age > freshnessTtlMs(query.window.to, now)) {
       stale = true;
       await deps.queue.enqueueSegment({
-        ...segmentJob(query.fingerprint, sliver, 1),
+        ...segmentJob(query.fingerprint, sliver, 1, "search"),
         kind: "topup",
       });
     }
@@ -253,7 +254,7 @@ async function planAndRead(
         budget.callsUsed >= budget.maxCalls ||
         (budget.callsUsed > 0 && deps.now().getTime() >= budget.deadline)
       ) {
-        deferred.push(segmentJob(query.fingerprint, gap, 1));
+        deferred.push(segmentJob(query.fingerprint, gap, 1, "search"));
         continue;
       }
 
@@ -267,12 +268,14 @@ async function planAndRead(
       }
 
       try {
-        const outcome = await fillSegment(deps, query, gap, budget, 1, "interactive");
+        const outcome = await fillSegment(deps, query, gap, budget, 1, "interactive", "search");
         if (outcome.callsMade > 0) servedFrom = "upstream";
         if (outcome.kind === "deferred") {
-          deferred.push(segmentJob(query.fingerprint, gap, outcome.resumePage));
+          deferred.push(segmentJob(query.fingerprint, gap, outcome.resumePage, "search"));
         } else if (outcome.kind === "truncated") {
-          deferred.push(...(await onTruncated(deps, query.fingerprint, gap, outcome.oldestSeen)));
+          deferred.push(
+            ...(await onTruncated(deps, query.fingerprint, gap, outcome.oldestSeen, "search")),
+          );
         } else if (outcome.kind === "capped") {
           capped = true;
         }
@@ -852,7 +855,11 @@ export async function queueStorylineRefresh(
     // consumer would fan out into several calls off one click.
     if (gap.to.getTime() - gap.from.getTime() <= maxSpanMs) {
       const job: SegmentJob = {
-        ...segmentJob(query.fingerprint, gap, 1),
+        // `deepening`, and ADR-0019 argues it against the obvious reading: a
+        // reader's click is the TRIGGER, but the target is an arc our own cloud
+        // named, and the test is whether our ranking chose it. Everything this
+        // job ingests is therefore kept out of the ranking that chose it.
+        ...segmentJob(query.fingerprint, gap, 1, "deepening"),
         kind: "topup",
       };
       await deps.queue.enqueueSegment(job);
@@ -877,7 +884,7 @@ export async function queueStorylineRefresh(
     return { status: "fresh", ...settled };
   }
 
-  const job = segmentJob(query.fingerprint, { from, to }, 1);
+  const job = segmentJob(query.fingerprint, { from, to }, 1, "deepening");
   await deps.queue.enqueueSegment(job);
   deps.metrics?.storylineRefresh("queued");
   return { status: "queued", ...settled, job };
@@ -982,9 +989,19 @@ export async function processSegmentJob(deps: TimelineDeps, job: SegmentJob): Pr
         // No reader is waiting: draw only what the interactive reserve spares
         // (§9.4). A refusal fails the job; BullMQ's backoff is the retry pacing.
         "background",
+        // The plane the PLANNER recorded, never one inferred here. A deferred
+        // page of a reader's search and a storyline refresh's top-up arrive at
+        // this function looking identical.
+        job.plane,
       );
       if (outcome.kind === "truncated") {
-        for (const half of await onTruncated(deps, job.fingerprint, slice, outcome.oldestSeen)) {
+        for (const half of await onTruncated(
+          deps,
+          job.fingerprint,
+          slice,
+          outcome.oldestSeen,
+          job.plane,
+        )) {
           await deps.queue.enqueueSegment(half);
         }
       } else if (outcome.kind === "capped") {
@@ -1032,6 +1049,7 @@ async function fillSegment(
   budget: FillBudget,
   startPage: number,
   priority: CallPriority,
+  plane: SightingPlane,
 ): Promise<FillOutcome> {
   const { maxPageSize, maxRetrievableResults } = deps.currents.limits;
   const maxPages = Math.floor(maxRetrievableResults / maxPageSize);
@@ -1088,6 +1106,7 @@ async function fillSegment(
     const ingested = await ingestSightings(deps.db, {
       fingerprint: query.fingerprint,
       sightings: result.sightings,
+      plane,
       timeZone: deps.config.grouping.timeZone,
       // The storyline re-derivation inside it is fenced and cannot fail this
       // fill; the warning is the only place a failed one surfaces.
@@ -1142,6 +1161,12 @@ async function onTruncated(
   fingerprint: string,
   segment: Span,
   oldestSeen: Date | null,
+  /**
+   * The plane the truncated fetch was made on, carried onto its remainder.
+   * A remainder is the SAME fetch continued, so re-deciding its reason here
+   * would let a deepening walk re-enter the ranking one subdivision at a time.
+   */
+  plane: SightingPlane,
 ): Promise<SegmentJob[]> {
   deps.metrics?.truncatedSegment();
 
@@ -1149,7 +1174,7 @@ async function onTruncated(
     const boundary = new Date(oldestSeen.getTime() + 1);
     if (boundary.getTime() > segment.from.getTime() && boundary.getTime() < segment.to.getTime()) {
       await recordCoverage(deps.db, fingerprint, { from: boundary, to: segment.to });
-      return [segmentJob(fingerprint, { from: segment.from, to: boundary }, 1)];
+      return [segmentJob(fingerprint, { from: segment.from, to: boundary }, 1, plane)];
     }
   }
 
@@ -1165,8 +1190,8 @@ async function onTruncated(
 
   const mid = new Date(segment.from.getTime() + Math.floor(length / 2));
   return [
-    segmentJob(fingerprint, { from: segment.from, to: mid }, 1),
-    segmentJob(fingerprint, { from: mid, to: segment.to }, 1),
+    segmentJob(fingerprint, { from: segment.from, to: mid }, 1, plane),
+    segmentJob(fingerprint, { from: mid, to: segment.to }, 1, plane),
   ];
 }
 
@@ -1190,11 +1215,17 @@ function trailingSliver(
   return gap;
 }
 
-function segmentJob(fingerprint: string, segment: Span, startPage: number): SegmentJob {
+function segmentJob(
+  fingerprint: string,
+  segment: Span,
+  startPage: number,
+  plane: SightingPlane,
+): SegmentJob {
   return {
     fingerprint,
     from: segment.from.toISOString(),
     to: segment.to.toISOString(),
     startPage,
+    plane,
   };
 }

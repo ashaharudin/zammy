@@ -1,4 +1,5 @@
 import type { Redis } from "ioredis";
+import type { SightingPlane } from "@zammy/storage";
 
 /**
  * The deferred-ingestion queue (ARCHITECTURE 9.1). Every job here traces back
@@ -33,6 +34,25 @@ export interface SegmentJob {
   to: string;
   /** Resume point when a deadline cut a segment mid-paging. */
   startPage: number;
+  /**
+   * WHY this span is being fetched (ADR-0019), carried from the planner to the
+   * consumer so `processSegmentJob` never has to infer it.
+   *
+   * It is on the JOB rather than derived at the far end because the planner is
+   * the only thing that knows: §6.3's read path plans a `search`, and ADR-0017's
+   * storyline refresh plans a `deepening` fetch, and by the time the consumer
+   * has the payload the two look identical — same shape, same fingerprint
+   * scheme, same span arithmetic. ADR-0019 names this exactly: "`plane` is set
+   * in the few places that PLAN fetches, not in the many that perform them."
+   *
+   * It is also in `ingestJobId`, which is the part that is easy to leave out.
+   * A reader searching an arc's own two words mints the same fingerprint the
+   * refresh does, so the two can plan the identical (fingerprint, span, page) —
+   * and without the plane in the content address one would dedup away the
+   * other and the surviving job's plane would decide, arbitrarily, whether that
+   * batch of articles feeds the cloud.
+   */
+  plane: SightingPlane;
   /**
    * A §6.4 incremental top-up: [max(coverage.upper), now]. Deduplicated by its
    * leading edge alone, because every poll re-reads "now" — under the full
@@ -74,8 +94,18 @@ export function ingestJobId(job: IngestJob): string {
   // Underscores, not colons — BullMQ reserves ':' as its key separator, and
   // Vercel Queues restricts topic names to [A-Za-z0-9_-] besides.
   if (job.kind === "sample") return samplePendingId(job);
-  if (job.kind === "topup") return `topup_${job.fingerprint}_${Date.parse(job.from)}`;
-  return `seg_${job.fingerprint}_${Date.parse(job.from)}_${Date.parse(job.to)}_p${job.startPage}`;
+  // The plane sits right after the prefix, where it cannot be confused with the
+  // fingerprint: plane names are `[a-z]+` and carry no underscore, so
+  // `parseIngestJobId` still splits this on "_" and still round-trips.
+  //
+  // A DEPLOY COST, stated because it is invisible otherwise: entries written by
+  // the previous encoding are not readable by the new one. `parseIngestJobId`
+  // already answers `null` for those and the drain drops them loudly — "a
+  // member this cannot read was written by a different version of
+  // `ingestJobId`" — so the worst case is one deploy's worth of outstanding
+  // segments losing their ledger entry while the queue still delivers them.
+  if (job.kind === "topup") return `topup_${job.plane}_${job.fingerprint}_${Date.parse(job.from)}`;
+  return `seg_${job.plane}_${job.fingerprint}_${Date.parse(job.from)}_${Date.parse(job.to)}_p${job.startPage}`;
 }
 
 /**
@@ -114,27 +144,39 @@ export function parseIngestJobId(id: string, now: Date): IngestJob | null {
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
   };
 
-  if (parts[0] === "topup" && parts.length === 3) {
-    const [, fingerprint, fromMs] = parts;
+  if (parts[0] === "topup" && parts.length === 4) {
+    const [, plane, fingerprint, fromMs] = parts;
     const from = asIso(fromMs!);
-    if (!fingerprint || !from) return null;
+    if (!isPlane(plane) || !fingerprint || !from) return null;
     // `to` is "now" by the definition of a top-up, which is the whole reason
     // this identity can afford to omit it.
-    return { fingerprint, from, to: now.toISOString(), startPage: 1, kind: "topup" };
+    return { fingerprint, from, to: now.toISOString(), startPage: 1, plane, kind: "topup" };
   }
 
-  if (parts[0] === "seg" && parts.length === 5) {
-    const [, fingerprint, fromMs, toMs, page] = parts;
+  if (parts[0] === "seg" && parts.length === 6) {
+    const [, plane, fingerprint, fromMs, toMs, page] = parts;
     const from = asIso(fromMs!);
     const to = asIso(toMs!);
     const startPage = /^p\d+$/.test(page ?? "") ? Number(page!.slice(1)) : NaN;
-    if (!fingerprint || !from || !to || !Number.isInteger(startPage) || startPage < 1) {
+    if (
+      !isPlane(plane) ||
+      !fingerprint ||
+      !from ||
+      !to ||
+      !Number.isInteger(startPage) ||
+      startPage < 1
+    ) {
       return null;
     }
-    return { fingerprint, from, to, startPage };
+    return { fingerprint, from, to, startPage, plane };
   }
 
   return null;
+}
+
+/** The three ADR-0019 planes, narrowed off a wire value. */
+function isPlane(value: unknown): value is SightingPlane {
+  return value === "search" || value === "breadth" || value === "deepening";
 }
 
 /**
@@ -169,7 +211,14 @@ export function parseIngestJob(payload: unknown): IngestJob | null {
     typeof candidate.fingerprint !== "string" ||
     typeof candidate.from !== "string" ||
     typeof candidate.to !== "string" ||
-    typeof candidate.startPage !== "number"
+    typeof candidate.startPage !== "number" ||
+    // Narrowed rather than defaulted. A payload published by an older
+    // deployment carries no plane, and the two available readings of that are
+    // "call it a search" and "drop the message" — the first quietly feeds a
+    // possibly-steered batch into the cloud, the second loses one deploy's
+    // worth of deferred pages, which the next reader re-plans (§6.3). The
+    // recoverable failure wins.
+    !isPlane(candidate.plane)
   ) {
     return null;
   }
@@ -178,6 +227,7 @@ export function parseIngestJob(payload: unknown): IngestJob | null {
     from: candidate.from,
     to: candidate.to,
     startPage: candidate.startPage,
+    plane: candidate.plane,
   };
   // Carried through explicitly: `kind` is what makes a top-up dedup by its
   // leading edge alone, and a top-up that arrives as a plain segment would mint

@@ -44,6 +44,7 @@ const segment = (fingerprint = "a".repeat(64)): SegmentJob => ({
   from: "2026-08-08T00:00:00.000Z",
   to: "2026-08-09T00:00:00.000Z",
   startPage: 1,
+  plane: "search",
 });
 
 const silent = { info: () => {}, warn: () => {} };

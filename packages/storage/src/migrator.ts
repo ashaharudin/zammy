@@ -21,6 +21,7 @@ import * as choreRuns from "./migrations/0018-chore-runs.js";
 import * as rowLevelSecurity from "./migrations/0019-enable-row-level-security.js";
 import * as articleAltKey from "./migrations/0020-article-alt-key.js";
 import * as providerCoverage from "./migrations/0021-provider-and-storyline-coverage.js";
+import * as sightingPlane from "./migrations/0022-sighting-plane.js";
 
 /**
  * Migrations as a static record rather than a directory scan: the file provider
@@ -50,6 +51,7 @@ const migrations: Record<string, Migration> = {
   "0019-enable-row-level-security": rowLevelSecurity,
   "0020-article-alt-key": articleAltKey,
   "0021-provider-and-storyline-coverage": providerCoverage,
+  "0022-sighting-plane": sightingPlane,
 };
 
 /**

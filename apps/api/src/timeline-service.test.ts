@@ -489,6 +489,7 @@ describe("call priority (§9.4) — queued work draws as background", () => {
       from: WINDOW.to.toISOString(),
       to: NOW.toISOString(),
       startPage: 1,
+      plane: "search",
       kind: "topup",
     });
     expect(harness.counting.priorities.slice(1)).toEqual(["background"]);
@@ -525,6 +526,7 @@ describe("per-topic daily cap (§9.4) — one curious user cannot drain the pool
       from: WINDOW.to.toISOString(),
       to: NOW.toISOString(),
       startPage: 1,
+      plane: "search",
       kind: "topup",
     });
 
@@ -628,6 +630,7 @@ describe("the 7-day per-call range ceiling (observed live 2026-08-11)", () => {
       from: "2026-07-25T00:00:00.000Z",
       to: NOW.toISOString(),
       startPage: 1,
+      plane: "search",
     });
 
     for (const range of harness.counting.ranges) {
@@ -696,6 +699,7 @@ describe("the lookback edge moves while a job waits in the queue", () => {
       from: staleFrom.toISOString(),
       to: new Date(horizon.getTime() + DAY).toISOString(),
       startPage: 1,
+      plane: "search",
     });
 
     // Nothing below the horizon was asked for...
@@ -727,6 +731,7 @@ describe("the lookback edge moves while a job waits in the queue", () => {
       from: new Date(horizon.getTime() - 2 * DAY).toISOString(),
       to: new Date(horizon.getTime() - DAY).toISOString(),
       startPage: 1,
+      plane: "search",
     });
 
     expect(harness.counting.ranges).toHaveLength(0);

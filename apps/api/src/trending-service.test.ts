@@ -94,6 +94,7 @@ async function storeArticles(
     category: null,
   });
   const ingested = await ingestSightings(h.deps.db, {
+    plane: "search",
     timeZone: "UTC",
     fingerprint,
     sightings: articles.map((a) => {

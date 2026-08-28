@@ -132,6 +132,7 @@ async function seed(config: Partial<TestHarness["deps"]["config"]> = {}) {
 
   await upsertTopic(harness.deps.db, { fingerprint, keywords: ["rate"], language: "en" });
   const ingested = await ingestSightings(harness.deps.db, {
+    plane: "search",
     timeZone: "UTC",
     fingerprint,
     sightings: SYNDICATED,
@@ -330,6 +331,7 @@ describe("two poles of one story, healed by a bridge (ADR-0009)", () => {
     for (const title of [...POLE_A, ...POLE_B, BRIDGE]) {
       minute += 1;
       const ingested = await ingestSightings(harness.deps.db, {
+        plane: "search",
         timeZone: "UTC",
         fingerprint,
         sightings: [
@@ -407,6 +409,7 @@ describe("an article that arrived before its story's coverage", () => {
     // and the bug only exists across separate arrivals.
     for (const arrival of arrivals) {
       const ingested = await ingestSightings(harness.deps.db, {
+        plane: "search",
         timeZone: "UTC",
         fingerprint,
         sightings: [arrival],
@@ -500,7 +503,7 @@ describe("labels arrive without an operator (ADR-0011)", () => {
     // for it, so it hands the promise over instead of dropping it.
     const tails: Promise<void>[] = [];
     const ingestOne = async (s: Sighting) => {
-      const ingested = await ingestSightings(harness.deps.db, { timeZone: "UTC", fingerprint, sightings: [s] });
+      const ingested = await ingestSightings(harness.deps.db, { plane: "search", timeZone: "UTC", fingerprint, sightings: [s] });
       await groupCreatedArticles(
         {
           db: harness.deps.db,

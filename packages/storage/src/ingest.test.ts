@@ -81,6 +81,7 @@ describe("the collapse over the recorded duplication payload", () => {
     expect(new Set(sightings.map((s) => s.dedupKey)).size).toBe(42);
 
     const result = await ingestSightings(harness.db, {
+      plane: "search",
       timeZone: "UTC",
       fingerprint: CLIMATE_TOPIC,
       sightings,
@@ -161,6 +162,7 @@ describe("the collapse over the recorded duplication payload", () => {
     // a user request race harmlessly (§7.4). Seeing the same upstream UUID
     // twice must not inflate sighting_count.
     const result = await ingestSightings(harness.db, {
+      plane: "search",
       timeZone: "UTC",
       fingerprint: CLIMATE_TOPIC,
       sightings,
@@ -207,6 +209,7 @@ describe("the collapse over the recorded duplication payload", () => {
     });
 
     const result = await ingestSightings(harness.db, {
+      plane: "search",
       timeZone: "UTC",
       fingerprint: SECOND_TOPIC,
       sightings: sightings.slice(0, 10),
@@ -230,6 +233,7 @@ describe("the collapse over the recorded duplication payload", () => {
 
   it("ingesting nothing is a no-op", async () => {
     const result = await ingestSightings(harness.db, {
+      plane: "search",
       timeZone: "UTC",
       fingerprint: CLIMATE_TOPIC,
       sightings: [],
@@ -282,6 +286,7 @@ describe("the earliest sighting owns the display fields", () => {
     // of a story arrives LAST. A later re-emission must not rewrite the
     // headline (§7.4) — display fields follow the earliest sighting.
     await ingestSightings(harness.db, {
+      plane: "search",
       timeZone: "UTC",
       fingerprint: TOPIC,
       sightings: [
@@ -305,6 +310,7 @@ describe("the earliest sighting owns the display fields", () => {
 
   it("an even earlier emission in a later fetch takes over the display fields", async () => {
     await ingestSightings(harness.db, {
+      plane: "search",
       timeZone: "UTC",
       fingerprint: TOPIC,
       sightings: [
@@ -432,6 +438,7 @@ describe("a fold re-derives the day slots of the storylines holding the article"
     sightingId: string;
   }): Promise<{ articleId: string; storylineId: string }> => {
     const ingested = await ingestSightings(harness.db, {
+      plane: "search",
       fingerprint: TOPIC,
       timeZone: ZONE,
       sightings: [emission({ id: input.sightingId, url: input.url, published: input.published })],
@@ -474,6 +481,7 @@ describe("a fold re-derives the day slots of the storylines holding the article"
     expect(await dirtyAt(storylineId)).toBeNull();
 
     await ingestSightings(harness.db, {
+      plane: "search",
       fingerprint: TOPIC,
       timeZone: ZONE,
       sightings: [
@@ -519,6 +527,7 @@ describe("a fold re-derives the day slots of the storylines holding the article"
     });
 
     await ingestSightings(harness.db, {
+      plane: "search",
       fingerprint: TOPIC,
       timeZone: ZONE,
       sightings: [
@@ -549,6 +558,7 @@ describe("a fold re-derives the day slots of the storylines holding the article"
     });
 
     await ingestSightings(harness.db, {
+      plane: "search",
       fingerprint: TOPIC,
       timeZone: ZONE,
       sightings: [
@@ -600,6 +610,7 @@ describe("a fold re-derives the day slots of the storylines holding the article"
     const warnings: string[] = [];
     try {
       const ingested = await ingestSightings(harness.db, {
+        plane: "search",
         fingerprint: TOPIC,
         timeZone: ZONE,
         log: { warn: (_obj, msg) => warnings.push(msg) },
@@ -685,7 +696,7 @@ describe("resolving an article by URL key, then by alt key", () => {
   };
 
   const ingest = async (...sightings: Sighting[]) =>
-    ingestSightings(harness.db, { timeZone: "UTC", fingerprint: TOPIC, sightings });
+    ingestSightings(harness.db, { plane: "search", timeZone: "UTC", fingerprint: TOPIC, sightings });
 
   const articleCount = async (): Promise<number> => {
     const row = await harness.db
@@ -904,5 +915,115 @@ describe("resolving an article by URL key, then by alt key", () => {
     // ADR-0002: one story across several outlets is several articles, on
     // purpose — the cloud's distinct-source gate depends on it.
     expect(await articleCount()).toBe(before + 2);
+  });
+});
+
+/**
+ * The plane, on the row (ADR-0019, migration 0022).
+ *
+ * Small, and worth its own block because the failure it guards is silent in one
+ * direction: `readTrendingStorylines` reads `plane is distinct from
+ * 'deepening'`, so a sighting stamped with anything else — or with nothing —
+ * feeds the ranking that may have chosen it.
+ */
+describe("stamping the plane a fetch was made on", () => {
+  let harness: TestDatabase;
+  const TOPIC = testFingerprint("b1a4e000");
+  let uuid = 0;
+
+  const emission = (): Sighting => {
+    uuid += 1;
+    const url = `https://example.com/plane-${uuid}`;
+    return {
+      id: `00000000-0000-4000-8000-${String(uuid).padStart(12, "0")}`,
+      url,
+      provider: "currents",
+      providerSightingId: url,
+      dedupKey: deriveDedupKey(url),
+      altKey: null,
+      title: `Plane fixture ${uuid}`,
+      description: null,
+      author: null,
+      imageUrl: null,
+      language: "en",
+      categories: [],
+      sourceCategories: [],
+      sourceDomain: "example.com",
+      published: "2026-08-27T09:00:00.000Z",
+      raw: { id: uuid },
+    };
+  };
+
+  beforeAll(async () => {
+    harness = await createTestDatabase();
+    await migrateToLatest(harness.db);
+    await upsertTopic(harness.db, { fingerprint: TOPIC, keywords: ["plane"] });
+  });
+
+  afterAll(async () => {
+    await harness.drop();
+  });
+
+  it("writes the caller's plane onto every sighting in the batch", async () => {
+    // Uniform across the batch by construction: one call was planned for one
+    // reason. The adapter never supplies this — `Sighting` has no plane, and
+    // deliberately: the same provider returning the same article answers a
+    // reader's search and a cloud-driven deepening fetch.
+    const deep = emission();
+    await ingestSightings(harness.db, {
+      plane: "deepening",
+      timeZone: "UTC",
+      fingerprint: TOPIC,
+      sightings: [deep],
+    });
+
+    const row = await harness.db
+      .selectFrom("sightings")
+      .select("plane")
+      .where("id", "=", deep.id)
+      .executeTakeFirstOrThrow();
+    expect(row.plane).toBe("deepening");
+  });
+
+  it("refuses a plane outside the three ADR-0019 names", async () => {
+    // `sightings_plane_check`. The predicate upstairs is `is distinct from
+    // 'deepening'`, which is TRUE of every misspelling — so a typo does not
+    // fail closed, it joins the discovery plane and silently re-opens the
+    // endogenous loop. The constraint is what turns that into a failed insert.
+    //
+    // Raw SQL because the point is the DATABASE\'s guard: `SightingPlane`
+    // already makes this unwriteable through the query builder, and a test that
+    // only demonstrated the type would be testing tsc.
+    const article = await harness.db
+      .selectFrom("articles")
+      .select("id")
+      .executeTakeFirstOrThrow();
+
+    await expect(
+      sql`insert into sightings (id, article_id, dedup_key, published, provider, plane, raw)
+          values (gen_random_uuid(), ${article.id}, ${hexToBytea(deriveDedupKey("https://example.com/typo"))},
+                  now(), 'currents', 'deepning', '{}'::jsonb)`.execute(harness.db),
+    ).rejects.toThrow(/sightings_plane_check/);
+  });
+
+  it("still admits NULL, because that is what the archive before 0022 carries", async () => {
+    // The migration would not invent a value for history, so every pre-0022 row
+    // is NULL and the CHECK has to let it stand. `readTrendingStorylines`
+    // counts those rows — see its own test — and the whole dev archive is them.
+    const article = await harness.db
+      .selectFrom("articles")
+      .select("id")
+      .executeTakeFirstOrThrow();
+
+    await sql`insert into sightings (id, article_id, dedup_key, published, provider, plane, raw)
+        values (gen_random_uuid(), ${article.id}, ${hexToBytea(deriveDedupKey("https://example.com/history"))},
+                now(), 'currents', null, '{}'::jsonb)`.execute(harness.db);
+
+    const nulls = await harness.db
+      .selectFrom("sightings")
+      .select(({ fn }) => fn.countAll().as("n"))
+      .where("plane", "is", null)
+      .executeTakeFirstOrThrow();
+    expect(Number(nulls.n)).toBe(1);
   });
 });
