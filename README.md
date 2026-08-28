@@ -52,6 +52,8 @@ packages/config            server-only env validation — MUST NOT be imported b
 packages/news-client       provider-agnostic core: Sighting, error taxonomy, quota, transport, pager
 packages/currents-client   Currents adapter: its wire shapes, its quirks, its fixture store
 packages/gnews-client      GNews adapter: same, for the second provider
+packages/google-news-client  Google News RSS adapter — the deepening plane. Built, off,
+                           and wired to nothing yet (G4 of the discovery/deepening plan)
 packages/news-providers    the composite + the factory apps/api calls — the only layer
                            that knows how many providers exist
 apps/api                   Fastify: HTTP surface, query planning, in-process job consumer
@@ -87,6 +89,15 @@ if (all.stoppedBy === "cap") {
 
 `stoppedBy` matters: `end_of_results` means upstream is out of articles; `cap` means it is not, and
 only a narrower time window will reach the rest.
+
+A third adapter, `@zammy/google-news-client`, exists but is **not part of that fan-out**. Currents
+and GNews are peers doing the same job; Google News is a second *stage* — Currents discovers and
+bears coverage, Google News reaches ~18 months back over arcs Currents already found
+([the design](docs/DESIGN-DISCOVERY-AND-DEEPENING.md)). It is off by default and unreachable while
+it is: `createGoogleNewsClient` refuses to build anything with `GOOGLE_NEWS_ENABLED=false`, and
+nothing calls it. Two guards have to land before it can be switched on — `alt_key` article identity
+and the ranker isolation, G1 and G2 of
+[the plan](docs/DISCOVERY-DEEPENING-PLAN.md) — and G5 is what wires it.
 
 ## Commands
 

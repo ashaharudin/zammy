@@ -255,6 +255,89 @@ const EnvSchema = z
      */
     GNEWS_INTERACTIVE_RESERVE: z.coerce.number().int().min(0).default(25),
 
+    // --- third provider: Google News RSS, the deepening plane ---
+    // DESIGN-DISCOVERY-AND-DEEPENING. Not a peer of the two above: Currents
+    // discovers and bears coverage, this one reaches back over arcs Currents
+    // already found (ADR-0012's asymmetry, applied harder).
+    /**
+     * Off by default, like GNEWS_ENABLED and for its reason — adding a provider
+     * changes what gets ingested and how budget is spent — plus two of its own,
+     * both of which are guards that have to land first: G1's `alt_key`, without
+     * which a Google News item cannot be collapsed onto the same story from
+     * Currents, and G2's ranker isolation, without which the cloud would rank on
+     * its own fetching. `createGoogleNewsClient` refuses to build a client while
+     * this is false, so the adapter is unreachable rather than merely unwired.
+     */
+    GOOGLE_NEWS_ENABLED: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+    GOOGLE_NEWS_MODE: z.enum(["live", "fixture"]).default("fixture"),
+    GOOGLE_NEWS_BASE_URL: z.url().default("https://news.google.com/rss"),
+    /**
+     * Optional: falls back to CURRENTS_USER_AGENT, which is already required.
+     *
+     * There is no API key here, so the User-Agent is the ONLY thing identifying
+     * this client — and PROBE-FINDINGS 2 cost eleven calls to learn that a
+     * default library UA earns a 403. A blocked keyless endpoint and a
+     * misconfigured one look identical from the outside.
+     */
+    GOOGLE_NEWS_USER_AGENT: z.string().trim().optional(),
+    /**
+     * The `hl`/`gl`/`ceid` triple is derived from this pair rather than
+     * configured as three values, because the three are not independent: `hl` is
+     * `<lang>-<COUNTRY>`, `gl` is the country and `ceid` is `<COUNTRY>:<lang>`.
+     * A set that disagrees with itself returns a different, quieter result set.
+     */
+    GOOGLE_NEWS_LANGUAGE: z.string().trim().min(2).default("en"),
+    GOOGLE_NEWS_COUNTRY: z.string().trim().length(2).default("CA"),
+    /**
+     * Two years — deliberately PAST what has been measured, which is 573 days.
+     *
+     * Nothing about this endpoint is documented, so the only fact available is
+     * a probed floor: `"bank of canada" after:2025-02-01 before:2025-02-03`
+     * answered with 20 items from 17 publisher domains on 2026-08-28, 573 days
+     * later. No upper bound was found because none was looked for.
+     *
+     * Set above the floor rather than on it because this clamp is not the same
+     * kind of clamp as CURRENTS_MAX_LOOKBACK_DAYS. That one exists so a
+     * documented 400 stays unreachable; there is no 400 here — an over-old
+     * window answers 200 with few or no items. So the only cost of asking too
+     * deep is a wasted call, whereas the cost of clamping too shallow is a
+     * window silently pulled forward and then recorded as covered
+     * (ARCHITECTURE 11). Between a wasted call and a permanent gap, this takes
+     * the wasted call.
+     *
+     * For scale: Currents' verified lookback is 30 days, and reaching past it
+     * is the entire reason this provider is worth having.
+     */
+    GOOGLE_NEWS_MAX_LOOKBACK_DAYS: z.coerce.number().int().min(1).max(7300).default(730),
+    /**
+     * A budget WE INVENTED. This is the uncomfortable part of this provider and
+     * it should not be smoothed over: there is no key, no published ceiling and
+     * no rate-limit header, so `quota()` returns null forever and the governor
+     * will never once be corrected by upstream. Every other number in this file
+     * was transcribed from something a provider told us; these two were not.
+     *
+     * Hence low. What an unhappy keyless endpoint looks like is on record —
+     * GDELT answered 1 of 6 probe calls, the five failures arriving as silent
+     * connection timeouts at 30–75s rather than as a 429
+     * (RESEARCH-FREE-NEWS-SOURCES §1). There is no warning shot to wait for, so
+     * the budget is the only thing pacing us and the breaker is the only thing
+     * that notices afterwards.
+     *
+     * Raise either only on measurement (G6), never on optimism.
+     */
+    GOOGLE_NEWS_DAILY_CALL_LIMIT: z.coerce.number().int().min(1).default(200),
+    GOOGLE_NEWS_BURST_CALL_LIMIT: z.coerce.number().int().min(1).default(5),
+    /** A minute, like Currents — there is no observed window shape to match. */
+    GOOGLE_NEWS_BURST_WINDOW_MS: z.coerce.number().int().min(1).default(60_000),
+    /**
+     * A quarter of the daily budget held back for interactive use, the same
+     * proportion CURRENTS_INTERACTIVE_RESERVE and GNEWS_INTERACTIVE_RESERVE hold.
+     */
+    GOOGLE_NEWS_INTERACTIVE_RESERVE: z.coerce.number().int().min(0).default(50),
+
     // --- ingestion budget (ARCHITECTURE 6.3, 9.4) ---
     SYNC_FILL_DEADLINE_MS: z.coerce.number().int().min(100).max(10_000).default(1200),
     MAX_SYNC_UPSTREAM_CALLS: z.coerce.number().int().min(1).max(5).default(5),
@@ -1068,6 +1151,23 @@ const EnvSchema = z
         message:
           `GNEWS_INTERACTIVE_RESERVE (${env.GNEWS_INTERACTIVE_RESERVE}) must be below ` +
           `GNEWS_DAILY_CALL_LIMIT (${env.GNEWS_DAILY_CALL_LIMIT}), ` +
+          "or background ingestion can never draw on this provider.",
+      });
+    }
+
+    // Google News has no page-size or retrievable-results knob to cross-check —
+    // both are fixed at the endpoint's 100-item wall in the adapter, because
+    // neither is a tier anyone could buy up. The reserve check still applies.
+    if (
+      env.GOOGLE_NEWS_ENABLED &&
+      env.GOOGLE_NEWS_INTERACTIVE_RESERVE >= env.GOOGLE_NEWS_DAILY_CALL_LIMIT
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["GOOGLE_NEWS_INTERACTIVE_RESERVE"],
+        message:
+          `GOOGLE_NEWS_INTERACTIVE_RESERVE (${env.GOOGLE_NEWS_INTERACTIVE_RESERVE}) must be ` +
+          `below GOOGLE_NEWS_DAILY_CALL_LIMIT (${env.GOOGLE_NEWS_DAILY_CALL_LIMIT}), ` +
           "or background ingestion can never draw on this provider.",
       });
     }
