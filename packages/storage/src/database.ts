@@ -158,25 +158,27 @@ export interface TopicArticlesTable {
  *
  * Per topic AND per provider since migration 0021, which is the one thing to
  * know before reading a row as "we have everything for this span": a row means
- * THAT provider fetched the span, not that every configured provider did — see
- * ADR-0012 for why a best-effort supplement is deliberately not allowed to write
- * an end-of-results signal here.
+ * THAT provider fetched the span, not that every configured provider did.
+ * ADR-0019 is the decision — coverage is `(subject, provider, span)`, no
+ * provider privileged, each recording only what it actually walked — and it says
+ * plainly that "is this span covered" therefore stops having a single answer.
  *
- * The read path has not caught up with the column and does not need to yet.
- * Currents is still the only writer, so every row is `'currents'` and a
- * provider-blind read is exact; `coverage.ts` carries the argument and the
- * conditions under which it stops being true.
+ * The read path has not caught up with that and does not need to yet: Currents
+ * is the only caller wired to write here today, so every row is `'currents'` and
+ * a provider-blind read is exact. `coverage.ts` carries the argument, and names
+ * G5 as when it stops holding.
  */
 export interface TopicCoverageTable {
   fingerprint: Buffer;
   /**
    * Which upstream fetched this span (migration 0021), defaulting to
-   * `'currents'` — the only provider that had ever written here.
+   * `'currents'` — a statement about the only provider that had ever written
+   * here, not a designation.
    *
-   * ADR-0012's deferred debt, paid: each provider's spans are now separable, so
-   * one provider's fill can never be read as another's. Note that `readCoverage`
-   * deliberately does NOT filter on it yet — see `coverage.ts` for why, and for
-   * what has to change together the day a second writer appears.
+   * ADR-0019's shape: each provider's spans are separable, so no provider can
+   * claim what another fetched. Note that `readCoverage` deliberately does NOT
+   * filter on it yet — see `coverage.ts` for why, and for the four things that
+   * change together in G5.
    */
   provider: Generated<string>;
   /** tstzrange, as its text representation. */
@@ -185,15 +187,15 @@ export interface TopicCoverageTable {
 }
 
 /**
- * The deepening plane's coverage, keyed on the arc rather than on a search
- * (migration 0021; docs/DESIGN-DISCOVERY-AND-DEEPENING.md §2b).
+ * Coverage keyed on the arc rather than on a search — the subject a `deepening`
+ * fetch covers (migration 0021; ADR-0019;
+ * docs/DESIGN-DISCOVERY-AND-DEEPENING.md §2b).
  *
  * Same question as `topic_coverage` — "did we ask, or was nothing published?" —
  * about a different subject. A storyline is a persistent arc whose identity is a
- * UUID (ADR-0011), so the deepening plane can record what it fetched for an arc
- * without inventing a topic fingerprint to hang it on, and, more importantly,
- * without being able to write into the discovery plane's coverage at all
- * (ADR-0012).
+ * UUID (ADR-0011), so a fetch pointed at an arc records what it covered without
+ * inventing a topic fingerprint to hang it on, and, more importantly, without
+ * being able to reach `topic_coverage` at all.
  *
  * No `Generated` on `provider`: unlike `topic_coverage` there is no history to
  * default, and which plane writes here is decided by its caller, not by the

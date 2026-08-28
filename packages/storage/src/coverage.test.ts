@@ -77,9 +77,10 @@ describe("coverage recording", () => {
   describe("the provider column", () => {
     it("stamps every span Currents records", async () => {
       // The premise `readCoverage` being provider-blind depends on: Currents is
-      // the only writer, so a blind read is exact. ADR-0012 makes that
-      // structural — a supplement has no end-of-results signal to record — and
-      // the deepening plane writes to `storyline_coverage` instead.
+      // the only caller wired to write topic coverage today, so a blind read is
+      // exact. Under ADR-0019 that is a fact about what exists rather than a
+      // rule — Google News writes here too from G5 — which is why the module
+      // header treats the blind read as sequencing and not as a position.
       const { rows } = await sql<{ provider: string }>`
         select distinct provider from topic_coverage
       `.execute(harness.db);
@@ -90,9 +91,9 @@ describe("coverage recording", () => {
       // `recordCoverage`'s merge is a delete-and-rewrite. Unscoped, it would
       // take this row into the `range_agg`, coalesce it with the adjacent
       // Currents span, and write the union back stamped 'currents' — coverage
-      // manufactured over a span Currents never fetched, which is the exact
-      // failure ADR-0012 exists to prevent, arriving through a write that was
-      // not thinking about providers.
+      // manufactured over a span Currents never fetched. Per-provider rows are
+      // what make that claim inexpressible (ADR-0019); they only do so if the
+      // writes respect them, and this write nearly did not.
       //
       // Nothing writes a row like this today; that is why it is inserted by
       // hand. The predicate is here so the write is already correct on the day
@@ -119,9 +120,10 @@ describe("coverage recording", () => {
       ]);
 
       // And the read stays blind, which is the documented consequence rather
-      // than an oversight: it returns BOTH providers' spans as one list. Safe
-      // only while nothing writes a row like the one above — `coverage.ts`
-      // names the four things that must change together on the day one does.
+      // than an oversight: it returns BOTH providers' spans as one list — the
+      // single answer ADR-0019 says this question no longer has. Safe only while
+      // nothing writes a row like the one above; `coverage.ts` names the four
+      // things that change together in G5, when something does.
       expect(iso(await readCoverage(harness.db, OTHER))).toEqual([
         "2026-09-01T00:00:00.000Z/2026-09-02T00:00:00.000Z",
         "2026-09-02T00:00:00.000Z/2026-09-03T00:00:00.000Z",

@@ -6,9 +6,9 @@ import { migrateToLatest } from "./migrator.js";
 import { createTestDatabase, type TestDatabase } from "./test-support.js";
 
 /**
- * `storyline_coverage` (migration 0021) — the deepening plane's half of "did we
- * ask, or was nothing published?" (ADR-0001), keyed on an arc rather than on a
- * search.
+ * `storyline_coverage` (migration 0021) — "did we ask, or was nothing
+ * published?" (ADR-0001) about the subject a `deepening` fetch covers, an arc
+ * rather than a search (ADR-0019).
  *
  * The cases mirror `coverage.test.ts` deliberately: this table's whole value is
  * that its spans arrive at the gap subtraction in the same shape the topic
@@ -116,11 +116,11 @@ describe("storyline coverage", () => {
   });
 
   it("keeps PROVIDERS' coverage separate, and does not merge across them", async () => {
-    // ADR-0012's line, made mechanical. One provider's fetch of the first half
-    // of a day and another's fetch of the second half are adjacent spans that
-    // `range_agg` would happily coalesce — and the merged row would claim each
-    // provider covered a span it never fetched. Scoping the fold to
-    // (storyline_id, provider) is what stops it.
+    // ADR-0019's "no provider can claim what another fetched", made mechanical.
+    // One provider's fetch of the first half of a day and another's fetch of the
+    // second half are adjacent spans that `range_agg` would happily coalesce —
+    // and the merged row would claim each provider covered a span it never
+    // fetched. Scoping the fold to (storyline_id, provider) is what stops it.
     await recordStorylineCoverage(
       harness.db,
       otherArc,

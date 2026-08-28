@@ -8,25 +8,28 @@ import type { Database } from "./database.js";
  * been fetched FOR AN ARC, by which provider.
  *
  * The same question `coverage.ts` answers about a topic — "did we ask, or was
- * nothing published?" (ADR-0001) — asked about a storyline instead. It is a
- * deliberate near-copy of that module rather than a generalization of it: the
- * two subjects have different key types, different foreign keys, different
- * readers, and — the point of the split — deliberately no way to write each
- * other's rows. A shared helper parameterized over the subject column would
- * hand the deepening plane a code path that reaches `topic_coverage`, which is
- * the one thing ADR-0012 exists to make impossible.
+ * nothing published?" (ADR-0001) — asked about a storyline instead. ADR-0019
+ * makes coverage `(subject, provider, span)`; this module is the second subject.
+ *
+ * A deliberate near-copy of `coverage.ts` rather than a generalization of it:
+ * the two subjects have different key types, different foreign keys, different
+ * readers, and different callers planning against them. A shared helper
+ * parameterized over the subject column would hand a deepening fetch a code path
+ * that reaches `topic_coverage` — and "no provider can claim what another
+ * fetched" is cheaper to guarantee when the wrong table is unreachable than when
+ * it is one argument away.
  *
  * ## Provider-scoped in both directions, unlike `coverage.ts`
  *
- * `readCoverage` is provider-blind because Currents is the only writer of topic
- * coverage and a blind read of a single-provider table is exact. Nothing like
- * that holds here. This table exists BECAUSE more than one provider will write
- * arc coverage, so "what is covered for this arc" is not a question — "what is
- * covered for this arc, by this provider" is. A blind read here would let one
- * provider's fetches suppress another's fills, which is over-coverage: the
- * unrecoverable direction, and exactly what ADR-0012 refuses.
+ * `readCoverage` is still provider-blind, because Currents is the only caller
+ * wired to write topic coverage today and a blind read of a single-writer table
+ * is exact. Nothing like that holds here, and nothing should: ADR-0019 retires
+ * the single-answer form of "is this span covered", so "what is covered for this
+ * arc" is not a question and "what is covered for this arc, BY THIS PROVIDER"
+ * is. A blind read would let one provider's fetches suppress another's fills —
+ * over-coverage, the unrecoverable direction.
  *
- * Nothing reads or writes this table yet. G5 attaches the deepening plane to it;
+ * Nothing reads or writes this table yet. G5 points the storyline refresh at it;
  * this phase lands the schema and the primitives and stops there.
  */
 
@@ -57,8 +60,8 @@ const STORYLINE_COVERAGE_LOCK_NAMESPACE = 0x5c07;
  * rather than tidy: it is a delete-and-rewrite, so an unscoped one would fold a
  * second provider's spans into this one's and write the union back under this
  * provider's name — a claim that this provider covered a span it never fetched.
- * That is coverage manufactured out of another plane's work, which is the
- * failure ADR-0012 is entirely about.
+ * Per-provider rows are what make that claim inexpressible (ADR-0019), and they
+ * only do so if the writes respect them.
  */
 export async function recordStorylineCoverage(
   db: Kysely<Database>,

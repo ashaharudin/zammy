@@ -4,34 +4,41 @@ import { sql, type Kysely } from "kysely";
  * Coverage gains a provider, and a second subject
  * (docs/DESIGN-DISCOVERY-AND-DEEPENING.md §2b; plan §G3).
  *
- * ADR-0012 deferred exactly this and named it: "`topic_coverage` gaining a
- * provider column so each provider's spans are tracked and repaired
- * independently. That is a schema and planner change, and it buys nothing until
- * a supplement contributes enough to be worth backfilling. Deferred, not
- * forgotten." The deepening plane makes it worth backfilling, so this cashes it
- * in — the schema half only. Nothing reads `storyline_coverage` until G5, and
- * no planner changes here.
+ * The governing decision is **ADR-0019**, which makes coverage
+ * `(subject, provider, span)` with **no provider privileged** and names this
+ * migration's two halves as what it needs. ADR-0012 — which ranked providers,
+ * and which deferred exactly this ("`topic_coverage` gaining a provider column
+ * so each provider's spans are tracked and repaired independently ... Deferred,
+ * not forgotten") — is superseded by it. This is the schema half only: nothing
+ * reads `storyline_coverage` until G5, and no planner changes here.
+ *
+ * ADR-0012's core argument does not have to be overruled, it dissolves. Its fear
+ * was a combined end-of-results signal recording coverage over days one provider
+ * never looked at; per-provider rows cannot express that claim, because each
+ * provider records only the spans it actually walked and a provider that ran out
+ * of budget simply still has a gap.
  *
  * ## Why two subjects rather than one wider table
  *
  * `topic_coverage` is keyed on a topic fingerprint: a hash of the SEARCH that
- * was run. The deepening plane's unit is a storyline — a persistent arc
- * (ADR-0011) whose identity is a UUID that outlives any particular query text —
- * and it does not run a topic search at all. Folding both into one table would
- * need a nullable subject column per kind and a CHECK that exactly one is set,
- * which is a discriminated union pretending to be a table; the two subjects have
- * different foreign keys, different cascade behaviour, and different readers.
+ * was run. A deepening fetch's unit is a storyline — a persistent arc (ADR-0011)
+ * whose identity is a UUID that outlives any particular query text — and it does
+ * not run a topic search at all. Folding both into one table would need a
+ * nullable subject column per kind and a CHECK that exactly one is set, which is
+ * a discriminated union pretending to be a table; the two subjects have different
+ * foreign keys, different cascade behaviour, and different readers.
  *
- * What the split buys is the thing ADR-0012 spends itself protecting: **two
- * planes that never write each other's coverage cannot manufacture coverage over
- * spans the other never fetched.** A deepening fetch physically cannot mark a
- * topic span covered, because it has nowhere to write that claim.
+ * The split also puts the wrong table out of reach rather than one argument
+ * away: a deepening fetch physically cannot mark a topic span covered, because
+ * it has nowhere to write that claim.
  *
  * ## Why `DEFAULT 'currents'` on the existing table, and why it stays
  *
  * Migration 0013's argument, unchanged. Until this migration there was exactly
  * one provider writing coverage, so the default backfills every existing row
- * correctly — verified against the dev archive: all 383 rows are Currents'.
+ * correctly — verified against the dev archive: all 383 rows are Currents'. It
+ * is a statement about history, not a designation: under ADR-0019 Google News
+ * writes topic coverage too, from G5.
  *
  * The default STAYS rather than being dropped afterwards, for 0013's reason:
  * "a write path that forgot to set it would otherwise fail at 3am, and being
@@ -47,9 +54,9 @@ import { sql, type Kysely } from "kysely";
  * exists.
  *
  * `storyline_coverage.provider` deliberately has NO default. There is no history
- * to backfill and no single obvious value — which plane writes storyline
- * coverage is G5's decision, not this migration's — so a writer that forgets it
- * should fail loudly at the point the mistake is made.
+ * to backfill and no obvious value to invent — under ADR-0019 no provider is
+ * privileged, and which ones deepen an arc is G5's decision — so a writer that
+ * forgets it should fail loudly at the point the mistake is made.
  *
  * ## Why `topic_coverage_gist` is left alone — the numbers
  *
