@@ -188,9 +188,31 @@ export function deriveSightingId(provider: string, providerSightingId: string): 
  * rather than a known one — but it is the first entry where the name alone no
  * longer bounds it, and a host-scoped strip is the only real fix if one appears.
  *
- * Case-insensitivity is a property of the strip loop, not of this entry: it
+ * `cmp`: verified 2026-08-27, to the same standard. CBC spells it `?cmp=rss` and
+ * the Guardian spells it `?CMP=share_btn_url`; both outlets' pages were fetched
+ * with and without it, and each declared the bare URL canonical either way, so
+ * stripping it agrees with what the publisher says the document is rather than
+ * with a guess from the name looking like "campaign".
+ *
+ * What `cmp` buys is mostly ahead of us. The CBC feeds append it to *every*
+ * link, so once feed ingestion lands, the same story reaching us from a feed and
+ * from Currents would otherwise canonicalize two ways and become two `articles`
+ * rows — on 100% of one outlet's articles. Today only the Guardian's `?CMP=`
+ * share links reach us at all, via Currents and GNews.
+ *
+ * `cmp` is the second generic name here, so `share_id`'s caveat above applies to
+ * it unchanged, and more sharply: three letters carry less meaning than eleven,
+ * and "cmp" could as easily abbreviate compare, component or consent. What
+ * bounds it is that the set is exact-match, so the compound forms a content
+ * selector would plausibly take — `cmpid`, `cmp_id`, `camp` — all survive
+ * untouched. A bare `?cmp=` naming a document, rather than the campaign that
+ * referred to it, is the shape that would break this, and none was found.
+ *
+ * Case-insensitivity is a property of the strip loop, not of any one entry: it
  * lowercases each key before the lookup, so every lowercase member here already
- * covers `SHARE_ID` and `Share_Id` as it does `FBCLID`.
+ * covers `SHARE_ID` and `Share_Id` as it does `FBCLID` — and covers the
+ * Guardian's `CMP` with the same `cmp` entry that covers CBC's. Members must
+ * therefore be spelled lowercase; a `"CMP"` entry could never match.
  */
 const TRACKING_PARAMS = new Set([
   "fbclid",
@@ -199,6 +221,7 @@ const TRACKING_PARAMS = new Set([
   "igshid",
   "mc_eid",
   "share_id",
+  "cmp",
 ]);
 
 /**

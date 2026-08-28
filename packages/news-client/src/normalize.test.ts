@@ -68,10 +68,34 @@ describe("canonicalizeUrl", () => {
     );
   });
 
-  it("does NOT strip names that merely resemble share_id", () => {
+  it("collapses a ?cmp= link onto the same article as the bare URL", () => {
+    // Every CBC feed link carries `?cmp=rss`, so once feed ingestion lands, without
+    // this one outlet's whole output would land as two articles per story — one from
+    // the feed, one from Currents. The Guardian spells it `CMP`, hence both cases.
+    // Asserted against the literal, not against `canonicalizeUrl` of the bare URL:
+    // comparing the function to itself would also pass if it returned null for all
+    // three.
+    const bare = "https://www.cbc.ca/news/world/story-9.7322947";
+    expect(canonicalizeUrl(bare)).toBe(bare);
+    expect(canonicalizeUrl(`${bare}?cmp=rss`)).toBe(bare);
+    expect(canonicalizeUrl(`${bare}?CMP=share_btn_url`)).toBe(bare);
+  });
+
+  it("does NOT strip names that merely resemble a tracking parameter", () => {
     // The set is exact-match by design: a near miss is far likelier to select
     // content than to track a referral, and over-collapsing is unrecoverable.
-    for (const key of ["share-id", "shareid", "sharer_id", "share_id_v2"]) {
+    // `cmp` needs this most — three letters, and the compound forms below are
+    // exactly what a content selector would be called.
+    for (const key of [
+      "share-id",
+      "shareid",
+      "sharer_id",
+      "share_id_v2",
+      "cmpid",
+      "cmp_id",
+      "camp",
+      "cmp2",
+    ]) {
       expect(canonicalizeUrl(`https://example.com/story?${key}=1`)).toBe(
         `https://example.com/story?${key}=1`,
       );
