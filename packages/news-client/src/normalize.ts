@@ -458,7 +458,7 @@ function stripOutletSuffix(title: string, domain: string): string {
   for (let peeled = 0; peeled < MAX_OUTLET_SEGMENTS; peeled += 1) {
     // Greedy head, so this splits on the LAST delimiter: attribution is peeled
     // from the right, one segment at a time.
-    const split = /^(.*\S)\s+[|\-–—]\s+(\S.*)$/u.exec(headline);
+    const split = /^(.*\S)\s+[|\-\u2013\u2014]\s+(\S.*)$/u.exec(headline);
     if (split === null) break;
     if (!outletSpellings.has(compareForm(split[2]!))) break;
     headline = split[1]!.trim();
