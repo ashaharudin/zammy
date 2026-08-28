@@ -83,8 +83,32 @@ import { deriveAltKey } from "@zammy/news-client";
  * The 737 account for themselves exactly: 135 rows this cannot key at all (134
  * source-truncated titles, one that folds to nothing) plus the 602 rows making
  * up 291 collision groups. Production holds 37,077 articles, so expect the same
- * shape and a little more of it — comfortably inside a deploy step, and the
- * table takes no lock a reader would notice beyond the `ADD COLUMN`.
+ * shape and a little more of it.
+ *
+ * ## What it locks, which is more than it looks
+ *
+ * `ALTER TABLE … ADD COLUMN` takes **ACCESS EXCLUSIVE** on `articles`, and that
+ * conflicts with ACCESS SHARE — so it blocks plain `SELECT`s, not only writers.
+ * And Kysely's migrator runs every pending migration in ONE transaction on
+ * Postgres (`supportsTransactionalDdl`, and `disableTransactions` is not set),
+ * so the lock is taken by the first statement here and held until that whole run
+ * commits: this backfill, this index build, and any other migration pending in
+ * the same deploy.
+ *
+ * On the dev numbers above that is ~1.8s during which no reader of `articles`
+ * gets an answer — and worse, every query arriving behind it queues too, so the
+ * request path sees a stall rather than a slow query. Small, and stated plainly
+ * because "1.8 seconds" is what somebody will use to decide whether to run this
+ * at peak, and the honest version of that sentence is "1.8 seconds of a fully
+ * blocked `articles`".
+ *
+ * Deliberately NOT bounded with `lock_timeout` the way 0019 bounds its own wait.
+ * That trade — fail the re-runnable deploy step rather than stall the request
+ * path — is available here too and would be worth taking if this table's reads
+ * ever got long enough to make the ACCESS EXCLUSIVE queue behind them. It is
+ * left off because 0019 bounds the WAIT for a change that is then instant,
+ * whereas this holds the lock for the backfill's duration whatever happens, so a
+ * timeout would bound the smaller half of the cost.
  */
 
 export async function up(db: Kysely<unknown>): Promise<void> {

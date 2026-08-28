@@ -448,6 +448,29 @@ export function foldTitleForIdentity(title: string): string {
  * fuzzy beyond that: a segment that merely resembles the domain is left alone,
  * because a suffix left on costs one uncollapsed duplicate and a suffix wrongly
  * taken off costs a merge.
+ *
+ * ## What that refuses to strip, and when it will start to matter
+ *
+ * The display name has to BE the domain stem. Probed over 12 outlets, 5 strip
+ * and 7 do not:
+ *
+ *     stripped       theguardian.com  " - The Guardian"
+ *     stripped       reuters.com      " - Reuters"
+ *     NOT stripped   nytimes.com      " - The New York Times"      expands the stem
+ *     NOT stripped   indiatimes.com   " - Times of India"          reorders it
+ *     NOT stripped   bbc.co.uk        " - BBC News"                adds a word
+ *     NOT stripped   wsj.com          " - The Wall Street Journal" domain is an initialism
+ *
+ * Inert while one provider supplies every title: an outlet that always appends
+ * " - BBC News" folds to a stable key whether or not the tail comes off, and the
+ * production measurement `deriveAltKey` cites already reflects exactly this
+ * behaviour. It stops being inert as soon as TWO providers describe one article
+ * and spell the outlet differently — a provider that writes the outlet's DISPLAY
+ * name, where Currents ships the outlet's own `<title>` tag, would fold to a
+ * different key and mint a second row, which is the failure this whole key
+ * exists to prevent. The fix is a display-name-to-domain map, which needs a
+ * corpus of such titles to be built against and measured on; ADR-0018 records it
+ * as an accepted cost, and the plan puts it in the phase that first has one.
  */
 function stripOutletSuffix(title: string, domain: string): string {
   const outletSpellings = domainSpellings(domain);

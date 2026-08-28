@@ -273,10 +273,27 @@ Changes:
 **§9 survives this phase.** "Every upstream call traces back to a real user
 request" holds — a click is still the trigger. G7 is where that is traded.
 
+**A known limitation of `alt_key`, carried forward from G1 and load-bearing
+here.** The fold's suffix strip fires only when the outlet's display name IS its
+domain stem — so it takes ` - The Guardian` off `theguardian.com`, and does NOT
+take ` - The New York Times` off `nytimes.com`, ` - Times of India` off
+`indiatimes.com`, ` - BBC News` off `bbc.co.uk`, or ` - The Wall Street Journal`
+off `wsj.com`. Measured over a 12-outlet probe: 5 strip, 7 do not. This is inert
+under one provider — one spelling of the suffix gives a stable key either way —
+but **Google News writes the display name**, so for every outlet in that second
+class a Google item and its Currents twin fold to different keys and mint two
+rows. That is the exact failure `alt_key` exists to prevent, and it lands on this
+phase. The fix is a display-name-to-domain map, deliberately deferred to here
+because it needs a corpus of Google News titles to be built against and measured
+on; ADR-0018 records it as an accepted cost of G1. **Budget for it in this phase
+rather than discovering it in G6's yield numbers**, where it would read as
+"Google News duplicates everything" rather than as one fixable mapping.
+
 **The open question this phase must answer**: how a deepening-plane article
 appears in a day slot. `alt_key` shrinks the problem a long way — a Google item
 for a story Currents already has folds into a *sighting* of the existing
-article and inherits its group, so only genuinely-new stories need placement.
+article and inherits its group (subject to the suffix limitation above), so
+only genuinely-new stories need placement.
 For those, either (a) let them into grouping normally, which needs G0 landed
 first to keep the suffix out of `story_tokens`, or (b) attach them as loose
 storyline-day members rendered below the groups. Pick the smallest thing that

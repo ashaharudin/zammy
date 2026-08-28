@@ -149,6 +149,38 @@ guess:
   upstream page of 20, so the ceiling is ~19ms against ARCHITECTURE 6.3's
   1,200ms sync-fill budget, and an article with no key pays nothing.
 
+- **The suffix strip only fires when the outlet's display name IS its domain
+  stem, and that will surprise the phase that needs it most.** The comparison is
+  loose about case, spaces, punctuation, a leading "the" and the public suffix —
+  and about nothing else. So it strips ` - The Guardian` from `theguardian.com`
+  and ` | Globalnews.ca` from `globalnews.ca`, and does not strip:
+
+  ```
+  NOT STRIPPED   nytimes.com      - The New York Times        display name expands the stem
+  NOT STRIPPED   indiatimes.com   - Times of India            display name reorders the stem
+  NOT STRIPPED   bbc.co.uk        - BBC News                  display name adds a word
+  NOT STRIPPED   cbc.ca           | CBC News                            ''
+  NOT STRIPPED   wsj.com          - The Wall Street Journal   domain is an initialism
+  NOT STRIPPED   ft.com           - Financial Times                     ''
+  ```
+
+  Measured over a 12-outlet probe: 5 strip, 7 do not.
+
+  **Inert today**, because one provider means one spelling of the suffix: an
+  outlet that always appends ` - BBC News` produces a stable key either way, and
+  the production result above already reflects this behaviour. It stops being
+  inert the moment two providers describe the same article, because **Google
+  News writes the outlet's DISPLAY name** while Currents ships the outlet's own
+  `<title>` tag. For every outlet in the second class above, a Google item and
+  its Currents twin would fold to different keys and mint two rows — precisely
+  the failure this key exists to prevent, and the mechanism the
+  discovery/deepening design's §2a rests on.
+
+  Left unfixed on purpose. The fix is a display-name-to-domain map, which is a
+  real piece of design: it needs a corpus of Google News titles to be built
+  against and measured on, and there is none yet. It belongs to the phase that
+  ingests the first Google News article, not to this one.
+
 - **Changing the fold is a migration, not an edit.** Keys are stored and never
   recomputed, so any change splits the archive into rows keyed the old way and
   rows keyed the new one. This is why the fold is duplicated in
