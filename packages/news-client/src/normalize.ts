@@ -159,33 +159,70 @@ export function deriveSightingId(provider: string, providerSightingId: string): 
 /**
  * Query parameters that identify a referral, never a document.
  *
- * Entries must be spelled lowercase: the loop below folds the URL's key, not the
- * set, so a `"CMP"` entry could never match. That fold is load-bearing for `cmp`,
- * which CBC spells `?cmp=rss` and the Guardian spells `?CMP=share_btn_url` — one
- * entry covers both.
+ * From here on, a parameter earns a place only on evidence from outside our own
+ * guesswork that it does not select content — a name that merely *looks* like a
+ * tracker is not enough, because over-collapsing is the worse error (see
+ * `canonicalizeUrl` below). The standard is the publisher's own
+ * `<link rel="canonical">`: fetch a real article with and without the
+ * parameter, and add it only if the page declares the bare URL canonical both
+ * times. The four click ids above predate that rule and were never held to it;
+ * they were safe on a weaker one, being vendor-namespaced (Facebook, Google,
+ * Microsoft, Instagram) plus Mailchimp's `mc_eid`, so no publisher will ever
+ * reuse those names to mean something of its own.
  *
- * `cmp` earns its place on the publishers' own evidence rather than on the name
- * looking like "campaign". Both outlets' `rel="canonical"` tags omit it — fetched
- * with and without it, 2026-08-27, each page declared the bare URL canonical — so
- * stripping it agrees with what the publisher says the document is.
+ * `share_id`: verified 2026-08-27. Production held two `articles` rows for one
+ * Common Dreams story differing only by `?share_id=983848`; fetched both ways,
+ * the page declares `rel="canonical"` as the bare
+ * `commondreams.org/news/trump-belgium-ring-bribe` and serves the same article
+ * (the id survives only in a client bootstrap payload, as a field beside
+ * `post_id` and `override_device` — those are payload fields, not query
+ * parameters we see or strip). Confirmed on honest-broker.com, deliberately a
+ * different stack — Substack, where Common Dreams is WordPress-based — so the
+ * two are independent implementations rather than one CMS checked twice.
  *
- * What it buys us is mostly ahead of us: the CBC feeds append `?cmp=rss` to
- * *every* link, so once feed ingestion lands, without this entry the same story
- * reaching us from a feed and from Currents would canonicalize two ways and become
- * two `articles` rows — the failure `dedupKey` exists to prevent, on 100% of one
- * outlet's articles. Today only the Guardian's `?CMP=` share links reach us at
- * all, via Currents and GNews.
+ * It is nonetheless the first generic, non-namespaced name in this set, and the
+ * risk that buys is real: a host routing `/share?share_id=<id>`, where the id
+ * IS the resource and the path carries no slug, would collapse every such link
+ * onto one dedup key. No publisher of that shape turned up, and every share
+ * convention found keeps full identity in the path, so this is residual risk
+ * rather than a known one — but it is the first entry where the name alone no
+ * longer bounds it, and a host-scoped strip is the only real fix if one appears.
  *
- * The bar is deliberately this high. `canonicalizeUrl` treats over-collapsing as
- * the worse error (see below), so a parameter joins this set only when something
- * outside our own guesswork says it does not select content. Note the asymmetry
- * `cmp` carries and the five above it do not: those are opaque vendor referral
- * IDs no server could use as a content selector, whereas `cmp` is a generic
- * abbreviation and this set applies to every host we ever see. The canonical-tag
- * evidence covers two publishers; the rule is global. Matching is exact, so
- * `cmpid=`, `cmp_id=` and `camp=` are untouched.
+ * `cmp`: verified 2026-08-27, to the same standard. CBC spells it `?cmp=rss` and
+ * the Guardian spells it `?CMP=share_btn_url`; both outlets' pages were fetched
+ * with and without it, and each declared the bare URL canonical either way, so
+ * stripping it agrees with what the publisher says the document is rather than
+ * with a guess from the name looking like "campaign".
+ *
+ * What `cmp` buys is mostly ahead of us. The CBC feeds append it to *every*
+ * link, so once feed ingestion lands, the same story reaching us from a feed and
+ * from Currents would otherwise canonicalize two ways and become two `articles`
+ * rows — on 100% of one outlet's articles. Today only the Guardian's `?CMP=`
+ * share links reach us at all, via Currents and GNews.
+ *
+ * `cmp` is the second generic name here, so `share_id`'s caveat above applies to
+ * it unchanged, and more sharply: three letters carry less meaning than eleven,
+ * and "cmp" could as easily abbreviate compare, component or consent. What
+ * bounds it is that the set is exact-match, so the compound forms a content
+ * selector would plausibly take — `cmpid`, `cmp_id`, `camp` — all survive
+ * untouched. A bare `?cmp=` naming a document, rather than the campaign that
+ * referred to it, is the shape that would break this, and none was found.
+ *
+ * Case-insensitivity is a property of the strip loop, not of any one entry: it
+ * lowercases each key before the lookup, so every lowercase member here already
+ * covers `SHARE_ID` and `Share_Id` as it does `FBCLID` — and covers the
+ * Guardian's `CMP` with the same `cmp` entry that covers CBC's. Members must
+ * therefore be spelled lowercase; a `"CMP"` entry could never match.
  */
-const TRACKING_PARAMS = new Set(["fbclid", "gclid", "msclkid", "igshid", "mc_eid", "cmp"]);
+const TRACKING_PARAMS = new Set([
+  "fbclid",
+  "gclid",
+  "msclkid",
+  "igshid",
+  "mc_eid",
+  "share_id",
+  "cmp",
+]);
 
 /**
  * Canonical form of a sighting's link, used BOTH as the stored `url` and as the

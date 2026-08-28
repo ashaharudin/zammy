@@ -412,7 +412,7 @@ export function TrendingCloud({
                 {storyline.label}
               </button>{" "}
               <span style={{ color: "var(--fg-faint)" }}>
-                — {cloudDetail(storyline, bounds)}
+                — {storyline.size} article{storyline.size === 1 ? "" : "s"}
               </span>
             </li>
           ))}
