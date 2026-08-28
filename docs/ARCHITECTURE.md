@@ -657,7 +657,11 @@ CREATE INDEX sightings_dedup_idx   ON sightings (dedup_key);
 -- sighting so a timeline read needs no join back to sightings.
 CREATE TABLE articles (
   id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  dedup_key       bytea NOT NULL,
+  dedup_key       bytea NOT NULL,              -- sha256(canonical url); the PRIMARY identity
+  -- Fallback identity: sha256(source_domain, folded title, UTC day), consulted
+  -- only when dedup_key matches nothing (ADR-0018). NULL = identified by URL
+  -- alone, which is what every row was before it existed.
+  alt_key         bytea,
   url             text NOT NULL,
   title           text NOT NULL,
   description     text,
@@ -678,6 +682,7 @@ CREATE TABLE articles (
   title_tokens    text[] NOT NULL DEFAULT '{}' -- headline tokens; what candidates match on
 );
 CREATE UNIQUE INDEX articles_dedup_key_idx     ON articles (dedup_key);
+CREATE UNIQUE INDEX articles_alt_key_idx       ON articles (alt_key) WHERE alt_key IS NOT NULL;
 CREATE INDEX        articles_timeline_idx      ON articles (published DESC, id DESC);
 CREATE INDEX        articles_group_timeline_idx ON articles (group_published DESC, group_id DESC);
 CREATE INDEX        articles_group_idx         ON articles (group_id);
@@ -801,9 +806,11 @@ single upstream page cannot have, so the client stays stateless and returns `Sig
 
 Per fetched sighting, in one transaction:
 
-1. Upsert `articles` on `dedup_key`: on conflict, `published = LEAST(existing, incoming)`,
-   `latest_seen = GREATEST(…)`, `sighting_count + 1`. Display fields come from the earliest
-   sighting, so a later re-emission does not rewrite the headline.
+1. Resolve the article — **`dedup_key`, then `alt_key`, then insert** (ADR-0018) — and fold:
+   `published = LEAST(existing, incoming)`, `latest_seen = GREATEST(…)`, `sighting_count + 1`.
+   Display fields come from the earliest sighting, so a later re-emission does not rewrite the
+   headline. Both KEYS are exempt from that handover: they are minted once, by the sighting that
+   created the row, so `dedup_key` may stop hashing `url` and that is intended.
 2. `INSERT INTO sightings … ON CONFLICT (id) DO NOTHING`, linked to that `article_id`. The conflict
    clause makes a re-fetch idempotent: the same upstream UUID twice must not inflate
    `sighting_count`.
@@ -826,9 +833,15 @@ fragment, removing tracking params (`utm_*`, `fbclid`, `gclid`), trimming the tr
 Verified on probe data: neither over- nor under-collapsed (42 unique raw URLs → 42 normalized).
 Unique on `articles`, deliberately **not** on `sightings`, where 58% of live rows would violate it.
 
-A `(title, source_domain)` secondary key stays disabled: probe data showed 41 unique title+domain
-pairs against 42 unique URLs — it would merge exactly one pair, and a false merge is worse than a
-visible duplicate. Syndicated stories across outlets do not collapse either, on purpose: the
+**`alt_key` derivation** — `sha256(source_domain, folded title, UTC day)`, where the fold
+lowercases, folds Latin diacritics, strips a trailing ` - Outlet` segment **only when it spells the
+article's own `source_domain`**, and collapses non-alphanumerics. A `(title, source_domain)`
+secondary key was disabled until ADR-0018 on the evidence available then — 41 unique title+domain
+pairs against 42 unique URLs, one pair to merge. On the production archive it collapses 411 rows
+(1.1%) that are one story filed under several URLs, and the fixture's one pair turns out to be a
+genuine duplicate. It is a FALLBACK: titles drift and URLs do not, so it is consulted only when the
+URL key matches nothing. No key is minted for a title the source itself truncated. Syndicated
+stories across outlets do not collapse either, on purpose: the
 wordcloud's breadth gate counts distinct sources and needs those rows (§10.3). They are **grouped**
 instead (§14.3), keeping every row and every `source_domain` intact.
 
@@ -1561,7 +1574,7 @@ apart see the same cloud.
 
   | Fixture | Guards | Assertions |
   | --- | --- | --- |
-  | `search-climate-duplicates.json`<br/>100 sightings, 42 unique URLs, one URL ×50 | The collapse (§7.4) | 100 rows in `sightings` → **42** in `articles`; the ×50 article has `sighting_count = 50`; re-ingesting leaves both counts unchanged; a `limit=25` page returns ≤25 **slots**, never 25 sightings — 25 articles before grouping, 25 groups after (§14.3); `dedup_key` normalization neither over- nor under-collapses (42 → 42) |
+  | `search-climate-duplicates.json`<br/>100 sightings, 42 unique URLs, one URL ×50 | The collapse (§7.4) | 100 rows in `sightings` → **41** in `articles`; the ×50 article has `sighting_count = 50`; re-ingesting leaves both counts unchanged; a `limit=25` page returns ≤25 **slots**, never 25 sightings — 25 articles before grouping, 25 groups after (§14.3); `dedup_key` normalization neither over- nor under-collapses (42 → 42), and the 42→41 gap is `alt_key` folding one Times of India post filed under two section paths (ADR-0018) — both numbers asserted, so a regression says which key moved |
   | `search-keywordless-category-sample.json`<br/>80 articles incl. a single-source Jenkins CVE burst | The headline tokenizer and its gates (§10.2), which grouping and the bigram label read | `cve-`-style fragments and anything containing a digit never survive tokenization; generic vocabulary (`earlier`, `found`, `read`, `how`) absent via stopwords; wire-service furniture (`angeles ap`, `ap`, `ceo`, `daily`, `rep`) absent while named entities (`ai`, `los angeles`) and phrases (`donald trump`) survive; a name beside a verb (`kelowna advances`, `leaving kelowna`) refused while deverbal nouns (`kelowna funding`, `kelowna games`) kept. Written against `scoreTerms`, re-pointed when the cloud stopped drawing terms (ADR-0013): the classes are properties of headline text, not of the cloud |
   | `error-and-reference-bodies.json` | Client error taxonomy (§5.3) | each `400` maps to `CurrentsInvalidQueryError` with `details.errors` preserved; `401` → `CurrentsAuthError`; non-JSON `403` → `CurrentsBlockedError`, **not** auth; `{"status":"ok","news":[]}` → `isLastPage: true`, not an error; reference maps parse as name→code with values used verbatim |
 

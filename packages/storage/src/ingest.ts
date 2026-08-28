@@ -411,7 +411,18 @@ async function resolveArticle(
   // re-resolved rather than raised.
   //
   // Fenced only when there is an alt key to collide on, which is what keeps the
-  // two extra round trips off the path of an article that has none. A plain
+  // two extra round trips off the path of an article that has none.
+  //
+  // MEASURED against the local dev Postgres, five runs of the 100-sighting
+  // duplication fixture: 287ms fenced against 248ms with every alt key nulled —
+  // ~0.95ms per fenced insert, and an UPPER bound, since the null variant also
+  // skips the alt-key half of the lookup. A batch is ONE upstream page
+  // (`CURRENTS_MAX_PAGE_SIZE`, 20 by default), so the ceiling is ~19ms against
+  // §6.3's 1,200ms even where every sighting on the page mints an article — and
+  // the fixture's own 100 is four times the real page size. Worth re-measuring
+  // if that page size is ever raised toward its 200 cap.
+  //
+  // A plain
   // catch would be no fence at all: Postgres aborts the whole transaction on the
   // first failed statement, COMMIT on an aborted transaction is a silent
   // ROLLBACK, and `ingestSightings` would return a result reporting sightings it

@@ -68,6 +68,23 @@ import { deriveAltKey } from "@zammy/news-client";
  * one-time catch-up sized for this table as it stands (37k rows in production,
  * ~4MB of keys). A table two orders of magnitude larger would want the whole
  * pass pushed into the staging table instead.
+ *
+ * ## What it costs, measured
+ *
+ * Run against a TEMPLATE clone of the dev archive — 32,279 articles, the real
+ * corpus rather than a seeded one:
+ *
+ * ```
+ * up      1.83s   31,542 rows keyed, 737 left NULL, index 1,848 kB
+ * down    0.02s
+ * re-up   1.49s   31,542 rows keyed — identical, so the pass is idempotent
+ * ```
+ *
+ * The 737 account for themselves exactly: 135 rows this cannot key at all (134
+ * source-truncated titles, one that folds to nothing) plus the 602 rows making
+ * up 291 collision groups. Production holds 37,077 articles, so expect the same
+ * shape and a little more of it — comfortably inside a deploy step, and the
+ * table takes no lock a reader would notice beyond the `ADD COLUMN`.
  */
 
 export async function up(db: Kysely<unknown>): Promise<void> {

@@ -126,6 +126,26 @@ suffix-insensitivity, and two genuinely different same-day stories from one
 domain staying separate; `@zammy/storage`'s `collapses 100 sightings into 42
 articles` regression is still green.
 
+**Landed** as [ADR-0018](adr/0018-a-fallback-identity-catches-what-the-url-cannot.md),
+migration `0020`. Both open questions decided:
+
+- **The key is computed in `packages/news-client/src/normalize.ts`**, beside
+  `canonicalizeUrl`/`deriveDedupKey`, with `altKey` on the `Sighting` schema and
+  set by both adapters — one function, so the identity and the thing it
+  identifies cannot disagree.
+- **The fold is duplicated in `news-client`, not shared with `foldDiacritics`.**
+  The two must be free to diverge: the tokenizer's fold serves the vocabulary and
+  is expected to change with `TOKENIZER_VERSION`, and sharing it would let a
+  tokenizer improvement silently re-key every article minted after it.
+
+Two things the phase learned that the design did not know. The suffix strip peels
+a trailing segment **only when it spells the article's own `source_domain`** —
+the positional strip §7 measured with merges 68 unrelated Frontiers papers into
+one article on the dev archive, since each is titled `Frontiers | <real title>`,
+so §7's 411 is an upper bound on what this collapses rather than a description of
+it. And the recorded duplication fixture now collapses to **41** articles, not
+42: the one pair ADR-0002 declined for want of evidence is a genuine duplicate.
+
 ## G2 — Isolate the ranker to the discovery plane
 
 **Depends on**: nothing. **Land it while it is still a no-op.**
