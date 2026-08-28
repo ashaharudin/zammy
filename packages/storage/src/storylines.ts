@@ -858,18 +858,28 @@ export async function readLastLinkedGroup(
 }
 
 /**
- * Delete every v2 storyline row: storylines, their joins, their day slots and
- * their bridges. The `--restart` half of the backfill.
+ * Delete every v2 storyline row: storylines, their joins, their day slots,
+ * their bridges and the arc coverage recorded against them. The `--restart`
+ * half of the backfill.
  *
  * TRUNCATE with CASCADE down the FK chain rather than DELETE — this is "build
  * from scratch", and a full-archive rebuild is the one operation where the
  * table's whole contents are the thing being replaced. It touches NOTHING on
  * `articles`: the old `storyline_id` columns are a different model's state,
  * ignored entirely by v2 (ADR-0011's Rollout) and dropped in S9.
+ *
+ * Every table with a foreign key into `storylines` must be NAMED here — the
+ * statement carries no `CASCADE`, so Postgres refuses outright rather than
+ * quietly leaving orphans, which is why `storyline_coverage` (migration 0021)
+ * joins the list. Dropping arc coverage on a rebuild is also the correct
+ * behaviour and not merely the permitted one: the storyline UUIDs it is keyed on
+ * do not survive a rebuild, so a row kept would claim coverage for an arc that
+ * no longer exists.
  */
 export async function resetStorylines(db: Kysely<Database>): Promise<void> {
   await sql`
-    truncate storylines, storyline_groups, storyline_days, storyline_bridges
+    truncate storylines, storyline_groups, storyline_days, storyline_bridges,
+             storyline_coverage
   `.execute(db);
 }
 

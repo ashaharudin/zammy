@@ -156,13 +156,52 @@ export interface TopicArticlesTable {
  * need an upstream call?" an exact question instead of a guess (ADR-0001).
  * Written by the query planner in `apps/api` as each gap segment completes.
  *
- * Per TOPIC, not per provider, which is the one thing to know before reading a
- * row as "we have everything for this span". It means the span was fetched, not
- * that every configured provider fetched it — see ADR-0012 for why a
- * best-effort second provider is deliberately not allowed to write here.
+ * Per topic AND per provider since migration 0021, which is the one thing to
+ * know before reading a row as "we have everything for this span": a row means
+ * THAT provider fetched the span, not that every configured provider did — see
+ * ADR-0012 for why a best-effort supplement is deliberately not allowed to write
+ * an end-of-results signal here.
+ *
+ * The read path has not caught up with the column and does not need to yet.
+ * Currents is still the only writer, so every row is `'currents'` and a
+ * provider-blind read is exact; `coverage.ts` carries the argument and the
+ * conditions under which it stops being true.
  */
 export interface TopicCoverageTable {
   fingerprint: Buffer;
+  /**
+   * Which upstream fetched this span (migration 0021), defaulting to
+   * `'currents'` — the only provider that had ever written here.
+   *
+   * ADR-0012's deferred debt, paid: each provider's spans are now separable, so
+   * one provider's fill can never be read as another's. Note that `readCoverage`
+   * deliberately does NOT filter on it yet — see `coverage.ts` for why, and for
+   * what has to change together the day a second writer appears.
+   */
+  provider: Generated<string>;
+  /** tstzrange, as its text representation. */
+  span: string;
+  fetched_at: Generated<Date>;
+}
+
+/**
+ * The deepening plane's coverage, keyed on the arc rather than on a search
+ * (migration 0021; docs/DESIGN-DISCOVERY-AND-DEEPENING.md §2b).
+ *
+ * Same question as `topic_coverage` — "did we ask, or was nothing published?" —
+ * about a different subject. A storyline is a persistent arc whose identity is a
+ * UUID (ADR-0011), so the deepening plane can record what it fetched for an arc
+ * without inventing a topic fingerprint to hang it on, and, more importantly,
+ * without being able to write into the discovery plane's coverage at all
+ * (ADR-0012).
+ *
+ * No `Generated` on `provider`: unlike `topic_coverage` there is no history to
+ * default, and which plane writes here is decided by its caller, not by the
+ * schema.
+ */
+export interface StorylineCoverageTable {
+  storyline_id: string;
+  provider: string;
   /** tstzrange, as its text representation. */
   span: string;
   fetched_at: Generated<Date>;
@@ -367,6 +406,7 @@ export interface Database {
   topics: TopicsTable;
   topic_articles: TopicArticlesTable;
   topic_coverage: TopicCoverageTable;
+  storyline_coverage: StorylineCoverageTable;
   fetch_log: FetchLogTable;
   storylines: StorylinesTable;
   storyline_groups: StorylineGroupsTable;
