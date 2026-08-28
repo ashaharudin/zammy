@@ -21,11 +21,20 @@ import { FIXTURES_DIR } from "./test-support.js";
  * measure.
  */
 
+/**
+ * The real caps, and a deliberately unreachable horizon.
+ *
+ * `FixtureGoogleNewsClient` clamps against the wall clock and takes no injected
+ * one, so a realistic 730 here would quietly start pulling the Feb-2025 window
+ * forward in early 2027 and these assertions would fail on a date rather than
+ * on a change. What this file is testing is the parsing, the cap and the
+ * mapping; the lookback clamp is tested against a pinned clock in http.test.ts.
+ */
 const limits = {
   maxPageSize: ITEMS_PER_QUERY,
   maxRetrievableResults: ITEMS_PER_QUERY,
-  maxLookbackDays: 730,
-  maxRangeDays: 730,
+  maxLookbackDays: 36_500,
+  maxRangeDays: 36_500,
 };
 
 /** The two windows the fixtures were captured over. */
