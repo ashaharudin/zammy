@@ -154,7 +154,8 @@ lab="$(q "select coalesce((report->'labels'->>'model'),'-') || '|' ||
                  coalesce((report->'labels'->>'skipped'),'-') || '|' ||
                  coalesce((report->'graph'->>'largestArc'),'-') || '|' ||
                  coalesce((report->'graph'->>'singletons'),'-') || '|' ||
-                 coalesce((report->'lateCandidates'->>'skipped'),'false')
+                 coalesce((report->'lateCandidates'->>'skipped'),'false') || '|' ||
+                 coalesce((report->'labels'->>'stoppedBy'),'')
           from chore_runs
           where source='route' and pass='storylines' and finished_at is not null
                 and started_at > now() - interval '$WINDOW_HOURS hours'
@@ -162,22 +163,64 @@ lab="$(q "select coalesce((report->'labels'->>'model'),'-') || '|' ||
 if [ -z "$lab" ]; then
   warn "storylines — no completed scheduled run to judge"
 else
-  IFS='|' read -r model bigram none skipped largest singles lateskip <<< "$lab"
-  applied=$(( ${model:-0} + ${bigram:-0} ))
-  if [ "$applied" -gt 0 ]; then
-    ok "labels — $applied applied ($model from the model, $bigram bigram fallback); $none returned nothing, $skipped skipped"
-  else
+  IFS='|' read -r model bigram none skipped largest singles lateskip stopped <<< "$lab"
+  # A missing field comes back as '-' from the coalesce above, which is not a
+  # number; the comparisons below are arithmetic, so normalise first.
+  [ "${model:-}" -eq "${model:-}" ] 2>/dev/null || model=0
+  [ "${bigram:-}" -eq "${bigram:-}" ] 2>/dev/null || bigram=0
+  applied=$(( model + bigram ))
+  if [ "$applied" -eq 0 ]; then
     bad "labels — NOTHING was labelled ($none none, $skipped skipped). Either the backlog is"
     warn "    empty, the Gemini key is exhausted, or the pass never reached the model."
+  elif [ "$model" -eq 0 ]; then
+    # THE FAILURE A GREEN TICK USED TO HIDE. Falling back is the labeler's
+    # designed behaviour for a model that will not answer, so a night where the
+    # model answered NOTHING and the bigram extractor named everything reports
+    # the same "applied > 0" as a healthy night. That is exactly what happened
+    # on 2026-08-28: the API had begun returning its reasoning as a separate
+    # response part, the client was joining it to the answer, and every label
+    # failed the 2-5 word contract. Zero model labels beside a non-zero fallback
+    # is the signature, and it is worth a red mark on its own.
+    bad "labels — $applied applied but NONE from the model ($bigram bigram fallback)."
+    warn "    The fallback is working, which is why this is not an outage — but the model"
+    warn "    answered nothing usable all night. Check the response shape and the key."
+  else
+    ok "labels — $applied applied ($model from the model, $bigram bigram fallback); $none returned nothing, $skipped skipped"
   fi
+  # Why the pass ended. `exhausted` is the healthy one — it walked every
+  # candidate; anything else means the tally above is a floor.
+  case "${stopped:-}" in
+    ""|exhausted) ;;
+    budget)
+      warn "    the pass stopped on its wall-clock budget (CHORE_LABEL_BUDGET_MS), not on"
+      warn "    CHORE_MAX_LABELS — a label is costing more than the count was sized for." ;;
+    max-labels)
+      say "     the pass stopped on CHORE_MAX_LABELS; the rest defers to the next night" ;;
+    *)
+      warn "    the pass stopped early ($stopped) — the tally above is a floor" ;;
+  esac
   say "     graph shape: largest arc $largest, singletons $singles"
   [ "$lateskip" = "true" ] && say "     late-candidate sweep: gated off (expected — STORYLINE_LATE_CANDIDATE_SWEEP)"
 fi
 
 # -- the backlog, as a delta: the label pass's whole job is to shrink this --
-backlog="$(q "select count(*) from storylines where status='active' and label_at is null")"
+#
+# `merged_into is null` is NOT optional, and leaving it off is what made this
+# number lie. A storyline merged into another keeps whatever status it had, so a
+# promoted arc absorbed before anything named it stays `status='active'` with
+# `label_at` null for ever — and the labeler is RIGHT to skip it: it holds no
+# groups and renders nowhere (`readLabelCandidates` filters on the same two
+# columns this does). Measured 2026-08-28: production held 552 such rows, 546 of
+# them merged-away aliases with zero groups, so the honest backlog was 6 and the
+# check reported 535 and blamed the label pass.
+#
+# The filter is copied from `readLabelCandidates` on purpose — this must count
+# exactly what the pass would offer, or the delta measures something no chore is
+# trying to move.
+backlog="$(q "select count(*) from storylines
+              where merged_into is null and status <> 'provisional' and label_at is null")"
 say ""
-say "   Label backlog (active storylines never offered to a model):"
+say "   Label backlog (live promoted storylines never offered to a model):"
 if [ -n "$backlog" ]; then
   prev="$(cat "$STATE_FILE" 2>/dev/null || echo "")"
   if [ -n "$prev" ] && [ "$prev" -eq "$prev" ] 2>/dev/null; then

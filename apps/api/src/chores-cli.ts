@@ -96,6 +96,15 @@ if (named.length !== 1 || (!wantsStatus && !isChorePass(command ?? ""))) {
   console.error(
     "  --max-labels       overrides CHORE_MAX_LABELS (default 50) for this run only.",
   );
+  console.error(
+    "  --label-budget     wall-clock ceiling for the label pass, in seconds. NOT",
+  );
+  console.error(
+    "                     applied here by default: CHORE_LABEL_BUDGET_MS exists to",
+  );
+  console.error(
+    "                     beat a serverless function's deadline, and this has none.",
+  );
   process.exit(64);
 }
 
@@ -199,6 +208,15 @@ async function runPass(pass: ChorePass): Promise<number> {
   if (labelRate !== undefined) deps.labelRatePerMinute = labelRate;
   const maxLabels = num("max-labels");
   if (maxLabels !== undefined) deps.maxLabels = maxLabels;
+  // The budget is a ROUTE concern and is dropped here unless asked for.
+  // `CHORE_LABEL_BUDGET_MS` exists because `api/chores.ts` is killed at 300 s;
+  // a terminal has no such deadline, and inheriting the configured night's
+  // budget would silently truncate the one run whose whole purpose is to drain
+  // a backlog in a single sitting. `--max-labels` is deliberately NOT treated
+  // this way: a spend ceiling means the same thing wherever the pass runs.
+  const labelBudget = num("label-budget");
+  if (labelBudget !== undefined) deps.labelBudgetMs = labelBudget * 1000;
+  else delete deps.labelBudgetMs;
   // `--late-candidates` runs the sweep inside the storyline pass for one night
   // without editing the environment, because the honest way to drain the backlog
   // fixing candidate retrieval exposed is an operator watching the graph shape,

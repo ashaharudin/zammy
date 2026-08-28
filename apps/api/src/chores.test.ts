@@ -224,6 +224,57 @@ describe("the nightly label pass", () => {
     expect((await readStoryline(db, id))?.label).toBe("Hurricane Fausto");
   });
 
+  it("stops on the wall-clock budget rather than being killed by the function", async () => {
+    // What production did on 2026-08-28: every model call was taking a full
+    // thinking generation, 50 labels ran ~25 minutes against a 300 s function,
+    // and the pass was KILLED — the `chore_runs` row was left open and the
+    // label-merge and graph passes that come after this one never ran. The
+    // count ceiling could not prevent it, because a count only bounds the clock
+    // if a label costs what the count was sized against.
+    await storyline([YESTERDAY, YESTERDAY]);
+    await storyline([YESTERDAY, YESTERDAY]);
+    await storyline([YESTERDAY, YESTERDAY]);
+
+    // A clock the model call moves: each label costs five minutes, against a
+    // one-minute budget. The first is spent before the budget can know what a
+    // label costs — which is exactly the honest behaviour, since it cannot.
+    let clock = NOW.getTime();
+    const generator = {
+      calls: 0,
+      generate: async () => {
+        generator.calls += 1;
+        clock += 5 * 60_000;
+        return { ok: true as const, text: "Hurricane Fausto" };
+      },
+    };
+
+    const report = await runStorylineLabelChore({
+      ...deps(),
+      now: () => new Date(clock),
+      labeler: labeler(generator),
+      labelBudgetMs: 60_000,
+    });
+
+    expect(generator.calls).toBe(1);
+    expect(report.model).toBe(1);
+    // The field a truncated night needs: without it this tally is identical to
+    // a night that simply had one storyline to name.
+    expect(report.stoppedBy).toBe("budget");
+  });
+
+  it("reports an untruncated pass as exhausted, so the two read differently", async () => {
+    await storyline([YESTERDAY, YESTERDAY]);
+
+    const report = await runStorylineLabelChore({
+      ...deps(),
+      labeler: labeler(saying("Hurricane Fausto")),
+      labelBudgetMs: 60_000,
+    });
+
+    expect(report.model).toBe(1);
+    expect(report.stoppedBy).toBe("exhausted");
+  });
+
   it("reaches a dormant storyline — going quiet must not strand it unlabelled", async () => {
     // The nightly job runs dormancy FIRST, so an old promoted-but-unlabelled
     // storyline is stamped dormant minutes before this pass looks. An

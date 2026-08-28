@@ -65,6 +65,25 @@ the default: same answer, no thinking tokens, cheapest tier. `GEMINI_MODEL` and
 `GEMINI_THINKING_LEVEL` stay knobs because the families spell this differently
 and a later model may need it.
 
+**A fourth finding, two weeks later: thinking comes back as its own PART, and
+the response shape moved under a pinned model.** Every response recorded on
+2026-08-14 carried a single bare part, so the client read the candidate by
+joining every part it found. On 2026-08-28 the same request, the same endpoint
+and the same pinned `gemma-4-26b-a4b-it` returned two — `{"thought": true,
+"text": "<the reasoning>"}` followed by `{"text": "Fort Hood Crash"}` — and the
+join produced the transcript with the answer glued to its end. That is not a
+two-to-five-word label, so `validateLabel` refused all of it and every storyline
+took the bigram fallback: **0 model labels against 66 bigram ones in a day**, and
+the failure was invisible because falling back is the designed behaviour for a
+model that will not answer.
+
+Two things worth keeping from it. *Pinning the model does not pin the response
+shape* — the id is a promise about weights, not about JSON — so the client reads
+the `thought` discriminator rather than trusting parts to be one thing. And *a
+deterministic fallback hides the failure it exists for*: the label pass reported
+success every night, which is why the bigram share, not the error rate, is the
+number to watch (`check-chores.sh` prints it).
+
 ## Cost
 
 Measured over 20 real day-bounded storylines: **712 input tokens per label**

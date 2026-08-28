@@ -414,8 +414,13 @@ vercel_env REDIS_URL             "$REDIS_URL"
 # nothing on Vercel drains — a silent, total loss of background ingest.
 vercel_env INGEST_QUEUE_DRIVER   "vercel"
 vercel_env CRON_SECRET           "$CRON_SECRET"
-# 75 labels is the entire 300 s maxDuration at GEMINI_MAX_RPM=15.
+# The count and the clock. CHORE_MAX_LABELS bounds the spend; only
+# CHORE_LABEL_BUDGET_MS bounds the wall clock, and the wall clock is what
+# api/chores.ts's 300 s maxDuration actually enforces. 240 s leaves room for the
+# label-merge and graph passes ordered after the label one — a killed pass loses
+# those and its chore_runs row.
 vercel_env CHORE_MAX_LABELS      "50"
+vercel_env CHORE_LABEL_BUDGET_MS "240000"
 vercel_env CURRENTS_MODE         "live"
 vercel_env CURRENTS_API_KEY      "$CURRENTS_API_KEY"
 vercel_env CURRENTS_USER_AGENT   "$CURRENTS_USER_AGENT"

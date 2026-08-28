@@ -14,7 +14,7 @@ import {
   type RetentionReport,
 } from "@zammy/storage";
 import { storyDfDay } from "./story-df.js";
-import { labelPass } from "./storyline-backfill.js";
+import { labelPass, type LabelPassTally } from "./storyline-backfill.js";
 import { readChangedSetBatch } from "./storyline-changed-set.js";
 import { labelLinkedStorylines, type LabelerDeps } from "./storyline-label-service.js";
 import type { LabelMergeRules } from "./storyline-label-merge.js";
@@ -567,6 +567,12 @@ export async function runStorylineLabelChore(
     /** Ceiling on storylines one night will relabel. */
     maxLabels?: number;
     /**
+     * Wall-clock ceiling for the pass. Absent is unbounded — right for a CLI
+     * run, wrong for the route, which lives inside a function timeout. See
+     * `BackfillOptions.labelBudgetMs` for what being killed costs.
+     */
+    labelBudgetMs?: number;
+    /**
      * Model calls per minute. Only the model is paced; the fallback is CPU.
      * Defaults to the free tier's ceiling; `GEMINI_MAX_RPM` is the knob, and
      * the server passes it through.
@@ -574,17 +580,31 @@ export async function runStorylineLabelChore(
     labelRatePerMinute?: number;
     sleep?: (ms: number) => Promise<void>;
   },
-): Promise<{ model: number; bigram: number; none: number; skipped: number }> {
+): Promise<LabelPassTally> {
   const labelled = await labelPass(
     deps.db,
     deps.labeler,
     {
       maxLabels: deps.maxLabels ?? 500,
       labelRatePerMinute: deps.labelRatePerMinute ?? 15,
+      ...(deps.labelBudgetMs !== undefined ? { labelBudgetMs: deps.labelBudgetMs } : {}),
+      // The clock the budget measures elapsed time against — `ChoreDeps.now`,
+      // which is the real one everywhere but a test.
+      now: deps.now,
     },
     deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
   );
-  deps.log.info({ labelled }, "storyline label pass — the drift trigger (ADR-0011)");
+  deps.log.info(
+    { labelled },
+    labelled.stoppedBy === "exhausted"
+      ? "storyline label pass — the drift trigger (ADR-0011)"
+      : // Its own message, because the difference between "there was nothing to
+        // do" and "we ran out of room" is the whole reading of the line, and a
+        // field buried in an object that is identical either way is not how a
+        // truncation gets noticed.
+        `storyline label pass stopped early (${labelled.stoppedBy}) — ` +
+        "the rest is deferred to the next pass, which reselects it",
+  );
   return labelled;
 }
 
@@ -724,6 +744,8 @@ export interface StorylinePassDeps extends ChoreDeps {
   labelRatePerMinute?: number;
   /** Ceiling on storylines one night will relabel. */
   maxLabels?: number;
+  /** Wall-clock ceiling for the label pass — `CHORE_LABEL_BUDGET_MS`. */
+  labelBudgetMs?: number;
   /**
    * Run the late-candidate sweep as part of the night. False skips step 3.
    *

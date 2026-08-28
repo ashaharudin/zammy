@@ -188,6 +188,43 @@ describe("the Gemini client", () => {
     });
   });
 
+  it("reads the answer past a reasoning model's thought parts", async () => {
+    // The regression that cost production a night of labels (2026-08-28): the
+    // client joined every part, so the answer arrived with the whole thinking
+    // transcript in front of it, failed `validateLabel`'s 2-5 word contract,
+    // and every storyline silently took the bigram fallback. Same model id and
+    // same request as the `ok` fixture two weeks earlier — only the response
+    // shape moved.
+    const { fetch } = recorder(jsonResponse(RESPONSES.thinking));
+    const client = createGeminiClient({ ...OPTIONS, fetch, sleep: noSleep });
+
+    expect(await client.generate({ prompt: "name this story" })).toEqual({
+      ok: true,
+      text: "Fort Hood Crash",
+    });
+  });
+
+  it("reports a candidate that is thoughts and nothing else", async () => {
+    // The budget ran out between the thinking and the answer. Distinct from
+    // `truncated` above, which carried no content at all — this one is the
+    // reason to raise `maxOutputTokens`, and the log line has to say which.
+    const thoughtsOnly = {
+      candidates: [
+        {
+          content: { role: "model", parts: [{ text: "thinking...", thought: true }] },
+          finishReason: "MAX_TOKENS",
+        },
+      ],
+    };
+    const { fetch } = recorder(jsonResponse(thoughtsOnly));
+    const client = createGeminiClient({ ...OPTIONS, fetch, sleep: noSleep });
+
+    expect(await client.generate({ prompt: "name this story" })).toEqual({
+      ok: false,
+      reason: "thoughts only (MAX_TOKENS)",
+    });
+  });
+
   it("survives a response that is not the shape we know", async () => {
     const { fetch } = recorder(jsonResponse({ candidates: "surprise" }));
     const client = createGeminiClient({ ...OPTIONS, fetch, sleep: noSleep });
