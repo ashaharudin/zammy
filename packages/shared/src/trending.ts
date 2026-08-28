@@ -24,12 +24,20 @@ import { ResponseMeta } from "./timeline.js";
  * response reports rather than as the thing it gates on.
  *
  * **The window fields and the arc fields count different corpora, and that is
- * deliberate.** Everything describing the window counts only articles the
- * DISCOVERY plane saw — the rule that the plane which measures is the plane
- * that is not steered (`DISCOVERY_PROVIDER` in `@zammy/storage`) — while `size`
- * and `sourceCount` describe the arc as the store actually holds it, because
- * they are what a click delivers. Today those are the same corpus and every
- * field agrees; the distinction is on the wire before it has to be, not after.
+ * deliberate.** Everything describing the window counts only articles a
+ * DISCOVERY-plane provider saw — the rule that the plane which measures is the
+ * plane that is not steered (`DISCOVERY_PROVIDERS` in `@zammy/storage`) — while
+ * `size` and `sourceCount` describe the arc as the store actually holds it,
+ * because they are what a click delivers.
+ *
+ * The two corpora are identical today, and for a checkable reason rather than
+ * by luck: every provider that has ever recorded a sighting is a discovery
+ * provider (Currents and GNews both arrive by fan-out on a reader's own query,
+ * ADR-0012), and ingest deletes any article left with no sighting at all. So
+ * every field here still agrees with every other. They diverge on the day a
+ * provider fetches because the cloud named a storyline, which is what the split
+ * is on the wire ahead of.
+ *
  * No field here distinguishes "articles we have" in the window from "articles
  * that voted" — if that ever needs saying, it is a new field and a
  * `PAGE_SHAPE_VERSION` bump, not a redefinition of one of these.
@@ -60,7 +68,7 @@ export const TrendingStoryline = z.object({
    * offer and can still hand over a folded token.
    */
   query: z.string().min(1),
-  /** Distinct DISCOVERY-plane articles published inside the window — the size input. */
+  /** Distinct discovery-plane articles published inside the window — the size input. */
   windowArticles: z.int().min(1),
   /**
    * Distinct discovery-plane source domains inside the window. The gate: >= 2.

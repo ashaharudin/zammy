@@ -30,7 +30,7 @@ export interface TrendingStoryline {
   profileTokens: string[];
   /**
    * Distinct DISCOVERY-PLANE member articles published inside the window — the
-   * size input, and the ranking's volume term. See `DISCOVERY_PROVIDER`: this
+   * size input, and the ranking's volume term. See `DISCOVERY_PROVIDERS`: this
    * counts articles the discovery plane saw, not every article we hold.
    */
   windowArticles: number;
@@ -47,7 +47,7 @@ export interface TrendingStoryline {
   /**
    * The newest discovery-plane member article inside the window: how recently
    * this moved. The recency half of the score and the colour channel, so it is
-   * steered and therefore discovery-only (`DISCOVERY_PROVIDER`, surface 6).
+   * steered and therefore discovery-only (`DISCOVERY_PROVIDERS`, surface 6).
    */
   lastUpdated: Date;
 }
@@ -74,14 +74,15 @@ export interface TrendingStoryline {
 const MIN_SOURCE_DOMAINS = 2;
 
 /**
- * The discovery plane. **The plane that measures is the plane that is not
- * steered** (DESIGN-DISCOVERY-AND-DEEPENING §3a) — this cloud ranks on articles
- * Currents actually saw, and on nothing that was fetched *because* the cloud
- * selected it.
+ * The discovery plane, as a SET.
+ *
+ * **The plane that measures is the plane that is not steered**
+ * (DESIGN-DISCOVERY-AND-DEEPENING §3a) — this cloud ranks on articles that were
+ * fetched for some reason other than the cloud having named them.
  *
  * The failure it forecloses is a loop, not an inaccuracy. A deepening provider
- * fetches for the storylines the cloud picked; if what it returns then counts
- * toward the volume the cloud picks on, the score is endogenous — an arc that
+ * takes the cloud's own output as its work list; if what it returns then counts
+ * toward the volume the cloud selects on, the score is endogenous — an arc that
  * reaches the board once is fetched, gains articles, ranks higher, is fetched
  * more, with nothing damping it. The cloud would stop answering "what is the
  * world covering" and start answering "what have we been fetching", and the
@@ -92,22 +93,65 @@ const MIN_SOURCE_DOMAINS = 2;
  * `MIN_SOURCE_DOMAINS` for free and the one mechanism PROBE-FINDINGS 6b showed
  * had to exist would stop selecting anything.
  *
- * Hardcoded, not configured, matching `articles.provider`'s own
- * `DEFAULT 'currents'` (migration 0013): there is one discovery plane, it is
- * named in the schema's defaults already, and a second name for it that could
- * drift from that default buys nothing. A provider-plane registry is a real
- * design and belongs with the phase that has a second plane to register.
+ * ## Membership is about steering, not about identity
  *
- * **Membership is by SIGHTING, not by `articles.provider`.** The cheap
- * predicate — `a.provider = 'currents'`, no join — is a different question:
- * migration 0013 defines `articles.provider` as the provider of the EARLIEST
- * sighting, so it reads "who got here first", where this needs "did the
- * discovery plane see this at all". They part company on an article another
- * plane reported first and Currents reported later, which is a real row and not
- * a hypothetical: 33 of them in the dev archive today, every one an article
- * Currents saw and the cheap predicate would call non-discovery. Measured cost
- * of asking the honest question instead: +1.6–2.1% shared buffers, +0.7–1.9%
- * wall clock, plan unchanged — the semi join resolves through
+ * The test is "was this fetched because the cloud pointed at it", NOT "did
+ * Currents report it". Both of today's providers pass, so both are in:
+ * ADR-0012 puts GNews behind the same client and fans **every search and
+ * breadth sample out to both**, so a GNews article is here because a reader
+ * searched or the breadth sample ran — the same reasons a Currents article is
+ * here. It bears no coverage and ends no walk, but neither of those is what
+ * steers a ranking. Its articles are real outlets, and the gate asking "are
+ * several newsrooms covering this NOW" should count them.
+ *
+ * A tempting mistake, and the one this constant made in its first form: reading
+ * the rule as "= currents". GNews ran for four days in August 2026 and its rows
+ * are still here — 1,327 articles in the dev archive carry no Currents sighting
+ * at all, 1,317 in production. Excluding them is not free. Held against the same
+ * query narrowed to Currents alone, over the 168h window `TREND_WINDOW_HOURS`
+ * permits, on the dev archive: 503 storylines become 363, with 140 dropped for
+ * no longer clearing two domains, 103 volumes moved, 103 breadths moved and 36
+ * recencies moved. (Production, measured read-only in review, is the same shape
+ * at its own scale: 412 volumes, 411 breadths, 82 recencies, 140 dropped.) None
+ * of that is the loop this guards against; it is just discarding coverage.
+ *
+ * The other tempting mistake is the mirror of it: reading ADR-0017's
+ * storyline refresh as steering. Opening a storyline does queue a top-up — but
+ * that top-up mints a topic and goes through the ordinary fan-out, so it fetches
+ * from Currents exactly as much as from GNews. A trigger that moves every
+ * provider together cannot bias one against another, which is why it is not what
+ * "steered" means here. What G5 introduces is different in kind: a provider
+ * whose ENTIRE work list is the cloud's output.
+ *
+ * So this set is expected to stay as it is when G4 lands. G4 adds the deepening
+ * provider; it does not change what discovery means, and its provider must not
+ * be added here.
+ *
+ * Hardcoded rather than configured — a two-element list is not a registry, and a
+ * provider-plane registry is a real design that belongs with the phase that has
+ * a plane to register. Spelled as a set rather than as one string so that adding
+ * a discovery provider is a one-word edit and adding a deepening one is
+ * correctly a no-op.
+ *
+ * ## Membership is by SIGHTING, not by `articles.provider`
+ *
+ * The cheap predicate — `a.provider = any(...)`, no join — is a different
+ * question: migration 0013 defines `articles.provider` as the provider of the
+ * EARLIEST sighting, so it reads "who got here first", where this needs "did a
+ * discovery-plane provider see this at all". The two agree on every row today,
+ * because today every provider is a discovery provider. They part company the
+ * moment one is not — on an article the deepening plane reported first and a
+ * discovery provider reported later, which the cheap predicate would call
+ * non-discovery and drop from a count it belongs in.
+ *
+ * That is not a hypothetical ordering, it is a measured rate: the dev archive
+ * holds 33 articles whose earliest sighting is from one provider and which
+ * another provider also saw. Writing the cheap version now would work, keep
+ * working through G4, and start silently understating discovery coverage on the
+ * day G5 first ingests — which is the worst time to find out.
+ *
+ * Measured cost of asking the honest question: +1.6–2.1% shared buffers,
+ * +0.7–1.9% wall clock, plan unchanged — the semi join resolves through
  * `sightings_article_idx` (migration 0001) at roughly one row per lookup.
  *
  * No composite `(article_id, provider)` index. It was built and measured rather
@@ -116,7 +160,7 @@ const MIN_SOURCE_DOMAINS = 2;
  * 0.07% and 0.28%, both inside run-to-run noise on the wall clock. An index
  * that earns a quarter of a percent is not worth its write cost or its bytes.
  */
-const DISCOVERY_PROVIDER = "currents";
+const DISCOVERY_PROVIDERS = ["currents", "gnews"];
 
 /**
  * The cloud: storylines several newsrooms covered inside `[from, to)`, the
@@ -148,7 +192,7 @@ const DISCOVERY_PROVIDER = "currents";
  *    be worse, since a label IS the word here.
  *  - **One newsroom inside the window** — see `MIN_SOURCE_DOMAINS`. A `having`
  *    rather than a `where`, because it is a question about the group.
- *  - **Articles the discovery plane never saw** — see `DISCOVERY_PROVIDER`.
+ *  - **Articles no discovery-plane provider saw** — see `DISCOVERY_PROVIDERS`.
  *    Unlike the other four this excludes ARTICLES rather than storylines, and a
  *    storyline whose entire window coverage came from somewhere else falls out
  *    as a consequence rather than by its own clause. That is the right outcome:
@@ -270,14 +314,19 @@ export async function readTrendingStorylines(
        -- alternative leaves a group standing with a zero count and a null
        -- "last_updated" for the "having" to discard anyway.
        --
-       -- "exists" over "sightings", not "a.provider = ...": see
-       -- "DISCOVERY_PROVIDER" for why the cheap column answers a different
+       -- "exists" over "sightings", not "a.provider = any(...)": see
+       -- "DISCOVERY_PROVIDERS" for why the cheap column answers a different
        -- question, and for the measured cost of asking the right one.
+       --
+       -- A no-op on every row in the store today, deliberately: ingest deletes
+       -- any article left with zero sightings, and every provider that has ever
+       -- written one is a discovery provider. It starts excluding rows on the
+       -- day G5 ingests the first article nobody asked for.
        and exists (
          select 1
            from sightings ds
           where ds.article_id = a.id
-            and ds.provider = ${DISCOVERY_PROVIDER}
+            and ds.provider = any(${DISCOVERY_PROVIDERS}::text[])
        )
      group by s.id, s.label, s.profile_tokens, arc.size, arc.source_count
     -- (3) The gate. Reads unchanged and means something different: "a" is now
