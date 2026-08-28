@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveDedupKey, sourceDomain } from "@zammy/news-client";
+import { deriveAltKey, deriveDedupKey, sourceDomain } from "@zammy/news-client";
 import { PROVIDER, normalizeSighting, normalizeSightings } from "./normalize.js";
 import { parseRssFeed } from "./rss.js";
 import { feed, item, parseFeed } from "./test-support.js";
@@ -56,13 +56,21 @@ describe("attribution comes from <source url>, not from the URL", () => {
     expect(new Set([viaGoogle.sourceDomain, viaCurrents]).size).toBe(1);
   });
 
-  it("falls back to null, NOT to the redirect's domain, when <source url> is unusable", () => {
-    // Null is excluded from `count(distinct …)` in Postgres, so an article we
-    // cannot attribute contributes nothing to the two-newsroom gate. Falling
-    // back to `sourceDomain(url)` would reintroduce exactly the lie this field
-    // exists to avoid.
-    expect(one({ sourceUrl: "" }).sourceDomain).toBeNull();
-    expect(one({ sourceUrl: "not a url" }).sourceDomain).toBeNull();
+  it("never falls back to the redirect's domain when <source url> is unusable", () => {
+    // It does not fall back to null either, any more — a sighting that reaches
+    // the archive always names a publisher, because the SAME value keys
+    // `alt_key` and `deriveAltKey` refuses a null domain, so the item is
+    // dropped before it can be stored (see the alt_key block below). Asserted
+    // here as well as there because the property being protected is different:
+    // there it is identity, here it is that nothing is ever attributed to
+    // Google.
+    for (const sourceUrl of ["", "not a url"]) {
+      const parsed = parseFeed(feed([item({ sourceUrl })]));
+      const { sightings, stats } = normalizeSightings(parsed.items);
+
+      expect(sightings).toHaveLength(0);
+      expect(stats.dropped.no_identity).toBe(1);
+    }
   });
 });
 
@@ -141,6 +149,118 @@ describe("identity, such as it is", () => {
   it("tags every sighting with the provider id downstream constants depend on", () => {
     expect(one().provider).toBe("google-news");
     expect(PROVIDER).toBe("google-news");
+  });
+});
+
+describe("alt_key, which is the only identity this provider can have", () => {
+  it("keys on the PUBLISHER's domain, not the redirect's", () => {
+    // Keyed on `sourceDomain(url)` every Google item would fold under
+    // `google.com`, and the Currents article for the same story is under the
+    // publisher's — so nothing would ever fold. This is the difference between
+    // the fallback working and never firing.
+    const sighting = one({
+      title: "Rate hold - The Guardian",
+      sourceUrl: "https://www.theguardian.com",
+      pubDate: "Thu, 20 Aug 2026 17:09:53 GMT",
+    });
+
+    expect(sighting.altKey).toBe(
+      deriveAltKey("theguardian.com", "Rate hold - The Guardian", sighting.published),
+    );
+    expect(sighting.altKey).not.toBe(
+      deriveAltKey("google.com", "Rate hold - The Guardian", sighting.published),
+    );
+  });
+
+  it("folds onto a Currents twin for an outlet in the stripping class", () => {
+    // THE property the whole design rests on (ADR-0018, design §2a). Currents
+    // ships the outlet's own `<title>` tag; Google writes the outlet's display
+    // name. When the display name collapses to the domain stem, `deriveAltKey`
+    // peels both and the two spellings of one story reach the same key — so the
+    // Google item lands as a SIGHTING of the article Currents already has,
+    // rather than as a second row.
+    const viaGoogle = one({
+      title: "Bank of Canada holds its policy rate - The Guardian",
+      sourceUrl: "https://www.theguardian.com",
+      pubDate: "Thu, 20 Aug 2026 17:09:53 GMT",
+    });
+    // What Currents would carry for the same story, same domain, same UTC day.
+    const viaCurrents = deriveAltKey(
+      "theguardian.com",
+      "Bank of Canada holds its policy rate",
+      "2026-08-20T09:15:00.000Z",
+    );
+
+    expect(viaGoogle.altKey).toBe(viaCurrents);
+  });
+
+  it("does NOT fold when the display name is not the domain stem — accepted, ADR-0018", () => {
+    // The known hole, asserted rather than hoped about. `bbc.co.uk` writes
+    // "BBC News", which adds a word to the stem, so the strip refuses and the
+    // outlet's name stays in the fold. A Google item and its Currents twin then
+    // mint two rows. ADR-0018 records this as an accepted cost with the fix — a
+    // display-name-to-domain map — deferred to the phase that has a corpus.
+    // This adapter does not build that map; it measures the hole (below).
+    const viaGoogle = one({
+      title: "Bank of Canada holds its policy rate - BBC News",
+      sourceUrl: "https://www.bbc.co.uk",
+      pubDate: "Thu, 20 Aug 2026 17:09:53 GMT",
+    });
+    const viaCurrents = deriveAltKey(
+      "bbc.co.uk",
+      "Bank of Canada holds its policy rate",
+      "2026-08-20T09:15:00.000Z",
+    );
+
+    expect(viaGoogle.altKey).not.toBe(viaCurrents);
+  });
+
+  it("drops a sighting with no publisher domain, rather than keying it on nothing", () => {
+    // For the other two adapters a null alt key means "identified by URL
+    // alone", which is safe because their URL is the article. Here the URL is a
+    // redirect whose id shifts across queries (51/53, 70/71), and the deepening
+    // plane issues overlapping queries by construction — so a keyless row is a
+    // duplicate generator. Counted and visible, never minted.
+    const parsed = parseFeed(feed([item({ sourceUrl: "", sourceName: "" })]));
+    const { sightings, stats } = normalizeSightings(parsed.items);
+
+    expect(sightings).toHaveLength(0);
+    expect(stats.dropped.no_identity).toBe(1);
+    // And specifically not counted as a bad URL: the link parsed fine, it just
+    // is not an identity.
+    expect(stats.dropped.bad_url).toBe(0);
+  });
+
+  it("drops a title the SOURCE truncated, which deriveAltKey refuses to key", () => {
+    // Note the outlet has to be one the strip fires on, or the `...` is not at
+    // the end of the headline `deriveAltKey` examines — it checks truncation
+    // AFTER peeling the suffix, precisely so `[00232.HK] Disclosure of... -
+    // HKEXnews` does not sail past the guard.
+    const parsed = parseFeed(
+      feed([
+        item({
+          title: "[00232.HK] Disclosure of... - HKEXnews",
+          sourceUrl: "https://www.hkexnews.hk",
+          sourceName: "HKEXnews",
+        }),
+      ]),
+    );
+    const { sightings, stats } = normalizeSightings(parsed.items);
+
+    expect(sightings).toHaveLength(0);
+    expect(stats.dropped.no_identity).toBe(1);
+  });
+
+  it("counts that drop separately from a schema drop", () => {
+    // A schema drop means upstream sent something the contract does not
+    // describe — worth investigating. This means upstream behaved perfectly and
+    // the article still cannot be filed. Folding them together would make a
+    // rise in either unreadable.
+    const parsed = parseFeed(feed([item({ sourceUrl: "" }), item({ guid: "ok" })]));
+    const { stats } = normalizeSightings(parsed.items);
+
+    expect(stats.dropped.no_identity).toBe(1);
+    expect(stats.dropped.schema).toBe(0);
   });
 });
 

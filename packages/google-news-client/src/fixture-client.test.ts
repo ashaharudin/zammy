@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NewsInvalidQueryError, sourceDomain } from "@zammy/news-client";
+import { NewsInvalidQueryError, deriveAltKey, sourceDomain } from "@zammy/news-client";
 import { FixtureGoogleNewsClient } from "./fixture-client.js";
 import { GoogleNewsFixtureStore } from "./fixture-store.js";
 import { ITEMS_PER_QUERY } from "./raw.js";
@@ -161,6 +161,90 @@ describe("what every real item carries", () => {
 
     for (const sighting of result.sightings) {
       expect(Number.isNaN(Date.parse(sighting.published))).toBe(false);
+    }
+  });
+});
+
+describe("how often the fold actually works, measured on the captures", () => {
+  /**
+   * The number G5 and G6 need, and nobody else is positioned to measure it.
+   *
+   * ADR-0018 records the hole: `deriveAltKey` peels a trailing ` - Outlet` only
+   * when the outlet's display name collapses to its domain stem, and **Google
+   * News writes the display name** where Currents ships the outlet's own
+   * `<title>` tag. For every outlet where those differ, a Google item and its
+   * Currents twin fold to different keys and mint two rows. ADR-0018 deferred
+   * the fix — a display-name-to-domain map — to the phase that first has a
+   * corpus of Google titles. This is that corpus; building the map is still out
+   * of scope, but measuring the hole is not.
+   *
+   * **Read the number with its caveat, which is larger than the number.** These
+   * captures are one query — `"bank of canada"` — so the corpus is dominated by
+   * market-data and PR outlets whose display name IS their domain stem
+   * (`marketbeat.com` "MarketBeat", `tradingview.com` "TradingView": 47 of 120
+   * items between them). Not one of the mastheads ADR-0018 names as failing
+   * appears in it at all. A general news corpus would be far worse, and the
+   * companion test below shows why: checked directly against `deriveAltKey`,
+   * 7 of 12 major outlets do not strip.
+   *
+   * So this is a floor, from a favourable sample. Do not plan against it.
+   */
+  it("folds for 110 of 120 items — a floor, from an unrepresentative corpus", async () => {
+    // Both windows, because one search cannot see all 120: the cap truncates
+    // at 100, which is itself the behaviour asserted two blocks down.
+    const gn = await client();
+    const pages = [
+      await gn.search({ keywords: ["x"], ...CAPPED_WINDOW }),
+      await gn.search({ keywords: ["x"], ...DEEP_WINDOW }),
+    ];
+    const sightings = pages.flatMap((page) => page.sightings);
+
+    let folds = 0;
+    for (const sighting of sightings) {
+      // What the same story would key as if it arrived with a clean headline —
+      // i.e. from Currents, for an outlet that does not append its own name.
+      const bare = /^(.*\S)\s+[|\-\u2013\u2014]\s+\S.*$/u.exec(sighting.title)?.[1];
+      const twin = deriveAltKey(sighting.sourceDomain, bare ?? sighting.title, sighting.published);
+      if (sighting.altKey === twin) folds += 1;
+    }
+
+    expect(sightings).toHaveLength(120);
+    expect(folds).toBe(110);
+    for (const page of pages) expect(page.normalization.dropped.no_identity).toBe(0);
+  });
+
+  it("but 7 of 12 major outlets do not strip, which is what G5 should plan against", () => {
+    // ADR-0018's 12-outlet probe, re-run against `deriveAltKey` itself rather
+    // than quoted, so it fails here if the strip rule ever changes. Every
+    // "not stripped" row is an outlet whose Google item mints a second article
+    // rather than folding onto the Currents one.
+    const published = "2026-08-20T12:00:00.000Z";
+    const strips = (domain: string, display: string) =>
+      deriveAltKey(domain, `Some headline - ${display}`, published) ===
+      deriveAltKey(domain, "Some headline", published);
+
+    // The display name IS the domain stem, loosely compared.
+    for (const [domain, display] of [
+      ["theguardian.com", "The Guardian"],
+      ["reuters.com", "Reuters"],
+      ["theglobeandmail.com", "The Globe and Mail"],
+      ["npr.org", "NPR"],
+      ["cnn.com", "CNN"],
+    ] as const) {
+      expect(strips(domain, display), `${domain} should strip`).toBe(true);
+    }
+
+    // It expands, reorders, adds a word, or the domain is an initialism.
+    for (const [domain, display] of [
+      ["nytimes.com", "The New York Times"],
+      ["bbc.co.uk", "BBC News"],
+      ["wsj.com", "The Wall Street Journal"],
+      ["indiatimes.com", "Times of India"],
+      ["cbc.ca", "CBC News"],
+      ["ft.com", "Financial Times"],
+      ["aljazeera.com", "Al Jazeera English"],
+    ] as const) {
+      expect(strips(domain, display), `${domain} should NOT strip`).toBe(false);
     }
   });
 });

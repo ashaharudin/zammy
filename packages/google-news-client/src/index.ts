@@ -40,9 +40,16 @@
  *     back; they do not promise it (`raw.ts`).
  *   - **100 items per query and no cursor.** A full 100 means subdivide the
  *     window, never "finished" (`http.ts`).
+ *   - **`alt_key` is the only identity it can have.** The `CBM…` link is not
+ *     one, so ADR-0018's fallback key is load-bearing here rather than a bonus,
+ *     and an item that cannot carry one is DROPPED (`no_identity`) rather than
+ *     stored keyed on a redirect. Measured on the captures: 110 of 120 items
+ *     fold onto the key a clean-titled twin would produce, and that 92% is a
+ *     floor from a favourable corpus — 7 of 12 major outlets do not strip
+ *     (`normalize.ts`, and the measurement in `fixture-client.test.ts`).
  *   - **`source_domain` from `<source url>`, not from the URL**, and a null
- *     `description`. The two deliberate departures from the other adapters, both
- *     argued at their site in `normalize.ts`.
+ *     `description`. All four departures from the other adapters are argued at
+ *     their site in `normalize.ts`.
  *   - **A 403 is a block, never an auth failure**, because there is no
  *     credential to fail (`map-error.ts`).
  *

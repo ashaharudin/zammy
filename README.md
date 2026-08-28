@@ -100,9 +100,10 @@ per `(subject, provider, span)` and what a fetch may feed the ranker is decided 
 made*, not by who answered.
 
 It is off by default and unreachable while it is: `createGoogleNewsClient` refuses to build anything
-with `GOOGLE_NEWS_ENABLED=false`, and nothing calls it. Two guards have to land before it can be
-switched on — `alt_key` article identity and the ranker isolation, G1 and G2 of
-[the plan](docs/DISCOVERY-DEEPENING-PLAN.md) — and G5 is what wires it.
+with `GOOGLE_NEWS_ENABLED=false`, and nothing calls it. The two guards it waited on — `alt_key`
+article identity and the ranker isolation, G1 and G2 of
+[the plan](docs/DISCOVERY-DEEPENING-PLAN.md) — have both landed; G3's `storyline_coverage` has not,
+and G5 is what wires it.
 
 ## Commands
 

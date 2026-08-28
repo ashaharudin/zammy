@@ -27,6 +27,23 @@ export type DropReason =
   | "no_url"
   | "bad_url"
   | "bad_published"
+  /**
+   * Nothing dependable identifies the article.
+   *
+   * NOT the same as "`deriveAltKey` returned null", which is a normal, safe
+   * outcome for a provider whose `url` is the article: null there means
+   * "identified by URL alone", exactly as every row was before ADR-0018. Only
+   * an adapter whose URL is *not* an identity — Google News, whose `<link>` is
+   * an opaque redirect — has nothing left when the fallback refuses, and only
+   * such an adapter may raise this.
+   *
+   * Kept out of `schema` deliberately. A schema drop means a provider sent
+   * something the contract does not describe, which is an upstream change worth
+   * investigating; this means the provider behaved perfectly and the article
+   * still cannot be filed. Folding the two together would make a rise in either
+   * unreadable.
+   */
+  | "no_identity"
   | "schema";
 
 export interface NormalizationStats {
@@ -48,6 +65,7 @@ export function emptyStats(): NormalizationStats {
       no_url: 0,
       bad_url: 0,
       bad_published: 0,
+      no_identity: 0,
       schema: 0,
     },
   };

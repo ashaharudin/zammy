@@ -23,25 +23,32 @@ export interface GoogleNewsClientConfig {
    * The principle is `GNEWS_ENABLED`'s, stated in the news-providers factory:
    * adding a provider changes what gets ingested and how budget is spent, so it
    * is an explicit decision rather than something that happens the moment a
-   * package is installed. This provider has two reasons of its own on top of
-   * that, and both are load-bearing:
+   * package is installed.
    *
-   *   - **Its articles cannot yet be identified.** The `<link>` is an opaque
+   * Two hazards specific to this provider used to be the reason, and **both are
+   * now guarded** — worth recording, because the guards are what any later
+   * reader should check still hold rather than assume:
+   *
+   *   - **Its articles could not be identified.** The `<link>` is an opaque
    *     redirect, so `dedup_key` cannot collapse a Google News item onto the
-   *     same story from Currents. `alt_key` (G1) is the fix and it is not
-   *     landed; ingesting before it would mint a second `articles` row for
-   *     every doubly-covered story (DESIGN-DISCOVERY-AND-DEEPENING §2a).
-   *   - **The cloud is not yet isolated from it.** Until G2 lands, a deepening
-   *     fetch would feed the volume score that decided to fetch — endogenous,
-   *     rich-get-richer, with no damping (§3a). ADR-0019 sets the shape of that
-   *     guard: the predicate is on the fetch's reason (`plane <> 'deepening'`),
-   *     not on which provider answered, because this provider is expected to
-   *     serve search and breadth too and a provider-level test cannot be right
-   *     about both at once.
+   *     same story from Currents. G1 landed `alt_key` (migration 0020,
+   *     ADR-0018) and this adapter derives one from `<source url>` and the
+   *     title — see `normalize.ts`, which also drops any item that cannot carry
+   *     one rather than minting a row keyed on the redirect.
+   *   - **The cloud would have measured its own fetching.** G2 landed the
+   *     ranker restriction. ADR-0019 then reshaped it: the honest predicate is
+   *     on a fetch's reason (`plane <> 'deepening'`), not on which provider
+   *     answered, because this provider is expected to serve search and breadth
+   *     too and no provider-level test can be right about both at once. The
+   *     shipped form is still `DISCOVERY_PROVIDERS`, correct today and carrying
+   *     its own shelf life; G5 replaces it.
    *
-   * So the guard is not ceremony. `createGoogleNewsClient` throws with this
-   * false, which means the adapter is unreachable at runtime no matter what
-   * else is configured, and G5 is what flips it.
+   * What is still missing is not a hazard but a destination: `storyline_coverage`
+   * (G3) does not exist yet, and nothing calls this factory at all — G5 writes
+   * the attachment rules and does the wiring. So the flag stays false, and it
+   * stays enforced HERE rather than only at a future call site, because "off"
+   * has to mean unreachable: an unwired guard is satisfied by doing nothing and
+   * stops being satisfied the moment someone adds the import.
    */
   GOOGLE_NEWS_ENABLED: boolean;
   GOOGLE_NEWS_MODE: "live" | "fixture";
@@ -95,8 +102,9 @@ export async function createGoogleNewsClient(
   if (!config.GOOGLE_NEWS_ENABLED) {
     throw new Error(
       "GOOGLE_NEWS_ENABLED is false; refusing to build a Google News client. " +
-        "This provider stays off until G1 (alt_key) and G2 (ranker isolation) " +
-        "are landed — see DISCOVERY-DEEPENING-PLAN.md.",
+        "G1 (alt_key) and G2 (ranker isolation) have landed; this provider stays " +
+        "off until G3 (storyline_coverage) exists and G5 wires it to a caller — " +
+        "see DISCOVERY-DEEPENING-PLAN.md.",
     );
   }
 

@@ -45,6 +45,11 @@ describe("recorded payloads normalize cleanly", () => {
       no_url: 0,
       bad_url: 0,
       bad_published: 0,
+      // Never raised by this adapter: `no_identity` belongs to a provider whose
+      // `url` is not the article, and Currents' is. A null `alt_key` here just
+      // means "identified by URL alone" (ADR-0018), which is what every row was
+      // before that key existed.
+      no_identity: 0,
       schema: 0,
     });
   });

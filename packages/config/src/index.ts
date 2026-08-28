@@ -264,12 +264,14 @@ const EnvSchema = z
     // decided by why it was made.
     /**
      * Off by default, like GNEWS_ENABLED and for its reason — adding a provider
-     * changes what gets ingested and how budget is spent — plus two of its own,
-     * both of which are guards that have to land first: G1's `alt_key`, without
-     * which a Google News item cannot be collapsed onto the same story from
-     * Currents, and G2's ranker isolation, without which the cloud would rank on
-     * its own fetching. `createGoogleNewsClient` refuses to build a client while
-     * this is false, so the adapter is unreachable rather than merely unwired.
+     * changes what gets ingested and how budget is spent. The two guards it
+     * waited on have landed: G1's `alt_key` (migration 0020), without which a
+     * Google News item cannot be collapsed onto the same story from Currents,
+     * and G2's ranker isolation, without which the cloud would rank on its own
+     * fetching. What remains is G3's `storyline_coverage` and G5's wiring —
+     * nothing calls the factory yet. `createGoogleNewsClient` refuses to build a
+     * client while this is false, so the adapter is unreachable rather than
+     * merely unwired.
      */
     GOOGLE_NEWS_ENABLED: z
       .enum(["true", "false"])

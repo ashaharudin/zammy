@@ -61,10 +61,14 @@ describe("with the flag off", () => {
   });
 
   it("says why, and names the phases that have to land first", async () => {
-    // The message is the documentation an operator will actually read.
+    // The message is the documentation an operator will actually read, so it
+    // has to stay current: G1 and G2 have landed since this was written, and a
+    // message still naming them as blockers would send someone to check work
+    // that is already done.
     await expect(createGoogleNewsClient(config())).rejects.toThrow(
       /DISCOVERY-DEEPENING-PLAN/,
     );
+    await expect(createGoogleNewsClient(config())).rejects.toThrow(/G3.*G5/s);
   });
 });
 

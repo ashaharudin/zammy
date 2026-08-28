@@ -1,6 +1,7 @@
 import {
   canonicalizeUrl,
   collapseWhitespace,
+  deriveAltKey,
   deriveDedupKey,
   deriveSightingId,
   finalizeSighting,
@@ -25,9 +26,21 @@ export const PROVIDER = "google-news";
 /**
  * Google News RSS → `Sighting` (ARCHITECTURE 5.2).
  *
- * Three fields depart from what the other two adapters do. The first is the one
- * that matters most, and all three are consequences of the same fact: the
- * `<link>` is not the article.
+ * Four things depart from what the other two adapters do — marked `DEPARTURE`
+ * below, in the order the code reaches them: **identity**, the **drop** on a
+ * missing one, **description**, **attribution**. Every one is a consequence of
+ * the same fact: **the `<link>` is not the article.** It is an opaque `CBM…`
+ * redirect, so it cannot carry identity, cannot name the publisher, and cannot
+ * be resolved without a headless browser (DESIGN-DISCOVERY-AND-DEEPENING §2a).
+ *
+ * That makes `alt_key` (ADR-0018) load-bearing here in a way it is not for the
+ * other two adapters, and the difference is worth stating before reading on:
+ * for them the fallback is a bonus that catches duplicates the URL missed, and
+ * a null one just means "identified by URL alone" — which was every row's state
+ * before ADR-0018 and is perfectly safe, because their URL is real. Here the
+ * fallback is the ONLY thing that can ever fold a Google item onto the Currents
+ * article for the same story, and a null one leaves nothing dependable at all.
+ * See `normalizeSighting` for what this adapter does about that.
  */
 export function normalizeSightings(
   raw: readonly RawGoogleNewsItem[],
@@ -80,6 +93,56 @@ export function normalizeSighting(
   // items constantly and each must collide rather than accumulate.
   const providerSightingId = collapseWhitespace(raw.guid) || url;
 
+  // DEPARTURE — IDENTITY, and the one the whole design leans on.
+  //
+  // Both other adapters pass `sourceDomain(url)` here, the same value they
+  // store. So does this one — but the value is `publisherDomain(<source url>)`,
+  // not the redirect's host, and the distinction is the difference between the
+  // fallback working and never firing. Keyed on `sourceDomain(url)` every
+  // Google item in the archive would fold under `google.com`, which is not a
+  // newsroom, and the Currents article for the same story is under the
+  // publisher's — so nothing would EVER fold. Computed here from the same value
+  // that is about to be stored, so the identity and the thing it identifies
+  // cannot disagree (ADR-0018).
+  const domain = publisherDomain(raw.sourceUrl);
+  const published = new Date(publishedMs).toISOString();
+  const altKey = deriveAltKey(domain, title, published);
+
+  // DEPARTURE — a null fallback key is a DROP here, where it is a normal
+  // outcome for the other two adapters.
+  //
+  // For them, null means "identified by URL alone" — the pre-ADR-0018 state,
+  // and safe, because their URL is the article. Here it means identified by
+  // nothing dependable. The redirect is *nearly* an identity: the `CBM…` id
+  // held on 100/100 titles across a repeated query but only 51/53 across two
+  // different queries and 70/71 across two locales, so 2–4% of stories carry a
+  // different id depending on how they were asked for
+  // (RESEARCH-FREE-NEWS-SOURCES §6a). For most callers that tail would be
+  // negligible; for the deepening plane it is the modal path, because
+  // subdividing one arc's span issues many overlapping queries by construction
+  // and each is a fresh chance to mint the same story twice.
+  //
+  // So a keyless row here is a duplicate generator, and minting one is exactly
+  // the state `GOOGLE_NEWS_ENABLED=false` exists to prevent until G1 landed
+  // (`factory.ts`). Dropping is counted and visible in `NormalizationStats`,
+  // which is the degradation ARCHITECTURE 11 asks for; a silently duplicating
+  // row is not.
+  //
+  // Measured on the committed fixtures: 0 of 120 items take this path. The
+  // guard costs nothing today and is cheap insurance against a feed that stops
+  // sending `<source url>`, which is the only realistic way to reach it — the
+  // other two refusals (`deriveAltKey` on a source-truncated title, or a title
+  // that folds to nothing) were also 0 of 120.
+  if (!altKey) {
+    return {
+      ok: false,
+      reason: "no_identity",
+      detail: domain
+        ? `no alt key for "${title.slice(0, 80)}" on ${domain}`
+        : `no publisher domain (<source url> was "${raw.sourceUrl ?? "absent"}")`,
+    };
+  }
+
   return finalizeSighting({
     id: deriveSightingId(PROVIDER, providerSightingId),
     provider: PROVIDER,
@@ -90,9 +153,10 @@ export function normalizeSighting(
     // G1 adds `alt_key` as a FALLBACK identity, and until G1 lands nothing
     // ingests this provider (the flag is off, see `factory.ts`).
     dedupKey: deriveDedupKey(url),
+    altKey,
     title,
 
-    // DEPARTURE 1 of 2: null, not derived from the RSS `<description>`.
+    // DEPARTURE — DESCRIPTION: null, not derived from the RSS `<description>`.
     //
     // The field is not prose. It arrives as an entity-escaped `<a href>` blob
     // wrapping the same opaque redirect, with the outlet name in a `<font>`
@@ -117,7 +181,7 @@ export function normalizeSighting(
     categories: [],
     sourceCategories: [],
 
-    // DEPARTURE 2 of 2: the publisher, from `<source url="…">` — NOT
+    // DEPARTURE — ATTRIBUTION: the publisher, from `<source url="…">` — NOT
     // `sourceDomain(url)`, which is what both other adapters do.
     //
     // `url` here is the Google redirect, so following the convention would
@@ -133,9 +197,11 @@ export function normalizeSighting(
     // `sourceDomain(article.url) !== article.source_domain`.** Anything that
     // recomputes a domain from a stored URL — a backfill, a repair, a chore —
     // will disagree with these rows, and it is the recomputation that is wrong.
-    sourceDomain: publisherDomain(raw.sourceUrl),
+    // `alt_key` above is derived from this same value, so a recomputation would
+    // disagree with the identity too, not merely with the source chip.
+    sourceDomain: domain,
 
-    published: new Date(publishedMs).toISOString(),
+    published,
     raw,
   });
 }
@@ -144,12 +210,16 @@ export function normalizeSighting(
  * `<source url>` → registrable domain, or null.
  *
  * Null rather than falling back to `sourceDomain(url)`, which would reintroduce
- * exactly the `news.google.com` attribution the field exists to avoid. A null
- * `source_domain` is excluded from `count(distinct …)` in Postgres, so an item
- * whose publisher we could not read contributes nothing to the two-newsroom
- * gate — which is the correct contribution from an article we cannot attribute.
- * All 120 items across the capture probes carried a usable `<source url>`, so
- * this is a rare path rather than a routine one.
+ * exactly the `news.google.com` attribution the field exists to avoid.
+ *
+ * **A null never reaches the archive**, though, and that is a consequence of
+ * ADR-0018 rather than of this function: the same value keys `alt_key`, and
+ * `deriveAltKey` refuses a null domain, so `normalizeSighting` drops the item
+ * before it can be stored. So `source_domain` on this provider's rows is always
+ * a real newsroom — a stronger guarantee than either other adapter offers, and
+ * one nothing should be built on lightly, since it holds only while the drop
+ * above does. All 120 items across the capture probes carried a usable
+ * `<source url>`, so the path is a guard rather than a routine one.
  */
 export function publisherDomain(sourceUrl: string | null | undefined): string | null {
   const trimmed = collapseWhitespace(sourceUrl);
