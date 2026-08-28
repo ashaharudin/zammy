@@ -28,16 +28,11 @@ writing the results. `--dry-run` is what reads without asking the model.
 >   table is Gemini-family only — gemma has no `thinkingLevel`/`thinkingBudget`
 >   knob at all (the API 400s on either) and thinks unconfigurably, ~703 tokens
 >   on the Fort Hood prompt, which is why `maxOutputTokens` went 256 → 2048.
-> - **Not re-measured, and the attempt found an outage.** Trying to time gemma
->   on 2026-08-28 (dev key, real dev-archive prompts, pacer off) instead found
->   every call **failing the contract**: `finishReason: MAX_TOKENS` with 2,046
->   thought tokens and no answer, surfaced as text because `gemini.ts` joined
->   *thought* parts into the reply. Those calls took 20.6–43.4 s and exceeded
->   the 20 s `GEMINI_TIMEOUT_MS` on 5 of 5 — but they are **failing** calls, so
->   that is not gemma's latency for a label. Flash-lite answered the same
->   prompts in ~0.9 s. The parsing fix landed in #177; the re-measurement it
->   unblocks has not been done. Per-label
->   **cost** is not re-measured either; the ~$0.22/1,000 below is flash-lite's.
+> - **Re-measured 2026-08-28 against the repaired client (#177)** — see "What
+>   gemma actually costs" below. Short version: 3 usable labels in 10, at
+>   20.4–36.8 s each; the other 7 answer nothing at any budget. Flash-lite
+>   answered the same prompts in ~0.9 s. Per-label **cost** is not re-measured;
+>   the ~$0.22/1,000 below is flash-lite's.
 
 ## What a label is
 
@@ -48,6 +43,44 @@ bigram extractor and then to nothing. Presentation, never identity: nothing
 keys off a label, two storylines may share one, and a null label renders. That
 last clause is why an external model is tolerable here — the worst failure it
 can produce is a storyline with no name.
+
+## What gemma actually costs, measured 2026-08-28
+
+Ten real dev-archive storylines, the repaired client (#177), the dev key, and
+the pacer off so these are latencies rather than pacing.
+
+| | calls | thinking tokens | wall clock |
+| --- | --- | --- | --- |
+| **Usable label** | **3** | 944, 1,103, 1,721 | 20.4 s, 23.8 s, 36.8 s |
+| **No answer** (`MAX_TOKENS`) | **7** | ~2,046 — the whole budget | ~43 s each |
+
+Three things follow, and none of them is "raise the budget".
+
+**The 2,048-token cap is a circuit breaker, not a budget.** Re-running the
+failures with `maxOutputTokens` at 8192, two of them reached **8,190 and 8,189
+thought tokens — 172 s apiece — and still answered nothing**, while the
+successes reproduced to the token (944 and 1,103, the same seconds).
+`temperature` is 0, so the split is a property of the PROMPT, not of sampling.
+Raising the cap converts a 43 s failure into a 172 s one; if anything it should
+come down, so that a runaway fails sooner.
+
+**`GEMINI_TIMEOUT_MS=20000` is below the floor.** None of the three usable
+labels arrived inside it, so at the shipped setting the pass aborts every label
+it would otherwise get and takes the bigram fallback. That is why raising it is
+not a knob to turn on its own — a longer deadline also makes each of the seven
+failures cost more before it fails.
+
+**A label costs ~40 s** — 2 s of spacing at 30 rpm plus ~38 s of call — so
+`CHORE_LABEL_BUDGET_MS`'s 240 s admits about six. `CHORE_MAX_LABELS` stays at 50
+because the budget is what bounds the clock now; the count bounds spend, and at
+14,400 requests/day 50 is nothing.
+
+**The open question this hands back to [ADR-0011](adr/0011-a-storyline-is-a-persistent-arc-of-one-event.md).**
+Repaired, this model names **3 storylines in 10**, at 20–37 s each. Flash-lite
+named the same ten in ~0.9 s apiece. The switch bought double the rpm ceiling
+(30 against 15) — a ceiling a serial pass came nowhere near at either latency,
+since latency binds first. That is a decision to take deliberately, not a
+number to tune.
 
 ## The three triggers
 

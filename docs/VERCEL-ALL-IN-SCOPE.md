@@ -460,20 +460,18 @@ wrapper plus one new table:
   its own — a count bounds a clock only if a label costs what the count was sized against — but it
   does **not** yield a replacement figure, and none is asserted here.
 
-  **Measuring one on 2026-08-28 found an outage instead.** Dev key, real dev-archive prompts, pacer
-  off: every `gemma-4-26b-a4b-it` call came back failing the label contract, because `gemini.ts`
-  joined the model's *thought* parts into its answer, and each burned a full generation to
-  `finishReason: MAX_TOKENS` (2,046 thought tokens, no answer) taking **20.6–43.4 s**. Those seconds
-  time a call that produced nothing; they are not what a working label costs, and the ~11-label
-  window they imply is not a figure to size anything against. `gemini-3.1-flash-lite`, for scale on
-  the same prompts, answered in ~0.9 s.
+  **Re-derived 2026-08-28 against the repaired client** (#177), dev key, real dev-archive prompts,
+  pacer off. Of ten storylines, **three produced a usable label** — 20.4 s, 23.8 s, 36.8 s — and
+  **seven returned no answer**, each spending the whole 2,048-token budget on thinking
+  (`MAX_TOKENS`, ~2,046 thought tokens) in ~43 s. A label therefore costs **~40 s** of wall clock,
+  2 s of it spacing, so `CHORE_LABEL_BUDGET_MS`'s 240 s admits about **six**.
 
-  So `CHORE_MAX_LABELS` stays at 50. The parsing fix landed in #177, together with
-  `CHORE_LABEL_BUDGET_MS` — the wall-clock bound this bullet should have asked for in the first
-  place, and what now keeps the pass inside the function. Re-measure latency on calls that
-  *answer*, then re-derive the count from that. The overrun is soft meanwhile (the pass is
-  resumable), and what a truncated night costs is the `chore_runs` row and the passes ordered after
-  the label one. See `.env.example`, `CHORE_MAX_LABELS`.
+  `CHORE_MAX_LABELS` nonetheless **stays at 50**, because the count is no longer the clock bound —
+  `CHORE_LABEL_BUDGET_MS` is, and a budget holds at whatever a label costs instead of wanting a
+  re-derivation every time latency moves. Pinning the count at six would bake today's latency into
+  a deployment parameter and throttle a healthy pass later; what it still bounds is spend, and at
+  14,400 requests/day 50 is nothing. Full numbers, including why raising `maxOutputTokens` is the
+  wrong lever, in [STORYLINE-LABELS.md](STORYLINE-LABELS.md).
 - **The late-candidate sweep is the phase that actually blows the ceiling.** Measured at
   **41 ms × 12,338 groups ≈ 506 s** — 1.7× Hobby's 300 s, every night, on loopback Postgres. It is
   one query: `readCandidateStorylines` is 34 of the 41 ms, and its cost tracks profile width, from
