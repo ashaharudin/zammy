@@ -118,7 +118,13 @@ export function contentTokenPairs(text: string): Array<[string, string]> {
  * would have to be threaded through `headlineTokens`, `storyTokens`,
  * `PhraseArticle` and two storage reads to get here. The shape rule needs
  * nothing, and it is measurable: what it drops is countable against the live
- * archive, and what it wrongly drops costs two tokens on one article.
+ * archive, and so is what it wrongly drops — see `isNameCased` for version 9's
+ * count of both.
+ *
+ * A domain rule now exists ELSEWHERE and is deliberately not reused here: G1's
+ * `deriveAltKey` folds a `source_domain`, and reconciling this shape rule with
+ * that domain one was considered and refused as a wider change than the peel
+ * needs. Two rules, two purposes; the tokenizer still reads only the title.
  */
 export function stripSourceAttribution(title: string): string {
   let headline = title.trim();
