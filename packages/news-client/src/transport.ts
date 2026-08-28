@@ -48,6 +48,12 @@ export interface ErrorResponseInput {
 }
 
 export interface RawResponse {
+  /**
+   * The parsed response body. JSON by default — see `parseBody`, which a
+   * provider that answers in something else replaces. The name is kept because
+   * JSON is what every provider with an actual API speaks, and renaming it
+   * would churn two adapters to describe one exception.
+   */
   json: unknown;
   quota: QuotaSnapshot | null;
   requestedAt: Date;
@@ -63,6 +69,21 @@ export interface HttpTransportOptions {
   mapError: (input: ErrorResponseInput) => NewsError;
   /** Read whatever rate-limit state the provider exposes. Null when it exposes none. */
   parseQuota?: (headers: Headers, requestedAt: Date) => QuotaSnapshot | null;
+  /**
+   * Body text → `RawResponse.json`. Defaults to JSON.
+   *
+   * Here rather than in the adapter because everything wrapped around the parse
+   * — retries, the breaker, deadlines, quota pre-flight, key redaction — is the
+   * transport's, and a provider that answers in RSS should not have to
+   * reimplement any of it to read its own body. It stays a hook rather than a
+   * format enum for the same reason `mapError` is one: the transport must not
+   * learn what any particular provider sends.
+   *
+   * Throw `NewsSchemaError` on an unparseable body, as the JSON default does —
+   * a 200 carrying something we cannot read is an intercepting proxy or a block
+   * page, and it is not a fault to retry.
+   */
+  parseBody?: (bodyText: string) => unknown;
   quota: QuotaGovernor;
   /** Per-request deadline. Observed Currents p50 was ~700ms, so 8s is generous. */
   timeoutMs?: number;
@@ -88,6 +109,7 @@ export class HttpTransport {
   private readonly parseQuota:
     | ((headers: Headers, requestedAt: Date) => QuotaSnapshot | null)
     | undefined;
+  private readonly parseBody: (bodyText: string) => unknown;
   private readonly governor: QuotaGovernor;
   private readonly timeoutMs: number;
   private readonly maxRetries: number;
@@ -106,6 +128,7 @@ export class HttpTransport {
     this.headers = options.headers;
     this.mapError = options.mapError;
     this.parseQuota = options.parseQuota;
+    this.parseBody = options.parseBody ?? safeJson;
     this.governor = options.quota;
     this.timeoutMs = options.timeoutMs ?? 8_000;
     this.maxRetries = options.maxRetries ?? 2;
@@ -192,7 +215,7 @@ export class HttpTransport {
         // service is unhealthy, so only transport-level faults trip the breaker.
         this.breaker.recordSuccess();
 
-        return { json: safeJson(bodyText), quota: snapshot, requestedAt };
+        return { json: this.parseBody(bodyText), quota: snapshot, requestedAt };
       } catch (caught) {
         error = this.classify(caught, opts.signal, timeoutMs);
       }
