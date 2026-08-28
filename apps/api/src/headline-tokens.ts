@@ -98,27 +98,33 @@ export function contentTokenPairs(text: string): Array<[string, string]> {
  * is deliberately narrower than "sits after a dash": at most
  * `MAX_ATTRIBUTION_WORDS` words, no verb form (the ADR-0006 lexicon again — a
  * segment that STATES something is the headline's own tail, not the outlet's
- * name), and no function word except a leading article, because attribution
- * reads "The Korea Times" and a headline's tail reads "and faster than
- * expected".
+ * name), and no function word except a leading article or one the segment's own
+ * capitalization vouches for (`isNameCased`), because attribution reads "The
+ * Korea Times" or "The Times of India" and a headline's tail reads "and faster
+ * than expected".
  * Peeling repeats, because the edition sits between the headline and the site
  * ("- National | Globalnews.ca"), and stops before it could eat the headline:
  * `MIN_HEADLINE_WORDS` words must survive, and at most
  * `MAX_ATTRIBUTION_SEGMENTS` segments come off per call.
  *
- * The shape rule buys its cheapness with both kinds of error, and both are
- * measured rather than assumed. It keeps mastheads with an internal function
- * word ("the Globe and Mail" — see `ARTICLES`), and it peels a short verbless
- * tail that reads like a name ("- a stunning upset"). The second costs two
- * tokens on one article; the first leaves that outlet's chrome exactly where it
- * was.
+ * The shape rule buys its cheapness with false positives, and they are measured
+ * rather than assumed: it peels a short verbless tail that reads like a name
+ * ("- a stunning upset"), and since version 9 it peels a Title Case one too
+ * ("- Board of Peace"). What that costs, counted against the dev archive, is in
+ * `isNameCased`.
  *
  * What it deliberately does NOT do is consult `source_domain`. Matching the
  * segment against the outlet's own domain would be the precise rule — and it
  * would have to be threaded through `headlineTokens`, `storyTokens`,
  * `PhraseArticle` and two storage reads to get here. The shape rule needs
  * nothing, and it is measurable: what it drops is countable against the live
- * archive, and what it wrongly drops costs two tokens on one article.
+ * archive, and so is what it wrongly drops — see `isNameCased` for version 9's
+ * count of both.
+ *
+ * A domain rule now exists ELSEWHERE and is deliberately not reused here: G1's
+ * `deriveAltKey` folds a `source_domain`, and reconciling this shape rule with
+ * that domain one was considered and refused as a wider change than the peel
+ * needs. Two rules, two purposes; the tokenizer still reads only the title.
  */
 export function stripSourceAttribution(title: string): string {
   let headline = title.trim();
@@ -145,14 +151,9 @@ const MAX_ATTRIBUTION_WORDS = 4;
 /** What must survive the peel. */
 const MIN_HEADLINE_WORDS = 2;
 /**
- * The only function words an outlet's own name opens with. A masthead that
- * carries one INSIDE it — "the Globe and Mail", "The Times of India" — is
- * refused by the rule above and survives into the vocabulary. That is the
- * shape rule's known blind spot, left as-is: the discriminator that would
- * catch it is the segment's own capitalization, and admitting `and`/`of`
- * anywhere would take "top of the table" and "and faster than expected" with
- * it. Consulting `source_domain` remains the precise fix, at the plumbing cost
- * the module comment describes.
+ * The only function words an outlet's own name opens with, whatever its case.
+ * A masthead that carries one INSIDE it — "the Globe and Mail", "The Times of
+ * India" — needs `isNameCased` instead, which is what version 9 added.
  */
 const ARTICLES: ReadonlySet<string> = new Set(["a", "an", "the"]);
 
@@ -169,7 +170,9 @@ function countWords(text: string): number {
  * remain top of the table", "just a year after suffering a stroke" and "and
  * faster than expected" are all refused — by length, by the verb lexicon, by
  * the function-word rule — while "The Telegraph", "Motley Fool", "EE Times",
- * "Globalnews.ca" and "Winnipeg" are all taken.
+ * "Globalnews.ca" and "Winnipeg" are all taken. Since version 9 a function word
+ * INSIDE the segment is survivable too, but only for a segment `isNameCased`
+ * vouches for: "The Times of India" is taken, "top of the table" is still not.
  */
 function isAttribution(segment: string): boolean {
   const words = countWords(segment);
@@ -180,20 +183,97 @@ function isAttribution(segment: string): boolean {
   // tokens either way, so leave it alone rather than guess.
   if (tokens.length === 0) return false;
 
+  const named = isNameCased(segment);
   return tokens.every((token, index) => {
     if (VERB_FORMS.has(token) || PAST_FORMS.has(token)) return false;
     // A leading ARTICLE is how outlets write their own names ("The Korea
     // Times"); a function word anywhere else is prose ("and faster than
-    // expected", "top of the table"). This reads grammar rather than the whole
-    // stopword list, because half that list is desk furniture — `times` and
-    // `news` are furniture in a headline and an outlet's NAME here.
+    // expected", "top of the table") unless the segment's capitalization says
+    // otherwise. This reads grammar rather than the whole stopword list,
+    // because half that list is desk furniture — `times` and `news` are
+    // furniture in a headline and an outlet's NAME here.
     //
     // Articles only, not every function word at index 0. Exempting the whole
     // class peeled "- some quiet relief" and "- an unexpected reversal", which
     // are headline tails; no outlet is named "Some ...".
     if (index === 0) return ARTICLES.has(token) || !FUNCTION_WORDS.has(token);
-    return !FUNCTION_WORDS.has(token);
+    return !FUNCTION_WORDS.has(token) || named;
   });
+}
+
+/**
+ * Does this segment's own CAPITALIZATION say it is a name?
+ *
+ * The discriminator version 9 added, and the one the blind-spot note above
+ * `ARTICLES` used to say could not be had. "The Times of India", "Moss and
+ * Fog", "Council on Foreign Relations" and "Den of Geek" are mastheads that
+ * carry a function word in the middle, so the grammar rule refuses them and the
+ * outlet's chrome enters the vocabulary — the same failure `stripSourceAttribution`
+ * exists to stop, only spelled with an `of` in it.
+ *
+ * A name capitalizes its content words and lowercases its connectives, and
+ * prose does not: "Times of India" against "top of the table". So the test is
+ * that every token is EITHER capitalized OR a function word written in
+ * lowercase. `FUNCTION_WORDS` holds lowercase spellings only, so testing the
+ * token AS WRITTEN is what separates the connective in "Times of India" from
+ * the name's own word in "WORLD OF BUZZ" and "Law The Podcast" — the second
+ * pair have to carry a capital like any other word, and do.
+ *
+ * A question mark disqualifies the segment outright, and that carve-out is
+ * measured rather than tasteful: Title Case is also how a stock-tip desk writes
+ * its own headline tail, and "- Time to Buy?", "- Still a Buy?", "- Opportunity
+ * or Trap?" and "| BJP Set for Showdown?" were 9 of the 17 titles this rule
+ * first got wrong. `!` is NOT in the carve-out — "Yahoo!" is a masthead — and
+ * no title in the archive needed it.
+ *
+ * **The question mark is a PROXY, not the discriminator.** What is actually
+ * being refused is Title Case stock-tip prose; the interrogative is only how
+ * this archive spelled it, and the declarative form is unguarded — "- Still a
+ * Buy" peels, because `buy` sits in `PAST_ONLY_LEMMAS` and so is not a
+ * `VERB_FORMS` entry that would refuse it. That hole is pinned in the tests
+ * rather than closed: no title in the archive is that shape, and closing it
+ * needs a wider rule than sixty-three rows can justify. Do not read `?` as the
+ * discriminator and widen the rule on that reading.
+ *
+ * **What it costs, counted on the dev archive (2026-08-28, 32,279 articles).**
+ * 63 titles peel differently; 55 of those are chrome and 8 are the headline's
+ * own words. The eight, by the TITLE they sit in, because a false positive
+ * nobody listed is a false positive nobody can weigh — and because naming the
+ * tail rather than the row leaves the count uncheckable:
+ *
+ *  - "... arsenals — Board of Peace" (TASS, and the Gaza board is the story)
+ *  - "... as Funds Seek Exit Routes - Ares Management (NYSE:A"
+ *  - "Force is the only language West understands – Carl Zha to RT"
+ *  - "Osun Guber: Help Gov Adeleke prepare ... - Hope Uzodimma to Davido"
+ *  - "CEBL on CBC: Finals - Game # 1 - Winnipeg at Brampton"
+ *  - three Oregonian obituary datelines ("... - Newberg, OR - The Oregonian")
+ *
+ * The datelines are arguably chrome too — peeling them is what stops two
+ * obituaries attaching to an Oregon poisoning arc — which is why the honest
+ * count is 55 right, 5 wrong, 3 argued.
+ *
+ * **The blast radius of one title is three tokens.** 112 title tokens go in
+ * total, over 62 rows: 22 rows lose one, 30 lose two, 10 lose three, and
+ * nothing loses four. Same shape on `story_tokens` — 23 / 19 / 6 over 48 rows.
+ * The ten three-token rows are six chrome ones ("Council on Foreign Relations"
+ * twice, "Conservative Party of Canada", "Office for National Statistics",
+ * "USC Viterbi | School of Engineering", "Investors Should Contact SueWallSt")
+ * and FOUR of the five false positives above, which is the whole of the tail
+ * risk in one line.
+ *
+ * A restricted list of masthead connectives (`of`/`and`/`on`/`for`, dropping
+ * `to` and `at`) would take three of those five. It is not taken: it trades a
+ * grammar rule for a hand-kept table fitted to sixty-three rows, and it would
+ * lose "Letters to the Editor" with them.
+ *
+ * Case is Latin-shaped, and scripts without case fall through to `false` —
+ * `\p{Lu}` is empty for Arabic or CJK, so a segment in one is refused and the
+ * peel is left where it was. Refusing is the safe direction here.
+ */
+function isNameCased(segment: string): boolean {
+  if (/\?\s*$/u.test(segment)) return false;
+  const named = splitTokens(segment).filter((token) => !FUNCTION_WORDS.has(token));
+  return named.length > 0 && named.every((token) => /^\p{Lu}/u.test(token));
 }
 
 /**

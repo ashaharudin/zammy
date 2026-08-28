@@ -225,17 +225,6 @@ describe("the outlet's own name is not vocabulary", () => {
     expect(stripSourceAttribution(title)).toBe(title);
   });
 
-  it("keeps a masthead that carries a function word inside it", () => {
-    // The shape rule's known blind spot, pinned so it is a decision rather
-    // than a surprise: `and` is not at the front, so the segment reads as
-    // prose and the chrome survives. Catching it needs the segment's own
-    // capitalization, or `source_domain` — see `ARTICLES` and the module
-    // comment. "top of the table" is why the loose rule is not taken.
-    expect(stripSourceAttribution("Ottawa unveils plan - the Globe and Mail")).toBe(
-      "Ottawa unveils plan - the Globe and Mail",
-    );
-  });
-
   it("peels a short verbless tail that reads like a name", () => {
     // The other side of the same coin, and the cost the module comment quotes:
     // an article plus two content words is the shape of "The Korea Times", so
@@ -251,6 +240,136 @@ describe("the outlet's own name is not vocabulary", () => {
 
   it("leaves a title that is nothing but attribution to the stopword list", () => {
     expect(stripSourceAttribution("Globalnews.ca")).toBe("Globalnews.ca");
+  });
+});
+
+describe("a masthead's own capitalization outranks the function word in it (tokenizer version 9)", () => {
+  // Version 6's blind spot, closed. Measured on the dev archive (2026-08-28,
+  // 32,279 articles): 5,559 titles carry a delimited tail, 101 were refused by
+  // the internal-function-word rule alone, and admitting the name-cased ones
+  // moves 63 titles — 62 rows' `title_tokens`, 48 rows' `story_tokens`. The
+  // biggest single slice is one outlet: 18 Times of India titles donating
+  // `india` (and `delhi`, off the "Delhi News" desk line) to every article they
+  // carry, which is version 6's "- Winnipeg | Globalnews.ca" with an `of` in
+  // the middle.
+
+  it.each([
+    // The example the old blind-spot note was written around.
+    ["Ottawa unveils plan - the Globe and Mail", "Ottawa unveils plan"],
+    // The archive's own, in the shapes it actually holds them.
+    [
+      "Rain leaves parts of Delhi waterlogged, disrupts traffic | Delhi News - The Times of India",
+      "Rain leaves parts of Delhi waterlogged, disrupts traffic",
+    ],
+    ["The Bombing of Hiroshima | Council on Foreign Relations", "The Bombing of Hiroshima"],
+    ["Street Fighter Sneak Peak Corrects the Mistake | Den of Geek", "Street Fighter Sneak Peak Corrects the Mistake"],
+    ["Commuting Happens Inside a Giant Strawberry | Moss and Fog", "Commuting Happens Inside a Giant Strawberry"],
+    ["GDP first quarterly estimate - Office for National Statistics", "GDP first quarterly estimate"],
+  ])("peels the name-cased masthead from %s", (title, expected) => {
+    expect(stripSourceAttribution(title)).toBe(expected);
+  });
+
+  it("reads the token AS WRITTEN, so a capitalized function word is a name's word", () => {
+    // `FUNCTION_WORDS` holds lowercase spellings. "OF" and "The" here are part
+    // of the name rather than connectives, and they carry a capital like every
+    // other word in it — which is exactly what the test asks of them.
+    expect(stripSourceAttribution("How M'sians Can Apply For a Permit - WORLD OF BUZZ")).toBe(
+      "How M'sians Can Apply For a Permit",
+    );
+    expect(stripSourceAttribution("Should Judges Work in Death Penalty Courts? - Law The Podcast")).toBe(
+      "Should Judges Work in Death Penalty Courts?",
+    );
+  });
+
+  it.each([
+    // The two the old note said a loose rule would eat. It does not: they are
+    // lowercase, and a name is not.
+    "Uganda hold on - remain top of the table",
+    "Harvest ends early - and faster than expected",
+    // Sentence-case tails generally, which is most of what sits after a dash.
+    "Trump signs order - mostly from Americans",
+    "Gaza talks stall - trap students in Gaza",
+    "Ottawa tables budget - Latest and Breaking news",
+  ])("leaves a tail that is not name-cased alone: %s", (title) => {
+    expect(stripSourceAttribution(title)).toBe(title);
+  });
+
+  it("cannot vouch for a segment in a script that has no case", () => {
+    // A constructed probe of the boundary rather than an archive shape: the new
+    // path only opens for a segment holding an ENGLISH function word, so this
+    // is where the two meet. `\p{Lu}` is empty for CJK, so the name-case test
+    // refuses and the peel stays where version 8 left it. Refusing is the safe
+    // direction — it keeps a token rather than deleting one.
+    //
+    // A tail with no function word in it at all was already peeled at version 8
+    // whatever its script, and still is; that is not this rule's decision.
+    expect(stripSourceAttribution("Taipei talks resume - 台灣 of 新聞網")).toBe(
+      "Taipei talks resume - 台灣 of 新聞網",
+    );
+  });
+
+  it.each([
+    // A question mark is never an outlet's own name, and Title Case is also how
+    // a stock-tip desk writes its headline tail. These four shapes were 9 of
+    // the 17 titles the bare capitalization rule got wrong.
+    "Dell Technologies Hits New 52-Week High - Time to Buy?",
+    "NetEase Shares Gap Up - Still a Buy?",
+    "Uber Became a Cash Machine – Opportunity or Trap?",
+    "Congress Govt Plans Curbs on Public-Space Activities | BJP Set for Showdown?",
+  ])("refuses a name-cased tail that asks a question: %s", (title) => {
+    expect(stripSourceAttribution(title)).toBe(title);
+  });
+
+  it.each([
+    // The cost, in the archive's own rows and pinned so a future loosening of
+    // `isNameCased` trips on it rather than quietly widening it. All FIVE of
+    // the firm false positives are here, and they are the same five
+    // `isNameCased` names — the ticker one included, because a truncated
+    // segment is the likeliest of them to move under an unrelated `tokenRuns`
+    // change and so the one that most wants a pin.
+    [
+      "Hamas disarmament plan includes destruction of tunnels, arsenals — Board of Peace",
+      "Hamas disarmament plan includes destruction of tunnels, arsenals",
+    ],
+    [
+      "Bridgepoint To Offload $1.1B in Private Credit Stakes as Funds Seek Exit Routes - Ares Management (NYSE:A",
+      "Bridgepoint To Offload $1.1B in Private Credit Stakes as Funds Seek Exit Routes",
+    ],
+    [
+      "Force is the only language West understands – Carl Zha to RT",
+      "Force is the only language West understands",
+    ],
+    [
+      "Osun Guber: Help Gov Adeleke prepare for life after losing - Hope Uzodimma to Davido",
+      "Osun Guber: Help Gov Adeleke prepare for life after losing",
+    ],
+    // Three tokens, the most any one title loses. `Game # 1` comes off behind
+    // the fixture because the segment ahead of it now passes — a knock-on of
+    // `MAX_ATTRIBUTION_SEGMENTS`, and token-neutral, since digits are dropped
+    // by `keepable` anyway.
+    ["CEBL on CBC: Finals - Game # 1 - Winnipeg at Brampton", "CEBL on CBC: Finals"],
+  ])("peels a Title Case tail that is the headline's own words: %s", (title, expected) => {
+    expect(stripSourceAttribution(title)).toBe(expected);
+  });
+
+  it("peels an obituary dateline, which is the argued third of the cost", () => {
+    // Three more titles, counted apart from the five above because they are
+    // arguable both ways: the town is content, and peeling it is also what
+    // stops two Oregonian obituaries attaching to an Oregon poisoning arc.
+    expect(
+      stripSourceAttribution("Vera Mitchell Obituary (2026) - Corvallis, OR - Corvallis Gazette-Times - Legacy"),
+    ).toBe("Vera Mitchell Obituary (2026)");
+  });
+
+  it("does not guard the declarative form of the tail the question mark catches", () => {
+    // The carve-out is punctuation standing in for a semantic class, and the
+    // proxy leaks: `buy` is in `PAST_ONLY_LEMMAS`, so bare "Buy" is not a
+    // `VERB_FORMS` entry and nothing else refuses this. Pinned as a known hole
+    // rather than fixed — no title in the archive is this shape, and the rule
+    // that would close it is a wider one than the measurement supports.
+    expect(
+      stripSourceAttribution("Dell Technologies (NYSE:DELL) Hits New 52-Week High - Still a Buy"),
+    ).toBe("Dell Technologies (NYSE:DELL) Hits New 52-Week High");
   });
 });
 

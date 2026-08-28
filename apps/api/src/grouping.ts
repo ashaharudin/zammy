@@ -83,9 +83,15 @@ const MIN_SHARED_TOKENS = 2;
  *       any of them, which cost `cloudQuery` the arc's own naming word, cost a
  *       reader typing "nino" the arc entirely, and split the label-agreement
  *       merge on an accent the labeler applies inconsistently to the same name.
+ *   9 — the peel's blind spot closed: a masthead carrying a function word
+ *       INSIDE it is peeled when the segment's own capitalization vouches for
+ *       it (`isNameCased`). Rows below 9 carry `india` on every Times of India
+ *       article, `council`/`foreign`/`relation` on every CFR piece,
+ *       `den`/`geek`, `journal`/`perinatology`, `conservative`/`party`/`canada`
+ *       — the version-6 failure again, spelled with an `of` in the middle.
  *
- * `pnpm regroup --tokens-only` is not the whole repair for 6 or 8, because both
- * versions changed `story_tokens` rather than only `title_tokens`. Four steps,
+ * `pnpm regroup --tokens-only` is not the whole repair for 6, 8 or 9, because
+ * all three changed `story_tokens` rather than only `title_tokens`. Four steps,
  * in order, and each one's absence is silent:
  *
  *   1. `pnpm regroup --tokens-only --days=<retention>` — re-derives the stored
@@ -171,7 +177,68 @@ const MIN_SHARED_TOKENS = 2;
  *     improves is mostly the label layer (grounding, agreement, `cloudQuery`),
  *     and `--restart` discards the label inventory to get it.
  *
- * **Where the chain runs.** Locally, the four commands above against
+ * **Version 9 pays steps 1 and 2, owes nothing on 3, and declines 4.** Measured
+ * against the dev archive on 2026-08-28 (32,279 articles):
+ *
+ *   - step 1 — 63 titles' peel moves. **62 rows' `title_tokens`** lose a token;
+ *     **60 rows' `story_tokens`** are rewritten, of which **48 lose a token**
+ *     and twelve only reorder, because the word the title stops donating is
+ *     still in the description. 112 title tokens go in all, at most three off
+ *     any one row (`isNameCased` has the distribution). That is a TENTH of
+ *     version 8's footprint and it is the honest headline of this bump: 5,559
+ *     titles carry a delimited tail at all, and only 101 of them were refused
+ *     by the internal-function-word rule alone. This is a narrow defect, not a
+ *     broad one.
+ *
+ *     **Run on dev on 2026-08-28, not merely predicted from it**, which is the
+ *     point of having a dev archive at all: the hand-dispatched production job
+ *     should not be where a step sequence executes for the first time.
+ *     `regroup --tokens-only --days=90` re-tokenized all 32,279 rows, refreshed
+ *     **51 storyline profiles** over 44 groups, and regrouped and merged
+ *     nothing. Every row is at `tokens_version` 9, and re-deriving version 8's
+ *     peel and diffing it against what is now STORED gives back 62 and 48
+ *     exactly — the predictions, confirmed against the written rows rather than
+ *     against the archive they were computed from. No row gained a token.
+ *   - **55 of the 63 are chrome and 8 are the headline's own words** — the
+ *     eight are listed in `isNameCased`, which is where the rule that makes
+ *     them is. The largest single beneficiary is one outlet: 18 titles are
+ *     indiatimes.com, and what leaves them is `india` (and `delhi` on the
+ *     "Delhi News" desk line, the same shape as version 6's "- Winnipeg |
+ *     Globalnews.ca").
+ *   - **What it is worth to the linker, and where it is not.** Replaying
+ *     member-against-rest link mass over the 2,499 multi-member arcs holding a
+ *     delimited title: six attachments fall below the mass floor of 20 that
+ *     clear it today. Four are wrong members the chrome was holding on — a
+ *     Polish deportation story glued to a Martin Sellner arc by
+ *     conservative.ca's masthead (21.4 → 11.5), two Oregonian obituaries glued
+ *     to an Oregon poisoning arc by their datelines, a UK GDP release glued to
+ *     a Trump-economy arc by the ONS byline. Two are "Delhi Student Protests"
+ *     losing members to a defensible arc, and they are the cost.
+ *
+ *     **And it does NOT repair the pile it looks like it should.** "Delhi
+ *     Monsoon Waterlogging" — three unrelated Times of India stories, a drain
+ *     rescue, a kanwar-yatra control room and a waterlogged street — survives
+ *     at 30.1/48.0/28.8 against the floor, because `delhi` reaches
+ *     `story_tokens` through the DESCRIPTION whatever the title's peel does.
+ *     Peeling `india` moves each of those links by exactly 4.12. The version-6
+ *     comparison flatters this change; the arithmetic does not.
+ *   - step 2 — owed because `story_tokens` moves on 48 rows, and df is what the
+ *     anchor rule reads. Run on dev the same day, and it removed **two
+ *     token-day rows** (`perinatology`) and nothing else: `--rebuild` covers
+ *     `STORYLINE_DF_WINDOW_DAYS + 1` days, not step 1's retention window, so
+ *     the older Times of India rows that lost `india` sit outside it. That
+ *     asymmetry is by design — the linker reads only the trailing window — and
+ *     every in-window day for `india` was checked against a recount from
+ *     `story_tokens` and matched exactly. The step is owed because the
+ *     derivation would otherwise be stale, not because the number is large.
+ *   - step 3 — **not owed at all**, for the reason given with the version list
+ *     above. This is the first bump that skips it, so it is said twice.
+ *   - step 4 — declined. Steps 1–3 re-derive tokens and profiles; they do not
+ *     re-run the linker, so the four bad attachments above are what the linker
+ *     would REFUSE next time, not something this repair undoes. `--restart` is
+ *     what would undo them, and it discards the label inventory to do it.
+ *
+ * **Where the chain runs.** Locally, the steps a bump owes, against
  * `DATABASE_URL`. For PRODUCTION it is the `repair (production)` job in
  * `.github/workflows/ci.yml`, dispatched by hand: the credential lives there, and
  * the alternative is pulling a live database URL onto a laptop to run a bulk
@@ -184,7 +251,7 @@ const MIN_SHARED_TOKENS = 2;
  * something. Anything touching verb-lexicon.ts therefore has to be diffed
  * against the archive's titles before it can claim to be label-only.
  */
-export const TOKENIZER_VERSION = 8;
+export const TOKENIZER_VERSION = 9;
 
 /**
  * The distinct content-bearing tokens of a headline (§10.2's tokenizer),

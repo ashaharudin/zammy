@@ -45,7 +45,7 @@ with every guard already in place and verified.
 ## Dependency graph
 
 ```
-G0 title-suffix strip ──────────────── (independent, any time)
+G0 masthead peel (v9) ──────────────── (independent, landed)
 
 G1 alt_key identity ────┐
 G2 ranker isolation ────┤
@@ -89,9 +89,43 @@ phase rather than a line inside G1.
 **Explicitly out**: `alt_key`'s fold (G1 computes its own, with no tokenizer
 impact); anything about Google News.
 
-**Done when**: v9 is applied on dev and prod, the three repair steps have run,
-and link mass on a sample of Globalnews-heavy storylines is measurably lower
-with no storyline lost that v8 held.
+**Done when**: v9 is applied on dev and prod, the repair steps this bump
+actually owes have run, and link mass on a sample of chrome-heavy storylines is
+measurably lower with no storyline lost that v8 held. Not "the three repair
+steps": which steps a bump owes is a finding of the phase, not a constant — see
+the Landed note.
+
+**Landed** as `TOKENIZER_VERSION` 9, `isNameCased` in
+`apps/api/src/headline-tokens.ts`. **The premise above was already satisfied and
+this phase is not what it says it is**, which is the first thing a later reader
+needs:
+
+- **The trailing ` - Outlet` / ` | Outlet` strip already existed**, as
+  `stripSourceAttribution`, shipped with v6. `" | Globalnews.ca"` — the damage
+  the Why paragraph is built on — has been peeled since then, along with
+  `" - The Guardian"` and `" - Winnipeg | Globalnews.ca"`. The Scope paragraph
+  therefore asks for something that is already there.
+- **The real defect was narrower**: a masthead carrying a function word INSIDE
+  it ("The Times of India", "Council on Foreign Relations", "the Globe and
+  Mail") was refused by the shape rule and survived into the vocabulary — the
+  SAME shape as `" - Winnipeg | Globalnews.ca"`, only spelled with an `of` in
+  the middle. The module named that blind spot and named its fix, the segment's
+  own capitalization, and said the fix could not be had because it would take
+  "top of the table" with it. **Measured, it does not**: a name capitalizes its
+  content words and prose does not.
+- **The `source_domain` question the Scope paragraph poses is answered NO, and
+  was not re-litigated.** The capitalization rule exists precisely to avoid the
+  plumbing. G1 has since shipped a domain rule of its own in `deriveAltKey`;
+  reconciling the two was considered and refused as wider than this phase.
+- **The prize is small and the phase says so.** 63 titles of 32,279 peel
+  differently — 55 chrome, 5 wrong, 3 argued — against 513 rows for v8. Four
+  bad storyline attachments would stop forming; the Times of India pile that
+  looks like the motivating case does NOT dissolve, because `delhi` reaches
+  `story_tokens` through the description regardless.
+- **Steps 1 and 2 are owed; step 3 is not.** `label_words` derives from a
+  storyline's LABEL through `foldDiacritics` and `singular`, and v9 touches
+  neither the fold nor any label text — only which words a TITLE donates. Both
+  owed steps have run on dev; production is a separate hand dispatch.
 
 ## G1 — `alt_key` fallback article identity
 
