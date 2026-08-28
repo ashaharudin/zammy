@@ -44,17 +44,38 @@ describe("canonicalizeUrl", () => {
     const shared = canonicalizeUrl(
       "https://www.commondreams.org/news/trump-belgium-ring-bribe?share_id=983848",
     )!;
-    const bare = canonicalizeUrl(
+    expect(shared).toBe(
       "https://www.commondreams.org/news/trump-belgium-ring-bribe",
-    )!;
-    expect(shared).toBe(bare);
-    expect(deriveDedupKey(shared)).toBe(deriveDedupKey(bare));
+    );
+    // The identity that matters is the key, not the string it came from.
+    expect(deriveDedupKey(shared)).toBe(
+      deriveDedupKey(
+        canonicalizeUrl("https://www.commondreams.org/news/trump-belgium-ring-bribe")!,
+      ),
+    );
   });
 
   it("strips ?share_id= whatever its casing", () => {
     expect(canonicalizeUrl("https://example.com/story?SHARE_ID=1&id=7")).toBe(
       "https://example.com/story?id=7",
     );
+  });
+
+  it("strips ?share_id= from a path that already ends in a slash", () => {
+    // Both trims run in sequence, so the share link and the bare link converge.
+    expect(canonicalizeUrl("https://example.com/story/?share_id=1")).toBe(
+      canonicalizeUrl("https://example.com/story"),
+    );
+  });
+
+  it("does NOT strip names that merely resemble share_id", () => {
+    // The set is exact-match by design: a near miss is far likelier to select
+    // content than to track a referral, and over-collapsing is unrecoverable.
+    for (const key of ["share-id", "shareid", "sharer_id", "share_id_v2"]) {
+      expect(canonicalizeUrl(`https://example.com/story?${key}=1`)).toBe(
+        `https://example.com/story?${key}=1`,
+      );
+    }
   });
 
   it("drops a dangling question mark once the last tracking param goes", () => {

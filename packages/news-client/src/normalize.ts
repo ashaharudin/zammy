@@ -159,24 +159,38 @@ export function deriveSightingId(provider: string, providerSightingId: string): 
 /**
  * Query parameters that identify a referral, never a document.
  *
- * A parameter earns a place here only on evidence from outside our own
+ * From here on, a parameter earns a place only on evidence from outside our own
  * guesswork that it does not select content — a name that merely *looks* like a
  * tracker is not enough, because over-collapsing is the worse error (see
  * `canonicalizeUrl` below). The standard is the publisher's own
  * `<link rel="canonical">`: fetch a real article with and without the
  * parameter, and add it only if the page declares the bare URL canonical both
- * times.
+ * times. The four click ids above predate that rule and were never held to it;
+ * they were safe on a weaker one, being vendor-namespaced (Facebook, Google,
+ * Microsoft, Instagram) plus Mailchimp's `mc_eid`, so no publisher will ever
+ * reuse those names to mean something of its own.
  *
  * `share_id`: verified 2026-08-27. Production held two `articles` rows for one
  * Common Dreams story differing only by `?share_id=983848`; fetched both ways,
  * the page declares `rel="canonical"` as the bare
  * `commondreams.org/news/trump-belgium-ring-bribe` and serves the same article
- * (the id survives only inside a share-widget payload, alongside `post_id` and
- * `override_device`). Confirmed on a second host on the same platform,
- * honest-broker.com, which likewise canonicalizes the parameter away.
+ * (the id survives only in a client bootstrap payload, as a field beside
+ * `post_id` and `override_device` — those are payload fields, not query
+ * parameters we see or strip). Confirmed on honest-broker.com, deliberately a
+ * different stack — Substack, where Common Dreams is WordPress-based — so the
+ * two are independent implementations rather than one CMS checked twice.
  *
- * Matched case-insensitively by the strip loop, so one lowercase entry also
- * covers `SHARE_ID` and `Share_Id`.
+ * It is nonetheless the first generic, non-namespaced name in this set, and the
+ * risk that buys is real: a host routing `/share?share_id=<id>`, where the id
+ * IS the resource and the path carries no slug, would collapse every such link
+ * onto one dedup key. No publisher of that shape turned up, and every share
+ * convention found keeps full identity in the path, so this is residual risk
+ * rather than a known one — but it is the first entry where the name alone no
+ * longer bounds it, and a host-scoped strip is the only real fix if one appears.
+ *
+ * Case-insensitivity is a property of the strip loop, not of this entry: it
+ * lowercases each key before the lookup, so every lowercase member here already
+ * covers `SHARE_ID` and `Share_Id` as it does `FBCLID`.
  */
 const TRACKING_PARAMS = new Set([
   "fbclid",
