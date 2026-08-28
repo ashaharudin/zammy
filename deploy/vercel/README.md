@@ -496,6 +496,33 @@ There used to be a matching `migrate (preview)` job here, on pull requests, gate
 reading a `PREVIEW_DATABASE_SESSION_URL` secret. Both the job and the secret are gone (2026-08-26) —
 see "There is no Preview environment" above.
 
+#### One push is one batch, and that is what decides how long the lock is held
+
+Kysely runs **every pending migration in one transaction**, so a single push to main takes whatever
+locks that whole batch needs and holds them until the last one commits. Two migrations that are
+individually cheap can therefore be expensive together, and the difference is not visible in either
+one's own timing.
+
+Merging two migration PRs **separately** is what keeps them apart, and the workflow cooperates:
+`concurrency: ci-${{ github.ref }}` with `cancel-in-progress` false for pushes means two back-to-back
+merges to main **queue** rather than cancel, so the second `migrate (production)` starts after the
+first has finished. What it does NOT protect against is one push carrying both — a stacked branch
+merged directly, or a squash of two PRs — because that is one batch by construction.
+
+The worked example, measured against a clone of the dev archive (32,279 articles):
+
+| deploy | migrations | ACCESS EXCLUSIVE on `sightings` |
+| --- | --- | --- |
+| separately, first | `0021` + `0022` | 377 ms |
+| separately, second | `0023` | none of its own — no `ALTER TABLE`, row locks only |
+| together, one push | `0021`–`0023` | **4.4–10.0 s**, during which `sightings` answers no reads |
+
+`0023` re-keys every article's `alt_key` in TypeScript, a page at a time; run beside `0022` it
+inherits `0022`'s table lock for its whole duration. So when two branches each carry a migration,
+**merge them one at a time and let each `migrate (production)` finish before merging the next** —
+and say so in the PR description, because this constraint lives in the migrations' own comments and
+nobody merging a PR reads those.
+
 ## What is still not done
 
 - **Nothing is in production.** Phase 2 is verified on *preview* only. Production has no seeded

@@ -169,50 +169,52 @@ describe("how often the fold actually works, measured on the captures", () => {
   /**
    * The number G5 and G6 need, and nobody else is positioned to measure it.
    *
-   * ADR-0018 records the hole: `deriveAltKey` peels a trailing ` - Outlet` only
-   * when the outlet's display name collapses to its domain stem, and **Google
-   * News writes the display name** where Currents ships the outlet's own
-   * `<title>` tag. For every outlet where those differ, a Google item and its
-   * Currents twin fold to different keys and mint two rows. ADR-0018 deferred
-   * the fix — a display-name-to-domain map — to the phase that first has a
-   * corpus of Google titles. This is that corpus; building the map is still out
-   * of scope, but measuring the hole is not.
+   * ADR-0018 recorded the hole this block was written to size: `deriveAltKey`
+   * peeled a trailing ` - Outlet` only when the outlet's display name collapsed
+   * to its domain stem, and **Google News writes the display name** where
+   * Currents ships the outlet's own `<title>` tag. For every outlet where those
+   * differed, a Google item and its Currents twin folded to different keys and
+   * minted two rows.
+   *
+   * **G5 closed most of it, and these assertions moved with it.** Four rules
+   * replaced the exact stem match — the domain being one END of the display
+   * name, an initialism of its content words, leading initials plus trailing
+   * words, and the reverse affix — chosen on a held-out split of a purpose-built
+   * corpus (`fixtures/google-news-source-names.tsv`, 6,008 items over 1,837
+   * outlets). `stripOutletSuffix` carries the experiment; this file carries what
+   * the change did to THESE captures, which is the only place the two numbers
+   * can be compared on identical input.
    *
    * **Read the number with its caveat, which is larger than the number.** These
    * captures are one query — `"bank of canada"` — so the corpus is dominated by
    * market-data and PR outlets whose display name IS their domain stem
    * (`marketbeat.com` "MarketBeat", `tradingview.com` "TradingView": 47 of 120
-   * items between them). It is a floor from a favourable sample.
+   * items between them). It was a floor from a favourable sample before the
+   * change and it still is; its value is the DELTA, not the level.
    *
    * ## The numbers G5 and G6 should actually plan against
    *
-   * Four measurements, all against `deriveAltKey` as shipped. They disagree,
-   * and the disagreement is the finding rather than noise:
+   * All against `deriveAltKey` as shipped, before the four rules and after:
    *
    * ```
-   *  8.3%  fail   item-weighted, this fixture corpus        10 / 120 items
-   * 30.7%  fail   item-weighted, two general-news queries   62 / 202 items
-   * 34.6%  fail   outlet-weighted, pairs observed here      56 / 162 outlets
-   * 34.6%  fail   outlet-weighted, a 561-outlet harvest    194 / 561 outlets
+   *                                                    before    after
+   * item-weighted, this fixture corpus (120 items)       8.3%     4.2%
+   * item-weighted, the G5 corpus (6,008 items)          24.4%     6.7%
+   * item-weighted, held-out half of it (2,889 items)    26.2%     6.9%
+   * pair-weighted, the G5 corpus (1,838 pairs)          30.8%    11.8%
    * ```
    *
-   * The last is a separate, larger harvest run during review; the third is this
-   * session's own, from the fixture captures plus two general-news probes. Two
-   * independent samples landing on the same figure to one decimal is worth more
-   * than either alone.
+   * The held-out row is the one to plan against: it is the only one measured on
+   * queries the rules were not built from. **~7% of the deepening plane's items
+   * still fail to fold onto their Currents twin**, down from a quarter, and what
+   * is left is mastheads in another script and names with no lexical relation to
+   * their domain at all — neither of which a rule can reach.
    *
-   * **Plan against ~35% at outlet level, ~31% at item level.** The item-weighted
-   * rate is better than the outlet-weighted one because high-volume outlets
-   * disproportionately self-name, and this fixture's 8.3% is better again only
-   * because a finance query is nearly all such outlets. Which of the two a
-   * caller wants depends on whether it is counting articles or newsrooms; the
-   * gap between 8.3% and 30.7% is how much a single query's subject can move it.
-   *
-   * A third of the deepening plane's articles failing to fold onto their
-   * Currents twin is the accepted cost ADR-0018 named, now with a size on it.
-   * The fix is a display-name-to-domain map and it is still out of scope here.
+   * Item-weighted beats pair-weighted throughout because high-volume outlets
+   * disproportionately self-name. Which one a caller wants depends on whether it
+   * is counting articles or newsrooms.
    */
-  it("folds for 110 of 120 items here — the floor, not the planning number", async () => {
+  it("folds for 115 of 120 items here — the floor, not the planning number", async () => {
     // Both windows, because one search cannot see all 120: the cap truncates
     // at 100, which is itself the behaviour asserted two blocks down.
     const gn = await client();
@@ -232,18 +234,20 @@ describe("how often the fold actually works, measured on the captures", () => {
     }
 
     expect(sightings).toHaveLength(120);
-    expect(folds).toBe(110);
+    // 110 before G5's four rules, 115 after: five of the ten failures on this
+    // corpus were reachable by a rule. A small delta on a sample chosen for
+    // being favourable — the honest read is the corpus-wide 24.4% -> 6.7%.
+    expect(folds).toBe(115);
     for (const page of pages) expect(page.normalization.dropped.no_identity).toBe(0);
   });
 
   /**
    * **Every display name below is one Google was OBSERVED emitting**, read out
-   * of `<source>` elements in live feeds (2026-08-28, two general-news
-   * queries). That property is the whole point of this test: an invented name
-   * asserts the fold against a string no provider sends, which is a test of
-   * nothing.
+   * of `<source>` elements in live feeds (2026-08-28). That property is the
+   * whole point of this test: an invented name asserts the fold against a string
+   * no provider sends, which is a test of nothing.
    *
-   * It is also how the earlier version of this test was wrong. It borrowed
+   * It is also how an earlier version of this test was wrong. It borrowed
    * ADR-0018's masthead spellings, and Google abbreviates mastheads:
    *
    *     ADR-0018 assumed        Google actually emits
@@ -251,24 +255,27 @@ describe("how often the fold actually works, measured on the captures", () => {
    *     "CBC News"              "CBC"         → folds
    *     "The Wall Street Journal"  "WSJ"      → folds
    *     "Al Jazeera English"    "Al Jazeera"  → folds
-   *     "The New York Times"    "The New York Times"   → still does not
    *
-   * Four of the seven supposed failures fold on real data. `indiatimes.com` is
-   * dropped from the probe rather than corrected, because its real display name
-   * was never observed and guessing one is the mistake being fixed.
+   * **G5 then moved the line again**, and this test is where to see by how much.
+   * Of the four outlets this block asserted did NOT fold, three now do — and
+   * each by a different one of the new rules, which is why they are kept here
+   * rather than deleted:
    *
-   * The corrected picture is roughly the INVERSE of what the invented names
-   * implied: major outlets mostly fold, and the failures are the long tail
-   * whose display name is a full organisation name rather than a masthead.
+   *     nytimes.com  "The New York Times"    initials + tail  (ny + times)
+   *     ft.com       "Financial Times"       initialism       (f + t)
+   *     ecfr.eu      "European Council on Foreign Relations"  initialism
+   *
+   * What still does not fold is the residue no rule reaches, and the four below
+   * are one example of each shape it takes.
    */
-  it("9 of 13 observed outlets strip, and the failures are the long tail", () => {
+  it("folds every observed masthead, and refuses the four shapes no rule reaches", () => {
     const published = "2026-08-20T12:00:00.000Z";
     const strips = (domain: string, display: string) =>
       deriveAltKey(domain, `Some headline - ${display}`, published) ===
       deriveAltKey(domain, "Some headline", published);
 
-    // The display name collapses to the domain stem, loosely compared.
     for (const [domain, display] of [
+      // The display name IS the domain stem — the rule that already shipped.
       ["theguardian.com", "The Guardian"],
       ["reuters.com", "Reuters"],
       ["theglobeandmail.com", "The Globe and Mail"],
@@ -278,18 +285,35 @@ describe("how often the fold actually works, measured on the captures", () => {
       ["cbc.ca", "CBC"],
       ["wsj.com", "WSJ"],
       ["aljazeera.com", "Al Jazeera"],
+      // The three G5 recovered, one per rule.
+      ["nytimes.com", "The New York Times"],
+      ["ft.com", "Financial Times"],
+      ["ecfr.eu", "European Council on Foreign Relations"],
+      // And two more from the harvested corpus, on the affix rule.
+      ["apa.org", "American Psychological Association (APA)"],
+      ["asia.nikkei.com", "Nikkei Asia"],
     ] as const) {
       expect(strips(domain, display), `${domain} should strip`).toBe(true);
     }
 
-    // It expands the stem, or is a full organisation name. Each of these is an
-    // outlet whose Google item mints a second article rather than folding onto
-    // the Currents one.
+    // The residue, and each is a different reason no rule reaches it. These are
+    // the outlets whose Google item still mints a second article rather than
+    // folding onto the Currents one — ~7% of items on held-out data.
     for (const [domain, display] of [
-      ["nytimes.com", "The New York Times"],
-      ["ft.com", "Financial Times"],
+      // A masthead in another script. Only a romanisation table connects these,
+      // which is the one thing a display-name map would do better.
+      ["chosun.com", "조선일보"],
+      // A name with no lexical relation to the domain at all.
+      ["umn.edu", "CIDRAP"],
+      ["wave3.com", "WAVE News"],
+      // The words are all there and in the wrong order: `indiatimes.com` spells
+      // "The Times of India" backwards. A permutation rule was built for exactly
+      // this and rejected — it earned 6 items on held-out data, against a
+      // factorial search.
+      ["indiatimes.com", "The Times of India"],
+      // And a display name that is itself a sentence, so the last delimiter
+      // segment is a fragment of prose rather than a name.
       ["abcnews.com", "ABC News - Breaking News, Latest News and Videos"],
-      ["ecfr.eu", "European Council on Foreign Relations"],
     ] as const) {
       expect(strips(domain, display), `${domain} should NOT strip`).toBe(false);
     }

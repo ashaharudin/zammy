@@ -194,22 +194,20 @@ describe("alt_key, which is the only identity this provider can have", () => {
     expect(viaGoogle.altKey).toBe(viaCurrents);
   });
 
-  it("does NOT fold when the display name is not the domain stem — accepted, ADR-0018", () => {
-    // The known hole, asserted rather than hoped about.
+  it("folds a display name that names the domain without spelling it (G5)", () => {
+    // What this adapter exists to make possible: a Google item and its Currents
+    // twin, same story, same outlet, same UTC day — one article.
     //
-    // The outlet here is `nytimes.com`, and the choice matters: ADR-0018's own
-    // table reaches for "BBC News" and "The Wall Street Journal", but Google
-    // OBSERVABLY emits "BBC" and "WSJ", both of which fold. Demonstrating the
-    // hole with a name no provider sends would assert nothing. "The New York
-    // Times" is a name Google was observed emitting and it expands the stem, so
-    // the strip refuses and the outlet's name stays in the fold — the Google
-    // item and its Currents twin then mint two rows.
+    // The outlet is `nytimes.com`, and the choice is deliberate history. This
+    // assertion used to run the other way: the shipped fold required the display
+    // name to BE the domain stem, "The New York Times" expands it, and the two
+    // rows stayed two. ADR-0018 recorded that as an accepted cost with the fix
+    // deferred to the phase that had a corpus. G5 is that phase, and the rule
+    // that recovers this outlet is initials-plus-tail — "New York" abbreviates
+    // to `ny`, "Times" does not abbreviate at all.
     //
-    // ADR-0018 records this as an accepted cost with the fix — a
-    // display-name-to-domain map — deferred to the phase that has a corpus.
-    // This adapter does not build that map; it measures the hole, in
-    // `fixture-client.test.ts`, where the four measurements disagree
-    // informatively.
+    // Note the two timestamps differ by eight hours and the key is the same:
+    // the day bucket is UTC and both land on the 20th (ADR-0018).
     const viaGoogle = one({
       title: "Bank of Canada holds its policy rate - The New York Times",
       sourceUrl: "https://www.nytimes.com",
@@ -218,6 +216,28 @@ describe("alt_key, which is the only identity this provider can have", () => {
     const viaCurrents = deriveAltKey(
       "nytimes.com",
       "Bank of Canada holds its policy rate",
+      "2026-08-20T09:15:00.000Z",
+    );
+
+    expect(viaGoogle.altKey).toBe(viaCurrents);
+  });
+
+  it("still mints two rows for a display name no rule can reach", () => {
+    // The residue, asserted rather than hoped about: ~7% of items on held-out
+    // data (`fixture-client.test.ts` carries the four measurements). `umn.edu`
+    // publishes as "CIDRAP", which shares nothing with its domain — no affix, no
+    // initialism, no abbreviation — so the strip refuses, the outlet's name
+    // stays in the fold, and the Google item and its Currents twin mint two
+    // rows. Refusing is the safe direction: a rule loose enough to connect these
+    // two strings would connect a headline's own tail to its domain as well.
+    const viaGoogle = one({
+      title: "Measles cases climb in three states - CIDRAP",
+      sourceUrl: "https://www.cidrap.umn.edu",
+      pubDate: "Thu, 20 Aug 2026 17:09:53 GMT",
+    });
+    const viaCurrents = deriveAltKey(
+      "umn.edu",
+      "Measles cases climb in three states",
       "2026-08-20T09:15:00.000Z",
     );
 
