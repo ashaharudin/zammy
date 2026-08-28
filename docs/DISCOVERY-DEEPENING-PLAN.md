@@ -404,18 +404,35 @@ Changes:
 request" holds — a click is still the trigger. G7 is where that is traded.
 
 **A known limitation of `alt_key`, carried forward from G1 and load-bearing
-here.** The fold's suffix strip fires only when the outlet's display name IS its
-domain stem, and **Google News writes the display name**, so a Google item and
-its Currents twin fold to different keys and mint two rows — the exact failure
-`alt_key` exists to prevent, landing on this phase.
+here — now measured and mostly closed.** The fold's suffix strip fired only when
+the outlet's display name IS its domain stem, and **Google News writes the
+display name**, so for every outlet in the second class a Google item and its
+Currents twin folded to different keys and minted two rows. That is the exact
+failure `alt_key` exists to prevent, and it landed on this phase.
 
-**Not fixed here. It is the subject of its own change**, because the fix needs a
-corpus of Google News titles to be built against and measured on, and that
-corpus plus the rules it justifies plus the re-key migration they owe are a
-reviewable unit on their own. Nothing in THIS change depends on it: the
-deepening plane works with the fold as it stands and simply duplicates more than
-it needs to. What does depend on it is the flag — see the ordering note under
-**Done when**.
+**Measured on a corpus harvested for it** — 70 real storyline labels off the dev
+archive, run against Google News RSS on 2026-08-28: 6,008 items over 1,837
+outlets, committed as `fixtures/google-news-source-names.tsv`. **26.2% of items
+failed to fold.** Four generative rules replaced the exact match, chosen on a
+held-out half of the queries: the domain stem being one END of the display name
+(the workhorse), an initialism of its content words, leading initials plus
+trailing words, and the reverse affix. Held-out residual **6.9%**, and what
+remains is a masthead in another script or a name with no lexical relation to
+its domain at all — neither reachable by any rule.
+
+Cost, measured the way ADR-0018 measured the positional strip: replaying the
+whole fold over the dev archive's 32,279 articles costs **one additional merge**,
+and it is a real duplicate. Migration `0023` re-keys the 524 rows (1.62%) whose
+key moved, because ADR-0018 is explicit that changing the fold is a migration.
+
+**Budgeting for it here rather than discovering it in G6 was the right call.**
+Note what the 26.2% is and is not: it is the share of items whose Currents twin
+they COULD NOT have folded onto, not the share that would have duplicated —
+duplication additionally needs Currents to hold that story, on that domain, on
+that UTC day, and how often that happens is precisely what G6 measures. Left
+unfixed it would have put an unknown fraction of that 26.2% into G6's yield
+number as new articles, biasing the one figure the phase is a go/no-go on, in
+the direction that says yes.
 
 **The open question this phase must answer**: how a deepening-plane article
 appears in a day slot. `alt_key` shrinks the problem a long way — a Google item
@@ -440,6 +457,38 @@ tokenizer since **v6**, as `stripSourceAttribution`. G0 did not add it; G0
 widened it to mastheads carrying a function word inside them. So option (a) was
 safe under v8 as well, and this open question was gated on nothing.
 
+**What G0 actually bought this plane is worth recording, because it is much
+larger here than where it was measured.** Both tokenizers replayed over the
+harvested corpus (1,838 display names, 6,008 items), each name appended to one
+fixed headline so the number is the RULE's and not the corpus's title shapes:
+
+```
+v8  peels 1,680 names (91.4%)   5,592 items (93.1%)
+v9  peels 1,747 names (95.0%)   5,775 items (96.1%)
+    gained: 67 names, 183 items — no name lost
+```
+
+Three points of items, over exactly the mastheads G0's own note names: "The Globe
+and Mail" (33 items), "The Times of India" (30), "Council on Foreign Relations"
+(11). G0 measured its prize against the Currents archive at **63 titles of
+32,279 — 0.2%** — and on Google News output it is 3.0% of items, an order of
+magnitude more, for the reason the whole display-name problem has: **Currents
+ships an outlet's own `<title>` tag and Google writes its DISPLAY name**, and a
+display name is far more often a full organisation name than a masthead is. G0's
+value is concentrated in the plane that did not exist when G0 was measured.
+
+**And the residual is small enough to close the question.** After v9, **3.9% of
+items (233 of 6,008, over 91 display names) still carry outlet chrome into
+`story_tokens`** — nothing like the 100% the design doc's §4 feared ("at 100% of
+items it would make link mass meaningless"), because that paragraph was written
+believing no strip existed at all. What survives is
+overwhelmingly a name LONGER than `MAX_ATTRIBUTION_WORDS = 4`: 62 of the 91 are
+five words or more ("Peterson Institute for International Economics", "Bulletin
+of the Atomic Scientists"). Raising that cap is the obvious next lever and it is
+NOT taken here — the cap is what keeps a headline's own tail out, G0 measured its
+false positives at that setting, and moving it re-opens a question this phase has
+no corpus to re-answer.
+
 Where the residual still lands, for G6 to price: `groupArticle`'s headline match
 and `story_token_df`, not the linker — nothing on this path consults the linker,
 since seeded groups are attached by provenance and joined groups inherit their
@@ -457,11 +506,8 @@ storyline is created by the deepening plane; the cloud is unchanged by the
 fetch (G2 holding under real conditions, verified — not assumed); and
 `storyline_coverage` records only spans actually fetched.
 
-**Two ordering constraints on turning the flag on, and neither is on this
-change.** The first is the display-name fold above: until it lands, a Google item
-and its Currents twin mint two rows for a quarter of the outlets Google names, so
-G6's yield number would count duplicates as new articles. The second is on a
-database rather than on code. G0's owed repair steps have run on dev only; production is a
+**One ordering constraint on turning the flag on, and it is on a database rather
+than on code.** G0's owed repair steps have run on dev only; production is a
 separate hand dispatch (see G0's Landed note). Enabling the deepening plane
 before that dispatch mixes v9 vocabulary from its new articles with v8
 vocabulary in the history they are matched against, which biases `groupArticle`
@@ -469,10 +515,9 @@ and `story_token_df` in exactly the direction G6 would read as yield. It is
 recorded in `.env.example` beside the flag, which is where an operator will be
 standing.
 
-**Landed**, as migration `0022` (`sightings.plane`, nullable, with a CHECK).
-Three decisions worth carrying forward, all of them departures from what this
-section assumed — and one deliberate omission, the display-name fold, which is
-its own change and carries its own measurements:
+**Landed.** Migrations `0022` (`sightings.plane`, nullable, with a CHECK) and
+`0023` (the `alt_key` re-key the fold change owes). Four decisions worth
+carrying forward, all of them departures from what this section assumed:
 
 - **The plane column is NULLABLE, not `NOT NULL DEFAULT 'search'`.** This
   section asked for "every existing sighting backfilled to a non-deepening
@@ -487,6 +532,14 @@ its own change and carries its own measurements:
   storylines under both the provider list and the new predicate over a 168h
   window on the dev archive — and 0 under a bare `<>`, which is why the spelling
   is load-bearing.
+- **The display-name MAP was built, measured and declined.** It loses to four
+  generative rules on held-out data (12.1% residual against 6.9%) because the
+  failure population is a long tail — 529 distinct failing pairs in 70 queries,
+  the top 100 outlets only 61% of failing items. The decisive argument is not the
+  five points: a map is a fold that changes every time an outlet is added, and
+  ADR-0018 establishes that changing the fold re-keys the archive. Corpus
+  committed at `fixtures/google-news-source-names.tsv` so the comparison can be
+  re-run; full experiment in `stripOutletSuffix`.
 - **The open question below is answered (a), and G0 turned out not to gate it.**
   See its own note.
 - **The topic row survives even though its coverage does not.** "Coverage goes to

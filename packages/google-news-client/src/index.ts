@@ -44,13 +44,13 @@
  *     one, so ADR-0018's fallback key is load-bearing here rather than a bonus,
  *     and an item that cannot carry one is DROPPED (`no_identity`) rather than
  *     stored keyed on a redirect. How often the fold actually reaches the
- *     Currents twin is measured rather than assumed: **~35% of outlets and
- *     ~31% of articles do NOT fold**, because Google writes the outlet's
- *     display name and `deriveAltKey` peels it only when it collapses to the
- *     domain stem. The committed fixtures fold 110 of 120, but that corpus is
- *     one finance query and unrepresentative — the four measurements and their
- *     spread are in `fixture-client.test.ts`. Fixing it is a change of its own,
- *     and it is what has to land before this flag goes on.
+ *     Currents twin is measured rather than assumed, and G5 moved it a long
+ *     way: **~7% of items now fail to fold, down from ~26%**, because
+ *     `stripOutletSuffix` stopped requiring the display name to BE the domain
+ *     stem and learned four ways it can name it instead. The committed fixtures
+ *     fold 115 of 120 — one finance query, unrepresentative, and a floor. The
+ *     honest number to plan against is the held-out one, and the four
+ *     measurements with their spread are in `fixture-client.test.ts`.
  *   - **`source_domain` from `<source url>`, not from the URL**, and a null
  *     `description`. All four departures from the other adapters are argued at
  *     their site in `normalize.ts`.
@@ -68,12 +68,15 @@
  *   - It does not strip the trailing ` - Outlet` from titles, though 100 of 101
  *     carry one. It does not have to: the TOKENIZER has peeled that suffix since
  *     v6 (`stripSourceAttribution`), and G0 widened it to mastheads with an
- *     interior function word.
+ *     interior function word. Measured over G5's corpus of 1,838 display names,
+ *     v9 peels the chrome off **96.1% of items** (v8: 93.1%); the 3.9% residual
+ *     is overwhelmingly a name longer than the four-word attribution cap.
  *
  *     Stripping it HERE would still be wrong, for the reason `normalize.ts`
  *     gives: an adapter editing a headline makes the stored title disagree with
  *     what the provider said it was, which `sightings.raw` exists to prevent.
- *     The IDENTITY half is a separate strip inside `deriveAltKey`.
+ *     The IDENTITY half is a separate strip inside `deriveAltKey`, and G5
+ *     widened that one.
  *
  * **Off by default** (`GOOGLE_NEWS_ENABLED`), and unreachable while it is —
  * `createGoogleNewsClient` refuses to build anything. Every guard it waited on
