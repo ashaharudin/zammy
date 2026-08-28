@@ -52,6 +52,8 @@ packages/config            server-only env validation — MUST NOT be imported b
 packages/news-client       provider-agnostic core: Sighting, error taxonomy, quota, transport, pager
 packages/currents-client   Currents adapter: its wire shapes, its quirks, its fixture store
 packages/gnews-client      GNews adapter: same, for the second provider
+packages/google-news-client  Google News RSS adapter. Built, off, and wired to
+                           nothing yet (G4 of the discovery/deepening plan)
 packages/news-providers    the composite + the factory apps/api calls — the only layer
                            that knows how many providers exist
 apps/api                   Fastify: HTTP surface, query planning, in-process job consumer
@@ -87,6 +89,21 @@ if (all.stoppedBy === "cap") {
 
 `stoppedBy` matters: `end_of_results` means upstream is out of articles; `cap` means it is not, and
 only a narrower time window will reach the rest.
+
+A third adapter, `@zammy/google-news-client`, exists but is **not part of that fan-out** — it has no
+offset parameter at all, so it cannot share a page plan with anything. It was built for the
+deepening plane, reaching ~18 months back over arcs Currents already found against Currents' 30 days
+([the design](docs/DESIGN-DISCOVERY-AND-DEEPENING.md)), and it is meant to serve search and breadth
+too. That is what retired ADR-0012's provider ranking: under
+[ADR-0019](docs/adr/0019-a-fetch-carries-its-own-reason-and-its-own-coverage.md) coverage is
+per `(subject, provider, span)` and what a fetch may feed the ranker is decided by *why the call was
+made*, not by who answered.
+
+It is off by default and unreachable while it is: `createGoogleNewsClient` refuses to build anything
+with `GOOGLE_NEWS_ENABLED=false`, and nothing calls it. The two guards it waited on — `alt_key`
+article identity and the ranker isolation, G1 and G2 of
+[the plan](docs/DISCOVERY-DEEPENING-PLAN.md) — have both landed; G3's `storyline_coverage` has not,
+and G5 is what wires it.
 
 ## Commands
 

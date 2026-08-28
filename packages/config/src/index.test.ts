@@ -246,6 +246,56 @@ describe("loadConfig", () => {
       expect((error as ConfigError).issues.length).toBeGreaterThanOrEqual(2);
     }
   });
+
+  // The deepening plane (docs/DESIGN-DISCOVERY-AND-DEEPENING.md). Off by
+  // default for GNEWS_ENABLED's reason plus two of its own — G1's `alt_key`
+  // and G2's ranker isolation both have to land before an article from it may
+  // be ingested — so the default is the guard, not a preference.
+  it("leaves Google News off by default", () => {
+    expect(loadConfig({ ...base } as NodeJS.ProcessEnv).GOOGLE_NEWS_ENABLED).toBe(false);
+  });
+
+  it("needs no key or User-Agent to validate while it is off", () => {
+    // Unlike GNews, there is no key at all — so the only thing that could be
+    // missing is the User-Agent, which falls back to the mandatory Currents one.
+    const config = loadConfig({ ...base } as NodeJS.ProcessEnv);
+    expect(config.GOOGLE_NEWS_USER_AGENT).toBeUndefined();
+    expect(config.GOOGLE_NEWS_MODE).toBe("fixture");
+  });
+
+  it("defaults to a self-imposed budget, since upstream publishes none", () => {
+    // These numbers are ours, not Google's: no key, no documented ceiling, no
+    // rate-limit header, so `quota()` returns null forever and nothing upstream
+    // will ever correct the governor. Asserted so a later change to them is a
+    // deliberate one.
+    const config = loadConfig({ ...base } as NodeJS.ProcessEnv);
+    expect(config.GOOGLE_NEWS_DAILY_CALL_LIMIT).toBe(200);
+    expect(config.GOOGLE_NEWS_BURST_CALL_LIMIT).toBe(5);
+    expect(config.GOOGLE_NEWS_INTERACTIVE_RESERVE).toBeLessThan(
+      config.GOOGLE_NEWS_DAILY_CALL_LIMIT,
+    );
+  });
+
+  it("reaches past the 573 days actually probed", () => {
+    // Currents' verified lookback is 30 days. Reaching past it is the entire
+    // reason this provider is worth having, and the default is set above the
+    // probed floor because an over-old window costs a wasted call while a
+    // too-shallow clamp silently narrows one.
+    expect(
+      loadConfig({ ...base } as NodeJS.ProcessEnv).GOOGLE_NEWS_MAX_LOOKBACK_DAYS,
+    ).toBeGreaterThan(573);
+  });
+
+  it("refuses a reserve that would leave background ingestion nothing", () => {
+    expect(() =>
+      loadConfig({
+        ...base,
+        GOOGLE_NEWS_ENABLED: "true",
+        GOOGLE_NEWS_DAILY_CALL_LIMIT: "40",
+        GOOGLE_NEWS_INTERACTIVE_RESERVE: "40",
+      } as NodeJS.ProcessEnv),
+    ).toThrow(/GOOGLE_NEWS_INTERACTIVE_RESERVE/);
+  });
 });
 
 describe("redactConfig", () => {
