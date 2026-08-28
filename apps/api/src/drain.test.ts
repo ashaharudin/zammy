@@ -12,6 +12,7 @@ import { INGEST_RETENTION_SECONDS } from "./ingest-queue-vercel.js";
 import {
   STALE_PENDING_MS,
   ingestJobId,
+  pendingIdOf,
   type IngestJob,
   type PendingEntry,
   type SegmentJob,
@@ -33,7 +34,7 @@ const clock = (at: Date) => () => at;
 
 function entry(job: IngestJob, ageMs: number): PendingEntry {
   return {
-    pendingId: "kind" in job && job.kind === "sample" ? `sample_${job.language}` : job.fingerprint,
+    pendingId: pendingIdOf(job),
     jobId: ingestJobId(job),
     enqueuedAt: new Date(T0.getTime() - ageMs),
   };

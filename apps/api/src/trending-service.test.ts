@@ -189,7 +189,9 @@ describe("the first visitor after the snapshot staled (§10.1)", () => {
     harness.queue.startConsumer((job) =>
       job.kind === "sample"
         ? processSampleJob(deps, job)
-        : processSegmentJob(harness.deps, job),
+        : job.kind === "deepen"
+          ? Promise.resolve()
+          : processSegmentJob(harness.deps, job),
     );
     await vi.waitFor(
       async () => expect(await harness.queue.pendingCount("sample_en")).toBe(0),
@@ -246,7 +248,9 @@ describe("the first visitor after the snapshot staled (§10.1)", () => {
     harness.queue.startConsumer((job) =>
       job.kind === "sample"
         ? processSampleJob(deps, job)
-        : processSegmentJob(harness.deps, job),
+        : job.kind === "deepen"
+          ? Promise.resolve()
+          : processSegmentJob(harness.deps, job),
     );
 
     await readTrending(deps, { language: "en", limit: 50 });

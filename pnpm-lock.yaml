@@ -40,6 +40,9 @@ importers:
       '@zammy/currents-client':
         specifier: workspace:*
         version: link:../../packages/currents-client
+      '@zammy/google-news-client':
+        specifier: workspace:*
+        version: link:../../packages/google-news-client
       '@zammy/news-client':
         specifier: workspace:*
         version: link:../../packages/news-client

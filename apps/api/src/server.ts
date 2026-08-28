@@ -8,6 +8,7 @@ import { Redis } from "ioredis";
 import { type Config, redactConfig } from "@zammy/config";
 import type { CurrentsClient } from "@zammy/currents-client";
 import { createNewsClient } from "@zammy/news-providers";
+import { createGoogleNewsClient, PROVIDER as GOOGLE_NEWS_PROVIDER } from "@zammy/google-news-client";
 import { createDb, databaseSsl } from "@zammy/storage";
 import { registerHealthRoutes } from "./health.js";
 import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
@@ -20,7 +21,11 @@ import {
 } from "./wiring.js";
 import { Metrics, registerMetricsRoute } from "./metrics.js";
 import { createQuotaGovernors } from "./quota-redis.js";
-import { processSegmentJob, type TimelineDeps } from "./timeline-service.js";
+import {
+  processDeepenJob,
+  processSegmentJob,
+  type TimelineDeps,
+} from "./timeline-service.js";
 import { processSampleJob, type TrendingDeps } from "./trending-service.js";
 
 /**
@@ -212,6 +217,49 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
       );
     }
 
+    // The DEEPENING plane's provider (ADR-0019, plan §G5), or nothing.
+    //
+    // Built here rather than inside `createNewsClient` and deliberately NOT
+    // handed to the composite: the composite exists to fan ONE plan out to
+    // several providers, and ADR-0019 ends the shared plan. This provider is
+    // planned against `storyline_coverage` and its own limits — no offset
+    // parameter at all, 100 items per query — which is not a plan Currents
+    // could be given a share of.
+    //
+    // `undefined` is the shipped state. `createGoogleNewsClient` refuses to
+    // build with the flag off (G4 put the refusal in the factory rather than
+    // only at the call site, so that "off" means unreachable), so the flag is
+    // checked here and the whole deepening path is absent rather than present
+    // and throwing.
+    const deepening = config.GOOGLE_NEWS_ENABLED
+      ? await createGoogleNewsClient(
+          {
+            ...config,
+            // One User-Agent for the whole service unless someone deliberately
+            // splits them — `createNewsClient` makes the same fallback for
+            // GNews, and for the same reason: the Currents one is required and
+            // non-empty, so this cannot fall back to a default library UA.
+            GOOGLE_NEWS_USER_AGENT:
+              config.GOOGLE_NEWS_USER_AGENT?.trim() || config.CURRENTS_USER_AGENT,
+          },
+          {
+            logger: log,
+            quota: createQuotaGovernors(config, redis, log)[GOOGLE_NEWS_PROVIDER],
+          },
+        )
+      : undefined;
+    if (deepening) {
+      abandon.push(() => deepening.close());
+      log.info(
+        {
+          mode: config.GOOGLE_NEWS_MODE,
+          dailyLimit: config.GOOGLE_NEWS_DAILY_CALL_LIMIT,
+        },
+        "GOOGLE_NEWS_ENABLED — a storyline open now also deepens the arc from " +
+          "Google News; its articles join that arc by provenance and feed no ranking",
+      );
+    }
+
     // §12 observability: everything the planner counts, scraped from one place.
     const metrics = new Metrics({ quota: () => currents.quota() });
 
@@ -235,6 +283,7 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
       db,
       redis,
       currents,
+      ...(deepening ? { deepening } : {}),
       queue,
       metrics,
       labeler,
@@ -315,10 +364,11 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
  * being processed as a segment on exactly one of them.
  */
 export function ingestDispatch(services: Services): IngestHandler {
-  return (job) =>
-    job.kind === "sample"
-      ? processSampleJob(services.trendingDeps, job)
-      : processSegmentJob(services.deps, job);
+  return (job) => {
+    if (job.kind === "sample") return processSampleJob(services.trendingDeps, job);
+    if (job.kind === "deepen") return processDeepenJob(services.deps, job);
+    return processSegmentJob(services.deps, job);
+  };
 }
 
 export async function buildApp(

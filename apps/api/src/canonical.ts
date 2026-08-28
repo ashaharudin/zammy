@@ -94,15 +94,7 @@ export function canonicalize(
 ): CanonicalizeResult {
   const errors: Record<string, string> = {};
 
-  const keywords = [
-    ...new Set(
-      input.q
-        .normalize("NFKC")
-        .toLowerCase()
-        .split(/\s+/)
-        .filter((term) => term.length > 0),
-    ),
-  ].sort();
+  const keywords = canonicalKeywords(input.q);
 
   if (keywords.length === 0) {
     errors.q = "keywords are required";
@@ -164,6 +156,29 @@ export function canonicalize(
       window: { from, to },
     },
   };
+}
+
+/**
+ * A query string reduced to the term SET a topic is identified by: NFKC, lower
+ * case, split on whitespace, de-duplicated, sorted.
+ *
+ * Exported so the deepening plane can mint the same identity for an arc's label
+ * without going through the route's validation — it has no reader's chips to
+ * validate and no 400 to return. One definition rather than two, for the reason
+ * `fingerprintOf` states one line down: the serialization is shared by every
+ * stored topic, and two normalizations that drifted would file the same words
+ * under two fingerprints.
+ */
+export function canonicalKeywords(q: string): string[] {
+  return [
+    ...new Set(
+      q
+        .normalize("NFKC")
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((term) => term.length > 0),
+    ),
+  ].sort();
 }
 
 /**

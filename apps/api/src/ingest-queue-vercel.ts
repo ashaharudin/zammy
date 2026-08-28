@@ -8,6 +8,7 @@ import {
   pendingIdOf,
   type IngestHandler,
   type IngestJob,
+  type DeepenJob,
   type IngestQueue,
   type SampleJob,
   type SegmentJob,
@@ -297,6 +298,11 @@ export class VercelIngestQueue implements IngestQueue {
     // Publish FIRST and let it throw: the message is the durable half, and a
     // caller told the enqueue succeeded when it did not would leave a gap
     // nothing is going to fill.
+    await this.send(job);
+    await this.record(job);
+  }
+
+  async enqueueDeepen(job: DeepenJob): Promise<void> {
     await this.send(job);
     await this.record(job);
   }

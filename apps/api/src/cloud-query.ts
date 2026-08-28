@@ -214,3 +214,77 @@ export function storylineKeywords(input: {
   }
   return tokens.slice(0, CLOUD_QUERY_TERMS).join(" ");
 }
+
+/**
+ * The deepening plane's ask for one arc — the query, and the decision to spend
+ * at all (plan §G5; DESIGN-DISCOVERY-AND-DEEPENING §3c).
+ *
+ * `cloudQuery` above keeps its job and this one changes its ROLE. There, the
+ * grounding — the label's own words that the arc's coverage actually says — is a
+ * **query rewriter**: it exists because Currents ANDs terms against body text we
+ * never receive, so a four-word label arrives as four conjunctive terms and
+ * returns nothing (ADR-0014 measured every label-shaped query in the archive at
+ * 0-1 articles). Here it is a **confidence gate**, and the query it gates is the
+ * whole label.
+ *
+ * Both halves of that are measured, and they are separate measurements.
+ *
+ * **The query is the full label because the provider is not conjunctive.**
+ * Probed live 2026-08-27: a four-word label against Google News returned 100
+ * items over 63 domains where its grounded pair returned 92 over 55. The
+ * rewriting `cloudQuery` does is a repair for a limitation this provider does
+ * not have, and applying it here would spend a call on a narrower question for
+ * no reason.
+ *
+ * **The gate is the grounding because a wrong label now costs quota and
+ * corpus.** Under ADR-0013 a bad label was cosmetic: a word on the board nobody
+ * clicked. On the deepening plane it becomes an ask — it spends an upstream call
+ * and fills a storyline with whatever came back. The labeler is a model and the
+ * label it writes can miss its own arc entirely; when it does, every word of it
+ * is absent from `profile_tokens`, which is the coverage's own vocabulary. So
+ * "shares nothing with the coverage it names" is available for free on a row the
+ * caller already holds, and it is the honest signal to stop on.
+ *
+ * `null` therefore means **do not fetch**, and it is returned for three states
+ * that all mean the same thing — we cannot say what this arc is about:
+ *
+ *  - **No label.** The cloud filters unlabelled arcs out, but the timeline
+ *    gutter renders one and it is clickable (`storylineKeywords` exists for
+ *    exactly that case). There is nothing to send.
+ *  - **An empty profile.** No coverage vocabulary, so nothing could ground a
+ *    label even if one were there.
+ *  - **A label the profile does not say.** The gate proper.
+ *
+ * **This is deliberately stricter than `storylineKeywords`, which keeps its
+ * fallbacks.** That function answers "what should a background top-up ask for",
+ * and its fallbacks — profile tokens when the label is ungrounded — are right
+ * for a fetch whose cost is one Currents call against a topic a reader could
+ * have typed. They are wrong here, because the deepening plane's product is
+ * MEMBERSHIP: everything this fetch returns joins storyline X by provenance
+ * (plan §G5), so an ask derived from two arbitrary profile tokens attaches
+ * whatever they match to an arc nobody checked they belong to. A search that
+ * returns nothing costs a call; an attachment that is wrong costs the arc.
+ */
+export function deepeningQuery(input: {
+  label: string | null;
+  profileTokens: readonly string[];
+}): { keywords: string; grounding: string[] } | null {
+  if (input.label === null) return null;
+  const profile = new Set(input.profileTokens);
+  if (profile.size === 0) return null;
+  // The same `labelWordForms` fold `cloudQuery` uses, for the same reason it
+  // uses it: label words and corpus words must arrive at the same spelling for
+  // the same word, and a second regex here would be the bug that lesson cost.
+  const grounding = labelWordForms(input.label).filter((word) => profile.has(word.folded));
+  if (grounding.length === 0) return null;
+  return {
+    // VERBATIM, not rebuilt from the grounded words. The gate decides whether to
+    // spend; it does not decide what to ask. Rebuilding would quietly turn this
+    // back into the rewriter it replaced.
+    keywords: input.label,
+    // Carried out for the log and the metric rather than for the query: when
+    // `zammy_storyline_deepening_total{result="ungrounded"}` moves, the next
+    // question is always "how close was it", and a count of nothing cannot say.
+    grounding: grounding.map((word) => word.surface),
+  };
+}

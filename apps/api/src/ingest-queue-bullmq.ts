@@ -5,6 +5,7 @@ import {
   ingestJobId,
   type IngestHandler,
   type IngestJob,
+  type DeepenJob,
   type IngestQueue,
   type SampleJob,
   type SegmentJob,
@@ -47,6 +48,20 @@ export class BullMqIngestQueue implements IngestQueue {
       backoff: { type: "exponential", delay: 200 },
       // Completed ids free up for re-adds — a segment may legitimately be
       // fetched again later; dedup only needs to cover the pending window.
+      removeOnComplete: true,
+      removeOnFail: true,
+    });
+    await this.pending.add(job);
+  }
+
+  async enqueueDeepen(job: DeepenJob): Promise<void> {
+    // A segment's options, and deliberately not a sample's: this is one arc's
+    // fetch, retried on the same exponential backoff a segment gets, and its id
+    // frees on completion so the same span can be re-fetched later.
+    await this.queue.add("deepen", job, {
+      jobId: ingestJobId(job),
+      attempts: 3,
+      backoff: { type: "exponential", delay: 200 },
       removeOnComplete: true,
       removeOnFail: true,
     });

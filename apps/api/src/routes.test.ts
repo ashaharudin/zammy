@@ -201,6 +201,7 @@ describe("POST /api/v1/storylines/:id/refresh", () => {
     queued: boolean;
     keywords: string[];
     fingerprint?: string;
+    deepening: { status: string; queued: boolean };
   }
 
   const refresh = (id: string): string => `/api/v1/storylines/${id}/refresh`;
@@ -223,6 +224,14 @@ describe("POST /api/v1/storylines/:id/refresh", () => {
     // request carried a UUID and nothing else.
     expect(body.keywords.length).toBeGreaterThan(0);
     expect(body.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    // One click, two plans (ADR-0019): the refresh above asks a TOPIC of the
+    // discovery provider, and the deepening plane asks the ARC of its own.
+    // `unavailable` here is the SHIPPED state and the assertion is about that —
+    // `GOOGLE_NEWS_ENABLED` is false, no deepening client is built, and this
+    // route's behaviour is therefore unchanged for anyone who has not turned
+    // the flag on. Its own end-to-end behaviour lives in
+    // `storyline-deepening.test.ts`, where a provider is configured.
+    expect(body.deepening).toEqual({ status: "unavailable", queued: false });
   });
 
   it("refreshes in the default language when the arc's own is not a query code", async () => {

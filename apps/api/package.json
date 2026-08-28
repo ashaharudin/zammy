@@ -54,6 +54,7 @@
     "@vercel/queue": "^0.3.0",
     "@zammy/config": "workspace:*",
     "@zammy/currents-client": "workspace:*",
+    "@zammy/google-news-client": "workspace:*",
     "@zammy/news-client": "workspace:*",
     "@zammy/news-providers": "workspace:*",
     "@zammy/shared": "workspace:*",

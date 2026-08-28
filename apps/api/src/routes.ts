@@ -10,6 +10,7 @@ import { repairedLanguages, repairedRegions } from "@zammy/currents-client";
 import { canonicalize, type ReferenceCodes } from "./canonical.js";
 import {
   InvalidCursorError,
+  queueStorylineDeepening,
   queueStorylineRefresh,
   readStorylineView,
   readTimeline,
@@ -229,16 +230,48 @@ export async function registerQueryRoutes(
           .status(400)
           .send({ error: { message: "invalid query", fields: outcome.errors } });
       }
+      // The DEEPENING plane's half of the same click (ADR-0019, plan §G5),
+      // planned separately and reported separately.
+      //
+      // Two plans rather than one, because ADR-0019 is explicit that providers
+      // stop sharing a plan: the refresh above asks a TOPIC of the discovery
+      // provider against `topic_coverage`, this asks an ARC of the deepening
+      // provider against `storyline_coverage`, and neither completion may stand
+      // for the other's. They can and will disagree about whether this arc is
+      // fresh, which is the point of per-provider coverage rather than a defect.
+      //
+      // After the refresh and awaited, not raced: both enqueue and neither
+      // fetches, so the cost is two Redis round trips on a fire-and-forget POST.
+      // Sequential keeps the failure story simple — a throw here fails the
+      // request AFTER the refresh has been queued, which is the same partial
+      // outcome any two-write route has, rather than an unhandled rejection.
+      //
+      // It answers `unavailable` and spends nothing whenever no deepening
+      // provider is configured, which is the shipped default
+      // (`GOOGLE_NEWS_ENABLED=false`). So this route's behaviour is unchanged
+      // for anyone who has not turned the flag on.
+      const deepened = await queueStorylineDeepening(deps, { storylineId: id });
+
       // 202 for every outcome that reached the planner, `fresh` included: the
       // request was accepted and what it cost is a fact about coverage, not a
       // different kind of answer. `queued: false` is the honest report of a
       // storyline whose trailing edge is already inside the staleness tier.
+      //
+      // `queued` stays the REFRESH's answer and the deepening plane reports
+      // under its own key. OR-ing the two would have been the smaller diff and
+      // it would make the field mean "something was queued somewhere", which no
+      // caller could act on — and this body is read by operators and tests, both
+      // of whom are asking which plane spent what.
       return reply.status(202).send({
         storyline: outcome.storylineId,
         queued: outcome.status === "queued",
         ...(outcome.status === "no_keywords"
           ? { keywords: [] }
           : { keywords: outcome.keywords, fingerprint: outcome.fingerprint }),
+        deepening: {
+          status: deepened.status,
+          queued: deepened.status === "queued",
+        },
       });
     },
   );
