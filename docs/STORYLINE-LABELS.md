@@ -75,6 +75,16 @@ failures cost more before it fails.
 because the budget is what bounds the clock now; the count bounds spend, and at
 14,400 requests/day 50 is nothing.
 
+**It is not the prompt's shape.** The obvious explanation — that the failures
+are the awkward storylines — does not survive checking. Across the ten, member
+count, group count, prompt size and time span all overlap between the two
+groups: every success has exactly 2 members, and so do 3 of the 7 failures; the
+**smallest** prompt in the set (226 tokens, 2 members, a 0.1-day span) failed,
+while a larger one succeeded. The one directional hint is that all four
+storylines with 3+ members failed, but 2-member ones failed half the time too,
+so at n=10 that carries nothing. Whatever separates them is not a property the
+prompt builder controls.
+
 **The open question this hands back to [ADR-0011](adr/0011-a-storyline-is-a-persistent-arc-of-one-event.md).**
 Repaired, this model names **3 storylines in 10**, at 20–37 s each. Flash-lite
 named the same ten in ~0.9 s apiece. The switch bought double the rpm ceiling
