@@ -397,7 +397,10 @@ Two consequences worth knowing before a third provider:
   Currents pays twice the calls for the same window. Deliberate: per-provider page sizes silently
   under-cover, because page 2 then means different items to each provider.
 - **A provider that cannot express a query sits it out.** GNews `/search` has no category or domain
-  filter, so a category-scoped topic is refused locally rather than answered unfiltered.
+  filter, so a category-scoped topic is refused locally rather than answered unfiltered. Since
+  ADR-0020 no reader can mint one, so the category half of that refusal is unreachable rather than
+  merely rare — kept, because an unreachable guard already written is what stops the parameter
+  being re-added.
 
 ---
 
@@ -410,7 +413,7 @@ Accepts front-end requests and turns them into the right upstream query — or, 
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/v1/timeline` | The main read. Keywords + filters → time-ordered page of articles. |
-| `GET /api/v1/reference` | Cached `/available/*` values, for front-end filter controls. |
+| `GET /api/v1/reference` | Cached `/available/*` values, for front-end filter controls. Languages and regions only — the category taxonomy is no longer served, because nothing can pick from it (ADR-0020). |
 | `GET /api/v1/topics/:fingerprint` | Topic metadata: coverage window, article count, freshness, summary. |
 | `POST /api/v1/storylines/:id/refresh` | Fire-and-forget: queue one background top-up of what this arc's coverage says (§9.1, ADR-0017). A UUID is the whole request — the keywords and the language are derived from the arc, never sent. 202 with `{ queued }`; nothing on the page reads it. |
 | `GET /healthz` · `GET /readyz` | Liveness, and dependency checks for Postgres/Redis/upstream. |
@@ -424,7 +427,6 @@ language   string   optional   defaults to DEFAULT_LANGUAGE (en); validated agai
                               every language mixed together, so "all" is an explicit
                               choice, never the accident of leaving a field unset.
 country    string   optional   validated against /available/regions
-category   string   optional   validated against /available/categories
 from, to   ISO-8601 optional   timeline window
 cursor     opaque   optional   keyset cursor from a previous response
 limit      int      optional   default 25, max 100 — a CEILING, not a promise (§6.5)
@@ -434,6 +436,13 @@ storyline  uuid     optional   the STORYLINE VIEW (ADR-0011): the timeline filte
                               search box is empty by definition, and typing exits it.
                               NOT part of the fingerprint; it has no topic at all.
 ```
+
+There is no `category`, and its absence is load-bearing
+([ADR-0020](adr/0020-a-reader-does-not-choose-a-category.md)): the deepening plane cannot express
+one and silently discards it when asked, so the filter left the reader's reach. `TimelineQuery` is
+not `.strict()`, so a bookmark still carrying `?category=technology` has the parameter **stripped**
+and is answered as the same search without it — same topic, same fingerprint. A 400 would be a
+harder failure than the filter's removal, which is why the parameter is not merely rejected.
 
 Response:
 
@@ -476,7 +485,10 @@ same cache entry and the same accumulated topic:
    make every request a unique cache key and defeat caching entirely.
 5. **Fingerprint** = `sha256(canonical JSON of {keywords, language, country, category})`. The window
    is *excluded* — a topic is a durable entity; the window is a view onto it. This is what lets an
-   older and a newer request contribute to one accumulating timeline.
+   older and a newer request contribute to one accumulating timeline. `category` is always `null`
+   from here on (ADR-0020) and stays in the serialization anyway: dropping the key would
+   re-identify the 29 topics minted with one, orphaning their coverage and article memberships
+   under a fingerprint nothing would ever compute again.
 
 The canonicalizer is a pure function — the single easiest and highest-value unit-test target in the
 system.
@@ -616,7 +628,7 @@ Two tiers with distinct jobs: Redis makes repeat reads free; Postgres makes the 
 | Key | Contents | TTL |
 | --- | --- | --- |
 | `page:v<shape>:<fingerprint>:<windowHash>:<cursor>:<limit>` | serialized response page | per §6.4 tier |
-| `ref:languages` \| `ref:regions` \| `ref:categories` | reference lists | 24h |
+| `ref:languages` \| `ref:regions` | reference lists | 24h |
 | `lock:refresh:<fingerprint>:<segment>` | single-flight election | 10s |
 | `<queue>:lock:sample:<language>` | breadth-sample enqueuer election (§10.1) | `SAMPLE_REFRESH_MINUTES` |
 | `budget:topic:<fingerprint>:<utcDay>` | per-topic daily call cap (§9.4) | 48h |
@@ -691,7 +703,10 @@ CREATE INDEX        articles_title_tokens_idx  ON articles USING gin (title_toke
 CREATE TABLE topics (
   fingerprint   bytea PRIMARY KEY,
   keywords      text[] NOT NULL,
-  language      text, country text, category text,
+  language      text, country text,
+  category      text,                          -- legacy: no new topic can carry one (ADR-0020),
+                                               -- but 29 do, and the fingerprint still folds it in
+                                               -- so those rows keep their identity
   summary       text,                          -- reserved: topic summary, later phase
   summary_at    timestamptz,
   created_at    timestamptz NOT NULL DEFAULT now(),
@@ -905,7 +920,8 @@ keywords in, timeline out.
 ### 8.1 Views (v1)
 
 - **Search bar** — the primary input. Debounced (~400ms), submits on Enter. Collapsible filter row
-  for language / country / category from `/api/v1/reference` (junk categories filtered — §2).
+  for language / country from `/api/v1/reference`. There is no category chip and the reference
+  payload no longer carries the taxonomy (ADR-0020).
   Multi-term keywords *narrow* results upstream, so the UI hints "all terms must match" rather than
   letting a 1-result response read as a bug. The date picker caps at **30 days back** — a disabled
   control beats a 400.

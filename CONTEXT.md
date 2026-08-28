@@ -69,8 +69,10 @@ _Avoid_: publisher, feed, provider
 ### Discovery
 
 **Topic**:
-A canonicalized search — keywords plus optional language, country and category — that accumulates
-articles over time and is shared by everyone who searches the same thing.
+A canonicalized search — keywords plus optional language and country — that accumulates
+articles over time and is shared by everyone who searches the same thing. A topic minted before
+[ADR-0020](docs/adr/0020-a-reader-does-not-choose-a-category.md) may also carry a category; no new
+one can, and the field stays in the identity so those rows keep theirs.
 _Avoid_: search, query, feed, tag
 
 **Keyword**:
