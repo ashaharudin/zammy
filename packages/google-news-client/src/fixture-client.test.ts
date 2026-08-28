@@ -165,6 +165,31 @@ describe("what every real item carries", () => {
   });
 });
 
+describe("domain scoping, which this adapter answers rather than refuses", () => {
+  it("narrows to one publisher, subdomains folded in", async () => {
+    // `site:` works upstream (measured: `q=housing site:cbc.ca` → 100 items, 2
+    // domains, against 75 for the control), and it matches subdomains. Both
+    // fold to the registrable domain, so every row a scoped fetch produces is
+    // attributed to the domain that was asked for.
+    const result = await (await client()).search({
+      keywords: ["x"],
+      domain: "theglobeandmail.com",
+    });
+
+    expect(result.sightings.length).toBeGreaterThan(0);
+    for (const sighting of result.sightings) {
+      expect(sighting.sourceDomain).toBe("theglobeandmail.com");
+    }
+  });
+
+  it("returns an empty, finished window for a publisher not in the capture", async () => {
+    const result = await (await client()).search({ keywords: ["x"], domain: "example.com" });
+
+    expect(result.rawCount).toBe(0);
+    expect(result.isLastPage).toBe(true);
+  });
+});
+
 describe("it refuses what the live client refuses", () => {
   it("rejects a second page, tagged with the provider", async () => {
     await expect(
@@ -172,9 +197,15 @@ describe("it refuses what the live client refuses", () => {
     ).rejects.toMatchObject({ provider: "google-news" });
   });
 
-  it("rejects a category filter", async () => {
+  it("rejects a category, which upstream silently discards", async () => {
     await expect(
       (await client()).search({ keywords: ["x"], category: "business" }),
+    ).rejects.toBeInstanceOf(NewsInvalidQueryError);
+  });
+
+  it("rejects a domain that is not a hostname", async () => {
+    await expect(
+      (await client()).search({ keywords: ["x"], domain: "cbc.ca OR bbc.co.uk" }),
     ).rejects.toBeInstanceOf(NewsInvalidQueryError);
   });
 

@@ -10,7 +10,9 @@ import {
 /**
  * HTTP failure → typed error, Google News RSS edition.
  *
- * Per-adapter for the reason ADR-0012 gives and this provider illustrates
+ * Per-adapter for the reason `errors.ts` gives — the same status code means
+ * different things to different providers, so callers branch on `kind` and
+ * never on a status code (ARCHITECTURE 5.3). This provider illustrates it
  * better than either of the others: **there is no key**, so a whole branch of
  * the taxonomy is unreachable here and the branch that replaces it means
  * something completely different.

@@ -73,13 +73,17 @@ export interface HttpGoogleNewsClientOptions {
 export class HttpGoogleNewsClient implements GoogleNewsClient {
   readonly provider = PROVIDER;
   /**
-   * Its own, and it will never be anyone's frontier.
+   * Its own, and only ever its own.
    *
-   * The field is required by the interface; what makes this provider
-   * non-coverage-bearing is that nothing names it as a composite's primary
-   * (ADR-0012) and that the deepening plane writes `storyline_coverage`, not
-   * `topic_coverage` (DESIGN-DISCOVERY-AND-DEEPENING §1). A `rawCount == 100`
-   * page here says "subdivide", never "this span is finished".
+   * Under ADR-0019 that is no longer a lesser status: coverage is
+   * `(subject, provider, span)`, no provider is privileged, and each records
+   * only the spans it actually walked. This client's `isLastPage` therefore
+   * ends *this provider's* walk over a window and makes no claim about anyone
+   * else's — which is the whole of what the field means now.
+   *
+   * The one thing that must not be misread is a full page: `rawCount == 100`
+   * says "the cap cut us off, subdivide", never "this span is finished". See
+   * `isLastPage` below.
    */
   readonly coverageProvider = PROVIDER;
   readonly limits: ClientLimits;

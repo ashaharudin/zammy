@@ -148,6 +148,35 @@ describe("date windowing through after:/before:", () => {
   });
 });
 
+describe("domain scoping through site:", () => {
+  it("answers a domain filter with site:, unlike the GNews adapter", async () => {
+    // A real divergence from the precedent, and it is a capability rather than
+    // a hazard. Measured live 2026-08-27:
+    //
+    //     q=housing site:cbc.ca    100 items,  2 domains
+    //     q=housing (control)      102 items, 75 domains
+    //
+    // GNews genuinely has no domain filter and must refuse; this one does not
+    // have to.
+    const { fetch, calls } = stubFetch([{}]);
+    await makeClient({ fetch }).search({ keywords: ["housing"], domain: "cbc.ca" });
+
+    expect(q(calls[0]!.url)).toBe("housing site:cbc.ca");
+  });
+
+  it("lowercases and trims the domain, and combines it with the window", async () => {
+    const { fetch, calls } = stubFetch([{}]);
+    await makeClient({ fetch }).search({
+      keywords: ["housing"],
+      domain: "  CBC.ca ",
+      startDate: new Date("2026-08-20T00:00:00.000Z"),
+      endDate: new Date("2026-08-22T00:00:00.000Z"),
+    });
+
+    expect(q(calls[0]!.url)).toBe("housing site:cbc.ca after:2026-08-19 before:2026-08-23");
+  });
+});
+
 describe("the 100-item wall", () => {
   it("is a short feed that ends a window", () => {
     expect(isLastPage(20)).toBe(true);
@@ -217,7 +246,13 @@ describe("queries this endpoint cannot express are refused locally", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("refuses a category filter rather than answering unfiltered", async () => {
+  it("refuses a category, which upstream would SILENTLY DISCARD", async () => {
+    // Measured: `topic/BUSINESS?q=housing` returns a set byte-identical to
+    // plain `search?q=housing`, 102 of 102 identical guids. The call would
+    // succeed and the articles would look right, so a category-scoped topic
+    // would fill with everything. A filter that appears applied and was not is
+    // worse than one never offered — which is why this refusal is not the same
+    // as the GNews adapter's, despite reading the same.
     const { fetch, calls } = stubFetch([]);
 
     await expect(
@@ -226,13 +261,13 @@ describe("queries this endpoint cannot express are refused locally", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("refuses a domain filter, because none was verified", async () => {
-    // An unverified filter is worse than no filter: silently ignored, a
-    // domain-scoped topic fills with every other outlet and nothing reports it.
+  it("refuses a domain that is not a hostname, since site: lives inside q", async () => {
+    // A value with a space would not fail — it would split, and the tail would
+    // become a search term. The query would quietly stop being domain-scoped.
     const { fetch, calls } = stubFetch([]);
 
     await expect(
-      makeClient({ fetch }).search({ keywords: ["x"], domain: "cbc.ca" }),
+      makeClient({ fetch }).search({ keywords: ["x"], domain: "cbc.ca OR bbc.co.uk" }),
     ).rejects.toBeInstanceOf(NewsInvalidQueryError);
     expect(calls).toHaveLength(0);
   });

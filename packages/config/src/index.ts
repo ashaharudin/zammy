@@ -255,10 +255,13 @@ const EnvSchema = z
      */
     GNEWS_INTERACTIVE_RESERVE: z.coerce.number().int().min(0).default(25),
 
-    // --- third provider: Google News RSS, the deepening plane ---
-    // DESIGN-DISCOVERY-AND-DEEPENING. Not a peer of the two above: Currents
-    // discovers and bears coverage, this one reaches back over arcs Currents
-    // already found (ADR-0012's asymmetry, applied harder).
+    // --- third provider: Google News RSS ---
+    // Built for DESIGN-DISCOVERY-AND-DEEPENING's deepening plane — reaching ~18
+    // months back over arcs Currents already found, against Currents' 30 days —
+    // and intended to serve search and breadth as well, which is why ADR-0019
+    // replaced ADR-0012's provider ranking with per-fetch coverage and a
+    // per-fetch `plane`. No provider is privileged; what a fetch may feed is
+    // decided by why it was made.
     /**
      * Off by default, like GNEWS_ENABLED and for its reason — adding a provider
      * changes what gets ingested and how budget is spent — plus two of its own,
@@ -284,6 +287,14 @@ const EnvSchema = z
      */
     GOOGLE_NEWS_USER_AGENT: z.string().trim().optional(),
     /**
+     * The default EDITION, not a filter — the distinction the parameter names
+     * invite you to miss. Measured 2026-08-27: one query across CA/US/GB/IN
+     * shared 30–50% of its titles and `axios.com` came back in all four, so an
+     * edition biases selection rather than restricting it. Language is a much
+     * stronger effect (`hl=en-CA` vs `hl=fr-CA` shared 1 guid of 100) and still
+     * not a guarantee. Nothing downstream may treat a fetch made under these as
+     * having been filtered upstream.
+     *
      * The `hl`/`gl`/`ceid` triple is derived from this pair rather than
      * configured as three values, because the three are not independent: `hl` is
      * `<lang>-<COUNTRY>`, `gl` is the country and `ceid` is `<COUNTRY>:<lang>`.

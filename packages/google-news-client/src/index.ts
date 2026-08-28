@@ -7,11 +7,21 @@
  * the endpoint has exactly one operation. Nothing above this package learns
  * there is a new provider.
  *
- * It is the **deepening plane** of DESIGN-DISCOVERY-AND-DEEPENING: Currents
- * discovers and stays coverage-bearing, this reaches back over arcs Currents
- * already found. That asymmetry is ADR-0012's, and it is stricter here than it
- * was for GNews — this provider is not a peer to be merged, it is a second
- * stage in a pipeline.
+ * What it is *for* is DESIGN-DISCOVERY-AND-DEEPENING's deepening plane —
+ * reaching ~18 months back over arcs Currents already found, against Currents'
+ * 30 days. What it is *permitted to do* is wider than that, and the difference
+ * is ADR-0019's: this provider is expected to serve search and breadth as well,
+ * so it is not a supplement and there is no provider ranking for it to sit at
+ * the bottom of.
+ *
+ * ADR-0019 relocates the asymmetry rather than dropping it. Coverage becomes
+ * `(subject, provider, span)`, so this client's fetches back only their own
+ * spans and can never claim what another provider walked; and what may feed the
+ * ranking that chooses what to deepen is decided by a fetch's **reason**, not
+ * by which provider answered — `plane <> 'deepening'`, set by the caller that
+ * planned the call. Neither property is this adapter's to enforce: it reports
+ * honestly about the window it was asked for, and the planner supplies the rest.
+ * Note that this replaces the ADR-0012 framing this package was written under.
  *
  * Everything genuinely Google-News-shaped, in one list:
  *
@@ -20,8 +30,14 @@
  *     upstream and the budget in config is one we invented (`factory.ts`).
  *   - **RSS, not JSON.** Read through the transport's `parseBody` hook by a
  *     reader written for one known generator (`rss.ts`).
- *   - **`after:`/`before:` instead of date parameters**, resolved by Google in
- *     US Pacific time rather than UTC — measured, and padded for (`raw.ts`).
+ *   - **Every filter is an operator inside `q`.** `after:`/`before:` for the
+ *     window — resolved by Google in US Pacific time rather than UTC, measured
+ *     and padded for — and `site:` for the domain (`raw.ts`).
+ *   - **A category is silently discarded rather than rejected**, so it is
+ *     refused locally. Measured: `topic/BUSINESS?q=housing` returns a set
+ *     byte-identical to plain `search?q=housing` (`raw.ts`).
+ *   - **`hl`/`gl`/`ceid` select an edition, not a subset.** They bias what comes
+ *     back; they do not promise it (`raw.ts`).
  *   - **100 items per query and no cursor.** A full 100 means subdivide the
  *     window, never "finished" (`http.ts`).
  *   - **`source_domain` from `<source url>`, not from the URL**, and a null

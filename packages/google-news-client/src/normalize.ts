@@ -16,8 +16,9 @@ import { parsePublished, type RawGoogleNewsItem } from "./raw.js";
  * The provider id, stored on every sighting as `sightings.provider`.
  *
  * Not `"gnews"` — that name is taken by an unrelated commercial API
- * (`gnews.io`) which this codebase already has an adapter for, and confusing
- * the two would put deepening-plane rows behind a discovery-plane name.
+ * (`gnews.io`) which this codebase already has an adapter for, and two
+ * providers sharing a name would make per-provider coverage and per-provider
+ * yield, the two numbers `sightings.provider` exists for, both meaningless.
  */
 export const PROVIDER = "google-news";
 

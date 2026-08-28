@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SearchParams } from "@zammy/news-client";
 import { ITEMS_PER_QUERY, RawGoogleNewsItem, parsePublished } from "./raw.js";
+import { publisherDomain } from "./normalize.js";
 import { parseRssFeed } from "./rss.js";
 
 /**
@@ -24,8 +25,18 @@ import { parseRssFeed } from "./rss.js";
  * recorded for Currents, where only 7 of 20 articles returned for `climate`
  * contained the word anywhere we can see. A local keyword filter would return a
  * *different* set from the real one and teach development the wrong lesson
- * about what a query returns. The window is filtered, because the window is the
- * one thing the endpoint applies to data we can see.
+ * about what a query returns.
+ *
+ * The window and the domain ARE filtered, and the line between the two groups
+ * is not arbitrary: those two are the only scopes the endpoint applies to
+ * metadata this feed carries, so reproducing them locally gives the same answer
+ * rather than a different one. `site:` matches subdomains upstream, and
+ * `publisherDomain` folds those to the registrable domain, so matching on the
+ * folded value here reproduces the real behaviour without a second rule.
+ *
+ * `language` and `country` are not filtered on either, and that is the same
+ * decision rather than an omission — they select an edition upstream, not a
+ * subset (`toQueryParams`).
  */
 
 const FIXTURE_FILES = [
@@ -95,6 +106,10 @@ export class GoogleNewsFixtureStore {
     this.assertLoaded("search");
 
     let results = this.items;
+    if (params.domain) {
+      const domain = params.domain.trim().toLowerCase();
+      results = results.filter((item) => publisherDomain(item.sourceUrl) === domain);
+    }
     if (params.startDate) {
       const from = params.startDate.getTime();
       results = results.filter((item) => parsePublished(item.pubDate) >= from);

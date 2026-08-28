@@ -10,8 +10,9 @@ import { mapErrorResponse } from "./map-error.js";
 
 /**
  * A pure function, and the highest-value test target in the package for the
- * reason ADR-0012 gives: the same status code means different things to
- * different providers, and nothing downstream may branch on a status code.
+ * reason the shared error taxonomy gives: the same status code means different
+ * things to different providers, and nothing downstream may branch on a status
+ * code (ARCHITECTURE 5.3).
  *
  * Here the taxonomy is narrower than anywhere else, because there is no key.
  */

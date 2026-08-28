@@ -76,31 +76,53 @@ export const ITEMS_PER_QUERY = 100;
 export const MAX_QUERY_CHARS = 400;
 
 /**
+ * A domain the `site:` operator can carry: a hostname, and nothing else.
+ *
+ * Checked rather than trusted because the operator lives inside `q`. A value
+ * with a space in it would not fail — it would split, and the tail would become
+ * a search term, so the query would quietly stop being domain-scoped and start
+ * being domain-scoped-plus-a-word. That is the same class of silent
+ * mis-execution the category refusal below exists for.
+ */
+const HOSTNAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
+
+/**
  * What this endpoint cannot express, and must therefore never be asked.
  *
- * Same rule as the GNews adapter's, for the same ADR-0012 reason: answering a
- * filtered query unfiltered fills a scoped topic with articles that do not
- * belong to it, and refusing locally costs nothing.
+ * The rule is ADR-0019's, carried over from ADR-0012 unchanged and sharpened by
+ * the category case below: answering a filtered query unfiltered fills a scoped
+ * topic with articles that do not belong to it, and refusing locally costs
+ * nothing.
  */
 export function unservableReason(params: SearchParams): string | null {
   if (!params.keywords?.length) {
     return "Google News RSS /search requires a q parameter; a keyword-less sweep has no equivalent";
   }
   if (params.category) {
+    // MEASURED 2026-08-27, and the measurement is why this refusal is not a
+    // courtesy. Google News does have category feeds — `topic/BUSINESS` — and
+    // combining one with a keyword does not error: `topic/BUSINESS?q=housing`
+    // returned a set byte-identical to plain `search?q=housing`, 102 of 102
+    // identical guids, and `search?q=…&topic=…` ignores the parameter outright.
+    // A bogus topic answers 200 with zero items and no error at all.
+    //
+    // So the category is SILENTLY DISCARDED, which is worse than a filter that
+    // was never offered: the call succeeds, the articles look right, and a
+    // category-scoped topic fills with everything (ADR-0019, "what survives
+    // from ADR-0012"). Note this differs from the GNews adapter's identical
+    // refusal only in its reason — there the parameter genuinely does not
+    // exist, so there was nothing to get wrong.
     return (
-      `Google News RSS has no category filter (got "${params.category}"), and answering ` +
-      "without it would ingest off-topic articles into a category-filtered topic"
+      `Google News RSS silently discards a category when a keyword is given ` +
+      `(got "${params.category}"), so answering would ingest off-topic articles ` +
+      "into a category-filtered topic while appearing to have filtered"
     );
   }
-  if (params.domain) {
-    // Google's web search understands `site:`, and this endpoint may or may not
-    // — it was not probed. An unverified filter is worse than no filter: if it
-    // is silently ignored, a domain-scoped topic fills with every other outlet
-    // and nothing reports it. Refuse until someone measures it.
+  if (params.domain !== undefined && !HOSTNAME.test(params.domain.trim())) {
     return (
-      `Google News RSS has no verified domain filter (got "${params.domain}"); ` +
-      "answering without one would ingest articles from every other outlet " +
-      "into a domain-filtered topic"
+      `"${params.domain}" is not a hostname, and the site: operator it would be ` +
+      "spliced into lives inside q — a value with a space would silently become " +
+      "a search term instead of a filter"
     );
   }
   if (params.pageNumber !== undefined && Math.trunc(params.pageNumber) > 1) {
@@ -131,10 +153,27 @@ export interface QueryLocale {
  * Currents gives a space-joined `keywords`, so one canonical topic asks both
  * providers the same question.
  *
- * The three locale parameters are not independent, despite looking it: `hl` is
- * `<lang>-<COUNTRY>`, `gl` is the country, and `ceid` is `<COUNTRY>:<lang>`.
- * Sending a set that disagrees with itself returns a different, quieter result
- * set, so they are derived from one pair rather than configured separately.
+ * Everything that looks like a filter here is an *operator inside `q`*. There
+ * are no filter parameters on this endpoint at all: the date window and the
+ * domain scope are both words in the query string, which is why
+ * `unservableReason` validates the domain rather than trusting it.
+ *
+ * **`hl`/`gl`/`ceid` are an EDITION, not a filter**, and the difference matters
+ * because the parameter names invite the wrong reading. Measured 2026-08-27:
+ * one query across CA/US/GB/IN shared only 30–50% of its titles, and localised
+ * domains appeared — but `asia.nikkei.com` and `axios.com` came back in all
+ * four, so the edition biases selection rather than restricting it. `hl=en-CA`
+ * vs `hl=fr-CA` shared 1 guid of 100, which is a much stronger effect than
+ * country and still not a guarantee. Passing `language` or `country` therefore
+ * changes *which* articles are likely to come back; it does not promise that
+ * every one of them is in that language or from that country. Allowing them is
+ * the decision. Implying they filter is not, so nothing downstream should treat
+ * a `language`-scoped fetch as having been filtered upstream.
+ *
+ * The three are also not independent of each other, despite looking it: `hl` is
+ * `<lang>-<COUNTRY>`, `gl` is the country, and `ceid` is `<COUNTRY>:<lang>`. A
+ * set that disagrees with itself returns a different, quieter result set, so
+ * they are derived from one pair rather than configured separately.
  */
 export function toQueryParams(params: SearchParams, locale: QueryLocale): URLSearchParams {
   const unservable = unservableReason(params);
@@ -143,6 +182,23 @@ export function toQueryParams(params: SearchParams, locale: QueryLocale): URLSea
   }
 
   const terms = [...(params.keywords ?? [])];
+  // DEPARTURE from the GNews adapter, and this one is a capability rather than
+  // a hazard: `site:` works, so `SearchParams.domain` is answered instead of
+  // refused. A reader arriving from `gnews-client` will expect the refusal —
+  // GNews genuinely has no domain filter — so it is worth saying that this is
+  // measured, not assumed. 2026-08-27, live:
+  //
+  //     q=housing site:cbc.ca    100 items,  2 domains (cbc.ca, subscriptions.cbc.ca)
+  //     q=housing (control)      102 items, 75 domains
+  //
+  // Note the two domains: `site:` matches the domain AND its subdomains. That
+  // is the right granularity here rather than a leak, because `sourceDomain`
+  // folds `subscriptions.cbc.ca` to `cbc.ca` anyway, so every row a
+  // `site:cbc.ca` fetch produces is attributed to the domain that was asked for.
+  //
+  // RESEARCH-FREE-NEWS-SOURCES §6c is worth reading beside this: `domain` has
+  // been plumbed through `SearchParams` and set by nothing since it was added.
+  if (params.domain) terms.push(`site:${params.domain.trim().toLowerCase()}`);
   if (params.startDate) terms.push(`after:${toSearchDay(afterBound(params.startDate))}`);
   if (params.endDate) terms.push(`before:${toSearchDay(beforeBound(params.endDate))}`);
 

@@ -31,10 +31,13 @@ export interface GoogleNewsClientConfig {
    *     same story from Currents. `alt_key` (G1) is the fix and it is not
    *     landed; ingesting before it would mint a second `articles` row for
    *     every doubly-covered story (DESIGN-DISCOVERY-AND-DEEPENING §2a).
-   *   - **The cloud is not yet isolated from it.** Until G2 restricts the
-   *     ranker to discovery-plane sightings, a deepening fetch would feed the
-   *     volume score that decided to fetch — endogenous, rich-get-richer, with
-   *     no damping (§3a).
+   *   - **The cloud is not yet isolated from it.** Until G2 lands, a deepening
+   *     fetch would feed the volume score that decided to fetch — endogenous,
+   *     rich-get-richer, with no damping (§3a). ADR-0019 sets the shape of that
+   *     guard: the predicate is on the fetch's reason (`plane <> 'deepening'`),
+   *     not on which provider answered, because this provider is expected to
+   *     serve search and breadth too and a provider-level test cannot be right
+   *     about both at once.
    *
    * So the guard is not ceremony. `createGoogleNewsClient` throws with this
    * false, which means the adapter is unreachable at runtime no matter what
@@ -61,7 +64,7 @@ export interface CreateGoogleNewsClientDeps {
 }
 
 /**
- * Tier limits — except that there is no tier, which is the whole problem.
+ * Limits — except that there is no tier, which is the whole problem.
  *
  * `maxPageSize` and `maxRetrievableResults` are both `ITEMS_PER_QUERY` and both
  * come from the constant rather than from config, because neither is a plan we
