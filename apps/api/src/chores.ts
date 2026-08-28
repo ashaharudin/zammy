@@ -586,7 +586,7 @@ export async function runStorylineLabelChore(
     deps.labeler,
     {
       maxLabels: deps.maxLabels ?? 500,
-      labelRatePerMinute: deps.labelRatePerMinute ?? 15,
+      labelRatePerMinute: deps.labelRatePerMinute ?? 30,
       ...(deps.labelBudgetMs !== undefined ? { labelBudgetMs: deps.labelBudgetMs } : {}),
       // The clock the budget measures elapsed time against — `ChoreDeps.now`,
       // which is the real one everywhere but a test.

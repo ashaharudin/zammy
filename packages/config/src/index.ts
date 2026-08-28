@@ -520,17 +520,31 @@ const EnvSchema = z
      *
      * **A deployment parameter, not an operator convenience**, which is the
      * whole reason it is here rather than only behind `--max-labels`. On Hobby
-     * the chores route has 300 s, and at `GEMINI_MAX_RPM=15` a label is >=4 s of
-     * pacing plus model latency — so **75 labels IS the entire window**, against
-     * the pass's own code default of 500. An unbounded night therefore exceeds
-     * the function ceiling long before it exceeds Gemini's daily quota, and what
-     * a truncated night loses is not latency but the `chore_runs` row and the
-     * passes ordered after the label one.
+     * the chores route has 300 s, against the pass's own code default of 500 —
+     * so an unbounded night exceeds the function ceiling long before it exceeds
+     * the daily quota, and what a truncated night loses is not latency but the
+     * `chore_runs` row and the passes ordered after the label one.
      *
-     * 50 is the middle of Phase 0's measured 40-60 (findings §2). The bound
-     * costs nothing durable: the pass is resumable across nights — it selects
-     * the storylines whose labels are missing or drifted — so a bound defers
-     * labels rather than dropping them.
+     * **The window is spacing PLUS latency, and 50 does not fit it.** Phase 0's
+     * 40-60 (findings §2, the source of this 50) counted pacing alone — 75 x 4 s
+     * at the old 15 rpm — but `labelPass` is sequential: it sleeps the spacing
+     * and THEN awaits the call, so the two add. Measured 2026-08-28 against the
+     * live API on the dev key, with real dev-archive prompts and the pacer off:
+     * `gemini-3.1-flash-lite` answers in ~0.9 s (median of 5; one 33 s outlier),
+     * which at 15 rpm made the old window ~60 labels; `gemma-4-26b-a4b-it`,
+     * today's default, answers in **20.6-43.4 s** (median 23.8 s of 3, with the
+     * timeout raised to see it at all), which at 2 s of spacing puts the window
+     * near **11**. So the number is 4-5x its ceiling.
+     *
+     * **Left at 50 anyway, deliberately.** The same measurement found the label
+     * path is not currently producing labels on that key at all — see
+     * `gemini.ts`, where thought parts are joined into the answer, and the
+     * 2048-token budget that a real prompt spends entirely on thinking. Sizing
+     * this bound against a path that returns nothing would be fitting a number
+     * to a defect. Re-derive it once a label call is a label again. The bound
+     * costs nothing durable meanwhile: the pass is resumable across nights — it
+     * selects the storylines whose labels are missing or drifted — so a bound
+     * defers labels rather than dropping them.
      *
      * `--max-labels` still overrides it, which is what an operator draining a
      * backlog against a clone wants. The default moved from "unbounded" to this

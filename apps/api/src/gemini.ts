@@ -79,11 +79,12 @@ export interface GeminiOptions {
    * How long a call may sit in the queue before giving up on the model.
    *
    * A pacer without this is an unbounded queue, and the live tail is exactly
-   * where one would grow: ingest can promote storylines faster than 15/min for
-   * a burst, and every waiter holds its members in memory. Past the cap the
-   * call returns `ok: false` and the caller takes the bigram fallback — the
-   * same move it already makes for a 503. 2 minutes is ~30 deep at 15/min,
-   * more than an ingest batch produces.
+   * where one would grow: ingest can promote storylines faster than the
+   * ceiling for a burst, and every waiter holds its members in memory. Past the
+   * cap the call returns `ok: false` and the caller takes the bigram fallback —
+   * the same move it already makes for a 503. 2 minutes is ~60 deep at config's
+   * 30/min (it was ~30 at the 15/min this was written for), more than an ingest
+   * batch produces.
    */
   maxRateWaitMs?: number;
   fetch?: FetchLike;

@@ -7,8 +7,13 @@ archive on 2026-08-14: 22,987 articles spanning 2026-07-14 → 2026-08-14,
 live API. Reproduce with:
 
 ```bash
-pnpm label:storylines --preview --limit=20
+pnpm label:storylines --dry-run --limit=20
 ```
+
+**Not `--preview`**, which this line said until 2026-08-28 and which S9 deleted
+(see "What dies" below). The CLI ignores unknown flags, so the old command does
+not preview anything — it labels 20 storylines for real, spending the calls and
+writing the results. `--dry-run` is what reads without asking the model.
 
 > **Model change, 2026-08-27 — read this before quoting a number below.**
 > Everything here was measured against `gemini-3.1-flash-lite`. The configured
@@ -23,9 +28,14 @@ pnpm label:storylines --preview --limit=20
 >   table is Gemini-family only — gemma has no `thinkingLevel`/`thinkingBudget`
 >   knob at all (the API 400s on either) and thinks unconfigurably, ~703 tokens
 >   on the Fort Hood prompt, which is why `maxOutputTokens` went 256 → 2048.
-> - **Not re-measured**: per-call latency and per-label cost. The ~7.1–8 s and
->   the ~$0.22/1,000 below are flash-lite's, and gemma spends ~710 tokens a call
->   against flash-lite's ~4, so neither should be quoted for it.
+> - **Re-measured 2026-08-28, and it is bad.** Dev key, real dev-archive
+>   prompts, pacer off: flash-lite answers in **~0.9 s** (median of 5), gemma in
+>   **20.6–43.4 s** (median 23.8 s of 3) — and only with `GEMINI_TIMEOUT_MS`
+>   raised past its 20 s default, which gemma exceeded on 5 of 5. Worse, all
+>   three answers **failed the contract**: `finishReason: MAX_TOKENS` with 2,046
+>   thought tokens and no answer, surfaced as text because `gemini.ts` joins
+>   *thought* parts into the reply. Per-label **cost** is still not re-measured;
+>   the ~$0.22/1,000 below is flash-lite's.
 
 ## What a label is
 
@@ -176,9 +186,11 @@ Three properties worth knowing:
   until membership doubles; `--relabel` is the repair. The CLIs raise the cap
   to 15 minutes, since a backfill would rather wait than settle for a bigram.
 - **Serially, latency binds before the limit does.** At ~7.1s per call a single
-  pass sustains ~8.5 labels/min, under 15 and further under today's 30 — the
-  reason halving the pacing floor did not double what a 300 s function fits
-  (`.env.example`, `CHORE_MAX_LABELS`). The ceiling only binds on a
+  pass sustains ~8.5 labels/min, under 15 and further under today's 30 — and
+  further still on gemma, whose measured 20.6–43.4 s puts a serial pass near
+  2.5/min, which is why a 300 s function fits ~11 labels and not the 75 the
+  pacing-only arithmetic promised (`.env.example`, `CHORE_MAX_LABELS`). The
+  ceiling only binds on a
   parallelised pass — exactly what STORYLINE-BACKFILL.md recommends for a full
   relabel, and why the pacer has to be in the client such a pass would share.
 
