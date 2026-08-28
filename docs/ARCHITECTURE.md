@@ -707,14 +707,30 @@ CREATE TABLE topic_articles (
   PRIMARY KEY (fingerprint, article_id)
 );
 
--- Which time windows have actually been fetched for a topic. This is what makes
--- "do I need an upstream call?" an exact question instead of a guess.
+-- Which time windows have actually been fetched for a topic, by which provider.
+-- This is what makes "do I need an upstream call?" an exact question instead of
+-- a guess. Coverage is (subject, provider, span) and no provider is privileged
+-- (ADR-0019); `provider` defaults to 'currents' only because until migration
+-- 0021 that was the only thing that had ever written here.
 CREATE TABLE topic_coverage (
   fingerprint bytea REFERENCES topics ON DELETE CASCADE,
+  provider    text NOT NULL DEFAULT 'currents',
   span        tstzrange NOT NULL,
   fetched_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX topic_coverage_gist ON topic_coverage USING gist (fingerprint, span);
+
+-- The same question about a different subject: what a provider has fetched for
+-- one persistent arc (ADR-0011). A `deepening` fetch's unit of coverage is a
+-- storyline, not a search, and it writes HERE and nowhere else — so it cannot
+-- reach topic coverage even by mistake.
+CREATE TABLE storyline_coverage (
+  storyline_id uuid NOT NULL REFERENCES storylines ON DELETE CASCADE,
+  provider     text NOT NULL,
+  span         tstzrange NOT NULL,
+  fetched_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX storyline_coverage_gist ON storyline_coverage USING gist (storyline_id, span);
 
 CREATE TABLE fetch_log (                       -- quota accounting + observability
   id bigserial PRIMARY KEY, fingerprint bytea, params jsonb,
@@ -1634,9 +1650,14 @@ Vercel plan's Phase 3 instead — see below).
   `x-ratelimit-*` one call later and that is tolerable; GNews sends no headers, so its count would
   stay wrong until a 403 arrives — the exact outcome pre-flight refusal exists to prevent.
   **Enabling GNews requires building the ledger first.**
-- **Per-provider coverage (ADR-0012).** `topic_coverage` is per topic, so a best-effort second
-  provider cannot contribute to end-of-results. Cost: a GNews-only article inside an
-  already-covered span may never be fetched.
+- **Per-provider coverage (ADR-0019, which supersedes ADR-0012).** Half paid. Migration 0021 gave
+  `topic_coverage` its `provider` column and added `storyline_coverage` as the second subject, so
+  spans are now *recordable* per provider. The PLANNER half is outstanding: `readCoverage` and the
+  gap arithmetic in `coverage-gaps.ts` still ask "is this span covered" in the single-answer form
+  ADR-0019 retires. That is exact only while Currents is the one caller wired to write topic
+  coverage; `coverage.ts` names the four things that change together, and G5 is when. Until then the
+  cost stands: an article only one provider would have found, inside a span another already covered,
+  may never be fetched.
 
 ---
 

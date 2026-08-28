@@ -11,6 +11,7 @@ import * as formationRefusals from "./migrations/0015-storyline-formation-refusa
 import * as dropTermCloud from "./migrations/0014-drop-term-cloud.js";
 import * as rowLevelSecurity from "./migrations/0019-enable-row-level-security.js";
 import * as articleAltKey from "./migrations/0020-article-alt-key.js";
+import * as providerCoverage from "./migrations/0021-provider-and-storyline-coverage.js";
 import { createTestDatabase, type TestDatabase } from "./test-support.js";
 
 /**
@@ -70,6 +71,7 @@ describe("migrateToLatest", () => {
       "story_token_days",
       "story_corpus_days",
       "storyline_bridges",
+      "storyline_coverage",
     ]) {
       expect(tables).toContain(expected);
     }
@@ -296,12 +298,14 @@ describe("migrateToLatest", () => {
     };
 
     // Newest first down, oldest first up, exactly as a rollback and the next
-    // deploy run. Both later migrations hang off 0007's tables — 0009's
-    // `storyline_bridges` by foreign key, 0010 by a column on `storylines` —
-    // so reverting 0007 alone is something no deploy would do: Postgres
-    // refuses the first (the key doing its job) and the second would silently
-    // rebuild `storylines` without a column the ledger still claimed.
+    // deploy run. Three later migrations hang off 0007's tables — 0009's
+    // `storyline_bridges` and 0021's `storyline_coverage` by foreign key, 0010
+    // by a column on `storylines` — so reverting 0007 alone is something no
+    // deploy would do: Postgres refuses the first two (the keys doing their job)
+    // and the third would silently rebuild `storylines` without a column the
+    // ledger still claimed.
     expect(await hasDriftColumn()).toBe(true);
+    await providerCoverage.down(migrationDb());
     await labelSource.down(migrationDb());
     await labelDrift.down(migrationDb());
     await storylineBridges.down(migrationDb());
@@ -312,6 +316,7 @@ describe("migrateToLatest", () => {
     await storylineBridges.up(migrationDb());
     await labelDrift.up(migrationDb());
     await labelSource.up(migrationDb());
+    await providerCoverage.up(migrationDb());
     expect(await hasStorylineTables()).toBe(3);
     expect(await hasDriftColumn()).toBe(true);
   });
@@ -378,6 +383,84 @@ describe("migrateToLatest", () => {
 
     await dropTermCloud.up(migrationDb());
     expect(await termTables()).toBe(0);
+  });
+
+  it("reverts and re-applies per-provider coverage cleanly", async () => {
+    // Migration 0021, both directions. The `up` is an ALTER on a table holding
+    // data plus a CREATE, so its `down` has two halves that can rot
+    // independently: a rollback that dropped the table and left the column
+    // would leave the next `up` failing on a duplicate column, which is a deploy
+    // that cannot go forward OR back.
+    const shape = async () => {
+      const { rows } = await sql<{ column_default: string | null }>`
+        select column_default from information_schema.columns
+        where table_schema = 'public' and table_name = 'topic_coverage'
+          and column_name = 'provider'
+      `.execute(harness.db);
+      const { rows: tables } = await sql<{ n: string }>`
+        select count(*) as n from information_schema.tables
+        where table_schema = 'public' and table_name = 'storyline_coverage'
+      `.execute(harness.db);
+      return { provider: rows[0]?.column_default ?? null, table: Number(tables[0]?.n ?? 0) };
+    };
+
+    expect(await shape()).toEqual({ provider: "'currents'::text", table: 1 });
+
+    // The default is what backfills history, so prove it on a row written the
+    // way every pre-0021 row was — with no provider named at all.
+    await sql`
+      insert into topics (fingerprint, keywords) values (decode(repeat('a', 64), 'hex'), '{x}')
+      on conflict do nothing
+    `.execute(harness.db);
+    await sql`
+      insert into topic_coverage (fingerprint, span)
+      values (decode(repeat('a', 64), 'hex'),
+              tstzrange('2026-05-01T00:00:00Z', '2026-05-02T00:00:00Z', '[)'))
+    `.execute(harness.db);
+    const { rows: backfilled } = await sql<{ provider: string }>`
+      select provider from topic_coverage where fingerprint = decode(repeat('a', 64), 'hex')
+    `.execute(harness.db);
+    expect(backfilled.map((row) => row.provider)).toEqual(["currents"]);
+
+    await providerCoverage.down(migrationDb());
+    expect(await shape()).toEqual({ provider: null, table: 0 });
+
+    await providerCoverage.up(migrationDb());
+    expect(await shape()).toEqual({ provider: "'currents'::text", table: 1 });
+
+    // The pre-0021 row survives the round trip and comes back stamped, which is
+    // the backfill claim the migration makes about production's 383 rows.
+    const { rows: after } = await sql<{ provider: string }>`
+      select provider from topic_coverage where fingerprint = decode(repeat('a', 64), 'hex')
+    `.execute(harness.db);
+    expect(after.map((row) => row.provider)).toEqual(["currents"]);
+
+    // A coverage row with no subject is refused. `topic_coverage` permits one —
+    // 0001 left `fingerprint` nullable — and this table deliberately does not:
+    // the row's whole meaning is "this span was fetched for THIS arc", so a null
+    // subject is a claim with no claimant that no read here would ever surface.
+    await expect(
+      sql`
+        insert into storyline_coverage (storyline_id, provider, span)
+        values (null, 'google-news',
+                tstzrange('2026-05-01T00:00:00Z', '2026-05-02T00:00:00Z', '[)'))
+      `.execute(harness.db),
+    ).rejects.toThrow();
+
+    // And the recreated table carries RLS, per 0019's convention. The blanket
+    // sweep cannot reach a table created after it, and a `down`/`up` pair is the
+    // other way a table comes back unprotected.
+    const { rows: rls } = await sql<{ relrowsecurity: boolean }>`
+      select relrowsecurity from pg_class where relname = 'storyline_coverage'
+    `.execute(harness.db);
+    expect(rls[0]?.relrowsecurity).toBe(true);
+
+    await sql`delete from topic_coverage where fingerprint = decode(repeat('a', 64), 'hex')`.execute(
+      harness.db,
+    );
+    await sql`delete from topics where fingerprint = decode(repeat('a', 64), 'hex')`.execute(
+      harness.db,
+    );
   });
 
   it("is a no-op the second time", async () => {
