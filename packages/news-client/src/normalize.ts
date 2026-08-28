@@ -451,15 +451,37 @@ export function foldTitleForIdentity(title: string): string {
  *
  * ## What that refuses to strip, and when it will start to matter
  *
- * The display name has to BE the domain stem. Probed over 12 outlets, 5 strip
- * and 7 do not:
+ * The display name has to BE the domain stem.
+ *
+ * **Every name below was observed in a real `<source>` element.** That property
+ * is what makes the table mean anything, and an earlier version of it did not
+ * have it: names were reasoned from the outlet rather than read off the wire, and
+ * four of them were wrong in the same direction. Google *abbreviates* mastheads —
+ * it sends "BBC", not "BBC News"; "WSJ", not "The Wall Street Journal" — so those
+ * outlets fold, where the invented names said they could not. A table of names no
+ * provider emits tests nothing.
+ *
+ * Measured on names actually observed, at two independent scales:
+ *
+ *     34.6% of outlets fail to fold   (194 / 561, and 56 / 162 in a second sample)
+ *     30.7% of items fail to fold     (62 / 202, general-news queries)
+ *
+ * Item-weighted sits below outlet-weighted because high-volume outlets
+ * disproportionately self-name. Which number matters depends on whether the
+ * caller is counting articles or newsrooms. **The failure population is the long
+ * tail, not the mastheads** — `apa.org` "American Psychological Association
+ * (APA)", `biv.com` "Business in Vancouver", `asia.nikkei.com` "Nikkei Asia" —
+ * which is the reverse of what the invented table implied. 13 observed outlets,
+ * 9 strip and 4 do not:
  *
  *     stripped       theguardian.com  " - The Guardian"
  *     stripped       reuters.com      " - Reuters"
- *     NOT stripped   nytimes.com      " - The New York Times"      expands the stem
- *     NOT stripped   indiatimes.com   " - Times of India"          reorders it
- *     NOT stripped   bbc.co.uk        " - BBC News"                adds a word
- *     NOT stripped   wsj.com          " - The Wall Street Journal" domain is an initialism
+ *     stripped       bbc.co.uk        " - BBC"          Google abbreviates it
+ *     stripped       cbc.ca           " - CBC"                  ''
+ *     stripped       wsj.com          " - WSJ"                  ''
+ *     NOT stripped   nytimes.com      " - The New York Times"   expands the stem
+ *     NOT stripped   ft.com           " - Financial Times"      initialism domain
+ *     NOT stripped   ecfr.eu          " - European Council on Foreign Relations"
  *
  * Inert while one provider supplies every title: an outlet that always appends
  * " - BBC News" folds to a stable key whether or not the tail comes off, and the

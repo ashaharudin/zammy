@@ -153,18 +153,44 @@ guess:
   stem, and that will surprise the phase that needs it most.** The comparison is
   loose about case, spaces, punctuation, a leading "the" and the public suffix —
   and about nothing else. So it strips ` - The Guardian` from `theguardian.com`
-  and ` | Globalnews.ca` from `globalnews.ca`, and does not strip:
+  and ` | Globalnews.ca` from `globalnews.ca`. Which outlets clear that bar is
+  not guessable from the masthead, so every name below was read off the wire:
 
   ```
+  STRIPPED       bbc.co.uk        - BBC                       Google ABBREVIATES it
+  STRIPPED       cbc.ca           - CBC                                 ''
+  STRIPPED       wsj.com          - WSJ                                 ''
+  STRIPPED       aljazeera.com    - Al Jazeera                          ''
   NOT STRIPPED   nytimes.com      - The New York Times        display name expands the stem
-  NOT STRIPPED   indiatimes.com   - Times of India            display name reorders the stem
-  NOT STRIPPED   bbc.co.uk        - BBC News                  display name adds a word
-  NOT STRIPPED   cbc.ca           | CBC News                            ''
-  NOT STRIPPED   wsj.com          - The Wall Street Journal   domain is an initialism
-  NOT STRIPPED   ft.com           - Financial Times                     ''
+  NOT STRIPPED   ft.com           - Financial Times           initialism domain
+  NOT STRIPPED   ecfr.eu          - European Council on Foreign Relations
   ```
 
-  Measured over a 12-outlet probe: 5 strip, 7 do not.
+  **Corrected 2026-08-28, and the correction matters more than the numbers.**
+  The names in the first version of this table were reasoned from the outlet
+  rather than read off the wire, and four were wrong in the same direction:
+  Google *abbreviates* mastheads, sending "BBC" rather than "BBC News" and "WSJ"
+  rather than "The Wall Street Journal", so those outlets fold where invented
+  names said they could not. A table of names no provider emits tests nothing,
+  and this one had propagated into `deriveAltKey`'s own docstring and into a test
+  that demonstrated the non-folding case with a string that in fact folds — an
+  assertion passing on a premise no upstream produces.
+
+  Measured on observed names only, at two independent scales:
+
+  ```
+  34.6% of outlets fail to fold   (194 / 561, and 56 / 162 in a second sample)
+  30.7% of items fail to fold     (62 / 202, general-news queries)
+   8.3% of items fail to fold     (10 / 120, one query's fixture corpus — a floor)
+  ```
+
+  Item-weighted sits below outlet-weighted because high-volume outlets
+  disproportionately self-name; the 8.3% floor comes from a corpus where
+  `marketbeat.com` and `tradingview.com` alone are 47 of 120 items. **The failure
+  population is the long tail, not the mastheads** — `apa.org` "American
+  Psychological Association (APA)", `biv.com` "Business in Vancouver",
+  `asia.nikkei.com` "Nikkei Asia" — which is the reverse of what the invented
+  table implied. Of 13 observed outlets, 9 strip and 4 do not.
 
   **Inert today**, because one provider means one spelling of the suffix: an
   outlet that always appends ` - BBC News` produces a stable key either way, and
