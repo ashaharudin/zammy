@@ -183,10 +183,22 @@ const MIN_SHARED_TOKENS = 2;
  *   - step 1 — 63 titles' peel moves. **62 rows' `title_tokens`** lose a token;
  *     **60 rows' `story_tokens`** are rewritten, of which **48 lose a token**
  *     and twelve only reorder, because the word the title stops donating is
- *     still in the description. That is a TENTH of version 8's footprint and it
- *     is the honest headline of this bump: 5,559 titles carry a delimited tail
- *     at all, and only 101 of them were refused by the internal-function-word
- *     rule alone. This is a narrow defect, not a broad one.
+ *     still in the description. 112 title tokens go in all, at most three off
+ *     any one row (`isNameCased` has the distribution). That is a TENTH of
+ *     version 8's footprint and it is the honest headline of this bump: 5,559
+ *     titles carry a delimited tail at all, and only 101 of them were refused
+ *     by the internal-function-word rule alone. This is a narrow defect, not a
+ *     broad one.
+ *
+ *     **Run on dev on 2026-08-28, not merely predicted from it**, which is the
+ *     point of having a dev archive at all: the hand-dispatched production job
+ *     should not be where a step sequence executes for the first time.
+ *     `regroup --tokens-only --days=90` re-tokenized all 32,279 rows, refreshed
+ *     **51 storyline profiles** over 44 groups, and regrouped and merged
+ *     nothing. Every row is at `tokens_version` 9, and re-deriving version 8's
+ *     peel and diffing it against what is now STORED gives back 62 and 48
+ *     exactly — the predictions, confirmed against the written rows rather than
+ *     against the archive they were computed from. No row gained a token.
  *   - **55 of the 63 are chrome and 8 are the headline's own words** — the
  *     eight are listed in `isNameCased`, which is where the rule that makes
  *     them is. The largest single beneficiary is one outlet: 18 titles are
@@ -211,9 +223,14 @@ const MIN_SHARED_TOKENS = 2;
  *     Peeling `india` moves each of those links by exactly 4.12. The version-6
  *     comparison flatters this change; the arithmetic does not.
  *   - step 2 — owed because `story_tokens` moves on 48 rows, and df is what the
- *     anchor rule reads. `india`'s df falls by 16 in a corpus of 29,485, which
- *     is a rounding error; the step is run because the derivation would
- *     otherwise be stale, not because the number is large.
+ *     anchor rule reads. Run on dev the same day, and it removed **two
+ *     token-day rows** (`perinatology`) and nothing else: `--rebuild` covers
+ *     `STORYLINE_DF_WINDOW_DAYS + 1` days, not step 1's retention window, so
+ *     the older Times of India rows that lost `india` sit outside it. That
+ *     asymmetry is by design — the linker reads only the trailing window — and
+ *     every in-window day for `india` was checked against a recount from
+ *     `story_tokens` and matched exactly. The step is owed because the
+ *     derivation would otherwise be stale, not because the number is large.
  *   - step 3 — **not owed at all**, for the reason given with the version list
  *     above. This is the first bump that skips it, so it is said twice.
  *   - step 4 — declined. Steps 1–3 re-derive tokens and profiles; they do not

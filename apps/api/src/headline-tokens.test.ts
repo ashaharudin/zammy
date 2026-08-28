@@ -321,16 +321,55 @@ describe("a masthead's own capitalization outranks the function word in it (toke
   });
 
   it.each([
-    // The cost, pinned so a future loosening of `isNameCased` trips on it
-    // rather than quietly widening it. These are the headline's own words and
-    // the rule takes them anyway — five titles of 32,279, listed in full in
-    // `isNameCased`.
-    ["Hamas disarmament plan includes destruction of tunnels — Board of Peace", "Hamas disarmament plan includes destruction of tunnels"],
-    ["Force is the only language West understands – Carl Zha to RT", "Force is the only language West understands"],
-    ["Help Gov Adeleke prepare for life after losing - Hope Uzodimma to Davido", "Help Gov Adeleke prepare for life after losing"],
-    ["CEBL on CBC: Finals - Winnipeg at Brampton", "CEBL on CBC: Finals"],
+    // The cost, in the archive's own rows and pinned so a future loosening of
+    // `isNameCased` trips on it rather than quietly widening it. All FIVE of
+    // the firm false positives are here, and they are the same five
+    // `isNameCased` names — the ticker one included, because a truncated
+    // segment is the likeliest of them to move under an unrelated `tokenRuns`
+    // change and so the one that most wants a pin.
+    [
+      "Hamas disarmament plan includes destruction of tunnels, arsenals — Board of Peace",
+      "Hamas disarmament plan includes destruction of tunnels, arsenals",
+    ],
+    [
+      "Bridgepoint To Offload $1.1B in Private Credit Stakes as Funds Seek Exit Routes - Ares Management (NYSE:A",
+      "Bridgepoint To Offload $1.1B in Private Credit Stakes as Funds Seek Exit Routes",
+    ],
+    [
+      "Force is the only language West understands – Carl Zha to RT",
+      "Force is the only language West understands",
+    ],
+    [
+      "Osun Guber: Help Gov Adeleke prepare for life after losing - Hope Uzodimma to Davido",
+      "Osun Guber: Help Gov Adeleke prepare for life after losing",
+    ],
+    // Three tokens, the most any one title loses. `Game # 1` comes off behind
+    // the fixture because the segment ahead of it now passes — a knock-on of
+    // `MAX_ATTRIBUTION_SEGMENTS`, and token-neutral, since digits are dropped
+    // by `keepable` anyway.
+    ["CEBL on CBC: Finals - Game # 1 - Winnipeg at Brampton", "CEBL on CBC: Finals"],
   ])("peels a Title Case tail that is the headline's own words: %s", (title, expected) => {
     expect(stripSourceAttribution(title)).toBe(expected);
+  });
+
+  it("peels an obituary dateline, which is the argued third of the cost", () => {
+    // Three more titles, counted apart from the five above because they are
+    // arguable both ways: the town is content, and peeling it is also what
+    // stops two Oregonian obituaries attaching to an Oregon poisoning arc.
+    expect(
+      stripSourceAttribution("Vera Mitchell Obituary (2026) - Corvallis, OR - Corvallis Gazette-Times - Legacy"),
+    ).toBe("Vera Mitchell Obituary (2026)");
+  });
+
+  it("does not guard the declarative form of the tail the question mark catches", () => {
+    // The carve-out is punctuation standing in for a semantic class, and the
+    // proxy leaks: `buy` is in `PAST_ONLY_LEMMAS`, so bare "Buy" is not a
+    // `VERB_FORMS` entry and nothing else refuses this. Pinned as a known hole
+    // rather than fixed — no title in the archive is this shape, and the rule
+    // that would close it is a wider one than the measurement supports.
+    expect(
+      stripSourceAttribution("Dell Technologies (NYSE:DELL) Hits New 52-Week High - Still a Buy"),
+    ).toBe("Dell Technologies (NYSE:DELL) Hits New 52-Week High");
   });
 });
 

@@ -223,19 +223,43 @@ function isAttribution(segment: string): boolean {
  * measured rather than tasteful: Title Case is also how a stock-tip desk writes
  * its own headline tail, and "- Time to Buy?", "- Still a Buy?", "- Opportunity
  * or Trap?" and "| BJP Set for Showdown?" were 9 of the 17 titles this rule
- * first got wrong. No outlet asks a question in its own name. `!` is NOT in the
- * carve-out — "Yahoo!" is a masthead — and no title in the archive needed it.
+ * first got wrong. `!` is NOT in the carve-out — "Yahoo!" is a masthead — and
+ * no title in the archive needed it.
+ *
+ * **The question mark is a PROXY, not the discriminator.** What is actually
+ * being refused is Title Case stock-tip prose; the interrogative is only how
+ * this archive spelled it, and the declarative form is unguarded — "- Still a
+ * Buy" peels, because `buy` sits in `PAST_ONLY_LEMMAS` and so is not a
+ * `VERB_FORMS` entry that would refuse it. That hole is pinned in the tests
+ * rather than closed: no title in the archive is that shape, and closing it
+ * needs a wider rule than sixty-three rows can justify. Do not read `?` as the
+ * discriminator and widen the rule on that reading.
  *
  * **What it costs, counted on the dev archive (2026-08-28, 32,279 articles).**
  * 63 titles peel differently; 55 of those are chrome and 8 are the headline's
- * own words. The eight, in full, because a false positive nobody listed is a
- * false positive nobody can weigh: "Board of Peace" (a TASS speaker line, and
- * the Gaza board is the story), "Ares Management (NYSE:A", "Carl Zha to RT",
- * "Hope Uzodimma to Davido", "Game # 1 - Winnipeg at Brampton" and three
- * Oregonian obituary datelines ("Portland, OR"). The datelines are arguably
- * chrome too — peeling them is what stops two obituaries attaching to an Oregon
- * poisoning arc — which is why the honest count is 55 right, 5 wrong, 3
- * argued.
+ * own words. The eight, by the TITLE they sit in, because a false positive
+ * nobody listed is a false positive nobody can weigh — and because naming the
+ * tail rather than the row leaves the count uncheckable:
+ *
+ *  - "... arsenals — Board of Peace" (TASS, and the Gaza board is the story)
+ *  - "... as Funds Seek Exit Routes - Ares Management (NYSE:A"
+ *  - "Force is the only language West understands – Carl Zha to RT"
+ *  - "Osun Guber: Help Gov Adeleke prepare ... - Hope Uzodimma to Davido"
+ *  - "CEBL on CBC: Finals - Game # 1 - Winnipeg at Brampton"
+ *  - three Oregonian obituary datelines ("... - Newberg, OR - The Oregonian")
+ *
+ * The datelines are arguably chrome too — peeling them is what stops two
+ * obituaries attaching to an Oregon poisoning arc — which is why the honest
+ * count is 55 right, 5 wrong, 3 argued.
+ *
+ * **The blast radius of one title is three tokens.** 112 title tokens go in
+ * total, over 62 rows: 22 rows lose one, 30 lose two, 10 lose three, and
+ * nothing loses four. Same shape on `story_tokens` — 23 / 19 / 6 over 48 rows.
+ * The ten three-token rows are six chrome ones ("Council on Foreign Relations"
+ * twice, "Conservative Party of Canada", "Office for National Statistics",
+ * "USC Viterbi | School of Engineering", "Investors Should Contact SueWallSt")
+ * and FOUR of the five false positives above, which is the whole of the tail
+ * risk in one line.
  *
  * A restricted list of masthead connectives (`of`/`and`/`on`/`for`, dropping
  * `to` and `at`) would take three of those five. It is not taken: it trades a
