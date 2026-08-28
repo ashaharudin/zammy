@@ -2,11 +2,16 @@
   "_comment": [
     "generateContent response payloads for the storyline labeler's tests",
     "(ADR-0011). The tests must never reach the live API, so these stand in for",
-    "it \u2014 but every SHAPE here was confirmed against the real endpoint on",
-    "2026-08-14 while the labeler was first run against it, including the two",
+    "it — but every SHAPE here was confirmed against the real endpoint, most",
+    "on 2026-08-14 while the labeler was first run against it, including the two",
     "that cost a label in that run: `truncated` (a reasoning model spending its",
     "whole output budget on thoughts) and the 503. `usageMetadata` is where the",
-    "cost-per-thousand estimate in docs/STORYLINE-LABELS.md comes from."
+    "cost-per-thousand estimate in docs/STORYLINE-LABELS.md comes from.",
+    "",
+    "`thinking` is the LATER shape, recorded 2026-08-28: the same endpoint and",
+    "the same model now split the candidate into a `thought: true` part and the",
+    "answer. Every fixture above it predates that and has a single bare part,",
+    "which is why none of them caught the client concatenating the two."
   ],
   "ok": {
     "candidates": [
@@ -106,5 +111,32 @@
         "finishReason": "STOP"
       }
     ]
+  },
+  "thinking": {
+    "candidates": [
+      {
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "*   Headline 1: Fort Hood helicopter crash kills three soldiers\n    *   Headline 2: Army opens investigation\n\n    *   The running story is the crash itself.\n\n    *   \"Fort Hood Crash\"",
+              "thought": true
+            },
+            {
+              "text": "Fort Hood Crash"
+            }
+          ]
+        },
+        "finishReason": "STOP",
+        "index": 0
+      }
+    ],
+    "usageMetadata": {
+      "promptTokenCount": 812,
+      "candidatesTokenCount": 3,
+      "thoughtsTokenCount": 71,
+      "totalTokenCount": 886
+    },
+    "modelVersion": "gemma-4-26b-a4b-it"
   }
 }

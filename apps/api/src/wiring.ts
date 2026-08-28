@@ -234,6 +234,10 @@ export function choreDepsFromConfig(
     // `GEMINI_MAX_RPM=15` a label is >=4 s of pacing, so 75 labels IS the whole
     // 300 s function ceiling (VERCEL-ALL-IN-SCOPE §3.3).
     maxLabels: config.CHORE_MAX_LABELS,
+    // The bound that matches what the PLATFORM enforces. `maxLabels` above is a
+    // count, and a count only bounds the clock if a label costs what the count
+    // was sized against — see `CHORE_LABEL_BUDGET_MS`.
+    labelBudgetMs: config.CHORE_LABEL_BUDGET_MS,
     lateCandidateSweep: config.STORYLINE_LATE_CANDIDATE_SWEEP,
     lateCandidatesChangedOnly: config.STORYLINE_LATE_CANDIDATE_CHANGED_ONLY,
   };

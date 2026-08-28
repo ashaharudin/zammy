@@ -538,6 +538,42 @@ const EnvSchema = z
      */
     CHORE_MAX_LABELS: z.coerce.number().int().min(1).max(100_000).default(50),
     /**
+     * Wall-clock ceiling for one nightly label pass, in ms — the OTHER half of
+     * the bound above, and the half that is actually about the function's
+     * deadline.
+     *
+     * `CHORE_MAX_LABELS` counts storylines, and its comment derives the count
+     * from a duration: 4 s of pacing each, so ~75 fills 300 s. That arithmetic
+     * has a term missing. A label costs pacing PLUS the model call, and the
+     * call is the larger term — ~8 s measured on 2026-08-14, and on 2026-08-28
+     * production ran 50 labels in ~25 minutes because every call was burning a
+     * full thinking generation before failing the label contract. The function
+     * was killed at 300 s: the `chore_runs` row stayed open, and the label-merge
+     * and graph passes never ran.
+     *
+     * So the count cannot bound the clock, because the count does not know what
+     * a label costs today. This does, and it is the bound that matches what the
+     * platform enforces.
+     *
+     * **240 s against `api/chores.ts`'s 300 s `maxDuration`.** The 60 s of
+     * headroom is for the passes ORDERED AFTER the label one — the label-agreement
+     * merge and the graph read — plus the two chore_runs writes. Those are what
+     * a killed pass loses, and leaving room for them is the whole point of
+     * stopping rather than being killed. It is not a limit on how much labelling
+     * gets done: the pass is resumable, so what a budget defers, the next night
+     * selects.
+     *
+     * Raise it with `maxDuration`, never past it. The CLI passes nothing, which
+     * is unbounded — a laptop run has no function ceiling and a terminal in front
+     * of it.
+     */
+    CHORE_LABEL_BUDGET_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(3_600_000)
+      .default(240_000),
+    /**
      * How long a label may wait for a rate-limit slot before giving up on the
      * model and taking the fallback. Bounds the pacer's queue, which the live
      * ingest tail would otherwise grow without limit during a promotion burst.

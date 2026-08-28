@@ -133,6 +133,7 @@ async function bootFromEnvironment(): Promise<StorylinePassDeps> {
       connection: config.DATABASE_SESSION_URL ? "DATABASE_SESSION_URL" : "DATABASE_URL",
       tls: config.DATABASE_SSL,
       maxLabels: config.CHORE_MAX_LABELS,
+      labelBudgetMs: config.CHORE_LABEL_BUDGET_MS,
       lateCandidateSweep: config.STORYLINE_LATE_CANDIDATE_SWEEP,
     },
     "chore route booted",

@@ -69,6 +69,27 @@ export interface BackfillOptions {
   /** Ceiling on how many storylines the label pass will touch. */
   maxLabels?: number;
   /**
+   * Wall-clock ceiling for the label pass, in ms. Absent is unbounded, which is
+   * right for a CLI run with a terminal in front of it.
+   *
+   * It exists for the caller that has a HARD deadline it does not control: the
+   * chores route runs inside a 300 s function, and `maxLabels` is a count, not
+   * a duration. A count only bounds the clock if every label costs what the
+   * count was sized against — and on 2026-08-28 production proved it does not.
+   * Every model call was failing the label contract and taking a full thinking
+   * generation to do it, so 50 labels ran ~25 minutes and the function was
+   * killed: the `chore_runs` row was left open, and the label-merge and graph
+   * passes that come after this one never ran at all.
+   *
+   * What a budget buys is the difference between STOPPING and BEING KILLED. A
+   * pass that stops returns its tally, the passes after it run, and the night is
+   * recorded; the labels it did not reach are exactly the labels the next night
+   * selects, because the pass is resumable by construction. A pass that is
+   * killed loses all three and looks, in the record, like a night that never
+   * happened.
+   */
+  labelBudgetMs?: number;
+  /**
    * Link exactly these groups and nothing else, ignoring the resume cursor.
    *
    * The cursor is a keyset over `(group_published, group_id)`, so a resume run
@@ -114,7 +135,13 @@ export interface BackfillOptions {
   /** Cooperative cancellation, so a long run stops at a clean group boundary. */
   signal?: AbortSignal;
   sleep?: (ms: number) => Promise<void>;
-  /** The wall clock the closing dormancy stamp measures silence against. */
+  /**
+   * The wall clock the closing dormancy stamp measures silence against — and
+   * the one `labelBudgetMs` measures elapsed time against, so a caller that
+   * injects a FROZEN clock has, by that act, disabled the budget. That is the
+   * right trade (one clock per run, rather than a second unmockable one), but
+   * it is worth knowing before wondering why a budget did nothing.
+   */
   now?: () => Date;
 }
 
@@ -127,6 +154,29 @@ export interface BackfillProgress {
   at?: Date;
 }
 
+/**
+ * What one label pass did, and — the field a truncated night needs — WHY it
+ * stopped.
+ *
+ * `exhausted` is the healthy answer: the pass walked every candidate and
+ * offered every one that needed a label. The other three each mean the tally
+ * below is a floor rather than the night's work, and they are worth telling
+ * apart: `max-labels` is the configured spend ceiling doing its job,
+ * `budget` is the wall clock running out first (which says the ceiling is
+ * mis-sized for what a label currently costs), and `signal` is a cancellation.
+ *
+ * Without this, a night that stopped early and a night with nothing to do
+ * produce the same-looking tally, which is how a truncation survives a month of
+ * clean nightly logs.
+ */
+export interface LabelPassTally {
+  model: number;
+  bigram: number;
+  none: number;
+  skipped: number;
+  stoppedBy: "exhausted" | "max-labels" | "budget" | "signal";
+}
+
 export interface BackfillReport {
   /** Groups the linker actually processed in THIS run. */
   linked: number;
@@ -137,7 +187,7 @@ export interface BackfillReport {
   failures: number;
   /** Storylines the closing stamp marked dormant (ADR-0011's Lifecycle). */
   dormant: number;
-  labelled: { model: number; bigram: number; none: number; skipped: number };
+  labelled: LabelPassTally;
   stats: StorylineStats;
   /** Wall clock, split so a slow half is visible as the slow half. */
   linkMs: number;
@@ -164,7 +214,7 @@ export async function backfillStorylines(
     merges: 0,
     failures: 0,
     dormant: 0,
-    labelled: { model: 0, bigram: 0, none: 0, skipped: 0 },
+    labelled: { model: 0, bigram: 0, none: 0, skipped: 0, stoppedBy: "exhausted" },
     stats: await readStorylineStats(deps.db),
     linkMs: 0,
     labelMs: 0,
@@ -366,7 +416,18 @@ export async function labelPass(
   options: BackfillOptions,
   sleep: (ms: number) => Promise<void>,
 ): Promise<BackfillReport["labelled"]> {
-  const tally = { model: 0, bigram: 0, none: 0, skipped: 0 };
+  const tally: BackfillReport["labelled"] = {
+    model: 0,
+    bigram: 0,
+    none: 0,
+    skipped: 0,
+    stoppedBy: "exhausted",
+  };
+  const now = options.now ?? ((): Date => new Date());
+  const startedAt = now().getTime();
+  const overBudget = (): boolean =>
+    options.labelBudgetMs !== undefined &&
+    now().getTime() - startedAt >= options.labelBudgetMs;
   // The free tier's published ceiling. Was 60 — four times the limit, which
   // the client now refuses to send regardless of what this says.
   const rate = options.labelRatePerMinute ?? 15;
@@ -411,7 +472,14 @@ export async function labelPass(
   };
 
   for (;;) {
-    if (options.signal?.aborted) break;
+    if (options.signal?.aborted) {
+      tally.stoppedBy = "signal";
+      break;
+    }
+    if (overBudget()) {
+      tally.stoppedBy = "budget";
+      break;
+    }
 
     const candidates = await readLabelCandidates(db, {
       limit: batchSize,
@@ -420,8 +488,21 @@ export async function labelPass(
     if (candidates.length === 0) break;
 
     for (const storyline of candidates) {
-      if (options.signal?.aborted) break;
-      if (options.maxLabels !== undefined && attempted >= options.maxLabels) break;
+      if (options.signal?.aborted) {
+        tally.stoppedBy = "signal";
+        break;
+      }
+      if (options.maxLabels !== undefined && attempted >= options.maxLabels) {
+        tally.stoppedBy = "max-labels";
+        break;
+      }
+      // Checked BEFORE the spacing sleep and the call, not after: a budget that
+      // notices it is spent only once the call has returned is a budget the
+      // caller's deadline has already passed.
+      if (overBudget()) {
+        tally.stoppedBy = "budget";
+        break;
+      }
 
       if (!shouldLabel(storyline)) {
         tally.skipped += 1;
@@ -443,7 +524,10 @@ export async function labelPass(
       options.onProgress?.({ phase: "label", done: attempted });
     }
 
-    if (options.maxLabels !== undefined && attempted >= options.maxLabels) break;
+    if (options.maxLabels !== undefined && attempted >= options.maxLabels) {
+      tally.stoppedBy = "max-labels";
+      break;
+    }
     const last = candidates[candidates.length - 1]!;
     after = { createdAt: last.createdAt, id: last.id };
     if (candidates.length < batchSize) break;

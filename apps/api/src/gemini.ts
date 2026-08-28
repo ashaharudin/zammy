@@ -143,7 +143,15 @@ const GenerateContentResponse = z.object({
     .array(
       z.object({
         content: z
-          .object({ parts: z.array(z.object({ text: z.string() }).partial()).optional() })
+          .object({
+            // `thought` is what separates the model's REASONING from its answer,
+            // and it must be in the schema to be readable below — a narrowed
+            // shape that drops the discriminator would leave two texts that
+            // cannot be told apart. See `answerText`.
+            parts: z
+              .array(z.object({ text: z.string(), thought: z.boolean() }).partial())
+              .optional(),
+          })
           .optional(),
         finishReason: z.string().optional(),
       }),
@@ -151,6 +159,43 @@ const GenerateContentResponse = z.object({
     .optional(),
   promptFeedback: z.object({ blockReason: z.string().optional() }).optional(),
 });
+
+/**
+ * The candidate's ANSWER — every part except the ones marked `thought`.
+ *
+ * A reasoning model returns its thinking as parts of the same candidate, and
+ * the answer as the parts after them. Concatenating the lot yields the
+ * transcript with the answer glued to the end, which is not the model's answer
+ * and never validates as a two-to-five-word label: it reaches
+ * `validateLabel`, fails the contract, and the storyline silently takes the
+ * bigram fallback. That is not a hypothetical — it is what production did.
+ *
+ * **The shape changed under a pinned model.** `gemma-4-26b-a4b-it` returned a
+ * single bare part when the labeler was first run against it on 2026-08-14 —
+ * which is what every fixture recorded that day looks like — and returned a
+ * `thought: true` part plus an answer part on 2026-08-28, same model id, same
+ * endpoint, same request. Pinning the model does not pin the response shape,
+ * so the discriminator is read rather than the parts being trusted to be one
+ * thing; `fixtures/gemini-label-responses.json` now carries both.
+ *
+ * Reports "all of them were thoughts" separately from "no parts at all"
+ * (`truncated`), because the two say different things: the first means the
+ * output budget ran out between the thinking and the answer, the second that
+ * the candidate carried no content. Both cost a label; only one is a reason to
+ * raise `maxOutputTokens`.
+ */
+function answerText(
+  parts: ReadonlyArray<{ text?: string; thought?: boolean }> | undefined,
+): { text: string } | { thoughtOnly: true } | null {
+  if (parts === undefined || parts.length === 0) return null;
+  const answer = parts
+    .filter((part) => part.thought !== true)
+    .map((part) => part.text ?? "")
+    .join("")
+    .trim();
+  if (answer) return { text: answer };
+  return parts.some((part) => part.thought === true) ? { thoughtOnly: true } : null;
+}
 
 /** The pacer's window. The published limit is per minute; so is this. */
 const WINDOW_MS = 60_000;
@@ -374,15 +419,12 @@ export function createGeminiClient(options: GeminiOptions): TextGenerator {
         const blocked = parsed.data.promptFeedback?.blockReason;
         if (blocked) return { ok: false, reason: `blocked: ${blocked}` };
 
-        const text = parsed.data.candidates?.[0]?.content?.parts
-          ?.map((part) => part.text ?? "")
-          .join("")
-          .trim();
-        if (!text) {
-          const finish = parsed.data.candidates?.[0]?.finishReason;
-          return { ok: false, reason: finish ? `empty (${finish})` : "empty response" };
-        }
-        return { ok: true, text };
+        const candidate = parsed.data.candidates?.[0];
+        const answer = answerText(candidate?.content?.parts);
+        if (answer !== null && "text" in answer) return { ok: true, text: answer.text };
+        const finish = candidate?.finishReason;
+        const what = answer === null ? "empty" : "thoughts only";
+        return { ok: false, reason: finish ? `${what} (${finish})` : `${what} response` };
       }
 
       return { ok: false, reason: lastReason };
