@@ -1,8 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { sql } from "kysely";
 import { readCoverage, recordCoverage } from "./coverage.js";
 import { upsertTopic } from "./ingest.js";
 import { migrateToLatest } from "./migrator.js";
 import { createTestDatabase, testFingerprint, type TestDatabase } from "./test-support.js";
+import { hexToBytea } from "./database.js";
 
 /**
  * topic_coverage (ARCHITECTURE 7.2) — what separates "nothing was published
@@ -64,5 +66,70 @@ describe("coverage recording", () => {
 
   it("keeps topics' coverage separate", async () => {
     expect(await readCoverage(harness.db, OTHER)).toEqual([]);
+  });
+
+  /**
+   * The provider column (migration 0021), and the decision that the reads above
+   * do not filter on it. These pin the state the decision rests on rather than
+   * new behaviour — every assertion above is unchanged by 0021, which is the
+   * evidence that the read path is untouched.
+   */
+  describe("the provider column", () => {
+    it("stamps every span Currents records", async () => {
+      // The premise `readCoverage` being provider-blind depends on: Currents is
+      // the only writer, so a blind read is exact. ADR-0012 makes that
+      // structural — a supplement has no end-of-results signal to record — and
+      // the deepening plane writes to `storyline_coverage` instead.
+      const { rows } = await sql<{ provider: string }>`
+        select distinct provider from topic_coverage
+      `.execute(harness.db);
+      expect(rows.map((row) => row.provider)).toEqual(["currents"]);
+    });
+
+    it("does not fold a foreign provider's rows into Currents' on write", async () => {
+      // `recordCoverage`'s merge is a delete-and-rewrite. Unscoped, it would
+      // take this row into the `range_agg`, coalesce it with the adjacent
+      // Currents span, and write the union back stamped 'currents' — coverage
+      // manufactured over a span Currents never fetched, which is the exact
+      // failure ADR-0012 exists to prevent, arriving through a write that was
+      // not thinking about providers.
+      //
+      // Nothing writes a row like this today; that is why it is inserted by
+      // hand. The predicate is here so the write is already correct on the day
+      // something does.
+      await sql`
+        insert into topic_coverage (fingerprint, provider, span)
+        values (${hexToBytea(OTHER)}, 'google-news',
+                tstzrange('2026-09-01T00:00:00Z', '2026-09-02T00:00:00Z', '[)'))
+      `.execute(harness.db);
+
+      await recordCoverage(harness.db, OTHER, span("2026-09-02T00:00:00Z", "2026-09-03T00:00:00Z"));
+
+      const { rows } = await sql<{ provider: string; from: Date; to: Date }>`
+        select provider, lower(span) as "from", upper(span) as "to"
+          from topic_coverage where fingerprint = ${hexToBytea(OTHER)}
+         order by provider
+      `.execute(harness.db);
+
+      expect(
+        rows.map((row) => `${row.provider} ${row.from.toISOString()}/${row.to.toISOString()}`),
+      ).toEqual([
+        "currents 2026-09-02T00:00:00.000Z/2026-09-03T00:00:00.000Z",
+        "google-news 2026-09-01T00:00:00.000Z/2026-09-02T00:00:00.000Z",
+      ]);
+
+      // And the read stays blind, which is the documented consequence rather
+      // than an oversight: it returns BOTH providers' spans as one list. Safe
+      // only while nothing writes a row like the one above — `coverage.ts`
+      // names the four things that must change together on the day one does.
+      expect(iso(await readCoverage(harness.db, OTHER))).toEqual([
+        "2026-09-01T00:00:00.000Z/2026-09-02T00:00:00.000Z",
+        "2026-09-02T00:00:00.000Z/2026-09-03T00:00:00.000Z",
+      ]);
+
+      await sql`delete from topic_coverage where fingerprint = ${hexToBytea(OTHER)}`.execute(
+        harness.db,
+      );
+    });
   });
 });
