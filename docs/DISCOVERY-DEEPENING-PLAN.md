@@ -13,25 +13,29 @@ repoints). Repo rules binding every phase: hand-written SQL migrations
 (ADR-0003), tokenizer changes bump `TOKENIZER_VERSION`, wire changes bump
 `PAGE_SHAPE_VERSION`, no threshold ships unmeasured.
 
-**ADR-0012 is under reconsideration, and this plan is written for the version
-that replaces it.** ADR-0012 assumes one coverage-bearing provider and a
-supplement that only ever adds breadth. The intent now is that **Google News
-provides search and breadth as well as deepening** — so it is not a supplement,
-and the asymmetry ADR-0012 defends is no longer the shape being built. The
-replacement ADR is a prerequisite for G5 and is tracked as part of it.
+**ADR-0012 is superseded by
+[ADR-0019](adr/0019-a-fetch-carries-its-own-reason-and-its-own-coverage.md), and
+this plan is written for that version.** ADR-0012 assumed one coverage-bearing
+provider and a supplement that only added breadth; Google News provides search
+and breadth as well as deepening, so it is not a supplement. ADR-0019 relocates
+the asymmetry rather than softening it: coverage becomes `(subject, provider,
+span)` — G3 — and what may feed the ranker becomes a property of the *fetch*
+(`search` | `breadth` | `deepening`) rather than of the provider.
 
-One consequence lands on **G2 and needs stating before it surprises someone**:
+The consequence for **G2**, spelled out in ADR-0019's second section:
 if one provider serves both a reader's search *and* a cloud-driven deepening
 fetch, then **`provider` stops being a proxy for "steered"**. The same provider
 would be unsteered answering a search or a breadth sample and steered answering
 the cloud, and no provider-level predicate can be true of both. G2's
 `DISCOVERY_PROVIDERS` is therefore correct today and has a shelf life: the plane
 has to become a property of the *sighting* — why was this fetched — rather than
-of the provider. That is a `sightings` column (`search` | `breadth` |
-`deepening`) and a predicate of `plane <> 'deepening'`, and it belongs to the
-phase that first makes one provider serve both roles. G2's own comment already
-anticipates this by refusing to build a registry early; the correction is a
-different shape from a registry, not a bigger one.
+of the provider. That is a `sightings.plane` column and a predicate of
+`plane <> 'deepening'`, and it belongs to the phase that first makes one provider
+serve both roles — **G5**. G2's own comment already anticipates this by refusing
+to build a registry early; the correction is a different shape from a registry,
+not a bigger one. Note ADR-0019 resolves the boundary case G2 raised: the
+storyline refresh is `deepening`, because the test is whether *our ranking chose
+the target*, not what triggered the call.
 
 **The organising principle.** Everything that protects the existing system lands
 *before* the first Google News article is ingested. G1–G4 are all either
@@ -329,6 +333,16 @@ Changes:
   this, 100 articles per arc become groups, groups become provisional
   storylines, and every promotion demands a model label against a 500/day
   quota that already has a backlog. Label demand must stay flat at zero.
+
+- **Add `sightings.plane`** (`search` | `breadth` | `deepening`) and move the
+  ranker's guard onto it, replacing G2's provider list. This is the phase that
+  first makes one provider serve two roles, so it is the phase that owes the
+  column — see [ADR-0019](adr/0019-a-fetch-carries-its-own-reason-and-its-own-coverage.md).
+  The storyline refresh is `deepening` even though a reader's click triggers it:
+  the test is whether our own ranking chose the target. Re-run G2's byte-identical
+  proof against the new predicate — with every existing sighting backfilled to a
+  non-deepening plane it must still hold, and if it does not, the backfill default
+  is wrong.
 
 **§9 survives this phase.** "Every upstream call traces back to a real user
 request" holds — a click is still the trigger. G7 is where that is traded.
