@@ -13,6 +13,30 @@ repoints). Repo rules binding every phase: hand-written SQL migrations
 (ADR-0003), tokenizer changes bump `TOKENIZER_VERSION`, wire changes bump
 `PAGE_SHAPE_VERSION`, no threshold ships unmeasured.
 
+**ADR-0012 is superseded by
+[ADR-0019](adr/0019-a-fetch-carries-its-own-reason-and-its-own-coverage.md), and
+this plan is written for that version.** ADR-0012 assumed one coverage-bearing
+provider and a supplement that only added breadth; Google News provides search
+and breadth as well as deepening, so it is not a supplement. ADR-0019 relocates
+the asymmetry rather than softening it: coverage becomes `(subject, provider,
+span)` — G3 — and what may feed the ranker becomes a property of the *fetch*
+(`search` | `breadth` | `deepening`) rather than of the provider.
+
+The consequence for **G2**, spelled out in ADR-0019's second section:
+if one provider serves both a reader's search *and* a cloud-driven deepening
+fetch, then **`provider` stops being a proxy for "steered"**. The same provider
+would be unsteered answering a search or a breadth sample and steered answering
+the cloud, and no provider-level predicate can be true of both. G2's
+`DISCOVERY_PROVIDERS` is therefore correct today and has a shelf life: the plane
+has to become a property of the *sighting* — why was this fetched — rather than
+of the provider. That is a `sightings.plane` column and a predicate of
+`plane <> 'deepening'`, and it belongs to the phase that first makes one provider
+serve both roles — **G5**. G2's own comment already anticipates this by refusing
+to build a registry early; the correction is a different shape from a registry,
+not a bigger one. Note ADR-0019 resolves the boundary case G2 raised: the
+storyline refresh is `deepening`, because the test is whether *our ranking chose
+the target*, not what triggered the call.
+
 **The organising principle.** Everything that protects the existing system lands
 *before* the first Google News article is ingested. G1–G4 are all either
 independently valuable or provably no-ops today, so the risky phase (G5) starts
@@ -26,12 +50,12 @@ G0 title-suffix strip ──────────────── (independ
 G1 alt_key identity ────┐
 G2 ranker isolation ────┤
 G3 coverage schema ─────┼── G5 attach + repoint refresh ── G6 measure ── G7 scheduler
-G4 adapter (flagged off)┘                                      │
-                                                          kill criteria
+G4 adapter (flagged off)┤                                      │
+G8 retire category ─────┘                                 kill criteria
 ```
 
-G1–G4 are mutually independent and can run in any order or in parallel. **G5 is
-gated on all four.** G7 is gated on G6 returning a yield worth having.
+G1–G4 and G8 are mutually independent and can run in any order or in parallel.
+**G5 is gated on all five.** G7 is gated on G6 returning a yield worth having.
 
 ---
 
@@ -237,6 +261,46 @@ comment saying why:
 no ceiling, so the governor has nothing to correct itself with. Needs a
 conservative self-imposed budget and the existing breaker.
 
+**What the query surface can and cannot express**, probed live 2026-08-27. Every
+row is measured, and the last one is the dangerous one:
+
+| `SearchParams` | Google News | Verdict |
+| --- | --- | --- |
+| `keywords` | `q`, matches headlines and entities | supported |
+| `startDate`/`endDate` | `after:` / `before:` | supported |
+| `domain` | **`site:` operator** — `site:cbc.ca` gave 100 items over 2 domains against 75 for the control | **supported** — unlike GNews, which refuses it |
+| `language` | `hl` + `ceid` | supported as an EDITION |
+| `country` | `gl` + `ceid` | **allowed** as an EDITION — see below |
+| `category` | topic feeds exist, but cannot carry a keyword | **must be refused** |
+
+**`country` is allowed, and it is an edition rather than a filter.** Measured:
+the same query across CA / US / GB / IN editions shared only 30–50% of titles,
+with visibly localised domains (`airdriecityview.com` for CA, `bcis.co.uk` for
+GB, `aninews.in` for IN) — so the lever is real. But it biases selection rather
+than restricting it: `asia.nikkei.com` and `axios.com` appeared in all four. So
+a country-scoped topic filled this way WILL hold some out-of-country outlets,
+which is weaker than the promise Currents' `country` makes. That is a decided,
+accepted cost — say so in the adapter rather than implying a filter. `language`
+behaves the same way and is stronger: `hl=en-CA` against `hl=fr-CA` on one
+keyword shared **1 of 100** guids.
+
+**`category` must be refused, and the reason is sharper than "unsupported".**
+Google News has category feeds (`/rss/headlines/section/topic/BUSINESS`, 70
+items) but they cannot take a keyword, and asking for both **silently discards
+the category**: `topic/BUSINESS?q=housing` returned a result set byte-identical
+to plain `search?q=housing` — 102 of 102 identical guids. `search?q=…&topic=…`
+ignores the parameter outright, exactly as Currents ignores a bogus one. A bogus
+topic returns HTTP 200 with zero items and no error.
+
+That is worse than the case ADR-0012 documented for GNews, which simply has no
+category filter and so has nothing to get wrong. Follow
+`gnews-client`'s `unservableReason` precedent exactly — read it first; its
+comment states the principle, that answering without the filter "would ingest
+off-topic articles into a category-filtered topic". **G8 removes category from
+the user's reach entirely, which makes this refusal unreachable rather than
+merely rare — implement it anyway**, because an unreachable guard that is
+already written is what keeps the next person from re-adding the parameter.
+
 **Off by default**, following `GNEWS_ENABLED`'s precedent: adding a provider
 changes what gets ingested and how budget is spent, so it is an explicit
 decision rather than something that happens when a package is installed.
@@ -269,6 +333,16 @@ Changes:
   this, 100 articles per arc become groups, groups become provisional
   storylines, and every promotion demands a model label against a 500/day
   quota that already has a backlog. Label demand must stay flat at zero.
+
+- **Add `sightings.plane`** (`search` | `breadth` | `deepening`) and move the
+  ranker's guard onto it, replacing G2's provider list. This is the phase that
+  first makes one provider serve two roles, so it is the phase that owes the
+  column — see [ADR-0019](adr/0019-a-fetch-carries-its-own-reason-and-its-own-coverage.md).
+  The storyline refresh is `deepening` even though a reader's click triggers it:
+  the test is whether our own ranking chose the target. Re-run G2's byte-identical
+  proof against the new predicate — with every existing sighting backfilled to a
+  non-deepening plane it must still hold, and if it does not, the backfill default
+  is wrong.
 
 **§9 survives this phase.** "Every upstream call traces back to a real user
 request" holds — a click is still the trigger. G7 is where that is traded.
@@ -342,6 +416,58 @@ Do not take this phase early. Its payoff depends entirely on G6, and its risk
 real traffic can demonstrate.
 
 ---
+
+## G8 — Retire category as a user selection
+
+**Depends on**: nothing. Independent of the rest, and it should land before G5.
+
+**Why**: the deepening plane cannot express a category at all (see G4 — asking
+for one silently discards it), so every category-scoped topic is a topic one of
+the two planes can never honestly answer. Rather than carry a filter that only
+half the system can serve, the filter goes.
+
+The usage numbers support it. Production, 2026-08-27:
+
+```
+topics                        341
+  country-scoped              114
+  category-scoped              29
+article memberships in category-scoped topics   393
+```
+
+Country is four times the demand and is served (as an edition bias). Category is
+29 topics, and is the one filter that would silently lie.
+
+**Scope**: remove `category` as something a reader can choose. The filter chip
+row in `apps/web/src/filterChips.ts` offers `ChipKind = "country" | "category"`;
+category comes out. The API stops accepting it, and the reference payload stops
+advertising the taxonomy.
+
+**Decide and record — this is the substance of the phase, not the chip removal**:
+
+- **What happens to `topics.category` and the fingerprint.** `canonical.ts`
+  folds category into `fingerprintOf({ keywords, language, country, category })`.
+  Dropping it from the fingerprint **re-identifies every existing
+  category-scoped topic** — 29 rows whose accumulated coverage and 393 article
+  memberships would be orphaned under a fingerprint nothing will compute again.
+  Leaving the column and the fingerprint alone, and only refusing new
+  category-scoped searches, costs nothing and orphans nothing. Prefer the second
+  unless you can show the first is needed; either way, say which and why.
+- **Whether the reference endpoint keeps serving the taxonomy.** The Currents
+  adapter still parses it from a recorded 400 body, and `ARCHITECTURE` documents
+  it. Removing the plumbing is a bigger change than removing the chip.
+- **Whether any existing category-scoped topic still needs to be readable.** A
+  bookmarked URL carrying a category should degrade to the same search without
+  it, not 400. Check `apps/web/src/route.ts` for what a stale URL does today.
+
+**Explicitly out**: dropping the `topics.category` column, deleting the 29
+topics, and anything about how Currents maps category on the wire. This phase
+removes a *choice*, not a schema.
+
+**Done when**: no reader can select a category; a URL that carries one still
+resolves to a usable search; the 29 existing topics are either untouched or
+migrated deliberately with the decision recorded; `apps/web` and `apps/api`
+tests cover the stale-URL path.
 
 ## Already landed
 

@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0019 (the provider ranking; every failure it prevents is still prevented, by the fetch's own reason and its own coverage rows rather than by privileging one provider)
 ---
 
 # A second provider adds breadth, but never coverage

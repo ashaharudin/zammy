@@ -77,8 +77,19 @@ GET news.google.com/rss/search
   ?q=climate+after:2026-08-10+before:2026-08-12&hl=en-CA&gl=CA&ceid=CA:en
 ```
 
-- **`after:`/`before:` work.** A `2026-08-10 → 2026-08-12` window returned 100
-  items *strictly inside* it. `when:1d` returned 100 items spanning 19h43m.
+- **`after:`/`before:` work, but they resolve at US Pacific midnight rather than
+  UTC** — found by G4 and confirmed here, twice, with the DST offset tracking:
+
+  ```
+  after:2026-08-20 before:2026-08-22  → 07:00Z … 07:00Z   (midnight PDT, UTC-7)
+  after:2026-02-10 before:2026-02-12  → 08:00Z … 08:00Z   (midnight PST, UTC-8)
+  ```
+
+  So a window is strictly inside the requested one *in Pacific terms* and offset
+  seven or eight hours from it in UTC. An adapter must pad a day outward at each
+  edge: wider over-fetches harmlessly, whereas narrower would let a caller record
+  coverage over hours it never actually fetched. `when:1d` returned 100 items
+  spanning 19h43m.
 - **Depth ≥ 18 months.** `"bank of canada" after:2025-02-01 before:2025-02-03`
   returned 20 items inside the window from **17 distinct publisher domains**
   (`barrons.com`, `bbc.com`, `cbc.ca`, `financialpost.com`, …). That is ~18×
