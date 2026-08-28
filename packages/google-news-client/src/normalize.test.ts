@@ -195,19 +195,28 @@ describe("alt_key, which is the only identity this provider can have", () => {
   });
 
   it("does NOT fold when the display name is not the domain stem — accepted, ADR-0018", () => {
-    // The known hole, asserted rather than hoped about. `bbc.co.uk` writes
-    // "BBC News", which adds a word to the stem, so the strip refuses and the
-    // outlet's name stays in the fold. A Google item and its Currents twin then
-    // mint two rows. ADR-0018 records this as an accepted cost with the fix — a
+    // The known hole, asserted rather than hoped about.
+    //
+    // The outlet here is `nytimes.com`, and the choice matters: ADR-0018's own
+    // table reaches for "BBC News" and "The Wall Street Journal", but Google
+    // OBSERVABLY emits "BBC" and "WSJ", both of which fold. Demonstrating the
+    // hole with a name no provider sends would assert nothing. "The New York
+    // Times" is a name Google was observed emitting and it expands the stem, so
+    // the strip refuses and the outlet's name stays in the fold — the Google
+    // item and its Currents twin then mint two rows.
+    //
+    // ADR-0018 records this as an accepted cost with the fix — a
     // display-name-to-domain map — deferred to the phase that has a corpus.
-    // This adapter does not build that map; it measures the hole (below).
+    // This adapter does not build that map; it measures the hole, in
+    // `fixture-client.test.ts`, where the four measurements disagree
+    // informatively.
     const viaGoogle = one({
-      title: "Bank of Canada holds its policy rate - BBC News",
-      sourceUrl: "https://www.bbc.co.uk",
+      title: "Bank of Canada holds its policy rate - The New York Times",
+      sourceUrl: "https://www.nytimes.com",
       pubDate: "Thu, 20 Aug 2026 17:09:53 GMT",
     });
     const viaCurrents = deriveAltKey(
-      "bbc.co.uk",
+      "nytimes.com",
       "Bank of Canada holds its policy rate",
       "2026-08-20T09:15:00.000Z",
     );

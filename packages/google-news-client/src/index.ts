@@ -43,10 +43,13 @@
  *   - **`alt_key` is the only identity it can have.** The `CBM…` link is not
  *     one, so ADR-0018's fallback key is load-bearing here rather than a bonus,
  *     and an item that cannot carry one is DROPPED (`no_identity`) rather than
- *     stored keyed on a redirect. Measured on the captures: 110 of 120 items
- *     fold onto the key a clean-titled twin would produce, and that 92% is a
- *     floor from a favourable corpus — 7 of 12 major outlets do not strip
- *     (`normalize.ts`, and the measurement in `fixture-client.test.ts`).
+ *     stored keyed on a redirect. How often the fold actually reaches the
+ *     Currents twin is measured rather than assumed: **~35% of outlets and
+ *     ~31% of articles do NOT fold**, because Google writes the outlet's
+ *     display name and `deriveAltKey` peels it only when it collapses to the
+ *     domain stem. The committed fixtures fold 110 of 120, but that corpus is
+ *     one finance query and unrepresentative — the four measurements and their
+ *     spread are in `fixture-client.test.ts`.
  *   - **`source_domain` from `<source url>`, not from the URL**, and a null
  *     `description`. All four departures from the other adapters are argued at
  *     their site in `normalize.ts`.

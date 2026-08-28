@@ -182,14 +182,37 @@ describe("how often the fold actually works, measured on the captures", () => {
    * captures are one query — `"bank of canada"` — so the corpus is dominated by
    * market-data and PR outlets whose display name IS their domain stem
    * (`marketbeat.com` "MarketBeat", `tradingview.com` "TradingView": 47 of 120
-   * items between them). Not one of the mastheads ADR-0018 names as failing
-   * appears in it at all. A general news corpus would be far worse, and the
-   * companion test below shows why: checked directly against `deriveAltKey`,
-   * 7 of 12 major outlets do not strip.
+   * items between them). It is a floor from a favourable sample.
    *
-   * So this is a floor, from a favourable sample. Do not plan against it.
+   * ## The numbers G5 and G6 should actually plan against
+   *
+   * Four measurements, all against `deriveAltKey` as shipped. They disagree,
+   * and the disagreement is the finding rather than noise:
+   *
+   * ```
+   *  8.3%  fail   item-weighted, this fixture corpus        10 / 120 items
+   * 30.7%  fail   item-weighted, two general-news queries   62 / 202 items
+   * 34.6%  fail   outlet-weighted, pairs observed here      56 / 162 outlets
+   * 34.6%  fail   outlet-weighted, a 561-outlet harvest    194 / 561 outlets
+   * ```
+   *
+   * The last is a separate, larger harvest run during review; the third is this
+   * session's own, from the fixture captures plus two general-news probes. Two
+   * independent samples landing on the same figure to one decimal is worth more
+   * than either alone.
+   *
+   * **Plan against ~35% at outlet level, ~31% at item level.** The item-weighted
+   * rate is better than the outlet-weighted one because high-volume outlets
+   * disproportionately self-name, and this fixture's 8.3% is better again only
+   * because a finance query is nearly all such outlets. Which of the two a
+   * caller wants depends on whether it is counting articles or newsrooms; the
+   * gap between 8.3% and 30.7% is how much a single query's subject can move it.
+   *
+   * A third of the deepening plane's articles failing to fold onto their
+   * Currents twin is the accepted cost ADR-0018 named, now with a size on it.
+   * The fix is a display-name-to-domain map and it is still out of scope here.
    */
-  it("folds for 110 of 120 items — a floor, from an unrepresentative corpus", async () => {
+  it("folds for 110 of 120 items here — the floor, not the planning number", async () => {
     // Both windows, because one search cannot see all 120: the cap truncates
     // at 100, which is itself the behaviour asserted two blocks down.
     const gn = await client();
@@ -213,36 +236,60 @@ describe("how often the fold actually works, measured on the captures", () => {
     for (const page of pages) expect(page.normalization.dropped.no_identity).toBe(0);
   });
 
-  it("but 7 of 12 major outlets do not strip, which is what G5 should plan against", () => {
-    // ADR-0018's 12-outlet probe, re-run against `deriveAltKey` itself rather
-    // than quoted, so it fails here if the strip rule ever changes. Every
-    // "not stripped" row is an outlet whose Google item mints a second article
-    // rather than folding onto the Currents one.
+  /**
+   * **Every display name below is one Google was OBSERVED emitting**, read out
+   * of `<source>` elements in live feeds (2026-08-28, two general-news
+   * queries). That property is the whole point of this test: an invented name
+   * asserts the fold against a string no provider sends, which is a test of
+   * nothing.
+   *
+   * It is also how the earlier version of this test was wrong. It borrowed
+   * ADR-0018's masthead spellings, and Google abbreviates mastheads:
+   *
+   *     ADR-0018 assumed        Google actually emits
+   *     "BBC News"              "BBC"         → folds
+   *     "CBC News"              "CBC"         → folds
+   *     "The Wall Street Journal"  "WSJ"      → folds
+   *     "Al Jazeera English"    "Al Jazeera"  → folds
+   *     "The New York Times"    "The New York Times"   → still does not
+   *
+   * Four of the seven supposed failures fold on real data. `indiatimes.com` is
+   * dropped from the probe rather than corrected, because its real display name
+   * was never observed and guessing one is the mistake being fixed.
+   *
+   * The corrected picture is roughly the INVERSE of what the invented names
+   * implied: major outlets mostly fold, and the failures are the long tail
+   * whose display name is a full organisation name rather than a masthead.
+   */
+  it("9 of 13 observed outlets strip, and the failures are the long tail", () => {
     const published = "2026-08-20T12:00:00.000Z";
     const strips = (domain: string, display: string) =>
       deriveAltKey(domain, `Some headline - ${display}`, published) ===
       deriveAltKey(domain, "Some headline", published);
 
-    // The display name IS the domain stem, loosely compared.
+    // The display name collapses to the domain stem, loosely compared.
     for (const [domain, display] of [
       ["theguardian.com", "The Guardian"],
       ["reuters.com", "Reuters"],
       ["theglobeandmail.com", "The Globe and Mail"],
       ["npr.org", "NPR"],
       ["cnn.com", "CNN"],
+      ["bbc.co.uk", "BBC"],
+      ["cbc.ca", "CBC"],
+      ["wsj.com", "WSJ"],
+      ["aljazeera.com", "Al Jazeera"],
     ] as const) {
       expect(strips(domain, display), `${domain} should strip`).toBe(true);
     }
 
-    // It expands, reorders, adds a word, or the domain is an initialism.
+    // It expands the stem, or is a full organisation name. Each of these is an
+    // outlet whose Google item mints a second article rather than folding onto
+    // the Currents one.
     for (const [domain, display] of [
       ["nytimes.com", "The New York Times"],
-      ["bbc.co.uk", "BBC News"],
-      ["wsj.com", "The Wall Street Journal"],
-      ["indiatimes.com", "Times of India"],
-      ["cbc.ca", "CBC News"],
       ["ft.com", "Financial Times"],
-      ["aljazeera.com", "Al Jazeera English"],
+      ["abcnews.com", "ABC News - Breaking News, Latest News and Videos"],
+      ["ecfr.eu", "European Council on Foreign Relations"],
     ] as const) {
       expect(strips(domain, display), `${domain} should NOT strip`).toBe(false);
     }
