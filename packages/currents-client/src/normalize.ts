@@ -2,6 +2,7 @@ import {
   canonicalizeUrl,
   collapseWhitespace,
   dedupeStrings,
+  deriveAltKey,
   deriveDedupKey,
   finalizeSighting,
   firstNonEmpty,
@@ -57,6 +58,11 @@ export function normalizeSighting(raw: RawSighting): NormalizeOutcome {
     return { ok: false, reason: "bad_published", detail: raw.published };
   }
 
+  // Both derived here, from the same values that are about to be stored, so the
+  // identity and the thing it identifies cannot disagree (ADR-0018).
+  const domain = sourceDomain(url);
+  const published = new Date(publishedMs).toISOString();
+
   return finalizeSighting({
     // Currents emits real UUIDs, so they are used verbatim rather than derived.
     // Every `sightings` row predating the second provider carries one of these,
@@ -66,6 +72,7 @@ export function normalizeSighting(raw: RawSighting): NormalizeOutcome {
     providerSightingId: raw.id,
     url,
     dedupKey: deriveDedupKey(url),
+    altKey: deriveAltKey(domain, title, published),
     title,
     description: collapseWhitespace(raw.description) || null,
     author: collapseWhitespace(raw.author) || null,
@@ -78,8 +85,8 @@ export function normalizeSighting(raw: RawSighting): NormalizeOutcome {
     // values mean, so lowercasing it would be destroying information we cannot
     // recover without re-fetching (PROBE-FINDINGS 1).
     sourceCategories: dedupeStrings((raw.source_category ?? []).map(collapseWhitespace)),
-    sourceDomain: sourceDomain(url),
-    published: new Date(publishedMs).toISOString(),
+    sourceDomain: domain,
+    published,
     raw,
   });
 }

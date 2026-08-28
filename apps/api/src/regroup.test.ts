@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
-import { deriveDedupKey, type Sighting } from "@zammy/currents-client";
+import { deriveAltKey, deriveDedupKey, type Sighting } from "@zammy/currents-client";
 import {
   createProvisionalStoryline,
   ingestSightings,
@@ -42,6 +42,7 @@ function sighting(domain: string, title: string, published: string): Sighting {
     provider: "currents",
     providerSightingId: url,
     dedupKey: deriveDedupKey(url),
+    altKey: deriveAltKey(domain, title, published),
     title,
     description: null,
     author: null,

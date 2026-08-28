@@ -6,7 +6,7 @@ import {
   readTrending,
   type TrendingDeps,
 } from "./trending-service.js";
-import { deriveDedupKey } from "@zammy/currents-client";
+import { deriveAltKey, deriveDedupKey } from "@zammy/currents-client";
 import { emptyStats, type SearchResult } from "@zammy/news-client";
 import {
   attachGroup,
@@ -99,12 +99,14 @@ async function storeArticles(
     sightings: articles.map((a) => {
       seeded += 1;
       const url = `https://${a.domain}/seeded-${seeded}`;
+      const published = new Date(NOW.getTime() - a.ageHours * 3_600_000).toISOString();
       return {
         id: randomUUID(),
         url,
         provider: "currents",
         providerSightingId: url,
         dedupKey: deriveDedupKey(url),
+        altKey: deriveAltKey(a.domain, a.title, published),
         title: a.title,
         description: null,
         author: null,
@@ -113,7 +115,7 @@ async function storeArticles(
         categories: [],
         sourceCategories: [],
         sourceDomain: a.domain,
-        published: new Date(NOW.getTime() - a.ageHours * 3_600_000).toISOString(),
+        published,
         raw: {},
       };
     }),
@@ -643,6 +645,7 @@ describe("the sample waits for the names it started (§10.1)", () => {
             provider: "currents",
             providerSightingId: url,
             dedupKey: deriveDedupKey(url),
+            altKey: deriveAltKey(page!.domain, page!.title, page!.published),
             title: page!.title,
             description: page!.description ?? null,
             author: null,

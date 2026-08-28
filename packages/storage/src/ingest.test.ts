@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sql } from "kysely";
-import { deriveDedupKey, type Sighting } from "@zammy/news-client";
+import { deriveAltKey, deriveDedupKey, type Sighting } from "@zammy/news-client";
 import { hexToBytea } from "./database.js";
 import { ingestSightings, upsertTopic } from "./ingest.js";
 import { migrateToLatest } from "./migrator.js";
@@ -20,6 +20,28 @@ import {
  *
  * Expected counts (100, 42, 50) come from the probe, not from re-deriving them
  * here — PROBE-FINDINGS 4 is the independent source of truth.
+ *
+ * **42 URLs, 41 articles** since ADR-0018. The gap is the fallback key catching
+ * a duplicate the URL cannot, and it is the SAME pair ADR-0002 measured and
+ * declined: "42 unique URLs against 41 unique title+source pairs, so it would
+ * merge exactly one pair — no evidence, and a false merge is worse than a
+ * visible duplicate". The evidence is now in hand, and it is in this fixture.
+ * The pair is one Times of India blog post, "First-World Flames", emitted 15
+ * seconds apart under two section paths:
+ *
+ *     /blogs/gen-zedits/first-world-flames-2
+ *     /blogs/toi-edit-page/first-world-flames
+ *
+ * Same domain, same headline, same opening sentence — a section-path duplicate
+ * of exactly the `ansa.it` and `rte.ie` class the production measurement found
+ * 411 of. So ADR-0002's caution was right and its conclusion has expired.
+ *
+ * Both numbers are asserted below, and deliberately: 42 distinct `dedup_key`s
+ * still proves canonicalization neither over- nor under-collapses (the original
+ * guard, unchanged), and 41 `articles` proves the fallback key caught the one
+ * thing the URL could not. A future change that moved 42 would be a
+ * canonicalization regression; one that moved 41 would be an alt-key regression.
+ * Kept apart, they say which.
  */
 
 const CLIMATE_TOPIC = testFingerprint("c11a1e");
@@ -53,7 +75,11 @@ describe("the collapse over the recorded duplication payload", () => {
     await harness.drop();
   });
 
-  it("collapses 100 sightings into 42 articles", async () => {
+  it("collapses 100 sightings into 41 articles", async () => {
+    // 42 distinct URLs go in; 41 rows come out. The header explains which pair
+    // merged and why the evidence for merging it is now good enough.
+    expect(new Set(sightings.map((s) => s.dedupKey)).size).toBe(42);
+
     const result = await ingestSightings(harness.db, {
       timeZone: "UTC",
       fingerprint: CLIMATE_TOPIC,
@@ -63,19 +89,43 @@ describe("the collapse over the recorded duplication payload", () => {
     expect(result).toMatchObject({
       sightingsReceived: 100,
       sightingsInserted: 100,
-      articlesCreated: 42,
+      articlesCreated: 41,
     });
     // Every created article — and only those — is handed on to grouping
     // (§14.3). An article that already existed has already been offered a
     // group, and regrouping it on every re-sighting would let a group drift.
-    expect(result.createdArticles).toHaveLength(42);
+    expect(result.createdArticles).toHaveLength(41);
 
     const [sightingRows, articleRows] = await Promise.all([
       harness.db.selectFrom("sightings").select(({ fn }) => fn.countAll().as("n")).executeTakeFirstOrThrow(),
       harness.db.selectFrom("articles").select(({ fn }) => fn.countAll().as("n")).executeTakeFirstOrThrow(),
     ]);
+    // Every sighting is still its own row. The alt key collapses ARTICLES; an
+    // emission is never discarded, so nothing that arrived is lost.
     expect(Number(sightingRows.n)).toBe(100);
-    expect(Number(articleRows.n)).toBe(42);
+    expect(Number(articleRows.n)).toBe(41);
+  });
+
+  it("keeps both URLs' sightings on the one article the alt key folded them onto", async () => {
+    // The fold has to be a MERGE, not a preference: the loser's emission must
+    // hang off the winning row, or the alt key would be silently dropping
+    // sightings instead of collapsing articles.
+    const pair = sightings.filter((s) => s.title === "First-World Flames");
+    expect(new Set(pair.map((s) => s.dedupKey)).size).toBe(2);
+    expect(new Set(pair.map((s) => s.altKey)).size).toBe(1);
+
+    const rows = await harness.db
+      .selectFrom("sightings")
+      .select("article_id")
+      .where(
+        "dedup_key",
+        "in",
+        pair.map((s) => hexToBytea(s.dedupKey)),
+      )
+      .execute();
+
+    expect(rows).toHaveLength(pair.length);
+    expect(new Set(rows.map((row) => row.article_id)).size).toBe(1);
   });
 
   it("gives the 50×-emitted roundup page a sighting_count of 50", async () => {
@@ -134,7 +184,7 @@ describe("the collapse over the recorded duplication payload", () => {
       .selectFrom("articles")
       .select(({ fn }) => fn.countAll().as("n"))
       .executeTakeFirstOrThrow();
-    expect(Number(articleRows.n)).toBe(42);
+    expect(Number(articleRows.n)).toBe(41);
   });
 
   it("records topic membership per article, not per sighting", async () => {
@@ -144,7 +194,7 @@ describe("the collapse over the recorded duplication payload", () => {
       .where("fingerprint", "=", hexToBytea(CLIMATE_TOPIC))
       .executeTakeFirstOrThrow();
 
-    expect(Number(links.n)).toBe(42);
+    expect(Number(links.n)).toBe(41);
   });
 
   it("links a second topic to existing articles without duplicating them", async () => {
@@ -175,7 +225,7 @@ describe("the collapse over the recorded duplication payload", () => {
       .selectFrom("articles")
       .select(({ fn }) => fn.countAll().as("n"))
       .executeTakeFirstOrThrow();
-    expect(Number(articleRows.n)).toBe(42);
+    expect(Number(articleRows.n)).toBe(41);
   });
 
   it("ingesting nothing is a no-op", async () => {
@@ -204,6 +254,7 @@ describe("the earliest sighting owns the display fields", () => {
     provider: "currents",
     providerSightingId: URL,
     dedupKey: deriveDedupKey(URL),
+    altKey: deriveAltKey("example.com", title, published),
     title,
     description: `${title} description`,
     author: null,
@@ -339,6 +390,7 @@ describe("a fold re-derives the day slots of the storylines holding the article"
     provider: "currents",
     providerSightingId: input.url,
     dedupKey: deriveDedupKey(input.url),
+    altKey: deriveAltKey("example.com", "Harbour spill widens", input.published),
     title: "Harbour spill widens",
     description: "Crews worked through the night",
     author: null,

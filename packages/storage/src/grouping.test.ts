@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { deriveDedupKey, type Sighting } from "@zammy/news-client";
+import { deriveAltKey, deriveDedupKey, type Sighting } from "@zammy/news-client";
 import { ingestSightings, upsertTopic } from "./ingest.js";
 import { migrateToLatest } from "./migrator.js";
 import {
@@ -51,6 +51,7 @@ function story(overrides: {
     provider: "currents",
     providerSightingId: overrides.url,
     dedupKey: deriveDedupKey(overrides.url),
+    altKey: deriveAltKey(new URL(overrides.url).hostname, overrides.title, overrides.published),
     title: overrides.title,
     description: null,
     author: null,

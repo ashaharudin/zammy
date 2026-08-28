@@ -52,6 +52,7 @@ function scriptedClient(rawCounts: number[], errorAt?: number): NewsClient & {
           providerSightingId: `p${index}-${item}`,
           url: `https://example.com/p${index}-${item}`,
           dedupKey: `${index}-${item}`.padStart(64, "0"),
+          altKey: null,
           title: "t",
           description: null,
           author: null,

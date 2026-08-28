@@ -277,6 +277,225 @@ export function deriveDedupKey(canonicalUrl: string): string {
 }
 
 /**
+ * The FALLBACK article identity: sha256 of `(source domain, folded title, UTC
+ * day)`, hex — or `null` when the inputs cannot carry an identity (ADR-0018).
+ *
+ * Here, beside `canonicalizeUrl`/`deriveDedupKey`, for the reason this module
+ * already gives about those two: one function, so the identity and the thing it
+ * identifies cannot disagree. An adapter that mapped a provider's wire shape to
+ * a title and then derived the key somewhere else would eventually derive it
+ * from a different title than the one it stored.
+ *
+ * ## Why a second key exists at all
+ *
+ * ADR-0002 made the canonical URL the whole of an article's identity, on
+ * evidence that a `(title, source)` secondary key would have merged exactly one
+ * pair in the probe. On the archive we now have, that is no longer true.
+ * Measured read-only against production 2026-08-27, 37,077 articles collapse to
+ * 36,666 of these keys: **411 rows (1.1%) are duplicates URL identity is
+ * already failing to catch** — one `space.com` eclipse liveblog under six slug
+ * variants, one `standard.co.uk` story under five slugs with the keywords
+ * reordered, `rte.ie` and `haaretz.com` section and paywall variants of one
+ * article id.
+ *
+ * ## Fallback, never replacement
+ *
+ * Ingest resolves URL key → alt key → insert (`ingestSightings`). Titles drift
+ * and URLs do not, so making this the PRIMARY key would split an article whose
+ * headline was edited between two emissions — a regression URL identity does not
+ * have. Keeping the URL first means the URL-keyed majority behaves exactly as it
+ * did, and only a URL never seen before consults this.
+ *
+ * ## The three ways this refuses to mint a key
+ *
+ * A refusal is a `null`, and a `null` alt key means the article is identified by
+ * its URL alone — exactly today's behaviour. Refusing is therefore always the
+ * safe direction, which is why each of these is a refusal rather than a guess:
+ *
+ *  - **No source domain.** The domain is what scopes the key to one newsroom;
+ *    without it, two outlets running the same wire headline on the same day
+ *    would collapse into one article, destroying the distinct-source signal
+ *    ADR-0002 protects.
+ *  - **A title the SOURCE already truncated** — one ending `...` or `…`.
+ *    `hkexnews.hk` filed three distinct regulatory disclosures on 2026-08-06
+ *    under titles it had itself cut to `[00232.HK] Disclosure of...`, so three
+ *    filings fold to one key. Measured: 4 of the 411 rows above. Excluding them
+ *    costs a handful of genuine collapses and is the right trade, because
+ *    `canonicalizeUrl` above establishes over-collapsing as the worse error.
+ *  - **A title that folds to nothing.** A headline of pure punctuation folds to
+ *    the empty string, and every such title on one domain and day would share
+ *    one key. The same reasoning as the truncation guard, for a case nobody has
+ *    seen; it costs one comparison.
+ *
+ * ## The day bucket is UTC, and that is load-bearing
+ *
+ * The day comes from `published` in UTC, matching `APP_TIMEZONE=UTC`
+ * (`.env.example`). **This key is therefore timezone-sensitive**: two emissions
+ * of one story that straddle a UTC midnight land in different buckets and do NOT
+ * fold. That is deliberate — a day bucket is what stops a domain's recurring
+ * column headline ("Morning Briefing") from collapsing a month of instalments
+ * into one article — and the cost is bounded and measured: 33 articles of
+ * 31,308 on the dev archive carry sightings that straddle a UTC midnight at all.
+ * Changing `APP_TIMEZONE` would silently re-key every article minted afterwards
+ * while leaving history keyed the old way, so the zone is fixed here rather than
+ * threaded in as a parameter.
+ *
+ * ## Changing the fold is a migration, not an edit
+ *
+ * Keys are STORED (`articles.alt_key`) under a unique index and are never
+ * recomputed. Any change to the fold below therefore splits the archive into
+ * rows keyed the old way and rows keyed the new one, and the repair is a
+ * migration that re-keys — the same standing cost `TOKENIZER_VERSION` carries
+ * for `story_tokens`, and the reason this fold is duplicated here rather than
+ * borrowed from the tokenizer's (see `foldTitleForIdentity`).
+ */
+export function deriveAltKey(
+  domain: string | null,
+  title: string,
+  publishedIso: string,
+): string | null {
+  if (!domain) return null;
+
+  const headline = stripOutletSuffix(collapseWhitespace(title), domain);
+  // After the strip, not before: the source's own truncation sits at the end of
+  // the HEADLINE, and `[00232.HK] Disclosure of... - HKEXnews` would sail past a
+  // check made on the raw title.
+  if (TRUNCATED_TITLE.test(headline)) return null;
+
+  const folded = foldTitleForIdentity(headline);
+  if (!folded) return null;
+
+  const day = new Date(publishedIso);
+  if (Number.isNaN(day.getTime())) return null;
+
+  // `\n` separates the three parts, and cannot appear in any of them: a hostname
+  // may not contain one, the fold below emits only letters, digits and single
+  // spaces, and the day is eight digits and two dashes. So no pair of distinct
+  // triples can concatenate to the same string.
+  return createHash("sha256")
+    .update(`${domain}\n${folded}\n${day.toISOString().slice(0, 10)}`)
+    .digest("hex");
+}
+
+/** A title the SOURCE cut short, in either of the two spellings seen. */
+const TRUNCATED_TITLE = /(\.\.\.|…)$/u;
+
+/**
+ * The title, reduced to what two spellings of one headline have in common:
+ * lowercase, Latin diacritics folded onto their base letter, and every run of
+ * non-alphanumerics collapsed to one space.
+ *
+ * Unicode-aware on purpose. An ASCII-only `[^a-z0-9]+` would fold every Arabic,
+ * Chinese, Greek or Cyrillic headline to the EMPTY string, and the guard above
+ * would then refuse a key for every non-Latin article — quietly turning this
+ * feature off for a large part of the archive. `\p{L}\p{N}` keeps those scripts
+ * whole.
+ *
+ * ## Why this duplicates `foldDiacritics` rather than sharing it
+ *
+ * `apps/api/src/headline-tokens.ts` holds the same three-line NFD fold, and
+ * ADR-0004 bars parking a shared copy in `@zammy/shared`, which carries only
+ * what ships to the browser. Moving it down here and importing it there would
+ * work — `apps/api` already depends on this package — and it is still the wrong
+ * trade, because the two folds must be free to DIVERGE. That one serves the
+ * VOCABULARY: it decides what counts as the same word, it is versioned by
+ * `TOKENIZER_VERSION`, and it is expected to change as the tokenizer learns.
+ * This one serves IDENTITY: its output is hashed into a stored, unique-indexed
+ * column, so a change to it re-keys the archive. Sharing the function would make
+ * a tokenizer improvement silently re-key every article minted after it, and the
+ * failure would surface as articles quietly failing to fold rather than as
+ * anything that raises. Three lines is a cheap price for that independence.
+ */
+export function foldTitleForIdentity(title: string): string {
+  return title
+    .toLowerCase()
+    .normalize("NFD")
+    .replaceAll(/(\p{Script=Latin})\p{Mn}+/gu, "$1")
+    .normalize("NFC")
+    .replaceAll(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+/**
+ * Peel a trailing ` - Outlet` / ` | Outlet` segment, but ONLY when the segment
+ * spells the article's own `source_domain`.
+ *
+ * Currents ships a title as the outlet wrote its own `<title>` tag, attribution
+ * and all — "Manitoba beekeepers feeling sting of potential 50 per cent tariff -
+ * Winnipeg | Globalnews.ca" — and Google News appends ` - Outlet` to 100 of 101
+ * items (design doc §4). Two spellings of one headline that differ only in that
+ * tail must fold to one key.
+ *
+ * `headline-tokens.ts` faces the same problem and solves it with a SHAPE rule —
+ * short, verbless, no interior function word — because, as its comment says,
+ * matching the segment against `source_domain` "would be the precise rule" but
+ * would have to be threaded through five call sites to get there. **Here the
+ * domain is already in hand**, so this takes the precise rule at no plumbing
+ * cost, and the shape rule's known blind spot ("the Globe and Mail", refused for
+ * its interior `and`) does not exist.
+ *
+ * That matters more here than it does there. A shape rule peels a short verbless
+ * tail that reads like a name, which costs two tokens on one article in the
+ * tokenizer — but here it would peel "Manitoba floods - live updates" and
+ * "Manitoba floods - what we know" onto ONE key, merging two genuinely different
+ * same-day stories from one domain. The domain match cannot: the tail has to
+ * spell the outlet.
+ *
+ * The comparison is loose on both sides — case, spaces and punctuation dropped,
+ * a leading "the" ignored — so "The Guardian" matches `theguardian.com` and
+ * "Globalnews.ca" matches `globalnews.ca`, while the domain's public suffix is
+ * optional because outlets name themselves both ways. It is deliberately NOT
+ * fuzzy beyond that: a segment that merely resembles the domain is left alone,
+ * because a suffix left on costs one uncollapsed duplicate and a suffix wrongly
+ * taken off costs a merge.
+ */
+function stripOutletSuffix(title: string, domain: string): string {
+  const outletSpellings = domainSpellings(domain);
+  let headline = title;
+  // Editions nest ("- National | Globalnews.ca"), and only the site half will
+  // ever match the domain — but peeling twice costs one failed comparison and
+  // covers an outlet that spells itself twice.
+  for (let peeled = 0; peeled < MAX_OUTLET_SEGMENTS; peeled += 1) {
+    // Greedy head, so this splits on the LAST delimiter: attribution is peeled
+    // from the right, one segment at a time.
+    const split = /^(.*\S)\s+[|\-–—]\s+(\S.*)$/u.exec(headline);
+    if (split === null) break;
+    if (!outletSpellings.has(compareForm(split[2]!))) break;
+    headline = split[1]!.trim();
+  }
+  return headline;
+}
+
+const MAX_OUTLET_SEGMENTS = 2;
+
+/** Lowercase letters and digits only, with a leading "the" dropped. */
+function compareForm(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replaceAll(/(\p{Script=Latin})\p{Mn}+/gu, "$1")
+    .replaceAll(/[^\p{L}\p{N}]+/gu, "")
+    .replace(/^the/, "");
+}
+
+/**
+ * How an outlet might spell itself in its own headline, given its registrable
+ * domain: with the public suffix ("globalnews.ca" → `globalnewsca`), without it
+ * (`globalnews`), and for a third-level ccTLD, without both labels
+ * ("bbc.co.uk" → `bbc`). Every form goes through `compareForm`, so a leading
+ * "the" is already gone on both sides.
+ */
+function domainSpellings(domain: string): Set<string> {
+  const labels = domain.toLowerCase().split(".").filter(Boolean);
+  const spellings = new Set<string>();
+  for (let drop = 0; drop < 3 && drop < labels.length; drop += 1) {
+    const form = compareForm(labels.slice(0, labels.length - drop).join(""));
+    if (form) spellings.add(form);
+  }
+  return spellings;
+}
+
+/**
  * ccTLD registries that sell at the third level, so `example.co.uk` is one
  * registrable domain rather than two labels of `co.uk`.
  *

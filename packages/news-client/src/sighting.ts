@@ -45,6 +45,18 @@ export const Sighting = z.object({
    * is the key the storage layer groups on. Server-side only.
    */
   dedupKey: z.string().regex(/^[0-9a-f]{64}$/),
+  /**
+   * The FALLBACK identity: sha256 of `(source domain, folded title, UTC day)`,
+   * hex — or null when the inputs cannot carry one (`deriveAltKey`, ADR-0018).
+   * Ingest consults it only when `dedupKey` matches nothing, so a URL seen
+   * before behaves exactly as it did before this field existed. Server-side
+   * only, for the same reason `dedupKey` is (ADR-0004).
+   *
+   * Nullable but NOT optional: an adapter that forgets it fails the schema gate
+   * in `finalizeSighting` and drops loudly, rather than quietly minting articles
+   * that can never fold.
+   */
+  altKey: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
   title: z.string().min(1),
   description: z.string().nullable(),
   author: z.string().nullable(),

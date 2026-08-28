@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { sql } from "kysely";
-import { deriveDedupKey, type Sighting } from "@zammy/currents-client";
+import { deriveAltKey, deriveDedupKey, type Sighting } from "@zammy/currents-client";
 import { encodeCursor } from "@zammy/shared";
 import {
   attachGroup,
@@ -114,6 +114,7 @@ function sighting(input: {
     provider: "currents",
     providerSightingId: url,
     dedupKey: deriveDedupKey(url),
+    altKey: deriveAltKey(input.domain, input.title, input.published),
     title: input.title,
     description: input.description ?? null,
     author: null,

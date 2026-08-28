@@ -19,6 +19,7 @@ import * as labelWordsColumn from "./migrations/0016-storyline-label-words.js";
 import * as linkDirty from "./migrations/0017-storyline-link-dirty.js";
 import * as choreRuns from "./migrations/0018-chore-runs.js";
 import * as rowLevelSecurity from "./migrations/0019-enable-row-level-security.js";
+import * as articleAltKey from "./migrations/0020-article-alt-key.js";
 
 /**
  * Migrations as a static record rather than a directory scan: the file provider
@@ -46,6 +47,7 @@ const migrations: Record<string, Migration> = {
   "0017-storyline-link-dirty": linkDirty,
   "0018-chore-runs": choreRuns,
   "0019-enable-row-level-security": rowLevelSecurity,
+  "0020-article-alt-key": articleAltKey,
 };
 
 /**

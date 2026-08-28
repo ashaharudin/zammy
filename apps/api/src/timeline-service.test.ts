@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  deriveAltKey,
   NewsQuotaError,
   type CallOpts,
   type SearchParams,
@@ -165,6 +166,11 @@ describe("truncation — a full final page means hidden history, not success", (
       providerSightingId: "synthetic-supplement-1",
       url: "https://supplement.example/older-story",
       dedupKey: randomBytes(32).toString("hex"),
+      altKey: deriveAltKey(
+        "supplement.example",
+        "A story only the supplement carried",
+        supplementPublished,
+      ),
       title: "A story only the supplement carried",
       description: null,
       author: null,
