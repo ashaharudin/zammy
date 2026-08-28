@@ -6,6 +6,7 @@ import {
   normalizeSightings,
   parsePublished,
 } from "./normalize.js";
+import { deriveAltKey } from "@zammy/news-client";
 import { RawSighting } from "./raw.js";
 import { FIXTURES_DIR, rawSighting } from "./test-support.js";
 
@@ -125,6 +126,46 @@ describe("dedup keys over the duplication fixture", () => {
     }
     const biggest = [...byKey.values()].sort((a, b) => b.size - a.size)[0]!;
     expect(biggest.size).toBe(50);
+  });
+});
+
+describe("fallback keys over the duplication fixture", () => {
+  const { sightings } = normalizeSightings(duplicates);
+
+  it("collapses the 42 URLs onto 41 stories", () => {
+    // The pair ADR-0002 measured and declined for want of evidence — "42 unique
+    // URLs against 41 unique title+source pairs, so it would merge exactly one
+    // pair". ADR-0018 names the pair: one Times of India blog post,
+    // "First-World Flames", emitted 15 seconds apart under two section paths.
+    // Same domain, same headline, same opening sentence.
+    expect(new Set(sightings.map((sighting) => sighting.dedupKey)).size).toBe(42);
+
+    // An article's identity, counted the way ingest resolves it: the alt key
+    // where there is one, the URL key where there is not. 40 alt keys over the
+    // 41 keyed URLs — the merged pair — plus the one unkeyed sighting standing
+    // on its URL alone.
+    const identities = new Set(
+      sightings.map((sighting) => sighting.altKey ?? `url:${sighting.dedupKey}`),
+    );
+    expect(identities.size).toBe(41);
+  });
+
+  it("declines a key for the one recorded title the source truncated", () => {
+    // A live example of the guard firing, in the payload we already have: a
+    // Facebook post whose title arrives cut mid-sentence.
+    const unkeyed = sightings.filter((sighting) => sighting.altKey === null);
+    expect(unkeyed).toHaveLength(1);
+    expect(unkeyed[0]!.title).toMatch(/(\.\.\.|…)$/u);
+  });
+
+  it("derives the key from the fields it stores, not from the raw payload", () => {
+    // One function, so the identity and the thing it identifies cannot
+    // disagree — the same property `dedupKey` has against `url`.
+    for (const sighting of sightings) {
+      expect(sighting.altKey).toBe(
+        deriveAltKey(sighting.sourceDomain, sighting.title, sighting.published),
+      );
+    }
   });
 });
 

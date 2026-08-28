@@ -126,6 +126,26 @@ suffix-insensitivity, and two genuinely different same-day stories from one
 domain staying separate; `@zammy/storage`'s `collapses 100 sightings into 42
 articles` regression is still green.
 
+**Landed** as [ADR-0018](adr/0018-a-fallback-identity-catches-what-the-url-cannot.md),
+migration `0020`. Both open questions decided:
+
+- **The key is computed in `packages/news-client/src/normalize.ts`**, beside
+  `canonicalizeUrl`/`deriveDedupKey`, with `altKey` on the `Sighting` schema and
+  set by both adapters — one function, so the identity and the thing it
+  identifies cannot disagree.
+- **The fold is duplicated in `news-client`, not shared with `foldDiacritics`.**
+  The two must be free to diverge: the tokenizer's fold serves the vocabulary and
+  is expected to change with `TOKENIZER_VERSION`, and sharing it would let a
+  tokenizer improvement silently re-key every article minted after it.
+
+Two things the phase learned that the design did not know. The suffix strip peels
+a trailing segment **only when it spells the article's own `source_domain`** —
+the positional strip §7 measured with merges 68 unrelated Frontiers papers into
+one article on the dev archive, since each is titled `Frontiers | <real title>`,
+so §7's 411 is an upper bound on what this collapses rather than a description of
+it. And the recorded duplication fixture now collapses to **41** articles, not
+42: the one pair ADR-0002 declined for want of evidence is a genuine duplicate.
+
 ## G2 — Isolate the ranker to the discovery plane
 
 **Depends on**: nothing. **Land it while it is still a no-op.**
@@ -253,10 +273,27 @@ Changes:
 **§9 survives this phase.** "Every upstream call traces back to a real user
 request" holds — a click is still the trigger. G7 is where that is traded.
 
+**A known limitation of `alt_key`, carried forward from G1 and load-bearing
+here.** The fold's suffix strip fires only when the outlet's display name IS its
+domain stem — so it takes ` - The Guardian` off `theguardian.com`, and does NOT
+take ` - The New York Times` off `nytimes.com`, ` - Times of India` off
+`indiatimes.com`, ` - BBC News` off `bbc.co.uk`, or ` - The Wall Street Journal`
+off `wsj.com`. Measured over a 12-outlet probe: 5 strip, 7 do not. This is inert
+under one provider — one spelling of the suffix gives a stable key either way —
+but **Google News writes the display name**, so for every outlet in that second
+class a Google item and its Currents twin fold to different keys and mint two
+rows. That is the exact failure `alt_key` exists to prevent, and it lands on this
+phase. The fix is a display-name-to-domain map, deliberately deferred to here
+because it needs a corpus of Google News titles to be built against and measured
+on; ADR-0018 records it as an accepted cost of G1. **Budget for it in this phase
+rather than discovering it in G6's yield numbers**, where it would read as
+"Google News duplicates everything" rather than as one fixable mapping.
+
 **The open question this phase must answer**: how a deepening-plane article
 appears in a day slot. `alt_key` shrinks the problem a long way — a Google item
 for a story Currents already has folds into a *sighting* of the existing
-article and inherits its group, so only genuinely-new stories need placement.
+article and inherits its group (subject to the suffix limitation above), so
+only genuinely-new stories need placement.
 For those, either (a) let them into grouping normally, which needs G0 landed
 first to keep the suffix out of `story_tokens`, or (b) attach them as loose
 storyline-day members rendered below the groups. Pick the smallest thing that

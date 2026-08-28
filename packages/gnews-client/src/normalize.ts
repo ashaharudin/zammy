@@ -1,6 +1,7 @@
 import {
   canonicalizeUrl,
   collapseWhitespace,
+  deriveAltKey,
   deriveDedupKey,
   deriveSightingId,
   finalizeSighting,
@@ -57,6 +58,11 @@ export function normalizeSighting(raw: RawGnewsArticle): NormalizeOutcome {
   // across the tracking parameters that make one article arrive as two strings.
   const providerSightingId = collapseWhitespace(raw.id) || url;
 
+  // Both derived here, from the same values that are about to be stored, so the
+  // identity and the thing it identifies cannot disagree (ADR-0018).
+  const domain = sourceDomain(url);
+  const published = new Date(publishedMs).toISOString();
+
   return finalizeSighting({
     // GNews ids are opaque strings, not UUIDs, so one is derived — see
     // `deriveSightingId` for why that keeps `sightings.id uuid` intact.
@@ -65,6 +71,7 @@ export function normalizeSighting(raw: RawGnewsArticle): NormalizeOutcome {
     providerSightingId,
     url,
     dedupKey: deriveDedupKey(url),
+    altKey: deriveAltKey(domain, title, published),
     title,
     description: collapseWhitespace(raw.description) || null,
     // GNews names the outlet but never the journalist. Null is the honest
@@ -77,8 +84,8 @@ export function normalizeSighting(raw: RawGnewsArticle): NormalizeOutcome {
     // Derived from the URL rather than taken from `source.name`, so the same
     // story reported by both providers presents as one source rather than as
     // "bbc.co.uk" and "BBC News".
-    sourceDomain: sourceDomain(url),
-    published: new Date(publishedMs).toISOString(),
+    sourceDomain: domain,
+    published,
     raw,
   });
 }

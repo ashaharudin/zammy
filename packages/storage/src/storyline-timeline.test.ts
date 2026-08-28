@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Article } from "@zammy/shared";
-import { deriveDedupKey, type Sighting } from "@zammy/news-client";
+import { deriveAltKey, deriveDedupKey, type Sighting } from "@zammy/news-client";
 import { ingestSightings, upsertTopic } from "./ingest.js";
 import { migrateToLatest } from "./migrator.js";
 import { readStorylineTimelinePage, type StorylineTimelinePage } from "./storyline-timeline.js";
@@ -147,8 +147,10 @@ describe("timeline reads over the collapsed fixture", () => {
       cursor = page.nextCursor!;
     }
 
-    expect(seen.size).toBe(42); // no skips: every article reached exactly once
-    expect(pages).toBe(5); // 10 + 10 + 10 + 10 + 2
+    // 41, not the fixture's 42 URLs: the fallback key folds one Times of India
+    // blog post filed under two section paths onto one article (ADR-0018).
+    expect(seen.size).toBe(41); // no skips: every article reached exactly once
+    expect(pages).toBe(5); // 10 + 10 + 10 + 10 + 1
   });
 
   it("filters to the requested window, inclusive-exclusive", async () => {
@@ -206,6 +208,7 @@ describe("a storyline's day is one slot in the timeline", () => {
     provider: "currents",
     providerSightingId: url,
     dedupKey: deriveDedupKey(url),
+    altKey: deriveAltKey(new URL(url).hostname, title, published),
     title,
     description: null,
     author: null,
@@ -373,6 +376,7 @@ describe("slots sharing a position", () => {
     provider: "currents",
     providerSightingId: url,
     dedupKey: deriveDedupKey(url),
+    altKey: deriveAltKey("example.com", `story at ${url}`, published),
     title: `story at ${url}`,
     description: null,
     author: null,

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
-import { deriveDedupKey, type Sighting } from "@zammy/currents-client";
+import { deriveAltKey, deriveDedupKey, type Sighting } from "@zammy/currents-client";
 import { ingestSightings, recordCoverage, upsertTopic } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
 import { groupCreatedArticles } from "./grouping-service.js";
@@ -75,6 +75,7 @@ function sighting(overrides: {
     provider: "currents",
     providerSightingId: url,
     dedupKey: deriveDedupKey(url),
+    altKey: deriveAltKey(overrides.domain, overrides.title, overrides.published),
     title: overrides.title,
     description: null,
     author: null,

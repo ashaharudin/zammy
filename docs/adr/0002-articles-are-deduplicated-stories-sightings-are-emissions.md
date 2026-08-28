@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted (amended by ADR-0018: the URL is still the primary identity and still what the fold resolves on first, but it is no longer the ONLY one — `alt_key` is consulted when a URL matches nothing, and the "`(title, source)` stays disabled" consequence below no longer holds)
 ---
 
 # Articles are deduplicated stories; sightings are upstream emissions
@@ -27,9 +27,14 @@ express by accident.
 
 ## Consequences
 
-- **URL is the only dedup axis.** A `(title, source)` secondary key stays disabled:
+- ~~**URL is the only dedup axis.** A `(title, source)` secondary key stays disabled:
   probe data showed 42 unique URLs against 41 unique title+source pairs, so it would merge
-  exactly one pair — no evidence, and a false merge is worse than a visible duplicate.
+  exactly one pair — no evidence, and a false merge is worse than a visible duplicate.~~
+  **Amended by ADR-0018.** The reasoning was right and the evidence has since arrived: on
+  37,077 production articles the key collapses 411 rows (1.1%) that are one story under
+  several URLs, and the one pair this declined turns out to be a genuine duplicate — a Times
+  of India blog post filed under two section paths. It is a FALLBACK, not a replacement:
+  titles drift and URLs do not, so the URL is still resolved first.
 - **Syndicated stories do not collapse.** One story across six outlets is six articles, on
   purpose. Multiple outlets covering something is signal, and the landing-page cloud
   measures a term's breadth by counting distinct sources — collapsing syndicates would

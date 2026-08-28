@@ -44,6 +44,7 @@ function sighting(provider: string, path: string): Sighting {
     providerSightingId: path,
     url: `https://example.com/${path}`,
     dedupKey: path.padStart(64, "0"),
+    altKey: null,
     title: `story ${path}`,
     description: null,
     author: null,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveDedupKey, deriveSightingId } from "@zammy/news-client";
+import { deriveAltKey, deriveDedupKey, deriveSightingId } from "@zammy/news-client";
 import { normalizeSighting, normalizeSightings, parsePublished } from "./normalize.js";
 import { RawGnewsArticle } from "./raw.js";
 import { rawArticle } from "./test-support.js";
@@ -55,6 +55,18 @@ describe("identity", () => {
     // This is what makes fan-out cheap: one story from two upstreams collapses
     // onto one article instead of duplicating the timeline.
     expect(ok().dedupKey).toBe(deriveDedupKey("https://example.com/story"));
+  });
+
+  it("carries a fallback key derived from the fields it stores", () => {
+    // GNews is the adapter this matters most to under the discovery/deepening
+    // design, because a provider whose link cannot serve as identity has only
+    // this key to fold on. Derived from the STORED title and domain, so the
+    // identity and the thing it identifies cannot disagree.
+    const sighting = ok();
+    expect(sighting.altKey).toBe(
+      deriveAltKey(sighting.sourceDomain, sighting.title, sighting.published),
+    );
+    expect(sighting.altKey).toMatch(/^[0-9a-f]{64}$/);
   });
 });
 

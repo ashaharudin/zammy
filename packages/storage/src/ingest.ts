@@ -83,7 +83,7 @@ export interface CreatedArticle {
 /**
  * Fold one batch of sightings into storage, in one transaction (§7.4):
  *
- *  1. upsert the article on `dedup_key`;
+ *  1. resolve the article — URL key, then alt key, then insert (ADR-0018);
  *  2. insert the sighting, `ON CONFLICT (id) DO NOTHING` — the conflict clause
  *     is what makes a re-fetch idempotent: the same upstream UUID twice must
  *     not inflate `sighting_count`;
@@ -141,48 +141,10 @@ export async function ingestSightings(
   await db.transaction().execute(async (trx) => {
     for (const sighting of input.sightings) {
       const dedupKey = hexToBytea(sighting.dedupKey);
+      const altKey = sighting.altKey === null ? null : hexToBytea(sighting.altKey);
       const published = new Date(sighting.published);
 
-      // Upsert-and-return-id in one statement. The conflict branch is a
-      // deliberate no-op assignment purely so RETURNING fires for existing
-      // rows too; `xmax = 0` distinguishes a fresh insert from that no-op.
-      const article = await trx
-        .insertInto("articles")
-        .values({
-          dedup_key: dedupKey,
-          url: sighting.url,
-          title: sighting.title,
-          description: sighting.description,
-          author: sighting.author,
-          image_url: sighting.imageUrl,
-          language: sighting.language,
-          categories: sighting.categories,
-          source_category: sighting.sourceCategories,
-          source_domain: sighting.sourceDomain,
-          provider: sighting.provider,
-          published,
-          latest_seen: published,
-          // 0, not the DEFAULT 1: step 3 increments per genuinely-new
-          // sighting, and counting the insert as well would double-count.
-          sighting_count: 0,
-        })
-        .onConflict((oc) =>
-          oc.column("dedup_key").doUpdateSet({
-            dedup_key: (eb) => eb.ref("excluded.dedup_key"),
-          }),
-        )
-        // `published` and `group_id` are read back as they stood BEFORE this
-        // sighting: the conflict branch's assignment touches `dedup_key` and
-        // nothing else, so RETURNING reports the stored row. That pre-fold
-        // timestamp is what makes the storyline guard below free — the
-        // alternative is asking the row again after the fold.
-        .returning([
-          "id",
-          "published",
-          "group_id",
-          sql<boolean>`(xmax = 0)`.as("was_created"),
-        ])
-        .executeTakeFirstOrThrow();
+      const article = await resolveArticle(trx, sighting, dedupKey, altKey, published);
 
       const inserted = await trx
         .insertInto("sightings")
@@ -222,6 +184,19 @@ export async function ingestSightings(
             // keeps meaning "whoever reported the earliest emission" even when
             // the second provider is the one that reached further back.
             provider: sql`case when ${published} < published then ${sighting.provider} else provider end`,
+            // `dedup_key` and `alt_key` are deliberately NOT in this list. They
+            // are IDENTITY, minted once by `resolveArticle` and never rewritten,
+            // and the two reasons are independent. Rewriting either would change
+            // an article's identity underneath a live unique index, so a
+            // handover could collide with another row and fail the whole batch.
+            // And identity has to be stable for the fold to work at all: a row
+            // that stopped answering to the key it was found by would be found
+            // again as a new article by the very next sighting of it.
+            //
+            // The visible consequence, and it is intended: once an earlier
+            // sighting under a DIFFERENT url hands over the display fields,
+            // `dedup_key` no longer hashes `url`. The key is the identity this
+            // row was minted with; `url` is what a reader clicks.
           })
           .where("id", "=", article.id)
           .execute();
@@ -399,4 +374,189 @@ export async function ingestSightings(
   });
 
   return result;
+}
+
+/**
+ * Find the article this sighting belongs to, or mint one: **URL key → alt key →
+ * insert** (ADR-0018).
+ *
+ * The ordering is the whole design and is not an implementation detail. Titles
+ * drift and URLs do not, so a `(domain, title, day)` key consulted FIRST would
+ * split an article whose headline was edited between two emissions — a
+ * regression URL identity does not have. Consulted SECOND, it can only ever
+ * catch a URL that has never been seen before, which is exactly the case URL
+ * identity was already failing: 411 rows of the production archive (1.1%) are
+ * one story filed under several URLs.
+ *
+ * So the URL-keyed majority behaves precisely as it did before this existed, and
+ * an article with `altKey === null` — a source-truncated title, no source domain
+ * — takes the pre-ADR-0018 path in full.
+ */
+async function resolveArticle(
+  trx: Kysely<Database>,
+  sighting: Sighting,
+  dedupKey: Buffer,
+  altKey: Buffer | null,
+  published: Date,
+): Promise<ResolvedArticle> {
+  const existing = await findArticle(trx, dedupKey, altKey);
+  if (existing) return { ...existing, was_created: false };
+
+  // Nothing COMMITTED holds either key. What is left is a concurrent
+  // transaction that holds one and has not committed yet — the worker and a
+  // user request racing, which §7.4 promises is harmless. The URL half of that
+  // race is handled by `ON CONFLICT (dedup_key)` inside the insert, as it always
+  // was; the alt-key half cannot be, because `ON CONFLICT` takes ONE arbiter and
+  // that one is spoken for. So the insert is fenced, and a lost race is
+  // re-resolved rather than raised.
+  //
+  // Fenced only when there is an alt key to collide on, which is what keeps the
+  // two extra round trips off the path of an article that has none.
+  //
+  // MEASURED against the local dev Postgres, five runs of the 100-sighting
+  // duplication fixture: 287ms fenced against 248ms with every alt key nulled —
+  // ~0.95ms per fenced insert, and an UPPER bound, since the null variant also
+  // skips the alt-key half of the lookup. A batch is ONE upstream page
+  // (`CURRENTS_MAX_PAGE_SIZE`, 20 by default), so the ceiling is ~19ms against
+  // §6.3's 1,200ms even where every sighting on the page mints an article — and
+  // the fixture's own 100 is four times the real page size. Worth re-measuring
+  // if that page size is ever raised toward its 200 cap.
+  //
+  // A plain
+  // catch would be no fence at all: Postgres aborts the whole transaction on the
+  // first failed statement, COMMIT on an aborted transaction is a silent
+  // ROLLBACK, and `ingestSightings` would return a result reporting sightings it
+  // had just discarded — the same reasoning the storyline savepoint below
+  // records, reached from the opposite direction.
+  if (altKey === null) return insertArticle(trx, sighting, dedupKey, null, published);
+
+  await sql`savepoint article_insert`.execute(trx);
+  try {
+    const created = await insertArticle(trx, sighting, dedupKey, altKey, published);
+    await sql`release savepoint article_insert`.execute(trx);
+    return created;
+  } catch (error) {
+    if (!isAltKeyConflict(error)) throw error;
+    // ROLLBACK TO leaves the savepoint in place, so it still needs releasing.
+    await sql`rollback to savepoint article_insert`.execute(trx);
+    await sql`release savepoint article_insert`.execute(trx);
+
+    // The winner committed between our lookup and our insert, so it is visible
+    // now. If it somehow is not, the conflict was not the one this fence is for
+    // and hiding it would be worse than failing the batch.
+    const winner = await findArticle(trx, dedupKey, altKey);
+    if (!winner) throw error;
+    return { ...winner, was_created: false };
+  }
+}
+
+interface ResolvedArticle {
+  id: string;
+  /**
+   * The article's `published` as it stood BEFORE this sighting — what makes the
+   * storyline guard further up free, since the alternative is asking the row
+   * again after the fold.
+   */
+  published: Date;
+  group_id: string;
+  was_created: boolean;
+}
+
+/**
+ * Both keys in one statement, URL first.
+ *
+ * `order by (dedup_key = …) desc` is what expresses the precedence: in the rare
+ * case where one row matches by URL and a DIFFERENT row matches by alt key — a
+ * title that has since drifted onto another article's key — the URL match is
+ * taken, and the alt key stays what it has always been, a fallback.
+ *
+ * `alt_key = …` never matches a NULL, so no `is not null` guard is needed; the
+ * partial index has the same predicate and serves this lookup directly.
+ */
+async function findArticle(
+  trx: Kysely<Database>,
+  dedupKey: Buffer,
+  altKey: Buffer | null,
+): Promise<{ id: string; published: Date; group_id: string } | undefined> {
+  return trx
+    .selectFrom("articles")
+    .select(["id", "published", "group_id"])
+    .where((eb) =>
+      altKey === null
+        ? eb("dedup_key", "=", dedupKey)
+        : eb.or([eb("dedup_key", "=", dedupKey), eb("alt_key", "=", altKey)]),
+    )
+    .orderBy(sql`(dedup_key = ${dedupKey})`, "desc")
+    .limit(1)
+    .executeTakeFirst();
+}
+
+/**
+ * Upsert-and-return-id in one statement. The conflict branch is a deliberate
+ * no-op assignment purely so RETURNING fires for existing rows too; `xmax = 0`
+ * distinguishes a fresh insert from that no-op.
+ */
+async function insertArticle(
+  trx: Kysely<Database>,
+  sighting: Sighting,
+  dedupKey: Buffer,
+  altKey: Buffer | null,
+  published: Date,
+): Promise<ResolvedArticle> {
+  return trx
+    .insertInto("articles")
+    .values({
+      dedup_key: dedupKey,
+      alt_key: altKey,
+      url: sighting.url,
+      title: sighting.title,
+      description: sighting.description,
+      author: sighting.author,
+      image_url: sighting.imageUrl,
+      language: sighting.language,
+      categories: sighting.categories,
+      source_category: sighting.sourceCategories,
+      source_domain: sighting.sourceDomain,
+      provider: sighting.provider,
+      published,
+      latest_seen: published,
+      // 0, not the DEFAULT 1: step 3 increments per genuinely-new sighting, and
+      // counting the insert as well would double-count.
+      sighting_count: 0,
+    })
+    .onConflict((oc) =>
+      oc.column("dedup_key").doUpdateSet({
+        dedup_key: (eb) => eb.ref("excluded.dedup_key"),
+      }),
+    )
+    // `published` and `group_id` are read back as they stood BEFORE this
+    // sighting: the conflict branch's assignment touches `dedup_key` and nothing
+    // else, so RETURNING reports the stored row.
+    .returning([
+      "id",
+      "published",
+      "group_id",
+      sql<boolean>`(xmax = 0)`.as("was_created"),
+    ])
+    .executeTakeFirstOrThrow();
+}
+
+/** The partial unique index migration 0020 builds. */
+const ALT_KEY_INDEX = "articles_alt_key_idx";
+
+/**
+ * A `unique_violation` (23505) raised by the alt-key index and nothing else.
+ *
+ * Narrow on purpose. The only other unique index on `articles` is the one
+ * `ON CONFLICT (dedup_key)` already absorbs, so a 23505 from anywhere else is a
+ * fact about a bug rather than about a lost race, and re-resolving would report
+ * a success that did not happen. `constraint` is absent only on error shapes
+ * Postgres does not produce for a unique index; treating that as a match keeps
+ * the fence working rather than failing closed on a driver detail.
+ */
+function isAltKeyConflict(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const { code, constraint } = error as { code?: unknown; constraint?: unknown };
+  if (code !== "23505") return false;
+  return constraint === ALT_KEY_INDEX || constraint === undefined;
 }

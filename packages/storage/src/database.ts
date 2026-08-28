@@ -53,7 +53,31 @@ export interface SightingsTable {
 export interface ArticlesTable {
   /** Surrogate identity; the cursor half. Never the URL hash (ADR-0002). */
   id: Generated<string>;
+  /**
+   * sha256 of the canonical URL. The PRIMARY identity, minted once from the URL
+   * of the sighting that created the row and never rewritten — so a row whose
+   * `url` was handed over to an earlier sighting under a different link (see
+   * `alt_key`) keeps the key it was minted with. Identity is stable; `url` is a
+   * display field.
+   */
   dedup_key: Buffer;
+  /**
+   * The FALLBACK identity: sha256 of `(source_domain, folded title, UTC day)`,
+   * consulted by ingest only when `dedup_key` matches nothing (ADR-0018,
+   * migration 0020). NULL means "identified by URL alone" — either because the
+   * title could not carry a key (`deriveAltKey` refuses a source-truncated one)
+   * or because 0020's backfill declined to key a row whose historical key
+   * collides. Unique where present, via a partial index.
+   *
+   * `Generated` because it is optional on insert, not because the database
+   * computes it: a nullable column with no default supplies NULL, which is the
+   * correct value for a caller with no key to offer.
+   *
+   * Minted once, like `dedup_key`, and for the same reason: rewriting it when a
+   * later sighting hands over the title would change an article's identity under
+   * a live unique index.
+   */
+  alt_key: Generated<Buffer | null>;
   url: string;
   title: string;
   description: string | null;

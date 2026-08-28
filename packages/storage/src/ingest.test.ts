@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sql } from "kysely";
-import { deriveDedupKey, type Sighting } from "@zammy/news-client";
+import { deriveAltKey, deriveDedupKey, type Sighting } from "@zammy/news-client";
 import { hexToBytea } from "./database.js";
 import { ingestSightings, upsertTopic } from "./ingest.js";
 import { migrateToLatest } from "./migrator.js";
@@ -20,6 +20,28 @@ import {
  *
  * Expected counts (100, 42, 50) come from the probe, not from re-deriving them
  * here — PROBE-FINDINGS 4 is the independent source of truth.
+ *
+ * **42 URLs, 41 articles** since ADR-0018. The gap is the fallback key catching
+ * a duplicate the URL cannot, and it is the SAME pair ADR-0002 measured and
+ * declined: "42 unique URLs against 41 unique title+source pairs, so it would
+ * merge exactly one pair — no evidence, and a false merge is worse than a
+ * visible duplicate". The evidence is now in hand, and it is in this fixture.
+ * The pair is one Times of India blog post, "First-World Flames", emitted 15
+ * seconds apart under two section paths:
+ *
+ *     /blogs/gen-zedits/first-world-flames-2
+ *     /blogs/toi-edit-page/first-world-flames
+ *
+ * Same domain, same headline, same opening sentence — a section-path duplicate
+ * of exactly the `ansa.it` and `rte.ie` class the production measurement found
+ * 411 of. So ADR-0002's caution was right and its conclusion has expired.
+ *
+ * Both numbers are asserted below, and deliberately: 42 distinct `dedup_key`s
+ * still proves canonicalization neither over- nor under-collapses (the original
+ * guard, unchanged), and 41 `articles` proves the fallback key caught the one
+ * thing the URL could not. A future change that moved 42 would be a
+ * canonicalization regression; one that moved 41 would be an alt-key regression.
+ * Kept apart, they say which.
  */
 
 const CLIMATE_TOPIC = testFingerprint("c11a1e");
@@ -53,7 +75,11 @@ describe("the collapse over the recorded duplication payload", () => {
     await harness.drop();
   });
 
-  it("collapses 100 sightings into 42 articles", async () => {
+  it("collapses 100 sightings into 41 articles", async () => {
+    // 42 distinct URLs go in; 41 rows come out. The header explains which pair
+    // merged and why the evidence for merging it is now good enough.
+    expect(new Set(sightings.map((s) => s.dedupKey)).size).toBe(42);
+
     const result = await ingestSightings(harness.db, {
       timeZone: "UTC",
       fingerprint: CLIMATE_TOPIC,
@@ -63,19 +89,43 @@ describe("the collapse over the recorded duplication payload", () => {
     expect(result).toMatchObject({
       sightingsReceived: 100,
       sightingsInserted: 100,
-      articlesCreated: 42,
+      articlesCreated: 41,
     });
     // Every created article — and only those — is handed on to grouping
     // (§14.3). An article that already existed has already been offered a
     // group, and regrouping it on every re-sighting would let a group drift.
-    expect(result.createdArticles).toHaveLength(42);
+    expect(result.createdArticles).toHaveLength(41);
 
     const [sightingRows, articleRows] = await Promise.all([
       harness.db.selectFrom("sightings").select(({ fn }) => fn.countAll().as("n")).executeTakeFirstOrThrow(),
       harness.db.selectFrom("articles").select(({ fn }) => fn.countAll().as("n")).executeTakeFirstOrThrow(),
     ]);
+    // Every sighting is still its own row. The alt key collapses ARTICLES; an
+    // emission is never discarded, so nothing that arrived is lost.
     expect(Number(sightingRows.n)).toBe(100);
-    expect(Number(articleRows.n)).toBe(42);
+    expect(Number(articleRows.n)).toBe(41);
+  });
+
+  it("keeps both URLs' sightings on the one article the alt key folded them onto", async () => {
+    // The fold has to be a MERGE, not a preference: the loser's emission must
+    // hang off the winning row, or the alt key would be silently dropping
+    // sightings instead of collapsing articles.
+    const pair = sightings.filter((s) => s.title === "First-World Flames");
+    expect(new Set(pair.map((s) => s.dedupKey)).size).toBe(2);
+    expect(new Set(pair.map((s) => s.altKey)).size).toBe(1);
+
+    const rows = await harness.db
+      .selectFrom("sightings")
+      .select("article_id")
+      .where(
+        "dedup_key",
+        "in",
+        pair.map((s) => hexToBytea(s.dedupKey)),
+      )
+      .execute();
+
+    expect(rows).toHaveLength(pair.length);
+    expect(new Set(rows.map((row) => row.article_id)).size).toBe(1);
   });
 
   it("gives the 50×-emitted roundup page a sighting_count of 50", async () => {
@@ -134,7 +184,7 @@ describe("the collapse over the recorded duplication payload", () => {
       .selectFrom("articles")
       .select(({ fn }) => fn.countAll().as("n"))
       .executeTakeFirstOrThrow();
-    expect(Number(articleRows.n)).toBe(42);
+    expect(Number(articleRows.n)).toBe(41);
   });
 
   it("records topic membership per article, not per sighting", async () => {
@@ -144,7 +194,7 @@ describe("the collapse over the recorded duplication payload", () => {
       .where("fingerprint", "=", hexToBytea(CLIMATE_TOPIC))
       .executeTakeFirstOrThrow();
 
-    expect(Number(links.n)).toBe(42);
+    expect(Number(links.n)).toBe(41);
   });
 
   it("links a second topic to existing articles without duplicating them", async () => {
@@ -175,7 +225,7 @@ describe("the collapse over the recorded duplication payload", () => {
       .selectFrom("articles")
       .select(({ fn }) => fn.countAll().as("n"))
       .executeTakeFirstOrThrow();
-    expect(Number(articleRows.n)).toBe(42);
+    expect(Number(articleRows.n)).toBe(41);
   });
 
   it("ingesting nothing is a no-op", async () => {
@@ -204,6 +254,7 @@ describe("the earliest sighting owns the display fields", () => {
     provider: "currents",
     providerSightingId: URL,
     dedupKey: deriveDedupKey(URL),
+    altKey: deriveAltKey("example.com", title, published),
     title,
     description: `${title} description`,
     author: null,
@@ -339,6 +390,7 @@ describe("a fold re-derives the day slots of the storylines holding the article"
     provider: "currents",
     providerSightingId: input.url,
     dedupKey: deriveDedupKey(input.url),
+    altKey: deriveAltKey("example.com", "Harbour spill widens", input.published),
     title: "Harbour spill widens",
     description: "Crews worked through the night",
     author: null,
@@ -585,5 +637,272 @@ describe("a fold re-derives the day slots of the storylines holding the article"
       { dayKey: "2026-08-15", published: "2026-08-15T18:00:00.000Z", lead: articleId },
     ]);
     expect(warnings).toHaveLength(1);
+  });
+});
+
+/**
+ * The resolution order — **URL key → alt key → insert** (ADR-0018).
+ *
+ * The ordering is the design, not an implementation detail, and the first test
+ * below is the one that proves why. Every case here is a shape the production
+ * archive actually holds: a story filed under two section paths, a headline
+ * re-styled between emissions, a source that truncates its own titles.
+ */
+describe("resolving an article by URL key, then by alt key", () => {
+  let harness: TestDatabase;
+  const TOPIC = testFingerprint("a17ceb00");
+  const DOMAIN = "example.com";
+  const DAY = "2026-08-27T09:00:00.000Z";
+
+  let uuid = 0;
+  const emission = (input: {
+    url: string;
+    title: string;
+    domain?: string;
+    published?: string;
+  }): Sighting => {
+    uuid += 1;
+    const domain = input.domain ?? DOMAIN;
+    const published = input.published ?? DAY;
+    return {
+      id: `00000000-0000-4000-8000-${String(uuid).padStart(12, "0")}`,
+      url: input.url,
+      provider: "currents",
+      providerSightingId: input.url,
+      dedupKey: deriveDedupKey(input.url),
+      altKey: deriveAltKey(domain, input.title, published),
+      title: input.title,
+      description: null,
+      author: null,
+      imageUrl: null,
+      language: "en",
+      categories: [],
+      sourceCategories: [],
+      sourceDomain: domain,
+      published,
+      raw: { id: uuid },
+    };
+  };
+
+  const ingest = async (...sightings: Sighting[]) =>
+    ingestSightings(harness.db, { timeZone: "UTC", fingerprint: TOPIC, sightings });
+
+  const articleCount = async (): Promise<number> => {
+    const row = await harness.db
+      .selectFrom("articles")
+      .select(({ fn }) => fn.countAll().as("n"))
+      .executeTakeFirstOrThrow();
+    return Number(row.n);
+  };
+
+  beforeAll(async () => {
+    harness = await createTestDatabase();
+    await migrateToLatest(harness.db);
+    await upsertTopic(harness.db, { fingerprint: TOPIC, keywords: ["ferry"] });
+  });
+
+  afterAll(async () => {
+    await harness.drop();
+  });
+
+  it("takes the URL match when the URL and the alt key point at different rows", async () => {
+    // The whole reason the alt key is a FALLBACK. Two articles exist; a new
+    // emission arrives under the FIRST one's URL carrying the SECOND one's
+    // headline — an outlet editing a headline into something another story on
+    // the same day already said. URLs are stable and titles drift, so the URL
+    // is what this must believe.
+    const first = await ingest(
+      emission({ url: "https://example.com/ferry", title: "Ferry service suspended" }),
+    );
+    const second = await ingest(
+      emission({ url: "https://example.com/rail", title: "Rail service suspended" }),
+    );
+    const ferryId = first.createdArticles[0]!.id;
+    const railId = second.createdArticles[0]!.id;
+    expect(ferryId).not.toBe(railId);
+
+    const drifted = await ingest(
+      emission({ url: "https://example.com/ferry", title: "Rail service suspended" }),
+    );
+    expect(drifted.articlesCreated).toBe(0);
+
+    // On the ferry row, by its URL — not on the rail row, whose alt key the
+    // drifted headline also matches.
+    const ferry = await harness.db
+      .selectFrom("articles")
+      .select(["id", "sighting_count"])
+      .where("id", "=", ferryId)
+      .executeTakeFirstOrThrow();
+    expect(ferry.sighting_count).toBe(2);
+
+    const rail = await harness.db
+      .selectFrom("articles")
+      .select("sighting_count")
+      .where("id", "=", railId)
+      .executeTakeFirstOrThrow();
+    expect(rail.sighting_count).toBe(1);
+  });
+
+  it("folds a never-seen URL onto the article the alt key already names", async () => {
+    // The 411 production rows in one sentence: one story, two section paths.
+    const before = await articleCount();
+    const original = await ingest(
+      emission({
+        url: "https://example.com/blogs/toi-edit-page/first-world-flames",
+        title: "First-World Flames",
+      }),
+    );
+    const articleId = original.createdArticles[0]!.id;
+
+    const second = await ingest(
+      emission({
+        url: "https://example.com/blogs/gen-zedits/first-world-flames-2",
+        title: "First-World Flames",
+      }),
+    );
+
+    expect(second.articlesCreated).toBe(0);
+    expect(second.sightingsInserted).toBe(1);
+    expect(await articleCount()).toBe(before + 1);
+
+    const article = await harness.db
+      .selectFrom("articles")
+      .select(["sighting_count", "url"])
+      .where("id", "=", articleId)
+      .executeTakeFirstOrThrow();
+    expect(article.sighting_count).toBe(2);
+    // The later emission is not the earliest, so the display URL is untouched
+    // (ADR-0002) — the fold contributes a sighting, not a rewrite.
+    expect(article.url).toBe("https://example.com/blogs/toi-edit-page/first-world-flames");
+  });
+
+  it("folds across the outlet suffix, since one headline may carry it and one may not", async () => {
+    const before = await articleCount();
+    await ingest(
+      emission({
+        url: "https://example.com/harbour-spill",
+        title: "Harbour spill widens - Example",
+      }),
+    );
+    const second = await ingest(
+      emission({ url: "https://example.com/news/harbour-spill", title: "Harbour spill widens" }),
+    );
+
+    expect(second.articlesCreated).toBe(0);
+    expect(await articleCount()).toBe(before + 1);
+  });
+
+  it("keeps two genuinely different same-day stories from one domain apart", async () => {
+    const before = await articleCount();
+    await ingest(
+      emission({ url: "https://example.com/budget", title: "Budget passes second reading" }),
+    );
+    await ingest(
+      emission({ url: "https://example.com/bridge", title: "Bridge closes for repairs" }),
+    );
+    expect(await articleCount()).toBe(before + 2);
+  });
+
+  it("mints no alt key at all for a title the source truncated, so two rows stand", async () => {
+    // hkexnews.hk files distinct disclosures under one truncated title. With no
+    // key, both rows take the pre-ADR-0018 path in full: identified by URL, and
+    // outside the partial unique index entirely.
+    const before = await articleCount();
+    const first = await ingest(
+      emission({
+        url: "https://example.com/disclosure-1",
+        title: "[00232.HK] Disclosure of...",
+      }),
+    );
+    const second = await ingest(
+      emission({
+        url: "https://example.com/disclosure-2",
+        title: "[00232.HK] Disclosure of...",
+      }),
+    );
+
+    expect(second.articlesCreated).toBe(1);
+    expect(await articleCount()).toBe(before + 2);
+
+    const rows = await harness.db
+      .selectFrom("articles")
+      .select(["id", "alt_key"])
+      .where("id", "in", [first.createdArticles[0]!.id, second.createdArticles[0]!.id])
+      .execute();
+    expect(rows.map((row) => row.alt_key)).toEqual([null, null]);
+  });
+
+  it("stores the key the sighting carried, so storage and the client cannot disagree", async () => {
+    const sighting = emission({
+      url: "https://example.com/rate-decision",
+      title: "Bank holds rate",
+    });
+    const created = await ingest(sighting);
+
+    const article = await harness.db
+      .selectFrom("articles")
+      .select("alt_key")
+      .where("id", "=", created.createdArticles[0]!.id)
+      .executeTakeFirstOrThrow();
+    expect(article.alt_key).toEqual(hexToBytea(sighting.altKey!));
+  });
+
+  it("never rewrites the keys when an earlier sighting takes over the display fields", async () => {
+    // ADR-0002 hands the display fields to the earliest emission. Identity is
+    // NOT a display field: rewriting either key would change an article's
+    // identity under a live unique index, and a row that stopped answering to
+    // the key it was found by would be found again as a new article by the very
+    // next sighting of it.
+    const late = emission({
+      url: "https://example.com/late-link",
+      title: "Cabinet reshuffle announced",
+      published: "2026-08-27T18:00:00.000Z",
+    });
+    const created = await ingest(late);
+    const articleId = created.createdArticles[0]!.id;
+
+    // Earlier, and under a different URL — so it resolves by alt key, and then
+    // wins the display fields on the way through.
+    const early = emission({
+      url: "https://example.com/early-link",
+      title: "Cabinet reshuffle announced",
+      published: "2026-08-27T06:00:00.000Z",
+    });
+    expect(early.altKey).toBe(late.altKey);
+    await ingest(early);
+
+    const article = await harness.db
+      .selectFrom("articles")
+      .select(["url", "dedup_key", "alt_key"])
+      .where("id", "=", articleId)
+      .executeTakeFirstOrThrow();
+
+    expect(article.url).toBe("https://example.com/early-link");
+    // Minted once, from the sighting that created the row.
+    expect(article.dedup_key).toEqual(hexToBytea(late.dedupKey));
+    expect(article.alt_key).toEqual(hexToBytea(late.altKey!));
+    // And the consequence worth naming: `dedup_key` no longer hashes `url`.
+    expect(article.dedup_key).not.toEqual(hexToBytea(early.dedupKey));
+  });
+
+  it("keeps one domain's stories out of another's", async () => {
+    const before = await articleCount();
+    await ingest(
+      emission({
+        url: "https://other.example/wire-story",
+        title: "Wire story everyone ran",
+        domain: "other.example",
+      }),
+    );
+    await ingest(
+      emission({
+        url: "https://third.example/wire-story",
+        title: "Wire story everyone ran",
+        domain: "third.example",
+      }),
+    );
+    // ADR-0002: one story across several outlets is several articles, on
+    // purpose — the cloud's distinct-source gate depends on it.
+    expect(await articleCount()).toBe(before + 2);
   });
 });
