@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { sql } from "kysely";
 import { migrateToLatest } from "./migrator.js";
@@ -43,23 +43,38 @@ describe("readTrendingStorylines", () => {
   });
 
   beforeEach(async () => {
+    // `articles cascade` takes `sightings` with it (the FK is ON DELETE CASCADE),
+    // but naming it keeps the reset legible now that sightings are load-bearing.
     await sql`
-      truncate storylines, storyline_groups, storyline_days, articles cascade
+      truncate storylines, storyline_groups, storyline_days, articles, sightings cascade
     `.execute(harness.db);
   });
 
-  /** One article, in its own group unless told otherwise. */
+  /**
+   * One article, in its own group unless told otherwise, with one sighting per
+   * entry in `providers` — earliest first, since `articles.provider` is defined
+   * as the provider of the EARLIEST sighting (migration 0013) and the read now
+   * asks a question that only means something against real sighting rows.
+   *
+   * Defaulting to `["currents"]` rather than to no sightings at all is the point:
+   * an article nobody reported is not a state ingest can produce, and a fixture
+   * that produced it would let the discovery-plane predicate pass every test by
+   * excluding everything.
+   */
   const article = async (input: {
     published: string;
     domain: string;
     groupId?: string;
     language?: string | null;
+    providers?: readonly string[];
   }): Promise<string> => {
     counter += 1;
+    const providers = input.providers ?? ["currents"];
+    const dedupKey = randomBytes(32);
     const row = await harness.db
       .insertInto("articles")
       .values({
-        dedup_key: randomBytes(32),
+        dedup_key: dedupKey,
         url: `https://${input.domain}/${counter}`,
         title: `Fixture ${counter}`,
         description: null,
@@ -71,10 +86,27 @@ describe("readTrendingStorylines", () => {
         source_domain: input.domain,
         published: new Date(input.published),
         latest_seen: new Date(input.published),
-        sighting_count: 1,
+        sighting_count: providers.length,
+        provider: providers[0]!,
       })
       .returning("id")
       .executeTakeFirstOrThrow();
+
+    for (const [index, provider] of providers.entries()) {
+      await harness.db
+        .insertInto("sightings")
+        .values({
+          id: randomUUID(),
+          article_id: row.id,
+          dedup_key: dedupKey,
+          published: new Date(input.published),
+          // Ordered, so "earliest sighting" is the first of `providers`.
+          first_seen_at: new Date(Date.parse(input.published) + index * 60_000),
+          provider,
+          raw: JSON.stringify({ fixture: counter, provider }),
+        })
+        .execute();
+    }
 
     if (input.groupId !== undefined) {
       await harness.db
@@ -95,7 +127,11 @@ describe("readTrendingStorylines", () => {
    */
   const storyline = async (
     label: string,
-    articles: readonly { published: string; domain: string }[],
+    articles: readonly {
+      published: string;
+      domain: string;
+      providers?: readonly string[];
+    }[],
   ): Promise<string> => {
     const groups = await Promise.all(articles.map((a) => article(a)));
     const created = await createProvisionalStoryline(harness.db, {
@@ -380,6 +416,116 @@ describe("readTrendingStorylines", () => {
     expect(english[0]!.windowArticles).toBe(2);
     expect(english[0]!.windowSources).toBe(2); // a.com and d.com — the English half
     expect(english[0]!.size).toBe(4);
+  });
+
+  it("counts only what the DISCOVERY plane saw, and still reports the whole arc", async () => {
+    // The load-bearing rule of the discovery/deepening design: the plane that
+    // measures is the plane that is not steered. All six surfaces of the query
+    // in one fixture — an arc three quarters of whose window coverage arrived
+    // from a plane the cloud itself would have pointed at.
+    await storyline("Deepened Arc", [
+      { published: "2026-08-17T08:00:00.000Z", domain: "a.com" },
+      { published: "2026-08-17T09:00:00.000Z", domain: "b.com" },
+      { published: "2026-08-17T10:00:00.000Z", domain: "x.com", providers: ["gnews"] },
+      { published: "2026-08-17T11:00:00.000Z", domain: "y.com", providers: ["gnews"] },
+      // Newer than every Currents article, and from a fourth outlet: the two
+      // steering channels a volume-only fix would leave wide open.
+      { published: "2026-08-17T11:45:00.000Z", domain: "z.com", providers: ["gnews"] },
+      // Outside the window, so it reaches the arc figures and nothing else.
+      { published: "2026-08-10T09:00:00.000Z", domain: "c.com" },
+    ]);
+
+    const [only] = await read();
+    // (1) volume and (2) window breadth: the two Currents articles, and the two
+    // outlets that filed them. Not 5 and not 5.
+    expect(only!.windowArticles).toBe(2);
+    expect(only!.windowSources).toBe(2);
+    // (6) recency: the newest CURRENTS article, not the newest article. Without
+    // this the arc re-ranks on a deepening article's timestamp alone, and the
+    // browser paints it the colour of something that just moved.
+    expect(only!.lastUpdated.toISOString()).toBe("2026-08-17T09:00:00.000Z");
+    // (4) and (5): the arc as the store holds it, every plane, deliberately
+    // whole — six articles from six outlets is what a click on this word
+    // delivers, and "N in all" is a promise about that timeline.
+    expect(only!.size).toBe(6);
+    expect(only!.sourceCount).toBe(6);
+  });
+
+  it("refuses a storyline the discovery plane did not see inside the window", async () => {
+    // (3), and the sharpest of the six: Google News answers a label with 20–82
+    // domains, so a two-newsroom bar is not a bar at all on an arc it touched.
+    // Two deepening-plane outlets clear the arithmetic and must still fail —
+    // there is no evidence here that several newsrooms are covering this now,
+    // only evidence that we went and fetched it.
+    await storyline("Fetched, Not Covered", [
+      { published: "2026-08-17T10:00:00.000Z", domain: "x.com", providers: ["gnews"] },
+      { published: "2026-08-17T11:00:00.000Z", domain: "y.com", providers: ["gnews"] },
+    ]);
+    await storyline("Genuinely Covered", [
+      { published: "2026-08-17T07:00:00.000Z", domain: "a.com" },
+      { published: "2026-08-17T07:30:00.000Z", domain: "b.com" },
+    ]);
+
+    expect((await read()).map((s) => s.label)).toEqual(["Genuinely Covered"]);
+  });
+
+  it("does not let fetched volume outrank an arc the discovery plane covered", async () => {
+    // The feedback loop, as a ranking. Unguarded, "Fetched Hard" scores
+    // 8 * 0.5^(10min/8h) = 7.9 against 4 * 0.5^(1.5/8) = 3.5 and leads the
+    // board — which is the rich-get-richer step: it leads because it was
+    // fetched, and leading is what gets it fetched again. Counting only what
+    // Currents saw leaves it 2 * 0.5^(5.5/8) = 1.2, behind on both terms.
+    await storyline("Fetched Hard", [
+      { published: "2026-08-17T06:00:00.000Z", domain: "a.com" },
+      { published: "2026-08-17T06:30:00.000Z", domain: "b.com" },
+      { published: "2026-08-17T11:00:00.000Z", domain: "p.com", providers: ["gnews"] },
+      { published: "2026-08-17T11:10:00.000Z", domain: "q.com", providers: ["gnews"] },
+      { published: "2026-08-17T11:20:00.000Z", domain: "r.com", providers: ["gnews"] },
+      { published: "2026-08-17T11:30:00.000Z", domain: "s.com", providers: ["gnews"] },
+      { published: "2026-08-17T11:40:00.000Z", domain: "t.com", providers: ["gnews"] },
+      { published: "2026-08-17T11:50:00.000Z", domain: "u.com", providers: ["gnews"] },
+    ]);
+    await storyline("Actually Covered", [
+      { published: "2026-08-17T07:00:00.000Z", domain: "a.com" },
+      { published: "2026-08-17T08:00:00.000Z", domain: "b.com" },
+      { published: "2026-08-17T09:00:00.000Z", domain: "c.com" },
+      { published: "2026-08-17T10:30:00.000Z", domain: "d.com" },
+    ]);
+
+    expect((await read()).map((s) => s.label)).toEqual(["Actually Covered", "Fetched Hard"]);
+  });
+
+  it("counts an article the discovery plane saw SECOND, not first", async () => {
+    // The nameable case that decides between the two implementations. The cheap
+    // predicate is `a.provider = 'currents'`, no join — but migration 0013
+    // defines that column as the provider of the EARLIEST sighting, so for an
+    // article another plane reported first and Currents reported later it says
+    // "gnews" about an article Currents plainly saw. 33 such rows in the dev
+    // archive today. Excluding them would understate the discovery plane's own
+    // coverage, which is the opposite of what this phase is for.
+    await storyline("Seen Second", [
+      {
+        published: "2026-08-17T11:00:00.000Z",
+        domain: "a.com",
+        providers: ["gnews", "currents"],
+      },
+      { published: "2026-08-17T10:00:00.000Z", domain: "b.com" },
+    ]);
+
+    // The article really is `provider = 'gnews'`, so this pins the distinction
+    // rather than merely exercising a code path that happens to agree.
+    const earliest = await harness.db
+      .selectFrom("articles")
+      .select(["provider", "source_domain"])
+      .where("source_domain", "=", "a.com")
+      .executeTakeFirstOrThrow();
+    expect(earliest.provider).toBe("gnews");
+
+    const [only] = await read();
+    expect(only!.label).toBe("Seen Second");
+    expect(only!.windowArticles).toBe(2);
+    expect(only!.windowSources).toBe(2);
+    expect(only!.lastUpdated.toISOString()).toBe("2026-08-17T11:00:00.000Z");
   });
 
   it("honours the limit, keeping the top of the ranking", async () => {
