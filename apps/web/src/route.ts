@@ -8,7 +8,7 @@ import type { TopicFilters } from "./api.js";
  * Filters are held apart from the keywords because they outlive them. The hero
  * carries them before there is anything to search, a search adopts whatever is
  * set, and clearing back to the hero keeps them — so a reader who has said
- * "Malay, sports" says it once, not once per topic.
+ * "Malaysia" says it once, not once per topic.
  */
 export interface Route {
   /** null on the landing page: filters standing without a topic. */
@@ -34,7 +34,19 @@ export interface Route {
   from?: string;
 }
 
-const PARAM_KEYS = { language: "lang", country: "country", category: "category" } as const;
+/**
+ * Filter name → its URL parameter. This map is the whole of what the URL says
+ * about filters, in both directions: `parseRoute` reads only these keys and
+ * `routeSearch` writes only these keys.
+ *
+ * `category` is deliberately absent (ADR-0020). A bookmarked
+ * `?q=housing&category=technology` therefore parses as the plain search for
+ * "housing" — the parameter is not read, not held, and not sent onward — and
+ * the first navigation rewrites the URL without it. The API strips it too, so
+ * a direct caller that never touches this file degrades the same way; neither
+ * side is relying on the other to have cleaned up.
+ */
+const PARAM_KEYS = { language: "lang", country: "country" } as const;
 
 export function parseRoute(search: string): Route {
   const params = new URLSearchParams(search);
@@ -46,7 +58,6 @@ export function parseRoute(search: string): Route {
     filters: {
       language: params.get(PARAM_KEYS.language) ?? undefined,
       country: params.get(PARAM_KEYS.country) ?? undefined,
-      category: params.get(PARAM_KEYS.category) ?? undefined,
     },
     // A SEED without keywords seeds nothing, and dropping it keeps the hero's
     // URL to the filters it is actually showing. A storyline VIEW is the

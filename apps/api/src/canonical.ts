@@ -34,16 +34,19 @@ export interface TimelineRequestInput {
   /** Reference code, or the literal "all" to search every language. */
   language?: string | undefined;
   country?: string | undefined;
-  category?: string | undefined;
   from?: Date | undefined;
   to?: Date | undefined;
 }
 
-/** The `/available/*` VALUE sets — codes, never names (PROBE-FINDINGS 6). */
+/**
+ * The `/available/*` VALUE sets — codes, never names (PROBE-FINDINGS 6).
+ *
+ * No categories: a reader cannot choose one any more (ADR-0020), so there is
+ * nothing left to validate a category against.
+ */
 export interface ReferenceCodes {
   languages: ReadonlySet<string>;
   regions: ReadonlySet<string>;
-  categories: ReadonlySet<string>;
 }
 
 export interface CanonicalizeOptions {
@@ -67,6 +70,15 @@ export interface CanonicalQuery {
   /** null = all languages, chosen explicitly. */
   language: string | null;
   country: string | null;
+  /**
+   * Always null out of `canonicalize` (ADR-0020): no request can set one.
+   *
+   * The field stays because a topic MINTED before that decision still carries a
+   * category, and `processSegmentJob` rebuilds a query from the stored row —
+   * so a queued segment for one of those 29 topics still fetches the thing the
+   * topic says it is, rather than quietly widening to an unfiltered search
+   * whose results would then be ingested under a category-scoped fingerprint.
+   */
   category: string | null;
   /** Snapped outward to the 15-minute grid. A view onto the topic, not identity. */
   window: { from: Date; to: Date };
@@ -117,10 +129,13 @@ export function canonicalize(
     errors.country = `unknown country "${country}"`;
   }
 
-  const category = input.category ?? null;
-  if (category !== null && !options.reference.categories.has(category)) {
-    errors.category = `unknown category "${category}"`;
-  }
+  // No category is read, and that is the whole of how a bookmarked
+  // `?category=technology` degrades (ADR-0020): the parameter is already gone
+  // by the time it reaches here — `TimelineQuery` no longer names it, so Zod
+  // strips it — and this function has no field to reject it with. The URL
+  // answers as the same search without the filter, which is the outcome the
+  // decision requires; a 400 would be a worse failure than the filter it
+  // replaces.
 
   // Outward snap: floor the start, ceil the end. The snap may widen the ask,
   // never narrow it — a narrowed window would silently hide articles the user
@@ -141,11 +156,11 @@ export function canonicalize(
   return {
     ok: true,
     query: {
-      fingerprint: fingerprintOf({ keywords, language, country, category }),
+      fingerprint: fingerprintOf({ keywords, language, country, category: null }),
       keywords,
       language,
       country,
-      category,
+      category: null,
       window: { from, to },
     },
   };
@@ -159,6 +174,14 @@ export function canonicalize(
  *
  * Exported for the §10.1 breadth sample, whose keyword-less per-category
  * fetches are ordinary topics — same identity, same storage, same dedup.
+ *
+ * **`category` stays in the serialization after ADR-0020 even though nothing
+ * can produce a non-null one any more.** It is not a vestige: dropping the key
+ * would re-identify the 29 category-scoped topics already stored — their
+ * accumulated coverage and 393 article memberships would sit under a
+ * fingerprint nothing ever computes again, orphaned and still holding rows.
+ * Retiring a reader's CHOICE costs nothing here; retiring the key would cost
+ * exactly that, for no gain a reader could see.
  */
 export function fingerprintOf(identity: {
   keywords: string[];

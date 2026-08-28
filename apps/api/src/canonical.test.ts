@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { canonicalize, type ReferenceCodes } from "./canonical.js";
+import {
+  canonicalize,
+  fingerprintOf,
+  type ReferenceCodes,
+  type TimelineRequestInput,
+} from "./canonical.js";
 
 /**
  * The canonicalizer (ARCHITECTURE 6.2) — the single easiest and highest-value
@@ -12,7 +17,6 @@ import { canonicalize, type ReferenceCodes } from "./canonical.js";
 const reference: ReferenceCodes = {
   languages: new Set(["en", "de", "fr"]),
   regions: new Set(["us", "gb", "ca"]),
-  categories: new Set(["technology", "politics", "crap"]),
 };
 
 const NOW = new Date("2026-08-10T14:07:33.000Z");
@@ -83,15 +87,30 @@ describe("filter validation against the reference lists", () => {
     );
   });
 
-  it("validates country and category the same way", () => {
+  it("validates country the same way", () => {
     const badCountry = canonicalize({ q: "x", country: "zz" }, options);
-    const badCategory = canonicalize({ q: "x", category: "nope" }, options);
     expect(badCountry.ok).toBe(false);
-    expect(badCategory.ok).toBe(false);
     if (!badCountry.ok) expect(badCountry.errors.country).toBeDefined();
-    if (!badCategory.ok) expect(badCategory.errors.category).toBeDefined();
 
-    expect(goodQuery("x", { country: "us", category: "technology" }).country).toBe("us");
+    expect(goodQuery("x", { country: "us" }).country).toBe("us");
+  });
+
+  it("has no category to validate, and answers one rather than refusing it", () => {
+    // ADR-0020. A bookmarked `?category=technology` reaches production as an
+    // extra property — `TimelineQuery` strips it, and by the time it is here
+    // there is nothing to reject. Passed in explicitly to prove the SHAPE of
+    // the degradation rather than merely that the field left the type: the
+    // request is answered, and answered as the same topic as the search
+    // without it. Refusing it would 400 every link a reader ever saved.
+    const stale = canonicalize(
+      { q: "housing", category: "technology" } as TimelineRequestInput,
+      options,
+    );
+
+    expect(stale.ok).toBe(true);
+    if (!stale.ok) return;
+    expect(stale.query.category).toBeNull();
+    expect(stale.query.fingerprint).toBe(goodQuery("housing").fingerprint);
   });
 });
 
@@ -162,5 +181,37 @@ describe("the fingerprint is a stable, documented serialization", () => {
       .digest("hex");
 
     expect(goodQuery("climate").fingerprint).toBe(expected);
+  });
+
+  it("still computes the identity of a topic minted with a category", () => {
+    // The 29 category-scoped topics in production predate ADR-0020 and were
+    // left exactly where they are. `category` therefore stays in the
+    // serialization even though nothing can produce a non-null one any more:
+    // drop the key and those rows' coverage and 393 article memberships sit
+    // under a fingerprint no code path ever computes again — orphaned,
+    // invisible, and still holding rows.
+    const scoped = fingerprintOf({
+      keywords: ["housing"],
+      language: "en",
+      country: null,
+      category: "technology",
+    });
+
+    expect(scoped).toBe(
+      createHash("sha256")
+        .update(
+          JSON.stringify({
+            category: "technology",
+            country: null,
+            keywords: ["housing"],
+            language: "en",
+          }),
+        )
+        .digest("hex"),
+    );
+    // And it is a DIFFERENT topic from the search a stale URL now degrades to,
+    // which is what makes leaving those rows alone cost nothing: the degraded
+    // search accumulates under its own fingerprint and never writes to theirs.
+    expect(scoped).not.toBe(goodQuery("housing").fingerprint);
   });
 });

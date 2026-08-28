@@ -1,6 +1,6 @@
 import { useTheme } from "./ThemeProvider.js";
 
-/** Sits to the right of the category chip in FilterChipRow (§8.1). */
+/** Sits to the right of the location chip in FilterChipRow (§8.1). */
 export function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
   const isDark = theme === "dark";

@@ -75,10 +75,7 @@ export function defaultedFilters(
   reference: Reference,
   language: LanguagePolicy,
 ): TopicFilters {
-  const untouched =
-    filters.language === undefined &&
-    filters.country === undefined &&
-    filters.category === undefined;
+  const untouched = filters.language === undefined && filters.country === undefined;
   const next = { ...filters };
   if (next.language === undefined) {
     next.language =

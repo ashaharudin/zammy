@@ -15,7 +15,6 @@ import { isStorylineView, TimelinePage, TrendingResponse } from "@zammy/shared";
 export interface TopicFilters {
   language?: string;
   country?: string;
-  category?: string;
 }
 
 /**
@@ -37,7 +36,9 @@ export const Reference = z.object({
   /** Display name → code, e.g. { English: "en" }. Always send the code. */
   languages: z.record(z.string(), z.string()),
   regions: z.record(z.string(), z.string()),
-  categories: z.array(z.string()),
+  // No `categories`: the API stopped serving the taxonomy with the chip that
+  // read it (ADR-0020). This object is not `.strict()`, so a response from an
+  // instance that still sends one parses fine — the field is simply dropped.
 });
 export type Reference = z.infer<typeof Reference>;
 
@@ -91,7 +92,6 @@ export async function fetchTimeline(
   const params = new URLSearchParams({ q: topic.q });
   if (topic.language) params.set("language", topic.language);
   if (topic.country) params.set("country", topic.country);
-  if (topic.category) params.set("category", topic.category);
   if (cursor) params.set("cursor", cursor);
 
   const response = await fetch(`/api/v1/timeline?${params}`, { signal });

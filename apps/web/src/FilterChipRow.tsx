@@ -10,7 +10,7 @@ import { ThemeToggle } from "./ThemeToggle.js";
  * reader meets one control, not two that drift (§8.1), plus the light/dark
  * toggle immediately after them.
  *
- * Location and category as words, each opening the list it can be changed to.
+ * Location as a word, opening the list it can be changed to.
  * Picking an entry applies immediately — a filter that waits for a second
  * Enter reads as broken. A custom popover rather than a native <select> so the
  * closed control reads as part of the line it sits on rather than as a form
@@ -150,7 +150,6 @@ function FilterChip({
 
 const CHIP_LABELS: Record<Chip["kind"], string> = {
   country: "Location",
-  category: "Category",
 };
 
 function Option({

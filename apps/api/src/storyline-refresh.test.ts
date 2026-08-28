@@ -194,7 +194,6 @@ function canonicalizer(
         reference: {
           languages: new Set(["en", "ms"]),
           regions: new Set(),
-          categories: new Set(),
         },
         defaultLanguage: "en",
         lookbackDays: 30,

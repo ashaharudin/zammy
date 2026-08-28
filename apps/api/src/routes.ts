@@ -35,13 +35,23 @@ const REFERENCE_TTL_MS = 24 * 60 * 60 * 1000;
 const EMPTY_REFERENCE_CODES: ReferenceCodes = {
   languages: new Set(),
   regions: new Set(),
-  categories: new Set(),
 };
 
+/**
+ * The reference lists a picker draws from. No categories since ADR-0020: a
+ * reader cannot choose one, so serving the taxonomy would be advertising a
+ * control that does not exist — and the next person to see it on the wire
+ * would reasonably build the chip back.
+ *
+ * The Currents adapter still PARSES the taxonomy out of a recorded 400 body
+ * and `availableCategories()` is still on the `NewsClient` interface; only the
+ * offer goes. That plumbing is expensive to re-derive and cheap to keep, and
+ * §10.1's breadth sample still sends categories upstream — what changed is
+ * that no reader picks one.
+ */
 interface ReferenceData {
   languages: Record<string, string>;
   regions: Record<string, string>;
-  categories: string[];
 }
 
 export async function registerQueryRoutes(
@@ -99,7 +109,9 @@ export async function registerQueryRoutes(
         q: parsed.data.q!,
         language: parsed.data.language,
         country: parsed.data.country,
-        category: parsed.data.category,
+        // No category, and nothing above dropped one: `TimelineQuery` never
+        // named it, so a bookmarked `?category=technology` was stripped by the
+        // schema and this is the same search without the filter (ADR-0020).
         from: parsed.data.from ? new Date(parsed.data.from) : undefined,
         to: parsed.data.to ? new Date(parsed.data.to) : undefined,
       },
@@ -199,7 +211,7 @@ export async function registerQueryRoutes(
             {
               // An empty set on a cache miss, which costs nothing: the only field
               // being validated is the language, and `filter` above has already
-              // dropped it. Country and category are never sent from here.
+              // dropped it. A country is never sent from here.
               reference: codes ?? EMPTY_REFERENCE_CODES,
               defaultLanguage: options.defaultLanguage,
               lookbackDays: deps.config.lookbackDays,
@@ -232,9 +244,10 @@ export async function registerQueryRoutes(
   );
 
   app.get("/api/v1/reference", async (_request, reply) => {
-    // Verbatim upstream CODES, junk categories included: filtering belongs
-    // to the UI picker, because a stored sighting may legitimately carry one.
-    // The region and language NAMES are spell-checked (`repairedRegions`,
+    // Verbatim upstream CODES for what a reader can still narrow by: languages
+    // and regions. The category taxonomy is no longer served (ADR-0020) — a
+    // list nothing can be picked from is an offer, not information. The region
+    // and language NAMES are spell-checked (`repairedRegions`,
     // `repairedLanguages`) — they are display text, and five of them are typed
     // wrong upstream.
     return reply.send(await loadReference(deps));
@@ -267,6 +280,10 @@ export async function registerQueryRoutes(
         keywords: topic.keywords,
         language: topic.language,
         country: topic.country,
+        // Still reported, and it is not an offer: this route states what a
+        // STORED topic is, and 29 of them were minted with a category before
+        // ADR-0020. Hiding it would make an operator reading a row's coverage
+        // unable to see what the row's fingerprint actually means.
         category: topic.category,
         articleCount,
         coverage:
@@ -349,16 +366,11 @@ async function loadReference(deps: TimelineDeps): Promise<ReferenceData> {
  */
 async function cachedReference(deps: TimelineDeps): Promise<ReferenceData | null> {
   try {
-    const [languages, regions, categories] = await deps.redis.mget(
-      "ref:languages",
-      "ref:regions",
-      "ref:categories",
-    );
-    if (languages && regions && categories) {
+    const [languages, regions] = await deps.redis.mget("ref:languages", "ref:regions");
+    if (languages && regions) {
       return {
         languages: JSON.parse(languages) as Record<string, string>,
         regions: JSON.parse(regions) as Record<string, string>,
-        categories: JSON.parse(categories) as string[],
       };
     }
   } catch {
@@ -368,25 +380,26 @@ async function cachedReference(deps: TimelineDeps): Promise<ReferenceData | null
 }
 
 async function fetchReference(deps: TimelineDeps): Promise<ReferenceData> {
-  const keys = ["ref:languages", "ref:regions", "ref:categories"] as const;
+  const keys = ["ref:languages", "ref:regions"] as const;
   const cached = await cachedReference(deps);
   if (cached) return cached;
 
-  const [languages, regions, categories] = await Promise.all([
+  // Two calls, not three: `availableCategories()` is no longer asked for, since
+  // nothing downstream can use the answer (ADR-0020). `ref:categories` is left
+  // unwritten and whatever a pre-G8 instance cached there expires on its own.
+  const [languages, regions] = await Promise.all([
     deps.currents.availableLanguages(),
     deps.currents.availableRegions(),
-    deps.currents.availableCategories(),
   ]);
 
   try {
     await deps.redis.set(keys[0], JSON.stringify(languages), "PX", REFERENCE_TTL_MS);
     await deps.redis.set(keys[1], JSON.stringify(regions), "PX", REFERENCE_TTL_MS);
-    await deps.redis.set(keys[2], JSON.stringify(categories), "PX", REFERENCE_TTL_MS);
   } catch {
-    // Next request fetches again; three calls a day is an acceptable worst case.
+    // Next request fetches again; two calls a day is an acceptable worst case.
   }
 
-  return { languages, regions, categories };
+  return { languages, regions };
 }
 
 /** Name→code maps reduce to their VALUES — never derive codes from names (§2). */
@@ -394,6 +407,5 @@ function referenceCodes(reference: ReferenceData): ReferenceCodes {
   return {
     languages: new Set(Object.values(reference.languages)),
     regions: new Set(Object.values(reference.regions)),
-    categories: new Set(reference.categories),
   };
 }

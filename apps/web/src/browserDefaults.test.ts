@@ -73,7 +73,6 @@ describe("defaultCountry", () => {
 const REFERENCE: Reference = {
   languages: LANGUAGES,
   regions: REGIONS,
-  categories: ["sports"],
 };
 
 const CANADIAN = { locales: ["en-CA"], timeZone: "America/Edmonton" };
