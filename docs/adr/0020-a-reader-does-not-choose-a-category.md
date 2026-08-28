@@ -98,6 +98,22 @@ the category**. Both sides do it, independently:
   and `routeSearch` does not write it back. The first navigation drops it from
   the URL.
 
+**One qualification on the web half, because "same fingerprint" is an
+API-surface claim and the browser adds a step after it.** `defaultedFilters`
+suppresses the browser's country default whenever the URL states any filter, and
+`category` counted as one until this decision. So a link carrying *only* a
+category — `?q=housing&category=technology`, no `lang`, no `country` — used to
+suppress that default and now takes it, landing on `?q=housing&lang=en&country=CA`.
+
+Measured against the right baseline this is still exact: that link and a plain
+`?q=housing` now resolve to the identical topic, which is what "degrades to the
+same search" has to mean. Measured against what the link did *before*, the reader
+gains a country filter they never set. Narrow — every URL the app itself writes
+carries `lang`, so only a hand-edited or pre-`lang` link reaches it — and
+defensible, since a stale link should behave like the plain search in every
+respect including defaulting. But it is a real change and the gate that produces
+it is now invisible, so it is pinned in `browserDefaults.test.ts`.
+
 **Both, not either.** Had only the web stripped it, a direct API consumer would
 have broken silently while the app looked fine — the app is not the only caller,
 and a shared link is exactly the thing that arrives from outside it. Neither

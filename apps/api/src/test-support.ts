@@ -185,6 +185,11 @@ export async function purgeTopicKeys(redis: Redis, fingerprint: string): Promise
     `lock:refresh:${fingerprint}:*`,
     "ref:languages",
     "ref:regions",
+    // Nothing writes `ref:categories` any more (ADR-0020), and it is purged
+    // anyway: the reference suite still SETS it, to prove a cache an older
+    // build left three keys in still counts as a hit, and a shared dev Redis
+    // can be holding one from a pre-G8 run. Purging a key no production path
+    // writes is what keeps that test honest about which state it set up.
     "ref:categories",
   ];
   for (const pattern of patterns) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Reference } from "./api.js";
 import { defaultCountry, defaultLanguage, defaultedFilters } from "./browserDefaults.js";
+import { parseRoute } from "./route.js";
 
 /**
  * What the command bar's filter chips start on before the user picks anything
@@ -108,6 +109,32 @@ describe("defaultedFilters", () => {
     expect(defaultedFilters({ language: "all" }, CANADIAN, REFERENCE, "browser")).toEqual({
       language: "all",
     });
+  });
+
+  it("defaults a stale ?category= link exactly as it defaults the plain search", () => {
+    // Composed with `parseRoute` on purpose: the claim is about a URL, and
+    // neither unit can state it alone. `untouched` counted `category` until
+    // ADR-0020, so `?q=housing&category=technology` used to state a filter and
+    // suppress the country default; the parameter is not parsed now, so the
+    // link states nothing and is defaulted like any bare `?q=`.
+    //
+    // Both halves of that are pinned here because the pair is the promise —
+    // re-adding `category` to `PARAM_KEYS` OR to the gate breaks this, and
+    // either would go unnoticed by a test of one file.
+    const stale = defaultedFilters(
+      parseRoute("?q=housing&category=technology").filters,
+      CANADIAN,
+      REFERENCE,
+      "browser",
+    );
+
+    expect(stale).toEqual(defaultedFilters(parseRoute("?q=housing").filters, CANADIAN, REFERENCE, "browser"));
+    expect(stale).toEqual({ language: "en", country: "CA" });
+    // The change this makes to that reader's saved link, stated rather than
+    // implied: it used to keep "any country" and now takes theirs. Defensible —
+    // a stale link should behave like the plain search in every respect — but
+    // it is a change, and ADR-0020 records it.
+    expect(parseRoute("?q=housing&category=technology&country=JP").filters.country).toBe("JP");
   });
 
   it("answers the language question even when the URL states other filters", () => {

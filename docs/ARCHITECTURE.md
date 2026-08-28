@@ -116,8 +116,10 @@ Data-shape hazards the client must absorb — all confirmed live:
 - Reference endpoints return name→code *maps*, not arrays, with typos in five of the 102 names
   (`"Vietnamise"`, `"United State"`, `"German"`, `"Gahana"`, `"Indonedia"`) — use the values, never
   derive codes from names, and draw a picker's names through `repairedRegions` /
-  `repairedLanguages` (PROBE-FINDINGS 6a). Categories include junk values (`crap`, `notsure`,
-  `redundant`) to filter from any user-facing picker.
+  `repairedLanguages` (PROBE-FINDINGS 6a). The category list includes junk values (`crap`,
+  `notsure`, `redundant`) — recorded as a fact about upstream's taxonomy, not as something to
+  filter for a picker: there is no category picker any more (ADR-0020), and the list is no longer
+  served.
 - The spec names the link field `urls` while responses use `url`; tolerate both. `id` is a UUID
   string despite the spec's `integer`.
 - **Cloudflare returns `403` (`error code: 1010`) to default library User-Agents.** Every call must
@@ -398,9 +400,11 @@ Two consequences worth knowing before a third provider:
   under-cover, because page 2 then means different items to each provider.
 - **A provider that cannot express a query sits it out.** GNews `/search` has no category or domain
   filter, so a category-scoped topic is refused locally rather than answered unfiltered. Since
-  ADR-0020 no reader can mint one, so the category half of that refusal is unreachable rather than
-  merely rare — kept, because an unreachable guard already written is what stops the parameter
-  being re-added.
+  ADR-0020 no reader can MINT a category-scoped topic — but 29 already exist, and `fillSegment`
+  still forwards `query.category` for a job planned against one of their rows. So the category half
+  of that refusal is unreachable from a reader and live from the deepening plane, which is exactly
+  where it will matter once G5 turns Google News on: a legacy topic's segment reaching a provider
+  that would silently discard the filter is the failure the refusal exists to prevent.
 
 ---
 
@@ -443,6 +447,12 @@ one and silently discards it when asked, so the filter left the reader's reach. 
 not `.strict()`, so a bookmark still carrying `?category=technology` has the parameter **stripped**
 and is answered as the same search without it — same topic, same fingerprint. A 400 would be a
 harder failure than the filter's removal, which is why the parameter is not merely rejected.
+
+That identity is an API-surface claim. The browser adds a step after it: a link whose ONLY filter
+was a category no longer states one, so `defaultedFilters` applies the reader's own country where
+it previously stood down. Such a link therefore resolves to the same topic a plain `?q=` link
+resolves to — the intended degradation — but not to the topic it resolved to before. See ADR-0020
+and `browserDefaults.test.ts`.
 
 Response:
 
