@@ -527,5 +527,22 @@ export function createQuotaGovernors(
       interactiveReserve: config.GNEWS_INTERACTIVE_RESERVE,
       burstWindowMs: config.GNEWS_BURST_WINDOW_MS,
     }),
+    // The deepening plane's provider, and the one governor whose numbers were
+    // NOT transcribed from something the provider published: there is no key, no
+    // documented ceiling and no rate-limit header, so `quota()` returns null
+    // forever and this governor is never corrected by upstream
+    // (`googleNewsClientFactory`). It is built whether or not the flag is on —
+    // a governor is a counter, and building one costs a closure — and the flag
+    // is checked where the CLIENT is built, so nothing can spend against it
+    // while the provider is unreachable.
+    "google-news": new RedisQuotaGovernor({
+      redis,
+      log,
+      provider: "google-news",
+      dailyLimit: config.GOOGLE_NEWS_DAILY_CALL_LIMIT,
+      burstLimit: config.GOOGLE_NEWS_BURST_CALL_LIMIT,
+      interactiveReserve: config.GOOGLE_NEWS_INTERACTIVE_RESERVE,
+      burstWindowMs: config.GOOGLE_NEWS_BURST_WINDOW_MS,
+    }),
   };
 }

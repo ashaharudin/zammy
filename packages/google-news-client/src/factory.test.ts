@@ -9,11 +9,12 @@ import { FIXTURES_DIR } from "./test-support.js";
 /**
  * The flag, and what "off" has to mean.
  *
- * Off must mean UNREACHABLE, not merely unwired. Nothing above this package
- * calls the factory yet — G5 is what wires it — so an "unwired" guard would be
- * satisfied by doing nothing at all, and would stop being satisfied the moment
- * someone added the import. The guard being inside the factory is what makes
- * the flag survive that.
+ * Off must mean UNREACHABLE, not merely unwired. When this was written nothing
+ * above the package called the factory, so an "unwired" guard was satisfied by
+ * doing nothing at all — and would have stopped being satisfied the moment
+ * someone added the import. G5 added it (`server.ts` builds this client when
+ * the flag is on), which is exactly the moment that argument was going to be
+ * tested. The guard being inside the factory is what made the flag survive it.
  */
 
 function config(overrides: Record<string, unknown> = {}) {
@@ -60,15 +61,20 @@ describe("with the flag off", () => {
     expect(calls).toEqual([]);
   });
 
-  it("says why, and names the phases that have to land first", async () => {
-    // The message is the documentation an operator will actually read, so it
-    // has to stay current: G1 and G2 have landed since this was written, and a
-    // message still naming them as blockers would send someone to check work
-    // that is already done.
+  it("says this is a deliberate off rather than a not-yet, and what it costs", async () => {
+    // The message is the documentation an operator will actually read, so it has
+    // to stay current — and what changed with G5 is its whole KIND. It used to
+    // name the phases that had to land first; they all have, and a message still
+    // naming G3 and G5 as blockers would send someone to check finished work.
+    // What an operator needs from it now is the opposite: that nothing is
+    // missing, and that turning this on spends calls and adds rows.
     await expect(createGoogleNewsClient(config())).rejects.toThrow(
       /DISCOVERY-DEEPENING-PLAN/,
     );
-    await expect(createGoogleNewsClient(config())).rejects.toThrow(/G3.*G5/s);
+    await expect(createGoogleNewsClient(config())).rejects.toThrow(
+      /deliberate off rather than a not-yet/,
+    );
+    await expect(createGoogleNewsClient(config())).rejects.toThrow(/spend an upstream call/);
   });
 });
 

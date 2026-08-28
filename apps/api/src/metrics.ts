@@ -78,6 +78,13 @@ export class Metrics {
     registers: [this.registry],
   });
 
+  private readonly storylineDeepens = new Counter({
+    name: "zammy_storyline_deepening_total",
+    help: "Storyline opens by what the DEEPENING plane queued (ADR-0019, plan G5)",
+    labelNames: ["result"] as const,
+    registers: [this.registry],
+  });
+
   constructor(options: { quota?: () => Promise<QuotaView> } = {}) {
     const quota = options.quota;
     if (quota) {
@@ -138,6 +145,29 @@ export class Metrics {
    */
   storylineRefresh(result: "queued" | "fresh" | "no_keywords" | "invalid"): void {
     this.storylineRefreshes.inc({ result });
+  }
+
+  /**
+   * The deepening plane's half of the same question, and it is a SEPARATE
+   * counter rather than a label on the one above because the two are planned
+   * against different coverage and can disagree — an arc can be fresh to
+   * Currents and cold to the deepening provider on the same click, which is
+   * exactly what per-provider coverage is for (ADR-0019).
+   *
+   * `unavailable` dominating is the shipped state, not a fault:
+   * `GOOGLE_NEWS_ENABLED` is false by default and no deepening provider is
+   * configured. Watch it after the flag goes on — it should fall to zero.
+   *
+   * `ungrounded` is the number G6 will want and nothing else reports it: it
+   * counts arcs whose model label shares NO word with their own coverage, which
+   * is a labelling failure the cloud currently hides rather than a fetch
+   * problem. It is also the only refusal here that is a judgement rather than a
+   * state, so a sudden rise means the labeler moved, not that traffic did.
+   */
+  storylineDeepen(
+    result: "queued" | "fresh" | "ungrounded" | "unavailable",
+  ): void {
+    this.storylineDeepens.inc({ result });
   }
 }
 

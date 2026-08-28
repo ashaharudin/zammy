@@ -260,6 +260,12 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
     const ingested = await ingestSightings(deps.db, {
       fingerprint,
       sightings: result.sightings,
+      // `breadth` (ADR-0019). Nobody asked for these articles and no ranking
+      // chose them — the sample is a periodic slice of whatever upstream is
+      // carrying — so they are demand we did not manufacture, and they COUNT
+      // toward the cloud. That is the distinction the plane exists to draw:
+      // not "did a human trigger it" but "did our own output pick the target".
+      plane: "breadth",
       // The same day rule grouping runs on: a fold moves which day an article
       // belongs to, and the ingest keeps its storylines' slots in step.
       timeZone: deps.config.grouping.timeZone,

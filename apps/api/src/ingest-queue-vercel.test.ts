@@ -50,6 +50,7 @@ const segment = (over: Partial<SegmentJob> = {}): SegmentJob => ({
   from: "2026-08-08T00:00:00.000Z",
   to: "2026-08-09T00:00:00.000Z",
   startPage: 1,
+  plane: "search",
   ...over,
 });
 
@@ -98,13 +99,26 @@ describe("ingestJobId", () => {
     // re-reads "now" as the upper bound.
     const from = Date.parse("2026-08-08T00:00:00.000Z");
     const to = Date.parse("2026-08-09T00:00:00.000Z");
-    expect(ingestJobId(segment())).toBe(`seg_${"f".repeat(64)}_${from}_${to}_p1`);
+    expect(ingestJobId(segment())).toBe(`seg_search_${"f".repeat(64)}_${from}_${to}_p1`);
     expect(ingestJobId(segment({ startPage: 3 }))).not.toBe(ingestJobId(segment()));
 
     const topup = segment({ kind: "topup", to: "2026-08-09T12:00:00.000Z" });
     const laterPoll = segment({ kind: "topup", to: "2026-08-09T12:00:01.500Z" });
-    expect(ingestJobId(topup)).toBe(`topup_${"f".repeat(64)}_${from}`);
+    expect(ingestJobId(topup)).toBe(`topup_search_${"f".repeat(64)}_${from}`);
     expect(ingestJobId(laterPoll)).toBe(ingestJobId(topup));
+  });
+
+  it("separates two planes that planned the identical span (ADR-0019)", () => {
+    // Not a hypothetical collision. A reader searching an arc\'s own two words
+    // canonicalizes to the SAME fingerprint `queueStorylineRefresh` mints for
+    // that arc, and both planners snap onto the same window grid — so without
+    // the plane in the content address one of these would dedup the other away,
+    // and whichever survived would decide, arbitrarily, whether that batch of
+    // articles feeds the cloud that chose the arc.
+    expect(ingestJobId(segment({ plane: "deepening" }))).not.toBe(ingestJobId(segment()));
+    expect(ingestJobId(segment({ kind: "topup", plane: "deepening" }))).not.toBe(
+      ingestJobId(segment({ kind: "topup" })),
+    );
   });
 
   it("gives a sample the identity its pending slot is keyed by", () => {
@@ -126,7 +140,12 @@ describe("parseIngestJobId", () => {
     // on an outstanding entry if this inverse is faithful. It is faithful because
     // a fingerprint contains no underscore — luck rather than design, which is
     // precisely why it is pinned here.
-    for (const job of [segment(), segment({ startPage: 7 })]) {
+    for (const job of [
+      segment(),
+      segment({ startPage: 7 }),
+      segment({ plane: "deepening" }),
+      segment({ plane: "breadth" }),
+    ]) {
       expect(parseIngestJobId(ingestJobId(job), NOW)).toEqual(job);
     }
   });
@@ -147,6 +166,7 @@ describe("parseIngestJobId", () => {
       from: topup.from,
       to: NOW.toISOString(),
       startPage: 1,
+      plane: "search",
       kind: "topup",
     });
   });

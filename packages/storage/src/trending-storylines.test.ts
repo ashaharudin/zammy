@@ -10,6 +10,7 @@ import {
 } from "./storylines.js";
 import { readTrendingStorylines } from "./trending-storylines.js";
 import { createTestDatabase, type TestDatabase } from "./test-support.js";
+import type { SightingPlane } from "./database.js";
 
 /**
  * The wordcloud read (ARCHITECTURE 10.4, ADR-0013, ADR-0014): the storylines
@@ -24,18 +25,26 @@ import { createTestDatabase, type TestDatabase } from "./test-support.js";
 
 const ZONE = "UTC";
 /**
- * A provider outside `DISCOVERY_PROVIDERS` — the deepening plane, which does not
- * exist yet. Named for the adapter G4 adds (`@zammy/google-news-client`), but
- * what these fixtures actually test is "any provider the cloud's own selections
- * caused us to fetch from", so if G4 spells the id differently it moves here and
- * beside the constant together, and no assertion below changes meaning.
+ * One EMISSION of a fixture article: who reported it, and why we asked.
  *
- * NOT `"gnews"`. GNews is a DISCOVERY provider: ADR-0012 fans every search and
- * breadth sample out to it alongside Currents, so nothing it returns arrives
- * because the cloud named a storyline. Using it here would have tested the
- * opposite of the rule.
+ * These two used to be one field. The fixtures below built sightings from a
+ * list of provider names, because the shipped rule was a provider list — and
+ * that is exactly what ADR-0019 says cannot survive one provider serving two
+ * roles. Splitting the fixture is what lets the tests state the rule the query
+ * now enforces: the same provider id appears on both sides of the predicate,
+ * and only the plane decides.
+ *
+ * `plane: null` is a real and important value here, not a convenience. Every
+ * sighting written before migration 0022 carries it, and it must COUNT — the
+ * whole dev archive does.
  */
-const DEEPENING = "google-news";
+const DEEPENING_PROVIDER = "google-news";
+
+interface Emission {
+  /** Defaults to `"currents"`. Never the thing the predicate reads. */
+  provider?: string;
+  plane: SightingPlane | null;
+}
 const NOW = new Date("2026-08-17T12:00:00.000Z");
 const WINDOW = { from: new Date("2026-08-16T12:00:00.000Z"), to: NOW };
 /** ADR-0008's default, so the arithmetic below is the shipped arithmetic. */
@@ -65,13 +74,13 @@ describe("readTrendingStorylines", () => {
 
   /**
    * One article, in its own group unless told otherwise, with one sighting per
-   * entry in `providers` — earliest first, since `articles.provider` is defined
+   * entry in `emissions` — earliest first, since `articles.provider` is defined
    * as the provider of the EARLIEST sighting (migration 0013) and the read now
    * asks a question that only means something against real sighting rows.
    *
-   * Defaulting to `["currents"]` rather than to no sightings at all is the point:
-   * an article nobody reported is not a state ingest can produce, and a fixture
-   * that produced it would let the discovery-plane predicate pass every test by
+   * Defaulting to one `search` emission rather than to no sightings at all is
+   * the point: an article nobody reported is not a state ingest can produce, and
+   * a fixture that produced it would let the plane predicate pass every test by
    * excluding everything.
    */
   const article = async (input: {
@@ -79,10 +88,10 @@ describe("readTrendingStorylines", () => {
     domain: string;
     groupId?: string;
     language?: string | null;
-    providers?: readonly string[];
+    emissions?: readonly Emission[];
   }): Promise<string> => {
     counter += 1;
-    const providers = input.providers ?? ["currents"];
+    const emissions: readonly Emission[] = input.emissions ?? [{ plane: "search" }];
     const dedupKey = randomBytes(32);
     const row = await harness.db
       .insertInto("articles")
@@ -99,13 +108,14 @@ describe("readTrendingStorylines", () => {
         source_domain: input.domain,
         published: new Date(input.published),
         latest_seen: new Date(input.published),
-        sighting_count: providers.length,
-        provider: providers[0]!,
+        sighting_count: emissions.length,
+        provider: emissions[0]!.provider ?? "currents",
       })
       .returning("id")
       .executeTakeFirstOrThrow();
 
-    for (const [index, provider] of providers.entries()) {
+    for (const [index, emission] of emissions.entries()) {
+      const provider = emission.provider ?? "currents";
       await harness.db
         .insertInto("sightings")
         .values({
@@ -113,9 +123,16 @@ describe("readTrendingStorylines", () => {
           article_id: row.id,
           dedup_key: dedupKey,
           published: new Date(input.published),
-          // Ordered, so "earliest sighting" is the first of `providers`.
+          // Ordered, so "earliest sighting" is the first of `emissions`.
           first_seen_at: new Date(Date.parse(input.published) + index * 60_000),
           provider,
+          // `never` on the UPDATE side of the column type, and non-null on the
+          // INSERT side, so a NULL-plane row — the whole pre-0022 archive —
+          // cannot be built through the builder. Raw SQL is what a fixture for
+          // history has to use, and the cast is what makes the intent loud.
+          ...(emission.plane === null
+            ? { plane: sql<never>`null` }
+            : { plane: emission.plane }),
           raw: JSON.stringify({ fixture: counter, provider }),
         })
         .execute();
@@ -143,7 +160,7 @@ describe("readTrendingStorylines", () => {
     articles: readonly {
       published: string;
       domain: string;
-      providers?: readonly string[];
+      emissions?: readonly Emission[];
     }[],
   ): Promise<string> => {
     const groups = await Promise.all(articles.map((a) => article(a)));
@@ -439,11 +456,11 @@ describe("readTrendingStorylines", () => {
     await storyline("Deepened Arc", [
       { published: "2026-08-17T08:00:00.000Z", domain: "a.com" },
       { published: "2026-08-17T09:00:00.000Z", domain: "b.com" },
-      { published: "2026-08-17T10:00:00.000Z", domain: "x.com", providers: [DEEPENING] },
-      { published: "2026-08-17T11:00:00.000Z", domain: "y.com", providers: [DEEPENING] },
+      { published: "2026-08-17T10:00:00.000Z", domain: "x.com", emissions: [{ provider: DEEPENING_PROVIDER, plane: "deepening" }] },
+      { published: "2026-08-17T11:00:00.000Z", domain: "y.com", emissions: [{ provider: DEEPENING_PROVIDER, plane: "deepening" }] },
       // Newer than every Currents article, and from a fourth outlet: the two
       // steering channels a volume-only fix would leave wide open.
-      { published: "2026-08-17T11:45:00.000Z", domain: "z.com", providers: [DEEPENING] },
+      { published: "2026-08-17T11:45:00.000Z", domain: "z.com", emissions: [{ provider: DEEPENING_PROVIDER, plane: "deepening" }] },
       // Outside the window, so it reaches the arc figures and nothing else.
       { published: "2026-08-10T09:00:00.000Z", domain: "c.com" },
     ]);
@@ -477,8 +494,8 @@ describe("readTrendingStorylines", () => {
     // A storyline whose window coverage is entirely GNews is therefore a
     // storyline the cloud should carry, on two real newsrooms.
     await storyline("GNews Only", [
-      { published: "2026-08-17T10:00:00.000Z", domain: "a.com", providers: ["gnews"] },
-      { published: "2026-08-17T11:00:00.000Z", domain: "b.com", providers: ["gnews"] },
+      { published: "2026-08-17T10:00:00.000Z", domain: "a.com", emissions: [{ provider: "gnews", plane: "breadth" }] },
+      { published: "2026-08-17T11:00:00.000Z", domain: "b.com", emissions: [{ provider: "gnews", plane: "breadth" }] },
     ]);
 
     const [only] = await read();
@@ -495,8 +512,8 @@ describe("readTrendingStorylines", () => {
     // there is no evidence here that several newsrooms are covering this now,
     // only evidence that we went and fetched it.
     await storyline("Fetched, Not Covered", [
-      { published: "2026-08-17T10:00:00.000Z", domain: "x.com", providers: [DEEPENING] },
-      { published: "2026-08-17T11:00:00.000Z", domain: "y.com", providers: [DEEPENING] },
+      { published: "2026-08-17T10:00:00.000Z", domain: "x.com", emissions: [{ provider: DEEPENING_PROVIDER, plane: "deepening" }] },
+      { published: "2026-08-17T11:00:00.000Z", domain: "y.com", emissions: [{ provider: DEEPENING_PROVIDER, plane: "deepening" }] },
     ]);
     await storyline("Genuinely Covered", [
       { published: "2026-08-17T07:00:00.000Z", domain: "a.com" },
@@ -515,12 +532,12 @@ describe("readTrendingStorylines", () => {
     await storyline("Fetched Hard", [
       { published: "2026-08-17T06:00:00.000Z", domain: "a.com" },
       { published: "2026-08-17T06:30:00.000Z", domain: "b.com" },
-      { published: "2026-08-17T11:00:00.000Z", domain: "p.com", providers: [DEEPENING] },
-      { published: "2026-08-17T11:10:00.000Z", domain: "q.com", providers: [DEEPENING] },
-      { published: "2026-08-17T11:20:00.000Z", domain: "r.com", providers: [DEEPENING] },
-      { published: "2026-08-17T11:30:00.000Z", domain: "s.com", providers: [DEEPENING] },
-      { published: "2026-08-17T11:40:00.000Z", domain: "t.com", providers: [DEEPENING] },
-      { published: "2026-08-17T11:50:00.000Z", domain: "u.com", providers: [DEEPENING] },
+      { published: "2026-08-17T11:00:00.000Z", domain: "p.com", emissions: [{ provider: DEEPENING_PROVIDER, plane: "deepening" }] },
+      { published: "2026-08-17T11:10:00.000Z", domain: "q.com", emissions: [{ provider: DEEPENING_PROVIDER, plane: "deepening" }] },
+      { published: "2026-08-17T11:20:00.000Z", domain: "r.com", emissions: [{ provider: DEEPENING_PROVIDER, plane: "deepening" }] },
+      { published: "2026-08-17T11:30:00.000Z", domain: "s.com", emissions: [{ provider: DEEPENING_PROVIDER, plane: "deepening" }] },
+      { published: "2026-08-17T11:40:00.000Z", domain: "t.com", emissions: [{ provider: DEEPENING_PROVIDER, plane: "deepening" }] },
+      { published: "2026-08-17T11:50:00.000Z", domain: "u.com", emissions: [{ provider: DEEPENING_PROVIDER, plane: "deepening" }] },
     ]);
     await storyline("Actually Covered", [
       { published: "2026-08-17T07:00:00.000Z", domain: "a.com" },
@@ -532,43 +549,79 @@ describe("readTrendingStorylines", () => {
     expect((await read()).map((s) => s.label)).toEqual(["Actually Covered", "Fetched Hard"]);
   });
 
-  it("counts an article the discovery plane saw SECOND, not first", async () => {
+  it("counts an article an unsteered fetch saw SECOND, not first", async () => {
     // The nameable case that decides between the two implementations. The cheap
-    // predicate is `a.provider = any(DISCOVERY_PROVIDERS)`, no join — but
-    // migration 0013 defines that column as the provider of the EARLIEST
-    // sighting, so for an article the deepening plane reported first and a
-    // discovery provider reported later it says "deepening" about an article
-    // Currents plainly saw, and drops it from a count it belongs in.
+    // predicate is a column on `articles`, no join — but migration 0013 defines
+    // `articles.provider` as the provider of the EARLIEST sighting, and any
+    // denormalized plane would have to follow the same rule. For an article the
+    // deepening plane reported first and a reader's search reported later that
+    // column says "deepening" about an article a reader plainly asked for, and
+    // drops it from a count it belongs in.
     //
-    // No row in the store can be in this state yet, because every provider that
-    // has ever written a sighting is a discovery provider. The ORDERING is not
-    // hypothetical though — the dev archive holds 33 articles one provider
-    // reported first and another also saw — so this becomes a live defect on
-    // the day G5 ingests, which is exactly when nobody will be looking at it.
+    // No row in the store can be in this state yet: nothing has written a plane
+    // at all. The ORDERING is not hypothetical though — the dev archive holds 33
+    // articles one provider reported first and another also saw — so this
+    // becomes a live defect on the day the deepening plane ingests, which is
+    // exactly when nobody will be looking at it.
     await storyline("Seen Second", [
       {
         published: "2026-08-17T11:00:00.000Z",
         domain: "a.com",
-        providers: [DEEPENING, "currents"],
+        emissions: [
+          { provider: DEEPENING_PROVIDER, plane: "deepening" },
+          { provider: "currents", plane: "search" },
+        ],
       },
       { published: "2026-08-17T10:00:00.000Z", domain: "b.com" },
     ]);
 
-    // The article really does carry the deepening provider in that column, so
-    // this pins the distinction
-    // rather than merely exercising a code path that happens to agree.
+    // The article really does carry the deepening provider in that column, and
+    // its earliest sighting really is the deepening one — so this pins the
+    // distinction rather than merely exercising a code path that happens to
+    // agree.
     const earliest = await harness.db
       .selectFrom("articles")
       .select(["provider", "source_domain"])
       .where("source_domain", "=", "a.com")
       .executeTakeFirstOrThrow();
-    expect(earliest.provider).toBe(DEEPENING);
+    expect(earliest.provider).toBe(DEEPENING_PROVIDER);
 
     const [only] = await read();
     expect(only!.label).toBe("Seen Second");
     expect(only!.windowArticles).toBe(2);
     expect(only!.windowSources).toBe(2);
     expect(only!.lastUpdated.toISOString()).toBe("2026-08-17T11:00:00.000Z");
+  });
+
+  it("counts a sighting with NO plane, because that is the whole archive", async () => {
+    // The trap `is distinct from` exists for, pinned at the smallest scale.
+    // Every sighting written before migration 0022 carries `plane = NULL`,
+    // because no single value describes history and the migration refused to
+    // invent one. Under a bare `plane <> \'deepening\'` the comparison is NULL,
+    // a NULL predicate filters the row out, and the cloud is EMPTY — measured
+    // on a clone of the dev archive over a 168h window, 0 storylines against
+    // 136 under the shipped form, which is also byte-identical to what the
+    // provider list returned.
+    //
+    // Two rows for one article, and the mix is deliberate: history plus a
+    // deepening sighting is the state every arc that existed before this phase
+    // enters the moment it is first deepened. It must still count.
+    await storyline("Pre-Plane Arc", [
+      { published: "2026-08-17T10:00:00.000Z", domain: "a.com", emissions: [{ plane: null }] },
+      {
+        published: "2026-08-17T11:00:00.000Z",
+        domain: "b.com",
+        emissions: [
+          { plane: null },
+          { provider: DEEPENING_PROVIDER, plane: "deepening" },
+        ],
+      },
+    ]);
+
+    const [only] = await read();
+    expect(only!.label).toBe("Pre-Plane Arc");
+    expect(only!.windowArticles).toBe(2);
+    expect(only!.windowSources).toBe(2);
   });
 
   it("honours the limit, keeping the top of the ranking", async () => {

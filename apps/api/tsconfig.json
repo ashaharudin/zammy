@@ -25,6 +25,9 @@
     },
     {
       "path": "../../packages/news-providers"
+    },
+    {
+      "path": "../../packages/google-news-client"
     }
   ],
   "exclude": [

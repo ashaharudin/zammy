@@ -13,6 +13,7 @@ import {
   type CallPriority,
   type CurrentsClient,
 } from "@zammy/currents-client";
+import type { NewsClient } from "@zammy/news-client";
 import {
   findSurfacedStorylines,
   ingestSightings,
@@ -23,14 +24,23 @@ import {
   readStoryline,
   readStorylineLanguage,
   resolveStoryline,
+  readStorylineCoverage,
   readTopic,
   recordCoverage,
+  recordStorylineCoverage,
   upsertTopic,
   type Database,
+  type SightingPlane,
   type StorylineSlot,
 } from "@zammy/storage";
-import { WINDOW_SNAP_MS, type CanonicalizeResult, type CanonicalQuery } from "./canonical.js";
-import { storylineKeywords } from "./cloud-query.js";
+import {
+  canonicalKeywords,
+  fingerprintOf,
+  WINDOW_SNAP_MS,
+  type CanonicalizeResult,
+  type CanonicalQuery,
+} from "./canonical.js";
+import { deepeningQuery, storylineKeywords } from "./cloud-query.js";
 import { planHorizon, sliceSpan, subtractCoverage, type Span } from "./coverage-gaps.js";
 import {
   freshnessTier,
@@ -42,7 +52,7 @@ import {
 import type { Metrics } from "./metrics.js";
 import { refreshLockKey, release, tryAcquire } from "./single-flight.js";
 import { reserveTopicCall } from "./topic-budget.js";
-import type { IngestQueue, SegmentJob } from "./ingest-queue.js";
+import type { DeepenJob, IngestQueue, SegmentJob } from "./ingest-queue.js";
 import {
   groupCreatedArticles,
   groupingDepsFor,
@@ -68,6 +78,26 @@ export interface TimelineDeps {
   db: Kysely<Database>;
   redis: Redis;
   currents: CurrentsClient;
+  /**
+   * The DEEPENING plane's provider (ADR-0019), when one is configured.
+   *
+   * Absent is the default and the shipped production state: `GOOGLE_NEWS_ENABLED`
+   * is false, `createGoogleNewsClient` refuses to build without it, and with no
+   * client here `queueStorylineDeepening` answers `unavailable` and spends
+   * nothing. So this whole path is behind the same flag G4 put the adapter
+   * behind, and turning the flag on is what turns it on.
+   *
+   * A separate field rather than a second entry in a registry, and separate from
+   * `currents` rather than folded into the composite, because the two are
+   * planned against DIFFERENT COVERAGE — `topic_coverage` for the one,
+   * `storyline_coverage` for the other — and ADR-0019 is explicit that providers
+   * stop sharing a plan. The composite exists to fan ONE plan out to several
+   * providers; there is no one plan here to fan.
+   *
+   * Typed as the narrow `NewsClient` rather than `CurrentsClient`: this path
+   * never calls `latestNews`, and nothing here should be able to.
+   */
+  deepening?: NewsClient;
   queue: IngestQueue;
   config: {
     syncFillDeadlineMs: number;
@@ -234,7 +264,7 @@ async function planAndRead(
     if (age > freshnessTtlMs(query.window.to, now)) {
       stale = true;
       await deps.queue.enqueueSegment({
-        ...segmentJob(query.fingerprint, sliver, 1),
+        ...segmentJob(query.fingerprint, sliver, 1, "search"),
         kind: "topup",
       });
     }
@@ -253,7 +283,7 @@ async function planAndRead(
         budget.callsUsed >= budget.maxCalls ||
         (budget.callsUsed > 0 && deps.now().getTime() >= budget.deadline)
       ) {
-        deferred.push(segmentJob(query.fingerprint, gap, 1));
+        deferred.push(segmentJob(query.fingerprint, gap, 1, "search"));
         continue;
       }
 
@@ -267,12 +297,14 @@ async function planAndRead(
       }
 
       try {
-        const outcome = await fillSegment(deps, query, gap, budget, 1, "interactive");
+        const outcome = await fillSegment(deps, query, gap, budget, 1, "interactive", "search");
         if (outcome.callsMade > 0) servedFrom = "upstream";
         if (outcome.kind === "deferred") {
-          deferred.push(segmentJob(query.fingerprint, gap, outcome.resumePage));
+          deferred.push(segmentJob(query.fingerprint, gap, outcome.resumePage, "search"));
         } else if (outcome.kind === "truncated") {
-          deferred.push(...(await onTruncated(deps, query.fingerprint, gap, outcome.oldestSeen)));
+          deferred.push(
+            ...(await onTruncated(deps, query.fingerprint, gap, outcome.oldestSeen, "search")),
+          );
         } else if (outcome.kind === "capped") {
           capped = true;
         }
@@ -852,7 +884,11 @@ export async function queueStorylineRefresh(
     // consumer would fan out into several calls off one click.
     if (gap.to.getTime() - gap.from.getTime() <= maxSpanMs) {
       const job: SegmentJob = {
-        ...segmentJob(query.fingerprint, gap, 1),
+        // `deepening`, and ADR-0019 argues it against the obvious reading: a
+        // reader's click is the TRIGGER, but the target is an arc our own cloud
+        // named, and the test is whether our ranking chose it. Everything this
+        // job ingests is therefore kept out of the ranking that chose it.
+        ...segmentJob(query.fingerprint, gap, 1, "deepening"),
         kind: "topup",
       };
       await deps.queue.enqueueSegment(job);
@@ -877,10 +913,343 @@ export async function queueStorylineRefresh(
     return { status: "fresh", ...settled };
   }
 
-  const job = segmentJob(query.fingerprint, { from, to }, 1);
+  const job = segmentJob(query.fingerprint, { from, to }, 1, "deepening");
   await deps.queue.enqueueSegment(job);
   deps.metrics?.storylineRefresh("queued");
   return { status: "queued", ...settled, job };
+}
+
+/**
+ * What opening a storyline queued on the DEEPENING plane, as the route reports
+ * it (ADR-0019, plan §G5).
+ *
+ * A second union beside `StorylineRefreshOutcome` rather than more cases on it,
+ * because the two answer about different subjects and different providers: the
+ * refresh plans a TOPIC against `topic_coverage` and the discovery provider,
+ * this plans an ARC against `storyline_coverage` and the deepening provider.
+ * Merging them would need a discriminant on every case to say which coverage a
+ * `fresh` is about.
+ */
+export type StorylineDeepenOutcome =
+  /** No such storyline, alias chain followed. */
+  | { status: "unknown" }
+  /** No deepening provider configured. The default; nothing is spent. */
+  | { status: "unavailable"; storylineId: string }
+  /**
+   * The confidence gate refused (`deepeningQuery`). An arc whose label shares
+   * nothing with its own coverage is one we cannot say the subject of, and on
+   * this plane a wrong subject is not a wasted call — it is an attachment.
+   */
+  | { status: "ungrounded"; storylineId: string }
+  /** This provider's coverage of the arc already reaches the present. */
+  | { status: "fresh"; storylineId: string; keywords: string }
+  | { status: "queued"; storylineId: string; keywords: string; job: DeepenJob };
+
+/**
+ * Opening a storyline queues one deepening fetch for the arc itself
+ * (plan §G5, ADR-0019).
+ *
+ * This is the repoint ADR-0017's refresh owed. That refresh laundered an arc
+ * through a synthetic TOPIC — two words off the label, canonicalized, planned
+ * against `topic_coverage` — and it stays exactly where it is, because a
+ * Currents fetch against a topic really does cover that topic's span and
+ * recording it there is honest. What it never was is a claim about the ARC.
+ * This is, and it is planned against the arc's own coverage rows.
+ *
+ * Three things differ from the topic path, and each is a decision the plan
+ * names:
+ *
+ *  - **The query is the whole label, not its grounded pair.** `cloudQuery`
+ *    shortens a label because Currents ANDs terms against body text we never
+ *    receive; the deepening provider does not, and the full label measurably
+ *    out-performs the pair there — 100 items over 63 domains against 92 over 55,
+ *    probed live 2026-08-27. `deepeningQuery` carries the argument.
+ *  - **The grounding becomes a gate rather than a rewriter.** An ungrounded
+ *    label spends nothing at all. On the topic path an ungrounded label falls
+ *    back to two arbitrary profile tokens and costs a call that returns little;
+ *    here it would cost an ATTACHMENT, because everything this fetch returns
+ *    joins the arc by provenance.
+ *  - **Coverage goes to `storyline_coverage`** — `(storyline_id, provider,
+ *    span)`, per ADR-0019 and migration 0021 — so this provider records only the
+ *    spans it actually walked for this arc, and no provider's completion can
+ *    stand for another's.
+ *
+ * **One call per click, and the span is grid-snapped**, both for the reasons
+ * `queueStorylineRefresh` gives at length one function up: a click buys
+ * freshness rather than history (§9.4), and an unsnapped span mints a distinct
+ * job per click on the surface most likely to be clicked twice. Google News has
+ * no offset parameter at all, so one job IS one call and depth can only come
+ * from subdividing the window — which is G7's crawl frontier, not this.
+ *
+ * **§9 survives**: a click is still the trigger. G7 is where that is traded.
+ */
+export async function queueStorylineDeepening(
+  deps: TimelineDeps,
+  input: { storylineId: string },
+): Promise<StorylineDeepenOutcome> {
+  const storylineId = await resolveStoryline(deps.db, input.storylineId);
+  if (storylineId === null) return { status: "unknown" };
+
+  const deepening = deps.deepening;
+  if (!deepening) {
+    // Not an error and not logged as one: no deepening provider is the shipped
+    // configuration, and the caller is a fire-and-forget POST.
+    deps.metrics?.storylineDeepen("unavailable");
+    return { status: "unavailable", storylineId };
+  }
+
+  const storyline = await readStoryline(deps.db, storylineId);
+  if (storyline === undefined) return { status: "unknown" };
+
+  const query = deepeningQuery({
+    label: storyline.label,
+    profileTokens: storyline.profileTokens,
+  });
+  if (query === null) {
+    deps.metrics?.storylineDeepen("ungrounded");
+    return { status: "ungrounded", storylineId };
+  }
+
+  const now = deps.now();
+  // The window is the archive's, not the provider's. Google News reaches back
+  // years (`GOOGLE_NEWS_MAX_LOOKBACK_DAYS` defaults to 730) and nothing here
+  // wants that: fetching below `lookbackDays` would ingest articles retention is
+  // about to remove, and record coverage over a span the archive will not hold.
+  const window: Span = { from: planHorizon(now, deps.config.lookbackDays), to: now };
+  const covered = await readStorylineCoverage(deps.db, storylineId, deepening.provider);
+
+  const [gap] = subtractCoverage(window, covered, {
+    now,
+    lookbackDays: deps.config.lookbackDays,
+  });
+  if (gap === undefined) {
+    deps.metrics?.storylineDeepen("fresh");
+    return { status: "fresh", storylineId, keywords: query.keywords };
+  }
+
+  // Freshness, judged against the REAL clock — the same separation
+  // `queueStorylineRefresh` draws: how stale an edge is has nothing to do with a
+  // grid, and judging it on a snapped clock would hide every staleness younger
+  // than the last grid line.
+  if (now.getTime() - gap.from.getTime() <= freshnessTtlMs(window.to, now)) {
+    deps.metrics?.storylineDeepen("fresh");
+    return { status: "fresh", storylineId, keywords: query.keywords };
+  }
+
+  // Onto the grid, both edges, so a quarter-hour of clicks on one arc is one
+  // job rather than one job per click.
+  const to = new Date(Math.floor(gap.to.getTime() / WINDOW_SNAP_MS) * WINDOW_SNAP_MS);
+  const from = new Date(
+    Math.max(gap.from.getTime(), to.getTime() - DEEPEN_SPAN_MS),
+  );
+  if (to.getTime() <= from.getTime()) {
+    // The gap does not reach back past the last grid line. Only reachable in the
+    // first quarter-hour of a cold arc's window; the next click asks for it.
+    deps.metrics?.storylineDeepen("fresh");
+    return { status: "fresh", storylineId, keywords: query.keywords };
+  }
+
+  const job: DeepenJob = {
+    kind: "deepen",
+    storylineId,
+    from: from.toISOString(),
+    to: to.toISOString(),
+  };
+  await deps.queue.enqueueDeepen(job);
+  deps.metrics?.storylineDeepen("queued");
+  return { status: "queued", storylineId, keywords: query.keywords, job };
+}
+
+/**
+ * How wide a span one deepening call may ask for.
+ *
+ * Seven days, and it is a guess with a stated reason rather than a measured
+ * ceiling — there is no per-call range limit on this provider to transcribe
+ * (`googleNewsClientLimits` sets `maxRangeDays` to the lookback for exactly that
+ * reason). What there IS is the 100-item cap and no offset, so the only question
+ * a span width answers is "how much does one call see". Probed 2026-08-27: five
+ * weekly slices of one arc returned 433 items where the unsliced query returned
+ * 92, so a week is already wide enough to be truncated on a busy arc and
+ * narrower slices are how depth is bought. That is G7's job.
+ *
+ * Matching `maxRangeDays` on the Currents side is a coincidence worth naming so
+ * nobody derives one from the other: that seven days is a 400 from upstream,
+ * this seven days is a judgement about yield.
+ */
+const DEEPEN_SPAN_MS = 7 * 86_400_000;
+
+/**
+ * Queue-consumer handler for a deepening fetch: one call, one arc.
+ *
+ * The shape is `processSegmentJob`'s and the differences are all consequences of
+ * the subject being a storyline rather than a topic — read them together.
+ */
+export async function processDeepenJob(deps: TimelineDeps, job: DeepenJob): Promise<void> {
+  const deepening = deps.deepening;
+  if (!deepening) {
+    // A message published before the flag was turned off. Dropped rather than
+    // retried: no amount of backoff makes a provider that is not configured
+    // answer, and a redelivery loop on it is the failure mode the parse guard
+    // in `parseIngestJob` exists to avoid one layer up.
+    deps.log?.warn(
+      { storylineId: job.storylineId },
+      "deepening job delivered with no deepening provider configured; dropping",
+    );
+    return;
+  }
+
+  // Re-resolved, because a storyline can be merged away between enqueue and
+  // delivery and the arc worth deepening is the survivor. Its own row holds the
+  // profile — `mergeStorylines` empties the loser's — so re-deriving the query
+  // below against a merged-away id would read as `ungrounded` rather than as
+  // "ask the survivor".
+  const storylineId = await resolveStoryline(deps.db, job.storylineId);
+  if (storylineId === null) {
+    deps.log?.warn({ storylineId: job.storylineId }, "deepening job for unknown storyline; dropping");
+    return;
+  }
+  const storyline = await readStoryline(deps.db, storylineId);
+  if (storyline === undefined) return;
+
+  // Re-derived rather than carried on the job, following `processSegmentJob`,
+  // which carries a fingerprint and re-reads the topic. Both the label and the
+  // profile can move between enqueue and delivery — the labeler runs on a tail
+  // and the profile is re-derived on every attach — and the gate has to be
+  // asked about the arc as it stands, not as it stood. An arc that LOST its
+  // grounding in the interval is one we no longer trust enough to attach to.
+  const query = deepeningQuery({
+    label: storyline.label,
+    profileTokens: storyline.profileTokens,
+  });
+  if (query === null) {
+    deps.metrics?.storylineDeepen("ungrounded");
+    deps.log?.warn(
+      { storylineId },
+      "deepening job's arc no longer grounds its own label; dropping rather than attaching",
+    );
+    return;
+  }
+
+  const requested: Span = { from: new Date(job.from), to: new Date(job.to) };
+  // Re-clamped to the horizon as it stands NOW — `processSegmentJob`'s reason,
+  // unchanged: nothing bounds how long a message sits, and recording coverage
+  // for a span the clamp narrowed would mark the remainder fetched forever.
+  const horizon = planHorizon(deps.now(), deps.config.lookbackDays);
+  const span: Span =
+    requested.from.getTime() >= horizon.getTime()
+      ? requested
+      : { from: horizon, to: requested.to };
+  if (span.from.getTime() >= span.to.getTime()) {
+    deps.log?.warn(
+      { storylineId, from: job.from, to: job.to },
+      "deepening job fell below the lookback horizon before it was fetched; dropping",
+    );
+    return;
+  }
+
+  // Single-flight on the arc and the span as ENQUEUED, so the key is stable
+  // across redeliveries the way `processSegmentJob`'s is.
+  const lockKey = refreshLockKey(`storyline:${storylineId}`, requested);
+  const token = await tryAcquire(deps.redis, lockKey, 30_000);
+  if (!token) throw new Error(`deepening ${lockKey} is locked; retrying later`);
+
+  try {
+    const language = await readStorylineLanguage(deps.db, storylineId);
+
+    // The arc's own topic, minted here rather than carried on the job so it is
+    // derived from the label as it stands at fetch time — the same reason the
+    // query above is. `canonicalKeywords` rather than a second normalization:
+    // the identity a reader typing this label would land on has to be this one,
+    // or the same words sit under two fingerprints.
+    const topicKeywords = canonicalKeywords(query.keywords);
+    const fingerprint = fingerprintOf({
+      keywords: topicKeywords,
+      language: language ?? null,
+      country: null,
+      category: null,
+    });
+    await upsertTopic(deps.db, {
+      fingerprint,
+      keywords: topicKeywords,
+      language,
+      country: null,
+      category: null,
+    });
+
+    const result = await deepening.search(
+      {
+        // The label VERBATIM and unsplit, which is what the provider is asked —
+        // word order is part of a phrase query and `topicKeywords` above has
+        // sorted it away for identity purposes. The two are deliberately
+        // different strings and neither can stand in for the other.
+        keywords: [query.keywords],
+        ...(language ? { language } : {}),
+        startDate: span.from,
+        endDate: span.to,
+        pageNumber: 1,
+        pageSize: deepening.limits.maxPageSize,
+      },
+      // No reader is waiting; draw only what the interactive reserve spares.
+      { priority: "background" },
+    );
+    deps.metrics?.upstreamCall({
+      received: result.normalization.received,
+      dropped: result.normalization.received - result.normalization.kept,
+    });
+
+    const ingested = await ingestSightings(deps.db, {
+      // The arc's own topic, minted below rather than skipped, and this is the
+      // part of the plan's "not a synthetic topic" that is NOT taken. What the
+      // plan asks to move is the COVERAGE CLAIM, and it moves: nothing here
+      // writes `topic_coverage`, so a reader who later searches this label gets
+      // a cold topic and fetches for themselves, which is the truth.
+      //
+      // The topic ROW stays because `topic_articles` is what CLAIMS an article
+      // against retention — "an article in no topic at all has nobody left to
+      // claim it" (`retentionReport`) — and a storyline is not a claimant that
+      // table knows about. Dropping the topic would leave every deepening
+      // article looking like a prune candidate, and teaching retention about
+      // storylines is a larger change than this phase should make. Recorded as
+      // the cost it is: one `topics` row per deepened arc plus one
+      // `topic_articles` row per article, and a `hit_count` bump on a fetch
+      // rather than on a reader.
+      fingerprint,
+      sightings: result.sightings,
+      plane: "deepening",
+      timeZone: deps.config.grouping.timeZone,
+      ...(deps.log ? { log: deps.log } : {}),
+    });
+    deps.metrics?.articlesIngested(ingested.articlesCreated);
+
+    // ATTACHMENT BY PROVENANCE. The seam is `groupCreatedArticles`' intent, and
+    // the whole of the rule lives there: seeded groups join this arc, nothing is
+    // offered to the linker, and no storyline is formed.
+    await groupCreatedArticles(groupingDepsFor(deps), ingested.createdArticles, {
+      attachTo: storylineId,
+    });
+
+    // Coverage LAST, and only on a clean end of results.
+    //
+    // `isLastPage` on this provider means `rawCount < 100`, which is the honest
+    // "there was nothing further in this window" — a FULL page means the 100-cap
+    // truncated it, and there is no page 2 to ask for. So a truncated span
+    // records nothing and the next click re-plans the same gap. That is a
+    // deliberate difference from `onTruncated`, which advances a frontier and
+    // enqueues the remainder: doing that here would need subdivision, and
+    // subdivision without a reader asking for it is the crawl frontier G7 has
+    // to argue for on its own.
+    if (result.isLastPage) {
+      await recordStorylineCoverage(deps.db, storylineId, deepening.provider, span);
+    } else {
+      deps.metrics?.truncatedSegment();
+      deps.log?.info?.(
+        { storylineId, from: span.from, to: span.to, items: result.rawCount },
+        "deepening span hit the item cap; coverage not recorded, the gap stays open",
+      );
+    }
+  } finally {
+    await release(deps.redis, lockKey, token);
+  }
 }
 
 /**
@@ -982,9 +1351,19 @@ export async function processSegmentJob(deps: TimelineDeps, job: SegmentJob): Pr
         // No reader is waiting: draw only what the interactive reserve spares
         // (§9.4). A refusal fails the job; BullMQ's backoff is the retry pacing.
         "background",
+        // The plane the PLANNER recorded, never one inferred here. A deferred
+        // page of a reader's search and a storyline refresh's top-up arrive at
+        // this function looking identical.
+        job.plane,
       );
       if (outcome.kind === "truncated") {
-        for (const half of await onTruncated(deps, job.fingerprint, slice, outcome.oldestSeen)) {
+        for (const half of await onTruncated(
+          deps,
+          job.fingerprint,
+          slice,
+          outcome.oldestSeen,
+          job.plane,
+        )) {
           await deps.queue.enqueueSegment(half);
         }
       } else if (outcome.kind === "capped") {
@@ -1032,6 +1411,7 @@ async function fillSegment(
   budget: FillBudget,
   startPage: number,
   priority: CallPriority,
+  plane: SightingPlane,
 ): Promise<FillOutcome> {
   const { maxPageSize, maxRetrievableResults } = deps.currents.limits;
   const maxPages = Math.floor(maxRetrievableResults / maxPageSize);
@@ -1088,6 +1468,7 @@ async function fillSegment(
     const ingested = await ingestSightings(deps.db, {
       fingerprint: query.fingerprint,
       sightings: result.sightings,
+      plane,
       timeZone: deps.config.grouping.timeZone,
       // The storyline re-derivation inside it is fenced and cannot fail this
       // fill; the warning is the only place a failed one surfaces.
@@ -1142,6 +1523,12 @@ async function onTruncated(
   fingerprint: string,
   segment: Span,
   oldestSeen: Date | null,
+  /**
+   * The plane the truncated fetch was made on, carried onto its remainder.
+   * A remainder is the SAME fetch continued, so re-deciding its reason here
+   * would let a deepening walk re-enter the ranking one subdivision at a time.
+   */
+  plane: SightingPlane,
 ): Promise<SegmentJob[]> {
   deps.metrics?.truncatedSegment();
 
@@ -1149,7 +1536,7 @@ async function onTruncated(
     const boundary = new Date(oldestSeen.getTime() + 1);
     if (boundary.getTime() > segment.from.getTime() && boundary.getTime() < segment.to.getTime()) {
       await recordCoverage(deps.db, fingerprint, { from: boundary, to: segment.to });
-      return [segmentJob(fingerprint, { from: segment.from, to: boundary }, 1)];
+      return [segmentJob(fingerprint, { from: segment.from, to: boundary }, 1, plane)];
     }
   }
 
@@ -1165,8 +1552,8 @@ async function onTruncated(
 
   const mid = new Date(segment.from.getTime() + Math.floor(length / 2));
   return [
-    segmentJob(fingerprint, { from: segment.from, to: mid }, 1),
-    segmentJob(fingerprint, { from: mid, to: segment.to }, 1),
+    segmentJob(fingerprint, { from: segment.from, to: mid }, 1, plane),
+    segmentJob(fingerprint, { from: mid, to: segment.to }, 1, plane),
   ];
 }
 
@@ -1190,11 +1577,17 @@ function trailingSliver(
   return gap;
 }
 
-function segmentJob(fingerprint: string, segment: Span, startPage: number): SegmentJob {
+function segmentJob(
+  fingerprint: string,
+  segment: Span,
+  startPage: number,
+  plane: SightingPlane,
+): SegmentJob {
   return {
     fingerprint,
     from: segment.from.toISOString(),
     to: segment.to.toISOString(),
     startPage,
+    plane,
   };
 }

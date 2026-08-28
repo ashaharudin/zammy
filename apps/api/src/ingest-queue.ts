@@ -1,4 +1,5 @@
 import type { Redis } from "ioredis";
+import type { SightingPlane } from "@zammy/storage";
 
 /**
  * The deferred-ingestion queue (ARCHITECTURE 9.1). Every job here traces back
@@ -34,6 +35,25 @@ export interface SegmentJob {
   /** Resume point when a deadline cut a segment mid-paging. */
   startPage: number;
   /**
+   * WHY this span is being fetched (ADR-0019), carried from the planner to the
+   * consumer so `processSegmentJob` never has to infer it.
+   *
+   * It is on the JOB rather than derived at the far end because the planner is
+   * the only thing that knows: §6.3's read path plans a `search`, and ADR-0017's
+   * storyline refresh plans a `deepening` fetch, and by the time the consumer
+   * has the payload the two look identical — same shape, same fingerprint
+   * scheme, same span arithmetic. ADR-0019 names this exactly: "`plane` is set
+   * in the few places that PLAN fetches, not in the many that perform them."
+   *
+   * It is also in `ingestJobId`, which is the part that is easy to leave out.
+   * A reader searching an arc's own two words mints the same fingerprint the
+   * refresh does, so the two can plan the identical (fingerprint, span, page) —
+   * and without the plane in the content address one would dedup away the
+   * other and the surviving job's plane would decide, arbitrarily, whether that
+   * batch of articles feeds the cloud.
+   */
+  plane: SightingPlane;
+  /**
    * A §6.4 incremental top-up: [max(coverage.upper), now]. Deduplicated by its
    * leading edge alone, because every poll re-reads "now" — under the full
    * (from, to) identity each 1.5s poll would mint a fresh job and multiply
@@ -54,7 +74,42 @@ export interface SampleJob {
   language: string;
 }
 
-export type IngestJob = SegmentJob | SampleJob;
+/**
+ * The deepening plane's unit of work (ADR-0019, plan §G5): fetch one span FOR
+ * ONE ARC.
+ *
+ * A `SegmentJob` and this one differ in their SUBJECT, which is the whole of
+ * why they are two types rather than one with a nullable field. A segment's
+ * subject is a topic fingerprint — a hash of the search that was run — and its
+ * completion is recorded in `topic_coverage`. This one's subject is a storyline:
+ * a persistent arc (ADR-0011) whose identity is a UUID outliving any query text,
+ * whose completion is recorded in `storyline_coverage` (migration 0021), and
+ * whose articles join that arc by PROVENANCE rather than by the linker's
+ * judgement. Migration 0021 makes the same argument about the two tables and
+ * refuses to fold them for the same reason: a discriminated union pretending to
+ * be one row.
+ *
+ * There is no `plane` field, and its absence is load-bearing rather than an
+ * omission: this job type EXISTS only on the deepening plane, so a field would
+ * be a value that can be set wrong where the type already cannot be. The
+ * consumer reads the plane off the job's kind, which is the planner's own
+ * statement rather than an inference about a provider (ADR-0019).
+ *
+ * No `startPage`, either, and that is Google News' shape rather than a
+ * simplification. There is no offset parameter at all: 100 items per query is
+ * the whole of it, and depth comes from subdividing the window (ADR-0019,
+ * G4). A resume point would be a number no request could carry.
+ */
+export interface DeepenJob {
+  kind: "deepen";
+  /** The arc this fetch is FOR. Resolved through aliases before enqueue. */
+  storylineId: string;
+  /** ISO-8601 — job payloads cross a transport as JSON. */
+  from: string;
+  to: string;
+}
+
+export type IngestJob = SegmentJob | SampleJob | DeepenJob;
 
 export type IngestHandler = (job: IngestJob) => Promise<void>;
 
@@ -74,8 +129,26 @@ export function ingestJobId(job: IngestJob): string {
   // Underscores, not colons — BullMQ reserves ':' as its key separator, and
   // Vercel Queues restricts topic names to [A-Za-z0-9_-] besides.
   if (job.kind === "sample") return samplePendingId(job);
-  if (job.kind === "topup") return `topup_${job.fingerprint}_${Date.parse(job.from)}`;
-  return `seg_${job.fingerprint}_${Date.parse(job.from)}_${Date.parse(job.to)}_p${job.startPage}`;
+  // A UUID carries no underscore, so this round-trips on the same split the
+  // segment forms use. Both bounds are in the address: unlike a §6.4 top-up,
+  // a deepening span is planned against `storyline_coverage` rather than
+  // against "now", so re-planning a minute later yields the same span and the
+  // same identity rather than a fresh job per poll.
+  if (job.kind === "deepen") {
+    return `deep_${job.storylineId}_${Date.parse(job.from)}_${Date.parse(job.to)}`;
+  }
+  // The plane sits right after the prefix, where it cannot be confused with the
+  // fingerprint: plane names are `[a-z]+` and carry no underscore, so
+  // `parseIngestJobId` still splits this on "_" and still round-trips.
+  //
+  // A DEPLOY COST, stated because it is invisible otherwise: entries written by
+  // the previous encoding are not readable by the new one. `parseIngestJobId`
+  // already answers `null` for those and the drain drops them loudly — "a
+  // member this cannot read was written by a different version of
+  // `ingestJobId`" — so the worst case is one deploy's worth of outstanding
+  // segments losing their ledger entry while the queue still delivers them.
+  if (job.kind === "topup") return `topup_${job.plane}_${job.fingerprint}_${Date.parse(job.from)}`;
+  return `seg_${job.plane}_${job.fingerprint}_${Date.parse(job.from)}_${Date.parse(job.to)}_p${job.startPage}`;
 }
 
 /**
@@ -108,33 +181,54 @@ export function parseIngestJobId(id: string, now: Date): IngestJob | null {
   }
 
   const parts = id.split("_");
+
   const asIso = (ms: string): string | null => {
     if (!/^\d+$/.test(ms)) return null;
     const date = new Date(Number(ms));
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
   };
 
-  if (parts[0] === "topup" && parts.length === 3) {
-    const [, fingerprint, fromMs] = parts;
+  if (parts[0] === "deep" && parts.length === 4) {
+    const [, storylineId, fromMs, toMs] = parts;
     const from = asIso(fromMs!);
-    if (!fingerprint || !from) return null;
-    // `to` is "now" by the definition of a top-up, which is the whole reason
-    // this identity can afford to omit it.
-    return { fingerprint, from, to: now.toISOString(), startPage: 1, kind: "topup" };
+    const to = asIso(toMs!);
+    if (!storylineId || !from || !to) return null;
+    return { kind: "deepen", storylineId, from, to };
   }
 
-  if (parts[0] === "seg" && parts.length === 5) {
-    const [, fingerprint, fromMs, toMs, page] = parts;
+  if (parts[0] === "topup" && parts.length === 4) {
+    const [, plane, fingerprint, fromMs] = parts;
+    const from = asIso(fromMs!);
+    if (!isPlane(plane) || !fingerprint || !from) return null;
+    // `to` is "now" by the definition of a top-up, which is the whole reason
+    // this identity can afford to omit it.
+    return { fingerprint, from, to: now.toISOString(), startPage: 1, plane, kind: "topup" };
+  }
+
+  if (parts[0] === "seg" && parts.length === 6) {
+    const [, plane, fingerprint, fromMs, toMs, page] = parts;
     const from = asIso(fromMs!);
     const to = asIso(toMs!);
     const startPage = /^p\d+$/.test(page ?? "") ? Number(page!.slice(1)) : NaN;
-    if (!fingerprint || !from || !to || !Number.isInteger(startPage) || startPage < 1) {
+    if (
+      !isPlane(plane) ||
+      !fingerprint ||
+      !from ||
+      !to ||
+      !Number.isInteger(startPage) ||
+      startPage < 1
+    ) {
       return null;
     }
-    return { fingerprint, from, to, startPage };
+    return { fingerprint, from, to, startPage, plane };
   }
 
   return null;
+}
+
+/** The three ADR-0019 planes, narrowed off a wire value. */
+function isPlane(value: unknown): value is SightingPlane {
+  return value === "search" || value === "breadth" || value === "deepening";
 }
 
 /**
@@ -144,7 +238,19 @@ export function parseIngestJobId(id: string, now: Date): IngestJob | null {
  * a trending read asks about `sample_<language>`.
  */
 export function pendingIdOf(job: IngestJob): string {
-  return job.kind === "sample" ? samplePendingId(job) : job.fingerprint;
+  if (job.kind === "sample") return samplePendingId(job);
+  // The arc's own registry, NOT a topic's. `meta.ingest.pendingJobs` is polled
+  // per subject (§6.5) and a deepening fetch has no topic to be counted
+  // against — counting it under one would make a timeline read report work it
+  // has no way to wait for, and would let a deepening job's settle decrement a
+  // count a reader is watching.
+  if (job.kind === "deepen") return storylinePendingId(job);
+  return job.fingerprint;
+}
+
+/** The pending-set identity a storyline's own outstanding work is counted under. */
+export function storylinePendingId(job: Pick<DeepenJob, "storylineId">): string {
+  return `storyline_${job.storylineId}`;
 }
 
 /**
@@ -160,6 +266,19 @@ export function pendingIdOf(job: IngestJob): string {
 export function parseIngestJob(payload: unknown): IngestJob | null {
   if (typeof payload !== "object" || payload === null) return null;
   const candidate = payload as Record<string, unknown>;
+  if (candidate.kind === "deepen") {
+    return typeof candidate.storylineId === "string" &&
+      candidate.storylineId.length > 0 &&
+      typeof candidate.from === "string" &&
+      typeof candidate.to === "string"
+      ? {
+          kind: "deepen",
+          storylineId: candidate.storylineId,
+          from: candidate.from,
+          to: candidate.to,
+        }
+      : null;
+  }
   if (candidate.kind === "sample") {
     return typeof candidate.language === "string" && candidate.language.length > 0
       ? { kind: "sample", language: candidate.language }
@@ -169,7 +288,14 @@ export function parseIngestJob(payload: unknown): IngestJob | null {
     typeof candidate.fingerprint !== "string" ||
     typeof candidate.from !== "string" ||
     typeof candidate.to !== "string" ||
-    typeof candidate.startPage !== "number"
+    typeof candidate.startPage !== "number" ||
+    // Narrowed rather than defaulted. A payload published by an older
+    // deployment carries no plane, and the two available readings of that are
+    // "call it a search" and "drop the message" — the first quietly feeds a
+    // possibly-steered batch into the cloud, the second loses one deploy's
+    // worth of deferred pages, which the next reader re-plans (§6.3). The
+    // recoverable failure wins.
+    !isPlane(candidate.plane)
   ) {
     return null;
   }
@@ -178,6 +304,7 @@ export function parseIngestJob(payload: unknown): IngestJob | null {
     from: candidate.from,
     to: candidate.to,
     startPage: candidate.startPage,
+    plane: candidate.plane,
   };
   // Carried through explicitly: `kind` is what makes a top-up dedup by its
   // leading edge alone, and a top-up that arrives as a plain segment would mint
@@ -258,6 +385,14 @@ export interface IngestQueue {
 
   /** Enqueue the breadth sample (§10.1). One per language. */
   enqueueSample(job: SampleJob): Promise<void>;
+
+  /**
+   * Enqueue a deepening fetch for one arc, deduplicated by content the same way
+   * a segment is: two readers opening the same storyline inside one planning
+   * window plan the same span, and without dedup a popular arc would spend a
+   * call per click.
+   */
+  enqueueDeepen(job: DeepenJob): Promise<void>;
 
   /**
    * Outstanding jobs for a topic — meta.ingest.pendingJobs (§6.1) — or for a

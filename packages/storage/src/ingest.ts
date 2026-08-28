@@ -1,6 +1,6 @@
 import { sql, type Kysely } from "kysely";
 import type { Sighting } from "@zammy/news-client";
-import { hexToBytea, type Database } from "./database.js";
+import { hexToBytea, type Database, type SightingPlane } from "./database.js";
 import { lowerGroupPosition } from "./grouping.js";
 import { readGroupStorylines, refreshStorylineDerivations } from "./storylines.js";
 import { markStorylinesLinkDirty } from "./storyline-link-dirty.js";
@@ -108,6 +108,24 @@ export async function ingestSightings(
     fingerprint: string;
     sightings: readonly Sighting[];
     /**
+     * WHY this batch was fetched (ADR-0019, migration 0022) — stamped on every
+     * sighting row this call inserts.
+     *
+     * Required, and it has to come from HERE rather than from the `Sighting`s
+     * themselves. A plane is a property of the FETCH, not of the emission: the
+     * same provider returning the same article answers a reader's search and a
+     * cloud-driven deepening fetch, so an adapter cannot know it and must not
+     * guess. The caller that PLANNED the fetch is the only one that does, which
+     * is ADR-0019's own mitigation for the column being settable wrong.
+     *
+     * There is no default here for the same reason there is none in the
+     * database. A default would be a value invented at the exact layer that has
+     * the true one in hand, and the failure it hides is silent and one-sided:
+     * anything but `deepening` feeds the ranking (`readTrendingStorylines`), so
+     * a forgotten plane re-opens the endogenous loop rather than raising.
+     */
+    plane: SightingPlane;
+    /**
      * The calendar day storyline slots are bucketed by, since a fold can move
      * which day an article belongs to and this re-derives them. Here for the
      * reason `mergeGroups` takes one: the day rule is bucketed in SQL, so the
@@ -154,6 +172,9 @@ export async function ingestSightings(
           dedup_key: dedupKey,
           published,
           provider: sighting.provider,
+          // The plane of the FETCH, uniform across the batch: one call was
+          // planned for one reason, and every row it produced carries it.
+          plane: input.plane,
           raw: JSON.stringify(sighting.raw),
         })
         .onConflict((oc) => oc.column("id").doNothing())

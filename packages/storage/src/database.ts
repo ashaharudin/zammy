@@ -24,6 +24,17 @@ type Timestamp = ColumnType<Date, Date | string, Date | string>;
 type DefaultedTimestamp = ColumnType<Date, Date | string | undefined, Date | string>;
 
 /**
+ * Why a fetch was made (ADR-0019). A closed set of three, mirrored by
+ * `sightings_plane_check` in migration 0022 — the constraint is what makes a
+ * typo a failed insert rather than a silent join to the discovery plane, and
+ * this type is what makes it a compile error one layer earlier.
+ *
+ * Exported from the package because the callers that PLAN fetches live above it
+ * (`apps/api`), and they are the ones that have to name a plane.
+ */
+export type SightingPlane = "search" | "breadth" | "deepening";
+
+/**
  * One row per upstream emission — the faithful record of what we were sent
  * (ADR-0002). `dedup_key` is deliberately NOT unique here: 58% of live rows
  * would violate it.
@@ -41,6 +52,35 @@ export interface SightingsTable {
   first_seen_at: Generated<Date>;
   /** Which upstream reported this emission. Exact, one row per emission. */
   provider: Generated<string>;
+  /**
+   * WHY this fetch was made: `search` | `breadth` | `deepening` (ADR-0019,
+   * migration 0022). Not derivable from `provider` — the same provider answers
+   * a reader's search and a cloud-driven deepening fetch — and not derivable
+   * from anything else on the row, which is why the caller that PLANNED the
+   * fetch supplies it.
+   *
+   * `null` on every row written before migration 0022: the reason was not
+   * recorded, and inventing one would have been a claim the archive disproves
+   * (the migration carries the numbers). Read it with `is distinct from`, never
+   * with `<>` — see `readTrendingStorylines`, where the bare form measurably
+   * empties the cloud.
+   *
+   * The `ColumnType` is doing three separate jobs and none of them is cosmetic:
+   *
+   *  - **read `SightingPlane | null`** — history is NULL and every reader has to
+   *    handle it.
+   *  - **insert `SightingPlane`, non-null and REQUIRED** — this is the `NOT
+   *    NULL` the column cannot have. A bare `SightingPlane | null` would not do
+   *    it: Kysely makes any column whose insert type admits `null` OPTIONAL on
+   *    insert, so the nullability meant for history would have silently excused
+   *    every future writer from naming a plane.
+   *  - **update `never`** — a plane is minted by the fetch that recorded the
+   *    sighting and is not a fact that can change afterwards. The same rule
+   *    `dedup_key` and `alt_key` follow on `articles`, for a related reason: a
+   *    row that could be re-planed could be moved in and out of the ranking
+   *    after the fact.
+   */
+  plane: ColumnType<SightingPlane | null, SightingPlane, never>;
   /** Original payload; lets us re-normalize without refetching. */
   raw: ColumnType<unknown, string, string>;
 }

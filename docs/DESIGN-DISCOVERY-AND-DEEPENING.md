@@ -202,13 +202,30 @@ spend on.
 
 Google News can return 100 articles for one arc. Left to the normal path those
 form groups, groups form provisional storylines, and every promotion demands a
-model label — against a 500/day/model quota with a backlog. That would make
-labeling the binding constraint on the entire system.
+model label.
+
+**The quota figure this paragraph carried is withdrawn.** It said "a
+500/day/model quota with a backlog", which described a labeler config that no
+longer runs: the default is `gemma-4-26b-a4b-it` and `gemini.ts` records its
+published free-tier figure as 30 requests per MINUTE, so the binding limit is
+pace rather than a daily budget, and a burst of labels is a latency problem for
+the reader who clicked rather than a starved day. G5 landed the rule anyway, on
+the two reasons that do not move when a quota does: the endogenous loop §3a
+argues on its own terms, and arc inventory — dozens of provisional storylines
+per click pollute the table the cloud reads, the linker scans and the merge pass
+judges, whatever labelling costs.
 
 Rule: **deepening-plane articles join the storyline that fetched them and are
 excluded from storyline formation.** Label demand stays flat at zero additional
 labels, and the deepening plane can only make known arcs richer, never mint new
 ones. This is a real constraint on `grouping-service`, not a config flag.
+
+**Landed in G5**, as `GroupingIntent.attachTo`, and narrower than this paragraph
+implies in one respect worth recording: only groups the fetch SEEDED are
+attached. An article that joined an existing group already has a home, and
+attaching its group would drag every other article in it into this arc on one
+keyword match — the judgement the linker exists to make, and the one this path
+is refusing to make.
 
 ### e. §9's invariant is on the table
 
@@ -236,6 +253,13 @@ have measured this exact damage: `" | Globalnews.ca"` alone pre-loaded **19.6 of
 the 20-point link-mass floor**. At 100% of items it would make link mass
 meaningless — and here it would also corrupt `alt_key`, which is derived from
 the folded title.
+
+**The tokenizer half was already handled and this paragraph did not know it.**
+The strip has been in `headlineTokens` since v6 as `stripSourceAttribution`; G0
+widened it to mastheads with an interior function word. So the 100% never
+arrived. The `alt_key` half is separate and is the larger problem — its own strip
+requires the display name to BE the domain stem — and it is fixed in its own
+change, with the measurements, beside ADR-0018.
 
 ---
 

@@ -1,5 +1,6 @@
 import type { Kysely } from "kysely";
 import {
+  attachGroup,
   mergeGroups,
   readGroupCandidates,
   readGroupStorylines,
@@ -112,6 +113,23 @@ export interface GroupingDeps {
  * candidates to everything ingested afterwards. The sampler was exactly that
  * bug for one release.
  */
+/**
+ * What a batch of created articles is FOR, when it is for anything.
+ *
+ * Empty on every discovery-plane path, which is every path that existed before
+ * G5: an article a reader's search or the breadth sample turned up belongs
+ * wherever the linker judges it belongs, and nothing about the fetch says
+ * otherwise. The deepening plane is the one caller that knows in advance.
+ */
+export interface GroupingIntent {
+  /**
+   * The storyline this batch was fetched for (ADR-0019's deepening plane).
+   * Present means: attach what these articles seed to this arc, and offer
+   * nothing to the linker.
+   */
+  attachTo?: string;
+}
+
 export function groupingDepsFor(
   deps: {
     db: Kysely<Database>;
@@ -185,6 +203,7 @@ const MERGE_LIMIT = 10;
 export async function groupCreatedArticles(
   deps: GroupingDeps,
   created: readonly CreatedArticle[],
+  intent: GroupingIntent = {},
 ): Promise<number> {
   if (created.length === 0) return 0;
 
@@ -285,6 +304,68 @@ export async function groupCreatedArticles(
   // fewer upstream calls than it did before the cutover. Worth revisiting if
   // the deadline starts binding: nothing here is on a reader's critical path
   // except by being on the same clock.
+  // ATTACHMENT BY PROVENANCE, and the branch that keeps label demand flat
+  // (plan §G5, DESIGN-DISCOVERY-AND-DEEPENING §3d).
+  //
+  // These articles were fetched FOR one arc. They do not go to the linker, and
+  // the difference is not a shortcut — it is the constraint the design states in
+  // as many words: **deepening-plane articles never form new storylines.**
+  // Google News answers one label with up to 100 items; left on the ordinary
+  // path each seeded group is offered to the linker, a seed that attaches to
+  // nothing becomes a PROVISIONAL storyline, and a provisional storyline that
+  // later attracts a second group is promoted and demands a model label. One
+  // click could mint dozens of arcs nobody asked for.
+  //
+  // Two independent reasons that survives its most-quoted justification going
+  // out of date. The quota one moved — the labeler is `gemma-4-26b-a4b-it` at a
+  // published 30 requests per MINUTE (`gemini.ts`), so the binding limit is
+  // pace, not a daily budget, and a burst of labels is a latency problem for the
+  // reader who clicked rather than a starved day. The two that do not move:
+  //
+  //  - **The endogenous loop.** ADR-0019 argues it on its own terms. If deepening
+  //    articles form arcs, an arc that reaches the board once is fetched, gains
+  //    coverage, ranks higher, is fetched more, with nothing damping it.
+  //  - **Arc inventory.** Dozens of provisional storylines per click is a data
+  //    problem whatever labelling costs — the cloud reads from that table, the
+  //    linker scans it for candidates, and the merge pass has to judge them.
+  //
+  // Only SEEDED groups are attached. An article that JOINED an existing group
+  // inherited that group's storylines and already has a home, and attaching its
+  // group here would drag every OTHER article in it into this arc on the
+  // strength of one keyword match — which is precisely the judgement the linker
+  // exists to make and this path is refusing to make. A seeded group has no such
+  // judgement to override: `linkSeededGroups` would have given it a storyline of
+  // its own, so nothing is left orphaned by taking this branch instead.
+  if (intent.attachTo !== undefined) {
+    for (const article of seeded) {
+      try {
+        // The seed's group id IS its article id — the BEFORE INSERT trigger
+        // seeds `group_id = id` for a group of one (§14.3) — but it is read back
+        // rather than assumed, because `mergeBridgedGroups` can have moved it
+        // between the insert and here.
+        const row = await deps.db
+          .selectFrom("articles")
+          .select("group_id")
+          .where("id", "=", article.id)
+          .executeTakeFirst();
+        if (!row) continue;
+        await attachGroup(deps.db, {
+          storylineId: intent.attachTo,
+          groupId: row.group_id,
+          timeZone: deps.config.timeZone,
+        });
+      } catch (error) {
+        // Same contract as the grouping loop above: the articles are stored and
+        // paged, and a failed attach costs one card in one arc's timeline.
+        deps.log?.warn(
+          { err: error, articleId: article.id, storylineId: intent.attachTo },
+          "deepening attach failed for one article; it stays outside the arc",
+        );
+      }
+    }
+    return grouped;
+  }
+
   if (deps.config.linker) {
     const outcomes = await linkSeededGroups(
       {

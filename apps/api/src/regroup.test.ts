@@ -69,6 +69,7 @@ async function seedStaleRows() {
   await upsertTopic(harness.deps.db, { fingerprint, keywords: ["harper"], language: "en" });
 
   const ingested = await ingestSightings(harness.deps.db, {
+    plane: "search",
     timeZone: "UTC",
     fingerprint,
     sightings: [
@@ -164,6 +165,7 @@ describe("regroup", () => {
     const fingerprint = randomBytes(32).toString("hex");
     await upsertTopic(harness.deps.db, { fingerprint, keywords: ["harper"], language: "en" });
     const ingested = await ingestSightings(harness.deps.db, {
+      plane: "search",
       timeZone: "UTC",
       fingerprint,
       sightings: [sighting("bbc.co.uk", BBC, "2026-08-11T21:21:00.000Z")],
@@ -242,6 +244,7 @@ describe("regroup", () => {
       bridge: "Mayor resigns over budget scandal at city hall",
     };
     const ingested = await ingestSightings(harness.deps.db, {
+      plane: "search",
       timeZone: "UTC",
       fingerprint,
       sightings: Object.values(titles).map((title, i) =>

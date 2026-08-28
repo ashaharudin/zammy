@@ -131,6 +131,7 @@ async function seedStoryline(
   const fingerprint = randomBytes(32).toString("hex");
   await upsertTopic(db, { fingerprint, keywords: ["seed"], language: "en" });
   const ingested = await ingestSightings(db, {
+    plane: "search",
     ...TZ,
     fingerprint,
     sightings: [

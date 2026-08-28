@@ -69,7 +69,7 @@ describe("article groups in storage", () => {
   let harness: TestDatabase;
 
   const ingest = async (...sightings: Sighting[]) =>
-    ingestSightings(harness.db, { timeZone: ZONE, fingerprint: TOPIC, sightings });
+    ingestSightings(harness.db, { plane: "search", timeZone: ZONE, fingerprint: TOPIC, sightings });
 
   const readArticle = async (id: string) =>
     harness.db
@@ -391,7 +391,7 @@ describe("what the storyline layer reads from storage", () => {
   let harness: TestDatabase;
 
   const ingest = async (...sightings: Sighting[]) =>
-    ingestSightings(harness.db, { timeZone: ZONE, fingerprint: TOPIC, sightings });
+    ingestSightings(harness.db, { plane: "search", timeZone: ZONE, fingerprint: TOPIC, sightings });
 
   const readRow = async (id: string) =>
     harness.db
@@ -502,6 +502,7 @@ describe("tokenizer staleness is findable", () => {
     // changing. Without the version, a row written under an older tokenizer
     // degrades every comparison it takes part in and nothing can find it.
     const stale = await ingestSightings(harness.db, {
+      plane: "search",
       timeZone: ZONE,
       fingerprint: TOPIC,
       sightings: [
@@ -513,6 +514,7 @@ describe("tokenizer staleness is findable", () => {
       ],
     });
     const fresh = await ingestSightings(harness.db, {
+      plane: "search",
       timeZone: ZONE,
       fingerprint: TOPIC,
       sightings: [
