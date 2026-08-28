@@ -520,17 +520,48 @@ const EnvSchema = z
      *
      * **A deployment parameter, not an operator convenience**, which is the
      * whole reason it is here rather than only behind `--max-labels`. On Hobby
-     * the chores route has 300 s, and at `GEMINI_MAX_RPM=15` a label is >=4 s of
-     * pacing plus model latency — so **75 labels IS the entire window**, against
-     * the pass's own code default of 500. An unbounded night therefore exceeds
-     * the function ceiling long before it exceeds Gemini's daily quota, and what
-     * a truncated night loses is not latency but the `chore_runs` row and the
-     * passes ordered after the label one.
+     * the chores route has 300 s, against the pass's own code default of 500 —
+     * so an unbounded night exceeds the function ceiling long before it exceeds
+     * the daily quota, and what a truncated night loses is not latency but the
+     * `chore_runs` row and the passes ordered after the label one.
      *
-     * 50 is the middle of Phase 0's measured 40-60 (findings §2). The bound
-     * costs nothing durable: the pass is resumable across nights — it selects
-     * the storylines whose labels are missing or drifted — so a bound defers
-     * labels rather than dropping them.
+     * **The window is spacing PLUS latency, which is why a COUNT is a poor
+     * bound on a CLOCK.** Phase 0's 40-60 (findings §2, the source of this 50)
+     * counted pacing alone — 75 x 4 s at the old 15 rpm — but `labelPass` is
+     * sequential: it sleeps the spacing and THEN awaits the call, so the two
+     * add. That holds whatever the model does; what it does not do is yield a
+     * replacement number, and this comment will not invent one.
+     *
+     * **Re-derived 2026-08-28 against the repaired client** (#177), on the dev
+     * key with real dev-archive prompts and the pacer off. 10 storylines:
+     *
+     *   - **3 produced a usable label**, in 20.4 s / 23.8 s / 36.8 s;
+     *   - **7 returned no answer at all**, each burning the whole 2,048-token
+     *     budget on thinking (`MAX_TOKENS`, ~2,046 thought tokens) in ~43 s.
+     *
+     * A label therefore costs ~40 s of wall clock on average (2 s of spacing at
+     * 30 rpm plus ~38 s of call), which means `CHORE_LABEL_BUDGET_MS`'s 240 s
+     * admits about **6**. Not 75, not 50.
+     *
+     * **50 stays anyway, and the reason is that the count is no longer the
+     * clock bound.** `CHORE_LABEL_BUDGET_MS` is, and a budget is right where a
+     * count is wrong: it holds at whatever a label happens to cost, so it does
+     * not need re-deriving every time latency moves. Pinning this to 6 would
+     * bake TODAY's latency — which is pathological, see below — into a
+     * deployment parameter, and would throttle a healthy pass to 6 labels a
+     * night once it is not. What this number still does is bound SPEND, and at
+     * 14,400 requests/day 50 is nothing. The bound costs nothing durable
+     * either way: the pass is resumable across nights — it selects the
+     * storylines whose labels are missing or drifted — so a bound defers labels
+     * rather than dropping them.
+     *
+     * **Why "pathological".** The 7 failures are not a budget that wants
+     * raising. Re-run at `maxOutputTokens` 8192, two of them ran to 8,190 and
+     * 8,189 thought tokens — 172 s apiece — and still answered nothing, while
+     * the successes reproduced exactly (944 and 1,103 thought tokens, the same
+     * seconds; temperature is 0, so the split is the PROMPT, not sampling). The
+     * cap is a circuit breaker on runaway reasoning, not a budget: raising it
+     * turns a 43 s failure into a 172 s one. See `gemini.ts`.
      *
      * `--max-labels` still overrides it, which is what an operator draining a
      * backlog against a clone wants. The default moved from "unbounded" to this

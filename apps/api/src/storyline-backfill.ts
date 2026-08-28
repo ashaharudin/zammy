@@ -428,9 +428,11 @@ export async function labelPass(
   const overBudget = (): boolean =>
     options.labelBudgetMs !== undefined &&
     now().getTime() - startedAt >= options.labelBudgetMs;
-  // The free tier's published ceiling. Was 60 — four times the limit, which
-  // the client now refuses to send regardless of what this says.
-  const rate = options.labelRatePerMinute ?? 15;
+  // The free tier's published ceiling for `gemma-4-26b-a4b-it`, config's model
+  // (it was 15 for the flash-lite this pass was written against). Was once
+  // 60 — four times the limit then — which the client now refuses to send
+  // regardless of what this says.
+  const rate = options.labelRatePerMinute ?? 30;
   // Only the MODEL is rate-limited, because it is the only thing here with a
   // per-minute ceiling and a bill. With no generator configured every label
   // comes from the bigram extractor — pure CPU — and spacing those would have

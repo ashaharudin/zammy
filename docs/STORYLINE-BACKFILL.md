@@ -155,7 +155,9 @@ Three things worth keeping:
   latency held the real rate near 8.5/min; the spacing setting never kept the
   run legal, which is exactly why parallelising is the dangerous half of the
   advice (four workers at 8.5/min each is 34/min, over the ceiling). The client
-  now paces itself (`GEMINI_MAX_RPM`, default 15), so a parallelised pass
+  now paces itself (`GEMINI_MAX_RPM`; **default 30 today**, 15 when this was
+  measured — the model moved to `gemma-4-26b-a4b-it` on 2026-08-27 and every
+  per-minute figure in this caveat is at the old 15), so a parallelised pass
   inside ONE process is throttled rather than rejected — workers sharing the
   CLI's client cannot beat ~15/min between them, putting the floor for a full
   relabel at ~3 hours. That is per-process, not per-key: a relabel beside a
@@ -177,11 +179,12 @@ pnpm backfill:storylines --label-rate=8     # model calls per minute; slower onl
 pnpm backfill:storylines --groups=1,2,3     # link exactly these; cursor ignored
 ```
 
-`--label-rate` defaults to `GEMINI_MAX_RPM` (15) and is useful only to go
-SLOWER — asking for more buys a queue inside the client's pacer, not a faster
-run. Going slower is the real use: this run's pacer knows nothing about the
-server's, so `--label-rate=7` keeps the two under one 15/min ceiling on a
-shared key.
+`--label-rate` defaults to `GEMINI_MAX_RPM` (30 since 2026-08-27; 15 before)
+and is useful only to go SLOWER — asking for more buys a queue inside the
+client's pacer, not a faster run. Going slower is the real use: this run's
+pacer knows nothing about the server's, so half the ceiling each —
+`--label-rate=15` today, `=7` at the old 15/min — keeps the two under one
+ceiling on a shared key.
 
 `--restart` is the only flag that discards state.
 

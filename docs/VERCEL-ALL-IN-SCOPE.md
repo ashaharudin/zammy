@@ -452,6 +452,26 @@ wrapper plus one new table:
   300 s well before it exceeds Gemini's daily quota. The pass is resumable across nights, so a bound
   costs latency, not labels. **Phase 0 puts the figure at 40–60**: 75 labels is the entire 300 s
   window, against a default of 500 ([chores.ts:394](../apps/api/src/chores.ts)).
+
+  **Corrected 2026-08-28, and measured.** The 40–60 counts *pacing only*, and the bullet's own
+  sentence names the term it then drops: `labelPass` is sequential — it sleeps the spacing and
+  *then* awaits the call — so a label costs spacing **plus** latency, and Phase 0 deliberately did
+  not make the model calls (§1: "its wall clock is pacing, not compute"). That correction stands on
+  its own — a count bounds a clock only if a label costs what the count was sized against — but it
+  does **not** yield a replacement figure, and none is asserted here.
+
+  **Re-derived 2026-08-28 against the repaired client** (#177), dev key, real dev-archive prompts,
+  pacer off. Of ten storylines, **three produced a usable label** — 20.4 s, 23.8 s, 36.8 s — and
+  **seven returned no answer**, each spending the whole 2,048-token budget on thinking
+  (`MAX_TOKENS`, ~2,046 thought tokens) in ~43 s. A label therefore costs **~40 s** of wall clock,
+  2 s of it spacing, so `CHORE_LABEL_BUDGET_MS`'s 240 s admits about **six**.
+
+  `CHORE_MAX_LABELS` nonetheless **stays at 50**, because the count is no longer the clock bound —
+  `CHORE_LABEL_BUDGET_MS` is, and a budget holds at whatever a label costs instead of wanting a
+  re-derivation every time latency moves. Pinning the count at six would bake today's latency into
+  a deployment parameter and throttle a healthy pass later; what it still bounds is spend, and at
+  14,400 requests/day 50 is nothing. Full numbers, including why raising `maxOutputTokens` is the
+  wrong lever, in [STORYLINE-LABELS.md](STORYLINE-LABELS.md).
 - **The late-candidate sweep is the phase that actually blows the ceiling.** Measured at
   **41 ms × 12,338 groups ≈ 506 s** — 1.7× Hobby's 300 s, every night, on loopback Postgres. It is
   one query: `readCandidateStorylines` is 34 of the 41 ms, and its cost tracks profile width, from

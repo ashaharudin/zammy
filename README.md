@@ -10,7 +10,7 @@ wordcloud of the storylines the last 24 hours updated. Backed by
 
 **Status: Phases 0–5f and 7a complete** — the full keyword→timeline product is built: schema with
 write-time dedup, the query service with caching and progressive fill, the timeline front end,
-article grouping, persistent storylines with Gemini-generated labels, the landing-page wordcloud
+article grouping, persistent storylines with model-generated labels, the landing-page wordcloud
 (now naming recently updated storylines), and GNews as a second provider behind the client
 interface. Deployment moved to Vercel + Supabase + Upstash
 ([ADR-0015](docs/adr/0015-all-in-on-vercel-hobby-shaped.md)) and is in progress. Not
