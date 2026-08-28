@@ -20,7 +20,16 @@ export const TimelineQuery = z.object({
   q: z.string().trim().min(1).max(MAX_KEYWORDS_LENGTH).optional(),
   language: z.string().min(2).max(8).optional(),
   country: z.string().min(2).max(8).optional(),
-  category: z.string().min(1).max(40).optional(),
+  /**
+   * There is no `category` here, and its absence is load-bearing (ADR-0020).
+   *
+   * A reader can no longer choose one, but bookmarks and shared links minted
+   * while they could are still out there. This object is not `.strict()`, so
+   * Zod STRIPS an unrecognised `?category=technology` rather than failing the
+   * parse: the request goes on to be answered as the same search without the
+   * filter. Adding the field back — even as something ignored downstream — is
+   * how that degradation turns back into a 400, so do not.
+   */
   from: z.iso.datetime().optional(),
   to: z.iso.datetime().optional(),
   /** Opaque keyset cursor from a previous response. */

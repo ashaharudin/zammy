@@ -68,6 +68,17 @@ export type LanguagePolicy = "browser" | "english";
  * nothing — so the
  * country default applies only where no filter is stated at all, which is what
  * a first visit or a bare `?q=` link looks like.
+ *
+ * **`untouched` is two terms, and it was three.** `category` counted here until
+ * ADR-0020, and its leaving changes one case: a link carrying ONLY a category
+ * (`?q=housing&category=technology`, no `lang`, no `country`) used to state a
+ * filter and so suppressed the country default; now it states none and takes
+ * one. Deliberate rather than overlooked — the whole point of ADR-0020 is that
+ * such a link is the plain search, and the plain search gets the reader's own
+ * country like any other. Narrow in practice too: every URL the app itself
+ * writes carries `lang`, so only a hand-edited or pre-`lang` link can reach it.
+ * Pinned in browserDefaults.test.ts so the next person to change this gate sees
+ * what the missing term used to do.
  */
 export function defaultedFilters(
   filters: TopicFilters,
@@ -75,10 +86,7 @@ export function defaultedFilters(
   reference: Reference,
   language: LanguagePolicy,
 ): TopicFilters {
-  const untouched =
-    filters.language === undefined &&
-    filters.country === undefined &&
-    filters.category === undefined;
+  const untouched = filters.language === undefined && filters.country === undefined;
   const next = { ...filters };
   if (next.language === undefined) {
     next.language =

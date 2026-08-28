@@ -55,7 +55,11 @@ G8 retire category ─────┘                                 kill crite
 ```
 
 G1–G4 and G8 are mutually independent and can run in any order or in parallel.
-**G5 is gated on all five.** G7 is gated on G6 returning a yield worth having.
+**G5 is gated on all five, and all five have landed** — G1 (#170), G2 (#169),
+G3 (#172), G4 (#173) and G8 (ADR-0020). **G5's gate is open.** Only G1 and G8
+carry a **Landed** note in their own sections; G2–G4 are on `main` regardless,
+and this line is the one to trust for the gate. G7 is gated on G6 returning a
+yield worth having.
 
 ---
 
@@ -468,6 +472,28 @@ removes a *choice*, not a schema.
 resolves to a usable search; the 29 existing topics are either untouched or
 migrated deliberately with the decision recorded; `apps/web` and `apps/api`
 tests cover the stale-URL path.
+
+**Landed** as [ADR-0020](adr/0020-a-reader-does-not-choose-a-category.md), no
+migration. All three decisions took the preferred option:
+
+- **The fingerprint is untouched** and `category` stays in its serialization.
+  The 29 topics keep their identity, their coverage and their 393 memberships.
+  `CanonicalQuery.category` stays with it, because `processSegmentJob` rebuilds
+  a query from the stored row — a segment already queued against one of those
+  topics must still fetch what the topic says it is.
+- **A stale URL degrades on both sides, independently** — Zod strips the
+  parameter (`TimelineQuery` is not `.strict()`) and `PARAM_KEYS` no longer
+  names it — so a direct API consumer cannot break silently behind an app that
+  looks fine. One qualification, recorded in the ADR: a link whose only filter
+  was a category now takes the browser's country default, which it used to
+  suppress.
+- **The taxonomy keeps its plumbing and loses its offer.** `/api/v1/reference`
+  serves languages and regions only, and the cold-cache path costs two upstream
+  calls rather than three; `availableCategories()` and the Currents 400-body
+  parse stay where they are.
+
+No `PAGE_SHAPE_VERSION` bump: `TopicSummary` has never carried a category, and
+the version keys the page cache, which this does not change.
 
 ## Already landed
 

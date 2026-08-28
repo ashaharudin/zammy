@@ -16,17 +16,38 @@ import {
 
 describe("parseRoute", () => {
   it("reads a topic and its filters", () => {
-    expect(parseRoute("?q=wildfires&lang=en&country=CA&category=sports")).toEqual({
+    expect(parseRoute("?q=wildfires&lang=en&country=CA")).toEqual({
       q: "wildfires",
-      filters: { language: "en", country: "CA", category: "sports" },
+      filters: { language: "en", country: "CA" },
     });
   });
 
   it("reads filters standing on their own, which is the hero", () => {
-    expect(parseRoute("?lang=msa&category=sports")).toEqual({
+    expect(parseRoute("?lang=msa")).toEqual({
       q: null,
-      filters: { language: "msa", country: undefined, category: "sports" },
+      filters: { language: "msa", country: undefined },
     });
+  });
+
+  it("ignores a category a bookmark still carries, keeping the search", () => {
+    // ADR-0020 retired the category chip; the links readers saved while it
+    // existed did not retire with it. The parameter is not read, so the route
+    // is the plain search — which is what the reader wanted minus a filter
+    // that half the ingest could never honestly serve. The alternative, and
+    // the reason this is pinned, is that such a link errors instead.
+    expect(parseRoute("?q=housing&lang=en&category=technology")).toEqual({
+      q: "housing",
+      filters: { language: "en", country: undefined },
+    });
+  });
+
+  it("drops the stale parameter from the URL the app writes back", () => {
+    // Round trip: whatever the reader arrives with, the next navigation states
+    // only what the app is actually showing. A category left in the query
+    // string would keep re-sharing a filter that no longer exists.
+    expect(routeSearch(parseRoute("?q=housing&lang=en&category=technology"))).toBe(
+      "?q=housing&lang=en",
+    );
   });
 
   it("reads a storyline seed beside the keywords, not among the filters", () => {
@@ -34,7 +55,7 @@ describe("parseRoute", () => {
     // recipient — and the reader's next search cannot inherit it.
     expect(parseRoute("?q=mail-in+voting&storyline=23905")).toEqual({
       q: "mail-in voting",
-      filters: { language: undefined, country: undefined, category: undefined },
+      filters: { language: undefined, country: undefined },
       storyline: "23905",
     });
   });
@@ -42,7 +63,7 @@ describe("parseRoute", () => {
   it("drops a seed with no keywords, which seeds nothing", () => {
     expect(parseRoute("?storyline=23905&lang=en")).toEqual({
       q: null,
-      filters: { language: "en", country: undefined, category: undefined },
+      filters: { language: "en", country: undefined },
     });
   });
 });
@@ -52,14 +73,14 @@ describe("routeSearch", () => {
     expect(
       routeSearch({
         q: "wildfires",
-        filters: { language: "en", country: "CA", category: "sports" },
+        filters: { language: "en", country: "CA" },
       }),
-    ).toBe("?q=wildfires&lang=en&country=CA&category=sports");
+    ).toBe("?q=wildfires&lang=en&country=CA");
   });
 
   it("keeps filters that have no topic yet, so the hero can hold them", () => {
-    expect(routeSearch({ q: null, filters: { language: "msa", category: "sports" } })).toBe(
-      "?lang=msa&category=sports",
+    expect(routeSearch({ q: null, filters: { language: "msa", country: "MY" } })).toBe(
+      "?lang=msa&country=MY",
     );
   });
 
@@ -78,7 +99,7 @@ describe("routeSearch", () => {
   });
 
   it("round-trips what it wrote", () => {
-    const route = { q: "banjir", filters: { language: "msa", country: "MY", category: "sports" } };
+    const route = { q: "banjir", filters: { language: "msa", country: "MY" } };
 
     expect(parseRoute(routeSearch(route))).toEqual(route);
   });
@@ -86,7 +107,7 @@ describe("routeSearch", () => {
   it("round-trips a seeded topic", () => {
     const route = {
       q: "mail-in voting",
-      filters: { language: "en", country: undefined, category: undefined },
+      filters: { language: "en", country: undefined },
       storyline: "23905",
     };
 
@@ -106,7 +127,7 @@ describe("the origin behind a storyline view", () => {
       parseRoute("?storyline=0192f3c4-5d6e-7f80-9123-456789abcdef&from=Trump"),
     ).toEqual({
       q: null,
-      filters: { language: undefined, country: undefined, category: undefined },
+      filters: { language: undefined, country: undefined },
       storyline: "0192f3c4-5d6e-7f80-9123-456789abcdef",
       from: "Trump",
     });
@@ -128,7 +149,7 @@ describe("the origin behind a storyline view", () => {
     // reader would return to, so an origin riding along says nothing.
     expect(parseRoute("?q=wildfires&from=Trump")).toEqual({
       q: "wildfires",
-      filters: { language: undefined, country: undefined, category: undefined },
+      filters: { language: undefined, country: undefined },
     });
   });
 });
@@ -136,14 +157,14 @@ describe("the origin behind a storyline view", () => {
 describe("leaveStorylineView", () => {
   const view = {
     q: null,
-    filters: { language: "en", country: undefined, category: undefined },
+    filters: { language: "en", country: undefined },
     storyline: "0192f3c4-5d6e-7f80-9123-456789abcdef",
     from: "Trump",
   };
 
   it("dismissing the chip returns to the search the view was opened from", () => {
     expect(leaveStorylineView(view, null)).toEqual({
-      route: { q: "Trump", filters: { language: "en", country: undefined, category: undefined } },
+      route: { q: "Trump", filters: { language: "en", country: undefined } },
       replace: false,
     });
   });
@@ -153,7 +174,7 @@ describe("leaveStorylineView", () => {
     // in history it would sit between the new search and the search that
     // opened it, and Back would walk them into a storyline they had left.
     expect(leaveStorylineView(view, "Iran")).toEqual({
-      route: { q: "Iran", filters: { language: "en", country: undefined, category: undefined } },
+      route: { q: "Iran", filters: { language: "en", country: undefined } },
       replace: true,
     });
   });
@@ -163,7 +184,7 @@ describe("leaveStorylineView", () => {
     // settled on are still theirs, and the hero holds them.
     const { from: _shared, ...linked } = view;
     expect(leaveStorylineView(linked, null)).toEqual({
-      route: { q: null, filters: { language: "en", country: undefined, category: undefined } },
+      route: { q: null, filters: { language: "en", country: undefined } },
       replace: false,
     });
   });
@@ -173,12 +194,12 @@ describe("openStorylineView", () => {
   it("records the search being left, so the view knows the way back", () => {
     expect(
       openStorylineView(
-        { q: "Trump", filters: { language: "en", country: "US", category: undefined } },
+        { q: "Trump", filters: { language: "en", country: "US" } },
         "0192f3c4-5d6e-7f80-9123-456789abcdef",
       ),
     ).toEqual({
       q: null,
-      filters: { language: "en", country: "US", category: undefined },
+      filters: { language: "en", country: "US" },
       storyline: "0192f3c4-5d6e-7f80-9123-456789abcdef",
       from: "Trump",
     });

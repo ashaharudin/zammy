@@ -57,7 +57,6 @@ async function setup(): Promise<void> {
       reference: {
         languages: new Set(["en"]),
         regions: new Set(),
-        categories: new Set(),
       },
       defaultLanguage: "en",
       lookbackDays: 30,
@@ -128,6 +127,49 @@ describe("GET /api/v1/timeline", () => {
 
     // Pre-flight validation exists so a bad request never reaches upstream (§6.2).
     expect(harness.counting.searchCalls).toBe(calls);
+  });
+
+  it("answers a bookmarked ?category= link instead of 400ing it", async () => {
+    // ADR-0020 retired the category CHOICE, and the failure mode it had to
+    // avoid is this one: `canonicalize` used to validate a category against the
+    // reference list and a miss became "invalid query". Had the taxonomy simply
+    // stopped being populated, every `?category=technology` bookmark ever
+    // shared would answer 400 — a harder failure than the filter being removed.
+    //
+    // What must happen instead is a usable search, and specifically the SAME
+    // search as without the parameter: the schema strips what it does not name,
+    // so the two requests are one topic, one fingerprint, one accumulating
+    // coverage. Asserted through the HTTP surface rather than the canonicalizer
+    // because the strip happens in the shared Zod contract, which a unit test of
+    // `canonicalize` never reaches.
+    await setup();
+
+    const plain = await app.inject({ method: "GET", url: `${TIMELINE}?q=climate&${QS}` });
+    const stale = await app.inject({
+      method: "GET",
+      url: `${TIMELINE}?q=climate&category=technology&${QS}`,
+    });
+
+    expect(stale.statusCode).toBe(200);
+    const staleBody = TimelinePage.parse(stale.json());
+    expect(staleBody.items.length).toBeGreaterThan(0);
+    expect(staleBody.topic.fingerprint).toBe(TimelinePage.parse(plain.json()).topic.fingerprint);
+  });
+
+  it("does not mint a category-scoped topic from a stale link", async () => {
+    // The other half of the same guarantee, and the one a strip could get
+    // wrong quietly: the request degrades to the unfiltered topic, so nothing
+    // is stored under a category the reader can no longer see or clear, and
+    // no fetch is planned with a filter half the ingest cannot express.
+    await setup();
+
+    const response = await app.inject({
+      method: "GET",
+      url: `${TIMELINE}?q=climate&category=technology&${QS}`,
+    });
+
+    const fingerprint = TimelinePage.parse(response.json()).topic.fingerprint;
+    expect(await readTopic(harness.deps.db, fingerprint)).toMatchObject({ category: null });
   });
 
   it("400s a stale-generation cursor on the storyline view, never a 500", async () => {
@@ -257,10 +299,10 @@ describe("GET /api/v1/reference", () => {
   interface ReferenceBody {
     languages: Record<string, string>;
     regions: Record<string, string>;
-    categories: string[];
+    categories?: string[];
   }
 
-  it("serves the upstream reference values verbatim — junk included", async () => {
+  it("serves the upstream reference values verbatim", async () => {
     await setup();
 
     const response = await app.inject({ method: "GET", url: "/api/v1/reference" });
@@ -269,10 +311,25 @@ describe("GET /api/v1/reference", () => {
     const body = response.json() as ReferenceBody;
     expect(body.languages.English).toBe("en");
     expect(Object.values(body.regions)).toContain("US");
-    // Junk categories survive the wire layer on purpose: filtering belongs to
-    // the UI picker, because a stored sighting may legitimately carry one.
-    expect(body.categories).toContain("crap");
-    expect(body.categories).toContain("technology");
+  });
+
+  it("no longer offers the category taxonomy, and spends no call learning it", async () => {
+    // ADR-0020. The chip is gone, so a list of things nobody can pick is an
+    // OFFER — the next person to see it on the wire would reasonably build the
+    // control back. Two upstream calls now, not three: `availableCategories()`
+    // is still on the client interface and still parses the taxonomy out of a
+    // recorded 400 body, and it is simply not asked.
+    await setup();
+    await harness.redis.del("ref:languages", "ref:regions", "ref:categories");
+    const before = harness.counting.referenceCalls;
+
+    const body = (
+      await app.inject({ method: "GET", url: "/api/v1/reference" })
+    ).json() as ReferenceBody;
+
+    expect(body.categories).toBeUndefined();
+    expect(harness.counting.referenceCalls - before).toBe(2);
+    expect(await harness.redis.get("ref:categories")).toBeNull();
   });
 
   it("spells the names a picker draws, whatever upstream typed", async () => {
@@ -305,7 +362,12 @@ describe("GET /api/v1/reference", () => {
       60_000,
     );
     await harness.deps.redis.set("ref:languages", JSON.stringify({ Vietnamise: "vi" }), "PX", 60_000);
+    // A `ref:categories` an older build left behind, with its TTL still running.
+    // The read no longer asks for that key, so a cache warmed by a pre-ADR-0020
+    // instance must still count as a HIT — requiring three keys where two are
+    // used would turn every such instance's next deploy into a refetch.
     await harness.deps.redis.set("ref:categories", JSON.stringify(["technology"]), "PX", 60_000);
+    const before = harness.counting.referenceCalls;
 
     const body = (
       await app.inject({ method: "GET", url: "/api/v1/reference" })
@@ -313,8 +375,9 @@ describe("GET /api/v1/reference", () => {
 
     expect(body.regions).toEqual({ Canada: "CA", "United States": "US" });
     expect(body.languages).toEqual({ Vietnamese: "vi" });
+    expect(body.categories).toBeUndefined();
     // Still the cached body, not a refetch: the repair is a rename, not a reload.
-    expect(body.categories).toEqual(["technology"]);
+    expect(harness.counting.referenceCalls).toBe(before);
   });
 });
 

@@ -9,7 +9,7 @@ import { upstreamHealthRecord } from "./upstreamHealth.js";
 /**
  * The persistent chrome once a topic is open: prompt + query, and underneath a
  * meta row carrying the response's asOf stamp (§8.1) followed by the topic's
- * filter chips — location and category.
+ * filter chip — location.
  *
  * The chips replaced a flag icon and a servedFrom/degraded/stale readout. The
  * icon said less than a word does, and the freshness readout was operational
@@ -19,8 +19,11 @@ import { upstreamHealthRecord } from "./upstreamHealth.js";
  * Ingest progress is deliberately not here: the timeline owns that state and
  * says it in motion (see IngestBeacon/IngestGhosts).
  *
- * Country and category filters, dropped from the UI on 2026-08-10, are back as
- * chips; shared links carrying them have kept working throughout.
+ * Country and category filters, dropped from the UI on 2026-08-10, came back as
+ * chips; shared links carrying them have kept working throughout. Category has
+ * since gone for good (ADR-0020) — half the ingest cannot express one — and a
+ * link still carrying `?category=` keeps working the same way, as the search
+ * without it.
  */
 export function CommandBar({
   topic,
