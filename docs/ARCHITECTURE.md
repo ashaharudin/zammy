@@ -724,7 +724,7 @@ CREATE INDEX topic_coverage_gist ON topic_coverage USING gist (fingerprint, span
 -- storyline, not a search, and it writes HERE and nowhere else — which is what
 -- makes it structurally unable to manufacture topic coverage (ADR-0012).
 CREATE TABLE storyline_coverage (
-  storyline_id uuid REFERENCES storylines ON DELETE CASCADE,
+  storyline_id uuid NOT NULL REFERENCES storylines ON DELETE CASCADE,
   provider     text NOT NULL,
   span         tstzrange NOT NULL,
   fetched_at   timestamptz NOT NULL DEFAULT now()

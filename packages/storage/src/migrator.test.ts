@@ -435,6 +435,18 @@ describe("migrateToLatest", () => {
     `.execute(harness.db);
     expect(after.map((row) => row.provider)).toEqual(["currents"]);
 
+    // A coverage row with no subject is refused. `topic_coverage` permits one —
+    // 0001 left `fingerprint` nullable — and this table deliberately does not:
+    // the row's whole meaning is "this span was fetched for THIS arc", so a null
+    // subject is a claim with no claimant that no read here would ever surface.
+    await expect(
+      sql`
+        insert into storyline_coverage (storyline_id, provider, span)
+        values (null, 'google-news',
+                tstzrange('2026-05-01T00:00:00Z', '2026-05-02T00:00:00Z', '[)'))
+      `.execute(harness.db),
+    ).rejects.toThrow();
+
     // And the recreated table carries RLS, per 0019's convention. The blanket
     // sweep cannot reach a table created after it, and a `down`/`up` pair is the
     // other way a table comes back unprotected.

@@ -197,7 +197,9 @@ export interface TopicCoverageTable {
  *
  * No `Generated` on `provider`: unlike `topic_coverage` there is no history to
  * default, and which plane writes here is decided by its caller, not by the
- * schema.
+ * schema. `storyline_id` is non-nullable in the schema as well as here — a
+ * coverage row with no subject is a claim with no claimant, and unlike
+ * `topic_coverage.fingerprint` this table had no existing rows to accommodate.
  */
 export interface StorylineCoverageTable {
   storyline_id: string;

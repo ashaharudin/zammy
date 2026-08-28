@@ -105,14 +105,17 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     ALTER TABLE topic_coverage ADD COLUMN provider text NOT NULL DEFAULT 'currents'
   `.execute(db);
 
-  // `storyline_id` nullable, mirroring `topic_coverage.fingerprint` (0001). The
-  // FK still holds: a row can name no storyline, but it cannot name one that
-  // does not exist, and a null-subject row is invisible to every read here
-  // (they all filter `storyline_id = $1`) — dead weight rather than a coverage
-  // claim over something unfetched.
+  // `storyline_id NOT NULL`, which is the one place this table does NOT follow
+  // `topic_coverage`'s shape — 0001 left `fingerprint` nullable and nothing has
+  // needed it to be. A coverage row's whole meaning is "this span was fetched
+  // FOR THIS SUBJECT"; a null subject is a claim with no claimant, invisible to
+  // every read here (they all filter `storyline_id = $1`) and therefore dead
+  // weight that no query would ever surface as wrong. The FK already forbids
+  // naming an arc that does not exist; this forbids naming none at all, and
+  // costs a writer nothing, because there is no writer yet to migrate.
   await sql`
     CREATE TABLE storyline_coverage (
-      storyline_id uuid REFERENCES storylines ON DELETE CASCADE,
+      storyline_id uuid NOT NULL REFERENCES storylines ON DELETE CASCADE,
       provider     text NOT NULL,
       span         tstzrange NOT NULL,
       fetched_at   timestamptz NOT NULL DEFAULT now()
