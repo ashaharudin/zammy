@@ -25,9 +25,10 @@ writing the results. `--dry-run` is what reads without asking the model.
 > - **Carries over**: the triggers, the prompt, the contract, the fallback
 >   chain, and the pacer with its scope — none of them are model-specific.
 > - **Does not**: every per-minute figure below is at the old 15. The thinking
->   table is Gemini-family only — gemma has no `thinkingLevel`/`thinkingBudget`
->   knob at all (the API 400s on either) and thinks unconfigurably, ~703 tokens
->   on the Fort Hood prompt, which is why `maxOutputTokens` went 256 → 2048.
+>   table is Gemini-family only in its VALUES — gemma takes `minimal` where
+>   3.x flash takes `low`, and each 400s on the other's — but its finding
+>   carries over exactly: thinking buys nothing here. Set to `minimal`, gemma
+>   spends zero thought tokens too. See "What gemma actually costs" below.
 > - **Re-measured 2026-08-28 against the repaired client (#177)** — see "What
 >   gemma actually costs" below. Short version: 3 usable labels in 10, at
 >   20.4–36.8 s each; the other 7 answer nothing at any budget. Flash-lite
@@ -46,51 +47,52 @@ can produce is a storyline with no name.
 
 ## What gemma actually costs, measured 2026-08-28
 
-Ten real dev-archive storylines, the repaired client (#177), the dev key, and
-the pacer off so these are latencies rather than pacing.
+Ten real dev-archive storylines, the repaired client (#177), the dev key, the
+pacer off so these are latencies rather than pacing. **The whole table is a
+function of one setting**, `GEMINI_THINKING_LEVEL`:
 
-| | calls | thinking tokens | wall clock |
-| --- | --- | --- | --- |
-| **Usable label** | **3** | 944, 1,103, 1,721 | 20.4 s, 23.8 s, 36.8 s |
-| **No answer** (`MAX_TOKENS`) | **7** | ~2,046 — the whole budget | ~43 s each |
+| | usable labels | median | thinking tokens | `MAX_TOKENS` |
+| --- | --- | --- | --- | --- |
+| field omitted | **3 / 10** | ~43 s | ~2,046 — the whole budget | **7 / 10** |
+| `minimal` | **9 / 10** | **1.4 s** | **0** | **0 / 10** |
 
-Three things follow, and none of them is "raise the budget".
+Left unset, this model is not "unconfigured" — it reasons itself into the token
+cap on most prompts and answers nothing. Set to `minimal` it names nine
+storylines in ten in under a second and a half. That is the finding this
+document already recorded for the flash tier in August ("naming a story is
+recall, not reasoning"), reached the other way round, and it is why
+`GEMINI_MODEL` and `GEMINI_THINKING_LEVEL` are now a **pair**: gemma takes
+`minimal` and 400s on `low`; 3.x flash takes `low` and 400s on `minimal`.
+
+Three things worth keeping from the unset case, because they say what the
+failure mode looks like if a future model reintroduces it.
 
 **The 2,048-token cap is a circuit breaker, not a budget.** Re-running the
-failures with `maxOutputTokens` at 8192, two of them reached **8,190 and 8,189
-thought tokens — 172 s apiece — and still answered nothing**, while the
-successes reproduced to the token (944 and 1,103, the same seconds).
-`temperature` is 0, so the split is a property of the PROMPT, not of sampling.
-Raising the cap converts a 43 s failure into a 172 s one; if anything it should
-come down, so that a runaway fails sooner.
+failures with `maxOutputTokens` at 8192, two reached **8,190 and 8,189 thought
+tokens — 172 s apiece — and still answered nothing**, while the successes
+reproduced to the token. `temperature` is 0, so the split is a property of the
+prompt, not of sampling. Raising the cap converts a 43 s failure into a 172 s
+one.
 
-**`GEMINI_TIMEOUT_MS=20000` is below the floor.** None of the three usable
-labels arrived inside it, so at the shipped setting the pass aborts every label
-it would otherwise get and takes the bigram fallback. That is why raising it is
-not a knob to turn on its own — a longer deadline also makes each of the seven
-failures cost more before it fails.
-
-**A label costs ~40 s** — 2 s of spacing at 30 rpm plus ~38 s of call — so
-`CHORE_LABEL_BUDGET_MS`'s 240 s admits about six. `CHORE_MAX_LABELS` stays at 50
-because the budget is what bounds the clock now; the count bounds spend, and at
-14,400 requests/day 50 is nothing.
-
-**It is not the prompt's shape.** The obvious explanation — that the failures
-are the awkward storylines — does not survive checking. Across the ten, member
-count, group count, prompt size and time span all overlap between the two
-groups: every success has exactly 2 members, and so do 3 of the 7 failures; the
-**smallest** prompt in the set (226 tokens, 2 members, a 0.1-day span) failed,
-while a larger one succeeded. The one directional hint is that all four
+**It was not the prompt's shape.** Member count, group count, prompt size and
+time span all overlap between the two groups: every success had exactly 2
+members and so did 3 of the 7 failures; the **smallest** prompt in the set (226
+tokens, 2 members, 0.1-day span) failed while a larger one succeeded. All four
 storylines with 3+ members failed, but 2-member ones failed half the time too,
-so at n=10 that carries nothing. Whatever separates them is not a property the
-prompt builder controls.
+so at n=10 that direction carries nothing. Editing the prompt changed nothing
+either — dropping the worked examples from the rules left the same storyline
+running to `MAX_TOKENS` at 2,046 tokens, and adding `minimal` fixed it with the
+examples still in place.
 
-**The open question this hands back to [ADR-0011](adr/0011-a-storyline-is-a-persistent-arc-of-one-event.md).**
-Repaired, this model names **3 storylines in 10**, at 20–37 s each. Flash-lite
-named the same ten in ~0.9 s apiece. The switch bought double the rpm ceiling
-(30 against 15) — a ceiling a serial pass came nowhere near at either latency,
-since latency binds first. That is a decision to take deliberately, not a
-number to tune.
+**A label costs ~1.4 s median** (mean ~3.9 s, pulled by one 19 s outlier), plus
+2 s of spacing at 30 rpm. `CHORE_LABEL_BUDGET_MS`'s 240 s therefore admits
+roughly 40–70 labels, which puts `CHORE_MAX_LABELS`'s 50 back inside the window
+it was always meant to describe. With the field omitted it admitted about six.
+
+**What this settles for [ADR-0011](adr/0011-a-storyline-is-a-persistent-arc-of-one-event.md).**
+Configured correctly, gemma names 9 storylines in 10 at ~1.4 s against
+flash-lite's ~0.9 s, at double the published rpm ceiling. The model choice
+stands. What nearly cost it was a one-line default.
 
 ## The three triggers
 

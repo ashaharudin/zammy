@@ -103,15 +103,20 @@ export interface GenerateRequest {
    * chatty-model guard the small cap was reaching for is `validateLabel`'s job
    * anyway.
    *
-   * `gemma-4-26b-a4b-it` (config's default model) raises the floor further:
-   * unlike Gemini 3.x, it has no `thinkingLevel`/`thinkingBudget` knob at all
-   * — the API 400s on both — so its thinking cannot be capped or disabled.
-   * MEASURED live on 2026-08-27 against the Fort Hood prompt: 256 spent the
-   * whole budget on an unfinished thought and returned `MAX_TOKENS` with no
-   * label; 2048 was enough to finish thinking (703 tokens) and answer (7
-   * tokens). The default below reflects that floor, not this model's typical
-   * spend — see `gemini.ts`'s pacer note for why the rpm gain is still worth
-   * that per-call cost for a background chore with a deterministic fallback.
+   * `gemma-4-26b-a4b-it` (config's default model) was believed to raise the
+   * floor further, on the grounds that it took no thinking level at all. **It
+   * does take one — `minimal` — and with it set this model spends ZERO
+   * thinking tokens** (measured 2026-08-28 over ten live label prompts;
+   * `GEMINI_THINKING_LEVEL` in config has the numbers). The 2048 below was
+   * sized for the other case: on 2026-08-27 the Fort Hood prompt needed 703
+   * thought tokens to answer, and 256 returned `MAX_TOKENS` with no label.
+   *
+   * So 2048 is now headroom rather than a floor, and it is worth keeping as
+   * headroom: it is the circuit breaker if a model ever reasons without a
+   * brake again. Left unbraked, 7 of those 10 prompts spent the whole 2048 and
+   * answered nothing — and raising the cap did not rescue them, it only made
+   * them cost more (8,190 thought tokens and 172 s at `maxOutputTokens` 8192,
+   * still no answer).
    */
   maxOutputTokens?: number;
   /** 0 by default: the same coverage should name the same story on a replay. */

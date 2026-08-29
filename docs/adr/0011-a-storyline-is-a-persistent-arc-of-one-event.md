@@ -211,13 +211,17 @@ publishing **double the free-tier rate — 30 requests a minute against
 flash-lite's 15, and 14,400 a day (confirmed 2026-08-28) against the 500-a-day
 ceiling the coherence-gate paragraph above reasons from**. It is served from
 the same endpoint, so the client did not change; two things about the model
-did. It has no `thinkingLevel`/`thinkingBudget` knob at all — the API 400s on
-either — so unlike the flash families its thinking cannot be capped, only
-budgeted for (`maxOutputTokens`, raised 256 → 2048 against the live API). And
-its per-call latency has never been measured, which is the gap the
-`CHORE_MAX_LABELS` arithmetic in `.env.example` names. Everything else here
-stands: presentation not identity, the three triggers, the bigram fallback, and
-the label-agreement merge's model-labels-only rule.
+did. It spells the thinking knob differently — `minimal`, where a Gemini 3.x
+flash model wants `low` — and the two families 400 on each other's values, so
+`GEMINI_MODEL` and `GEMINI_THINKING_LEVEL` are now a pair rather than two
+settings. That is load-bearing, not cosmetic: measured 2026-08-28 over ten live
+label prompts, the model produces **9 usable labels in 10 at a 1.4 s median**
+with `minimal` set, and **3 in 10 at ~43 s** with the field omitted, most of
+those spending an entire token budget reasoning and answering nothing. Naming a
+story is recall, not reasoning — the finding this ADR already recorded for the
+flash tier, reached the other way round. Everything else here stands:
+presentation not identity, the three triggers, the bigram fallback, and the
+label-agreement merge's model-labels-only rule.
 
 ## The timeline
 

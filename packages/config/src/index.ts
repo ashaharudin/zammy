@@ -471,21 +471,37 @@ const EnvSchema = z
      * double that tier's free-tier ceiling (30 rpm vs 15). Served from the
      * same endpoint (`GEMINI_BASE_URL`), so no client change was needed
      * beyond the id, `GEMINI_MAX_RPM` below, and `maxOutputTokens` in
-     * `gemini.ts` — this model has no `thinkingLevel`/`thinkingBudget` knob
-     * (the API 400s on both), so unlike the flash families its thinking
-     * cannot be capped and must be budgeted for instead.
+     * `gemini.ts`. It DOES take a thinking level, contrary to what this
+     * comment said until 2026-08-28 — see `GEMINI_THINKING_LEVEL`, which is
+     * the difference between this model working and not.
      */
     GEMINI_MODEL: NonEmpty.default("gemma-4-26b-a4b-it"),
     /**
-     * How much the model may think before answering, for the families that
-     * accept the knob. EMPTY — omit the field — is the default because a
-     * Gemini 3.x flash model spends thinking tokens for nothing here: see
-     * `gemini.ts`. Set it (`low` is the floor 3.x flash accepts) only if a
-     * chosen model needs it — NOT `gemma-4-26b-a4b-it`, the current default,
-     * which 400s if this is set at all; it thinks unconfigurably regardless,
-     * budgeted for via `maxOutputTokens` in `gemini.ts` instead.
+     * How much the model may think before answering. **Model-specific, and
+     * paired with `GEMINI_MODEL` above — change one and check the other.**
+     * The families spell this differently and reject each other's values.
+     *
+     * `minimal` for `gemma-4-26b-a4b-it`, and it is not a tuning preference —
+     * it is what makes the model usable. Measured 2026-08-28 over the same ten
+     * dev-archive storylines, live:
+     *
+     *   omitted   3 usable labels in 10, median ~43 s, 7 of them spending the
+     *             whole 2,048-token budget on thinking and answering nothing
+     *   minimal   **9 in 10, median 1.4 s, zero thinking tokens, no MAX_TOKENS**
+     *
+     * Left unset it is not "unconfigured", it is a model that reasons itself
+     * into a wall on most prompts. Naming a storyline is recall, not
+     * reasoning — the same finding flash-lite gave in August, reached the
+     * other way round.
+     *
+     * The accepted values are narrow and the errors are unhelpful: gemma takes
+     * `minimal`, 400s on `low` ("Thinking level is not supported for this
+     * model") and 400s on `none` (not a valid enum value at all). A Gemini 3.x
+     * flash model is the mirror image — `low` is its floor, `none`/`minimal`
+     * are 400s — so switching `GEMINI_MODEL` back to one means clearing this
+     * to empty or setting `low`, or every call 400s.
      */
-    GEMINI_THINKING_LEVEL: z.string().trim().default(""),
+    GEMINI_THINKING_LEVEL: z.string().trim().default("minimal"),
     /**
      * Per-call deadline. Labelling is never on a reader's path — it runs after
      * a promotion or merge has already been written — so a slow call should be

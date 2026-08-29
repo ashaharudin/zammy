@@ -461,17 +461,19 @@ wrapper plus one new table:
   does **not** yield a replacement figure, and none is asserted here.
 
   **Re-derived 2026-08-28 against the repaired client** (#177), dev key, real dev-archive prompts,
-  pacer off. Of ten storylines, **three produced a usable label** — 20.4 s, 23.8 s, 36.8 s — and
-  **seven returned no answer**, each spending the whole 2,048-token budget on thinking
-  (`MAX_TOKENS`, ~2,046 thought tokens) in ~43 s. A label therefore costs **~40 s** of wall clock,
-  2 s of it spacing, so `CHORE_LABEL_BUDGET_MS`'s 240 s admits about **six**.
+  pacer off — and the figure turns entirely on `GEMINI_THINKING_LEVEL`. With the field omitted, as
+  it shipped, ten storylines yielded **three usable labels at a ~43 s median**, seven of them
+  spending the whole 2,048-token budget on thinking and answering nothing; a label cost ~40 s and
+  the 240 s budget admitted about **six**. With the level set to `minimal` — which this model does
+  accept, contrary to what config claimed — the same ten yielded **nine labels at a 1.4 s median**,
+  zero thinking tokens, no `MAX_TOKENS`. A label costs ~1.4 s median (~3.9 s mean, one 19 s
+  outlier) plus 2 s of spacing, so the budget admits roughly **40–70**.
 
-  `CHORE_MAX_LABELS` nonetheless **stays at 50**, because the count is no longer the clock bound —
-  `CHORE_LABEL_BUDGET_MS` is, and a budget holds at whatever a label costs instead of wanting a
-  re-derivation every time latency moves. Pinning the count at six would bake today's latency into
-  a deployment parameter and throttle a healthy pass later; what it still bounds is spend, and at
-  14,400 requests/day 50 is nothing. Full numbers, including why raising `maxOutputTokens` is the
-  wrong lever, in [STORYLINE-LABELS.md](STORYLINE-LABELS.md).
+  Which puts `CHORE_MAX_LABELS`'s **50 back inside the window it was always meant to describe** —
+  not by re-deriving the count, but by fixing what a label costs. The count stays at 50 and
+  `CHORE_LABEL_BUDGET_MS` remains the clock bound, which is the right division: the budget held
+  correct across a 30× swing in latency that no count could have tracked. Full numbers in
+  [STORYLINE-LABELS.md](STORYLINE-LABELS.md).
 - **The late-candidate sweep is the phase that actually blows the ceiling.** Measured at
   **41 ms × 12,338 groups ≈ 506 s** — 1.7× Hobby's 300 s, every night, on loopback Postgres. It is
   one query: `readCandidateStorylines` is 34 of the 41 ms, and its cost tracks profile width, from
