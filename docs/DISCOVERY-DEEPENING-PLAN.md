@@ -1128,6 +1128,81 @@ planned as though each arc were an event.
   change to the ingest fold with its own measurement to make, and inventing it
   inside a measurement phase is how a gate stops being one.
 
+#### The obvious escape — window the crawl inside the cliff — was measured, and it is half a fix
+
+The first thing anyone will propose on reading the cliff is to keep the frontier
+on the safe side of it. **Span B already is that experiment** — 17 fetches, all
+at the leading edge — so this is measured rather than argued:
+
+```
+                            Span A (backfill)   Span B (leading edge)
+corrected yield                       89.2%                   95.5%
+stamps degraded                        ~89%                    3.1%
+fold misses (of minted)                 4.4%                   0.9%
+absorbed articles losing their URL       83%                     28%
+```
+
+The fold recovers almost completely, and that is the whole of what the window
+buys. Four things it does not settle, in the order they will bite.
+
+**The window has to be about a day narrower than the cliff, and G5's current
+constant already sits on the edge with no margin.** `BOUND_PADDING_MS` pads
+`after:` a day outward — deliberately, so an under-fetch is impossible — so a
+planner window whose far edge is D days back asks the wire for D+1. Span B's far
+edge was 8 days back and **the wire returned 24 items 9 days old, 17 of them
+degraded (71%)**. The arithmetic limit is therefore a far edge 7 days back, and
+the bucket that lands on (day 8) is already 3.9% degraded against 0% at day 7 —
+so **7 is the ceiling and 6 is the number with margin**, not 8.
+
+Which is worth stating twice, because `DEEPEN_SPAN_MS` is *already* 7 days and
+`queueStorylineDeepening` plans `to ≈ now`: the shipped leading-edge fetch puts
+the wire's far edge on **day 8, the last bucket before the cliff**, by accident.
+Widening that constant reads like a tuning change and is a change to how well the
+fold works.
+
+**The URL handover is a SEPARATE defect and the window does not touch it.**
+Every one of the **3,087** deepening sightings this phase produced carries a
+`news.google.com/rss/articles/CBMi…` redirect; **not one carries the outlet's own
+URL**. So handing the display fields to a Google sighting is never an improvement
+on the `url` column, whatever the timestamp says. Split by run and by stamp:
+
+```
+                         absorbed   lost their URL
+Span A  bare-date stamp       123              103
+Span A  real clock time         3                1
+Span B  bare-date stamp         3                3
+Span B  real clock time        40                9
+```
+
+Span B still loses 12 of 43, and **9 of those 12 are the honest case** — Google
+genuinely saw an earlier emission, ADR-0002 says the earliest emission wins the
+display fields, and the archive trades a working link for a redirect anyway. A
+bare-date test fixes the timestamp and the title; it cannot fix this, because
+this one is not about the timestamp.
+
+**Group re-parenting is timestamp-independent and scales with call volume.**
+259 pre-existing articles changed `group_id` across the two runs. Nothing about
+a narrower window changes that, and a scheduler is a call-volume increase by
+definition.
+
+**And the window costs G7 the thing G7 is for.** This section's own scope line is
+"arcs backfilled by slicing their spans"; a six-day ceiling means an arc
+discovered late can never have its history fetched at all. What survives is *the
+same leading-edge fetch G5 already ships, on a timer instead of a click* — a real
+thing, since it trades §9's invariant for freshness on arcs nobody clicked, but a
+much smaller thing than this section describes, and it should be **re-scoped and
+re-argued rather than shipped under the current framing**.
+
+So the window is a workaround that forfeits backfill, and the handover fix is
+needed for the windowed case anyway. The fix is the cheaper of the two and
+forfeits nothing.
+
+**One truncation fact that binds either way**: 9 of Span B's 17 calls hit the
+100-item cap at the leading edge, so a windowed crawl still needs subdivision —
+roughly three to four slices per busy arc per pass. Against 150 background calls
+a day that is comfortable for production's 22-arc board and unmeasured for
+anything wider; the active-arc count was not read, so no budget is asserted here.
+
 #### The verdict on G7
 
 **NO-GO, and it is a "not yet" rather than a "never".**
@@ -1155,20 +1230,59 @@ worse in exactly the way G7 changes things:
    leading-edge fetch runs at 1.7% degraded and is fine; the crawl frontier
    would run at ~90%.
 
-**What G7 is gated on, and it is a short list**: refuse the display-field
-handover to a bare-date sighting (measure it — the split above says it removes
-106 of 116 corruptions and keeps the 10 honest ones); decide what a deepening
-sighting's `published` means for `alt_key`'s day bucket when it is a date rather
-than a time; and re-run this instrument to confirm the cloud is byte-identical
-across a run. None of that needs a new phase of its own — it is a G5 correction,
-and it is smaller than the measurement that found it.
+**What G7 is gated on.** Five items, none of them a phase of its own — every one
+is a G5 correction, and together they are smaller than the measurement that found
+them. The first two are unconditional; the last three are what a windowed frontier
+owes on top, and they exist because windowing was measured above and came back
+half a fix.
+
+1. **Never hand a deepening sighting's `url` to an existing article.** Not
+   conditional on the stamp: all 3,087 sightings this phase drew carry a
+   `news.google.com/…CBMi…` redirect and none carries an outlet URL, so the
+   handover is a downgrade in every case — including the 9 of Span B's 12 where
+   the earlier-emission claim was true. A newly MINTED article keeps the redirect,
+   which is the price of the provider and not a defect.
+2. **Refuse the rest of the display-field handover to a bare-date sighting**, and
+   decide in the same change what a bare date means for `alt_key`'s day bucket —
+   the two are one question about whether a date is an emission time. The measured
+   prize is the 103 of Span A's 104 corruptions that a bare stamp drove; the
+   measured cost is that the test misfires on ~1.7% of in-window items, in the
+   safe direction. Both numbers are above; neither ships unmeasured.
+3. **If the frontier is windowed, the far edge is 6 days back, not 8.** The cliff
+   is at day 8/9, `BOUND_PADDING_MS` adds a day to whatever the planner asks, and
+   day 8 is already 3.9% degraded. 7 is the arithmetic ceiling and 6 is the number
+   with margin. Note this makes `DEEPEN_SPAN_MS` load-bearing on the fold: at 7
+   days with `to ≈ now` it puts the wire's far edge on day 8 today, by accident.
+4. **Do not pin that window to a measured constant without a monitor on it.** The
+   cliff is Google's behaviour, not a contract, and its exact location rests on
+   **24 items** — day 9 was reached by Span B alone, since Span A's window started
+   at day 12. The honest form is a metric on the share of
+   deepening sightings arriving with a bare-date stamp, alerting when it moves —
+   not a number in config that was true on 2026-08-29.
+5. **Close the group-re-parenting channel, or accept it in writing.** 259
+   pre-existing articles changed `group_id`; that is timestamp-independent,
+   untouched by any window, and it scales with call volume. Nothing above fixes
+   it and this phase does not know what should.
+
+**And re-run this instrument afterwards**, with the acceptance test being the one
+G5 stated and did not get: the cloud comes back byte-identical across a run.
+
+**If the frontier IS windowed, re-scope this section before building it.** Its own
+line above is "arcs backfilled by slicing their spans", and a six-day ceiling
+forecloses exactly that: an arc discovered late can never have its history
+fetched. What is left is the leading-edge fetch G5 already ships, on a timer
+rather than a click — still worth doing, still a genuine §9 trade, but not the
+phase written here, and it should be argued as the smaller thing it is.
 
 ## G7 — The scheduler, and the §9 trade
 
-**Depends on**: G6 saying yes. **G6 said NO — see its verdict above.** The yield
-is there; two defects it uncovered are not survivable by a scheduler, and both
-are G5 corrections rather than new phases. Do not start this until they land and
-this instrument has been re-run.
+**Depends on**: G6 saying yes. **G6 said NO — see its verdict above**, which
+carries a five-item gating list. The yield is there; two defects it uncovered are
+not survivable by a scheduler, and both are G5 corrections rather than new phases.
+**Windowing the crawl inside the eight-day `pubDate` cliff was measured and is
+half a fix** — it restores the fold and touches neither the URL handover nor
+group re-parenting, and it forecloses the backfill this section is written around.
+Do not start this until the gating list lands and G6's instrument has been re-run.
 
 Turn the cloud into a crawl frontier: storylines fetched on a schedule rather
 than on a click, arcs backfilled by slicing their spans.
