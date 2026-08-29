@@ -147,6 +147,10 @@ pnpm summaries:storylines --storyline=<uuid> --show
 Run `--dry-run` first: it names the qualifying days and an upper bound on the
 calls, which is the only way to see what a backfill costs before spending it.
 
+The CLI does **not** consult `SUMMARIES_ENABLED`. That flag exists so the nightly
+pass does not start spending unattended; typing the command is the deliberate act
+it protects.
+
 `--rate` matters more than it looks. The pacer's scope is one **process**, so a
 CLI run against a live server puts two pacers on one key and up to 2× the ceiling
 through it. What that costs is not this run — it is the server's labels falling

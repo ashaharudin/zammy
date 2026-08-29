@@ -36,6 +36,11 @@ import { createConfiguredDb, createSummarizer } from "./wiring.js";
  * `--dry-run` names the days and their counts without calling the model, which
  * is what to run FIRST: it is the only way to see what a backfill would cost
  * before spending it.
+ *
+ * **`SUMMARIES_ENABLED` is deliberately not consulted here.** The flag exists so
+ * the nightly pass does not start spending unattended; typing this command IS
+ * the deliberate act it protects, exactly as naming `late-candidates` runs that
+ * sweep regardless of its own gate.
  */
 
 const args = process.argv.slice(2);
