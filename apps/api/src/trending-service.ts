@@ -257,6 +257,14 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
       received: result.normalization.received,
       dropped: result.normalization.received - result.normalization.kept,
     });
+    // The breadth plane's contribution to the stamp-quality share (ADR-0021).
+    // Every `ingestSightings` call site owes this, because the metric is a SHARE
+    // and one missing plane makes the denominator quietly wrong — and this is
+    // the densest of the three. No `date_only` row can originate here today
+    // (`server.ts` wires the deepening provider to the deepening plane alone),
+    // which is exactly why it is worth counting: this is what a plane that
+    // times its output looks like.
+    deps.metrics?.sightingsStamped(result.sightings);
     const ingested = await ingestSightings(deps.db, {
       fingerprint,
       sightings: result.sightings,

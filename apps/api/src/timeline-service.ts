@@ -1196,6 +1196,35 @@ export async function processDeepenJob(deps: TimelineDeps, job: DeepenJob): Prom
       received: result.normalization.received,
       dropped: result.normalization.received - result.normalization.kept,
     });
+    // How much of what this provider just sent is DATED rather than timed
+    // (plan §G6, ADR-0021). Recorded here rather than inside `ingestSightings`
+    // because storage has no metrics and should not grow any, and before the
+    // ingest so a throwing fold does not lose the observation.
+    const dateOnly = result.sightings.filter((s) => s.publishedIsDateOnly === true).length;
+    deps.metrics?.sightingsStamped(result.sightings);
+    // AND as a log field, which is the half that survives the deployment we
+    // actually run. ARCHITECTURE 12 is explicit that `/metrics` is deleted under
+    // the Vercel target — per-process counters mean nothing across ephemeral
+    // instances and nothing scrapes them — and this consumer is its own
+    // function, so the counter above is a Compose-only instrument. ADR-0021
+    // names this observation as the enforcement for a flag nothing can force an
+    // adapter to set, so it has to exist somewhere production can read it.
+    //
+    // Logged on EVERY fetch rather than only when the share is high, because
+    // the alarming direction is the share going to ZERO on an old span: that
+    // means the detector stopped matching, not that the provider improved, and
+    // a line that only fires when the number is large cannot show its absence.
+    deps.log?.info?.(
+      {
+        storylineId,
+        provider: deepening.provider,
+        from: span.from,
+        to: span.to,
+        items: result.sightings.length,
+        dateOnly,
+      },
+      "deepening fetch: how many of these items the provider dated rather than timed",
+    );
 
     const ingested = await ingestSightings(deps.db, {
       // The arc's own topic, minted below rather than skipped, and this is the
@@ -1464,6 +1493,11 @@ async function fillSegment(
       received: result.normalization.received,
       dropped: result.normalization.received - result.normalization.kept,
     });
+    // The discovery plane's half of the same counter (ADR-0021). Kept even
+    // though no discovery provider dates its items today: the metric is a SHARE
+    // and a share needs its denominator, so a run with no `date_only` rows here
+    // is what "the other providers still time their output" looks like.
+    deps.metrics?.sightingsStamped(result.sightings);
 
     const ingested = await ingestSightings(deps.db, {
       fingerprint: query.fingerprint,

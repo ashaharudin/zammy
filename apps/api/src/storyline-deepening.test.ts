@@ -69,6 +69,9 @@ function sighting(input: {
   provider?: string;
   /** Google News writes the outlet's DISPLAY name into the title; Currents does not. */
   displayName?: string;
+  /** ADR-0021's two claims, which only the deepening provider ever makes. */
+  isAggregatorCopy?: boolean;
+  publishedIsDateOnly?: boolean;
 }): Sighting {
   uuid += 1;
   const url = `https://${input.domain}/${uuid}`;
@@ -88,6 +91,12 @@ function sighting(input: {
     categories: [],
     sourceCategories: [],
     sourceDomain: input.domain,
+    ...(input.isAggregatorCopy === undefined
+      ? {}
+      : { isAggregatorCopy: input.isAggregatorCopy }),
+    ...(input.publishedIsDateOnly === undefined
+      ? {}
+      : { publishedIsDateOnly: input.publishedIsDateOnly }),
     published: input.published,
     raw: {},
   };
@@ -414,6 +423,59 @@ describe("a click deepens the arc it opened", () => {
     expect(before[0]!.size).toBe(2);
     expect(after[0]!.size).toBe(8);
     expect(after[0]!.sourceCount).toBe(8);
+  });
+});
+
+describe("the stamp-quality counter, which is the only alarm on a silent detector", () => {
+  it("labels a fetch's items by whether the provider timed them", async () => {
+    // ADR-0021's enforcement story rests on this counter and on the log line
+    // beside it, because NOTHING can force an adapter to set
+    // `publishedIsDateOnly` — `finalizeSighting` takes an `unknown` — and a
+    // provider that changed its convention would simply stop matching, silently.
+    // So the mapping from the flag to the label is asserted rather than assumed.
+    const storylineId = await seedArc();
+    const outcome = await queueStorylineDeepening(harness.deps, { storylineId });
+    if (outcome.status !== "queued") throw new Error(`expected queued, got ${outcome.status}`);
+
+    stub.next = [
+      sighting({
+        domain: "d.example",
+        title: "Dated by the provider, not timed",
+        published: "2026-08-10T07:00:00.000Z",
+        provider: DEEPENING_PROVIDER,
+        isAggregatorCopy: true,
+        publishedIsDateOnly: true,
+      }),
+      sighting({
+        domain: "e.example",
+        title: "Timed properly",
+        published: "2026-08-10T11:41:03.000Z",
+        provider: DEEPENING_PROVIDER,
+        isAggregatorCopy: true,
+      }),
+    ];
+
+    // Deltas, not absolutes: the registry is per-harness but this file drives
+    // several fetches through it, so a total would encode test order.
+    const stamped = async (stamp: string): Promise<number> => {
+      const metrics = (await harness.metrics.registry.getMetricsAsJSON()) as Array<{
+        name: string;
+        values: Array<{ value: number; labels: Record<string, string> }>;
+      }>;
+      return (
+        metrics
+          .find((m) => m.name === "zammy_sightings_stamped_total")
+          ?.values.find(
+            (v) => v.labels.provider === DEEPENING_PROVIDER && v.labels.stamp === stamp,
+          )?.value ?? 0
+      );
+    };
+    const before = { dated: await stamped("date_only"), timed: await stamped("clock") };
+
+    await processDeepenJob(harness.deps, outcome.job);
+
+    expect((await stamped("date_only")) - before.dated).toBe(1);
+    expect((await stamped("clock")) - before.timed).toBe(1);
   });
 });
 

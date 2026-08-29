@@ -287,3 +287,57 @@ export function parsePublished(value: string | null | undefined): number {
   }
   return Date.parse(trimmed);
 }
+
+/**
+ * Midnight US Pacific, which is what this provider sends INSTEAD of a
+ * publication time once an item is old enough (plan §G6).
+ *
+ * Measured 2026-08-29 over 3,087 live sightings, by the item's age at fetch:
+ *
+ * ```
+ * age (days)     0    1    2    3    4    5    6    7    8 |    9   11   12   13   14   15   16   17   18   19   20
+ * % at midnight 0.0  0.0  0.0  1.4  1.5  2.7  4.0  0.0  3.9 | 70.8 92.5 77.4 83.5 83.2 85.4 95.0 93.9 89.8 88.7 97.1
+ * items          11   73   65  215  194  221  101  170  103 |   24  106  124   97  107  322  398  361  246  115   34
+ * ```
+ *
+ * 1.7% at eight days or fresher, 89.4% beyond. **The `items` row is not
+ * decoration**: the first post-cliff bucket is 24 items, so where exactly the
+ * cliff falls is the least well-evidenced part of this — the plan records it as
+ * a gating condition for anything that would depend on the boundary's precise
+ * location. The cliff is sharp and it sits
+ * where `GOOGLE_NEWS_MAX_LOOKBACK_DAYS` says nothing at all — the provider
+ * serves those older items perfectly happily, it just stops timing them.
+ *
+ * **Pacific rather than a hardcoded 07:00Z**, because the offset moves: this
+ * module's own `BOUND_PADDING_MS` note already records the two probes that
+ * establish it, `after:2026-08-20` landing on 07:00Z (PDT) and
+ * `after:2025-02-01` on 08:00Z (PST). `Intl` tracks the transition; a constant
+ * would be right for eight months of the year.
+ *
+ * **This is a heuristic and its error direction is the safe one.** A real
+ * article CAN publish at exactly midnight Pacific to the second, and 20 of the
+ * 1,153 items measured inside the eight-day window carry that stamp — whether
+ * those 20 are genuine midnight publications or early onset of the same
+ * degradation was NOT established, and the bound is quoted as the conservative
+ * one it is. A false
+ * positive costs one display-field handover, which leaves the existing
+ * article's own URL, title and timestamp in place — the outcome the archive
+ * wants anyway. A false NEGATIVE is the expensive direction and is what
+ * `zammy_sightings_stamped_total` is watched for: if the provider moves to a
+ * different convention this returns false forever and nothing else notices.
+ */
+export function isDateOnlyStamp(epochMs: number): boolean {
+  if (!Number.isFinite(epochMs) || epochMs % 1000 !== 0) return false;
+  const parts = PACIFIC_CLOCK.formatToParts(new Date(epochMs));
+  const at = (type: string): string | undefined =>
+    parts.find((part) => part.type === type)?.value;
+  return at("hour") === "00" && at("minute") === "00" && at("second") === "00";
+}
+
+const PACIFIC_CLOCK = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/Los_Angeles",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});

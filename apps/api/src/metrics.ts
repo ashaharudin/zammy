@@ -85,6 +85,44 @@ export class Metrics {
     registers: [this.registry],
   });
 
+  /**
+   * Whether a provider is still TIMING the items it sends, or only dating them
+   * (plan §G6, `Sighting.publishedIsDateOnly`).
+   *
+   * **This is a detector-health metric, and reading it as a data-quality one
+   * gets it exactly backwards.** Google News stops reporting a publication time
+   * for items past about eight days and sends midnight US Pacific instead —
+   * measured at 1.7% of items inside that window and 89.4% outside it — and
+   * `isDateOnlyStamp` recognises the convention so the storage fold can refuse
+   * to let such a stamp redefine an article the discovery plane already timed.
+   *
+   * Nothing in the type system can enforce that an adapter sets the flag, and
+   * nothing at all would notice if the provider changed its convention: the
+   * detector would simply return false forever and the fold would go back to
+   * being corrupted silently. So the thing to watch is the `date_only` share
+   * DISAPPEARING, not it being high. A high share is the provider behaving as
+   * measured; a share that falls to zero on an old span is the detector broken.
+   *
+   * **This counter is a Compose-only instrument and must not be relied on as
+   * the production alarm.** ARCHITECTURE 12: `/metrics` is deleted under the
+   * Vercel target, because per-process counters mean nothing across ephemeral
+   * instances and nothing scrapes them — and the deepening consumer is its own
+   * function besides. The observation that survives there is the structured log
+   * field `processDeepenJob` writes beside this call. Both exist deliberately;
+   * neither is redundant, because the counter is what a local run and the test
+   * suite can assert against.
+   *
+   * Labelled by provider rather than by plane: the convention belongs to
+   * whoever answered, and Google News would send the same stamps to a reader's
+   * search if it ever served one.
+   */
+  private readonly stampedSightings = new Counter({
+    name: "zammy_sightings_stamped_total",
+    help: "Sightings by whether the provider gave a real clock time or only a date (plan G6)",
+    labelNames: ["provider", "stamp"] as const,
+    registers: [this.registry],
+  });
+
   constructor(options: { quota?: () => Promise<QuotaView> } = {}) {
     const quota = options.quota;
     if (quota) {
@@ -126,6 +164,19 @@ export class Metrics {
    */
   articlesGrouped(count: number): void {
     this.groupedArticles.inc(count);
+  }
+
+  /**
+   * Count one fetch's sightings by stamp quality. A no-op for an empty batch, so
+   * a caller need not guard.
+   */
+  sightingsStamped(sightings: readonly { provider: string; publishedIsDateOnly?: boolean }[]): void {
+    for (const sighting of sightings) {
+      this.stampedSightings.inc({
+        provider: sighting.provider,
+        stamp: sighting.publishedIsDateOnly === true ? "date_only" : "clock",
+      });
+    }
   }
 
   truncatedSegment(): void {

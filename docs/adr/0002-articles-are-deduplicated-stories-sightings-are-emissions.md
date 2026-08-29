@@ -1,5 +1,5 @@
 ---
-status: accepted (amended by ADR-0018: the URL is still the primary identity and still what the fold resolves on first, but it is no longer the ONLY one — `alt_key` is consulted when a URL matches nothing, and the "`(title, source)` stays disabled" consequence below no longer holds)
+status: accepted (amended by ADR-0021: an article is positioned by its earliest sighting THAT CARRIES A PUBLICATION TIME, and the "updated" badge likewise ignores one that does not — a provider that sends a bare date gets no say in either. ARCHITECTURE 7.4's generalisation — the earliest emission wins every display field — gains a second exemption too: a sighting that is an aggregator's copy hands over no display field, though it still folds its timestamp; amended by ADR-0018: the URL is still the primary identity and still what the fold resolves on first, but it is no longer the ONLY one — `alt_key` is consulted when a URL matches nothing, and the "`(title, source)` stays disabled" consequence below no longer holds)
 ---
 
 # Articles are deduplicated stories; sightings are upstream emissions

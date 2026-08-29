@@ -335,6 +335,51 @@ describe("pubDate is a real publication time, and is validated", () => {
   });
 });
 
+/**
+ * The two warnings this adapter attaches to its own output (plan §G6).
+ *
+ * Neither changes a stored field here — they change what the STORAGE fold is
+ * allowed to do with one, so the tests that matter most are next door in
+ * `ingest.test.ts`. What is asserted here is that the claims are made at all,
+ * and that the per-item one is made about the right items.
+ */
+describe("the warnings this adapter attaches to its own fields", () => {
+  it("always says it is an aggregator copy: the <link> is never the article, and neither is the rest", () => {
+    const sighting = one();
+    expect(sighting.isAggregatorCopy).toBe(true);
+    // And the reason the flag gates the WHOLE display handover rather than just
+    // `url` (ADR-0021): every other display field this adapter can offer is
+    // empty by construction, so handing them to a row a newsroom's own provider
+    // minted can only ever subtract.
+    expect(sighting.description).toBeNull();
+    expect(sighting.author).toBeNull();
+    expect(sighting.imageUrl).toBeNull();
+    expect(sighting.categories).toEqual([]);
+    expect(sighting.sourceCategories).toEqual([]);
+  });
+
+  it("flags midnight US Pacific, which is what this feed sends instead of a time", () => {
+    // 07:00Z is midnight PDT. Measured live: 89.4% of items past about eight
+    // days carry exactly this, and 1.7% inside that window do.
+    expect(one({ pubDate: "Thu, 13 Aug 2026 07:00:00 GMT" }).publishedIsDateOnly).toBe(true);
+  });
+
+  it("tracks daylight saving rather than hardcoding an offset", () => {
+    // 08:00Z is midnight PST. A constant 07:00Z would be wrong for four months
+    // of the year, and G7's backfill is the thing that would walk into them.
+    expect(one({ pubDate: "Sun, 2 Feb 2025 08:00:00 GMT" }).publishedIsDateOnly).toBe(true);
+    // And the same wall-clock hour in the OTHER half of the year is a real time.
+    expect(one({ pubDate: "Sun, 2 Feb 2025 07:00:00 GMT" }).publishedIsDateOnly).toBe(false);
+  });
+
+  it("leaves a real publication time alone", () => {
+    expect(one({ pubDate: "Thu, 20 Aug 2026 17:09:53 GMT" }).publishedIsDateOnly).toBe(false);
+    // One second either side of the boundary is a time somebody chose.
+    expect(one({ pubDate: "Thu, 13 Aug 2026 07:00:01 GMT" }).publishedIsDateOnly).toBe(false);
+    expect(one({ pubDate: "Thu, 13 Aug 2026 06:59:59 GMT" }).publishedIsDateOnly).toBe(false);
+  });
+});
+
 describe("a malformed item is dropped and counted, never repaired", () => {
   it("counts each reason separately, keeping the rest of the batch", () => {
     const parsed = parseFeed(

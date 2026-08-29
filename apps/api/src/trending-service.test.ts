@@ -339,6 +339,37 @@ describe("the sample is a write path, so it groups what it creates (§14.3)", ()
   }, 30_000);
 });
 
+describe("the sample counts toward the stamp-quality share (ADR-0021)", () => {
+  it("labels what the breadth sample ingests, so the share has its denominator", async () => {
+    // This branch shipped without this call once, and the miss was invisible:
+    // `zammy_sightings_stamped_total` is a SHARE, and a whole plane missing from
+    // the denominator makes every computed ratio wrong by an unknown factor
+    // without any row looking wrong. The breadth sample is the densest of the
+    // three ingest paths (§10.1), so it is the worst one to omit.
+    //
+    // Asserted as "every sighting landed under `clock`" rather than as a total,
+    // because that is the claim: no discovery provider dates its output, so this
+    // plane is what a provider that TIMES its items looks like — and the guard
+    // ADR-0021 adds is only readable against that baseline.
+    harness = await createTestHarness({}, NOW);
+    const deps = trendingDeps(harness);
+
+    await processSampleJob(deps, { kind: "sample", language: "en" });
+
+    const metrics = (await harness.metrics.registry.getMetricsAsJSON()) as Array<{
+      name: string;
+      values: Array<{ value: number; labels: Record<string, string> }>;
+    }>;
+    const stamped = metrics.find((m) => m.name === "zammy_sightings_stamped_total");
+    const at = (stamp: string): number =>
+      stamped?.values.find((v) => v.labels.provider === "currents" && v.labels.stamp === stamp)
+        ?.value ?? 0;
+
+    expect(at("clock")).toBeGreaterThan(0);
+    expect(at("date_only")).toBe(0);
+  });
+});
+
 describe("the window rolls (§10.1, ADR-0008)", () => {
   it("covers the last TREND_WINDOW_HOURS from now, and drops what has aged out", async () => {
     harness = await createTestHarness({}, NOW);

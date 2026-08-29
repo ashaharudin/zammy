@@ -690,7 +690,9 @@ CREATE INDEX sightings_dedup_idx   ON sightings (dedup_key);
 
 -- One row per real-world story. This is what the timeline pages over and what
 -- anything countable counts. Display fields are denormalized from the earliest
--- sighting so a timeline read needs no join back to sightings.
+-- sighting so a timeline read needs no join back to sightings — with the two
+-- exceptions ADR-0021 adds, which a repair recomputing these columns from
+-- sightings.raw must honour or it re-inflicts what that ADR measured. See 7.4.
 CREATE TABLE articles (
   id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   dedup_key       bytea NOT NULL,              -- sha256(canonical url); the PRIMARY identity
@@ -866,6 +868,13 @@ Per fetched sighting, in one transaction:
    Display fields come from the earliest sighting, so a later re-emission does not rewrite the
    headline. Both KEYS are exempt from that handover: they are minted once, by the sighting that
    created the row, so `dedup_key` may stop hashing `url` and that is intended.
+   **Two further exemptions, and unlike the keys they are claims the ADAPTER makes
+   ([ADR-0021](adr/0021-the-earliest-emission-is-not-authoritative-for-every-field.md))**: a
+   sighting that says its timestamp is a bare date rather than a publication time folds neither
+   timestamp and hands over nothing, and one that says it is an aggregator's copy hands over no
+   display field — keeping only the timestamp fold and `provider`, which is a fact about the
+   emission rather than a rendering of the article. Both are absent on every adapter but Google
+   News, so every other path is exactly as described above.
 2. `INSERT INTO sightings … ON CONFLICT (id) DO NOTHING`, linked to that `article_id`. The conflict
    clause makes a re-fetch idempotent: the same upstream UUID twice must not inflate
    `sighting_count`.

@@ -274,6 +274,18 @@ async function refreshGroupPosition(
  * moved article once per batch, in the same transaction. Keeping the two apart
  * is what makes the storyline half affordable — this runs on every new
  * sighting, that one only when a fold actually moved something.
+ *
+ * **Two sentences above are now conditional (ADR-0021).** This no longer runs on
+ * every new sighting, and `LEAST` is no longer applied on every one:
+ * `ingestSightings` refuses the fold to a sighting whose timestamp is a bare
+ * date rather than a publication time, and skips this call with it. **The
+ * invariant this docstring rests on is intact** — `published` still only ever
+ * moves earlier, so a group's position still only ever lowers, and a `least`
+ * against one timestamp is still enough. Fewer sightings move it, not more. That
+ * is required rather than an optimisation — this sets `group_published` for the
+ * whole group from the sighting's own stamp, so calling it with a day-boundary
+ * date would push the group below every member's `articles.published` and break
+ * the invariant `refreshGroupPosition` maintains.
  */
 export async function lowerGroupPosition(
   db: Kysely<Database>,
