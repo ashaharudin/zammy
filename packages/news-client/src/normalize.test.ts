@@ -357,6 +357,85 @@ describe("deriveAltKey", () => {
     expect(deriveAltKey("bbc.co.uk", "Ferry service suspended", "not a date")).toBeNull();
   });
 
+  it("folds a display name that NAMES the domain without spelling it", () => {
+    // The G5 widening, one case per rule, and every string below is a real
+    // (domain, display name) pair from `fixtures/google-news-source-names.tsv`.
+    // That property is the whole point: the table this replaced was reasoned
+    // from mastheads rather than read off the wire, and four of its entries were
+    // wrong in the same direction (PR #174).
+    const folds = (domain: string, name: string): boolean =>
+      deriveAltKey(domain, `Ferry service suspended - ${name}`, DAY) ===
+      deriveAltKey(domain, "Ferry service suspended", DAY);
+
+    // 1. EXACT — the rule that already shipped.
+    expect(folds("theguardian.com", "The Guardian")).toBe(true);
+    // 2. AFFIX — the domain stem is one end of the name. 317 of 756 held-out
+    //    failures, more than the other three rules together.
+    expect(folds("thestar.com", "Toronto Star")).toBe(true);
+    expect(folds("yahoo.com", "Yahoo Sports")).toBe(true);
+    expect(folds("time.com", "Time Magazine")).toBe(true);
+    // 3. INITIALISM — content words only, because a domain does not spell "on".
+    expect(folds("scmp.com", "South China Morning Post")).toBe(true);
+    expect(folds("cfr.org", "Council on Foreign Relations")).toBe(true);
+    // 4. INITIALS PLUS TAIL — a place name abbreviates, a common noun does not.
+    expect(folds("latimes.com", "Los Angeles Times")).toBe(true);
+    expect(folds("nypost.com", "New York Post")).toBe(true);
+    expect(folds("sfchronicle.com", "San Francisco Chronicle")).toBe(true);
+    // 5. AFFIX REVERSED — the name is one end of the domain stem.
+    expect(folds("wionews.com", "WION")).toBe(true);
+    // A domain cannot carry "&" and a display name can.
+    expect(folds("skyandtelescope.org", "Sky & Telescope")).toBe(true);
+  });
+
+  it("still refuses a display name with no lexical claim on the domain", () => {
+    // The 6.9% these rules do not reach, and they are refusals rather than
+    // misses: nothing here NAMES the domain, so stripping would be a guess.
+    // Two populations, both from the harvested corpus — a masthead in another
+    // script, and a name with no relation at all.
+    const folds = (domain: string, name: string): boolean =>
+      deriveAltKey(domain, `Ferry service suspended - ${name}`, DAY) ===
+      deriveAltKey(domain, "Ferry service suspended", DAY);
+
+    expect(folds("chosun.com", "조선일보")).toBe(false);
+    expect(folds("umn.edu", "CIDRAP")).toBe(false);
+    expect(folds("channelnewsasia.com", "CNA")).toBe(false);
+  });
+
+  it("does not let the widened rules eat a headline's own tail", () => {
+    // The cost side, and the one that decides whether the widening was worth
+    // taking. Measured by replaying the whole fold over the dev archive (32,279
+    // articles): the four rules cost exactly ONE additional merge — `cbc.ca`
+    // filed "How will the new tariffs hit Canada's economy? | CBC Radio" and the
+    // same headline without it, which is a real duplicate — against a positional
+    // strip's 347.
+    //
+    // No real over-strip could be found on 32,279 articles to pin here, so the
+    // three cases below are the shapes that would have to break first rather
+    // than regressions caught in the wild — said plainly, because a test whose
+    // provenance is "invented" should not be read as one whose provenance is
+    // "measured".
+    //
+    // The third is the reverse-affix rule's length floor, and it is the one to
+    // watch: "Sun" on `thesun.co.uk` folds and always did — `sun` IS that
+    // domain's stem — so the floor has to be demonstrated on a domain the tail
+    // merely PREFIXES. Below four characters the rule declines, which is what
+    // keeps a common short word out of it.
+    expect(deriveAltKey("bbc.co.uk", "Manitoba floods - live updates", DAY)).not.toBe(
+      deriveAltKey("bbc.co.uk", "Manitoba floods - what we know", DAY),
+    );
+    expect(
+      deriveAltKey("frontiersin.org", "Frontiers | Glucosamine for knee osteoarthritis", DAY),
+    ).not.toBe(deriveAltKey("frontiersin.org", "Frontiers | Benthic life stages", DAY));
+    expect(deriveAltKey("sunlife.com", "Blackout hits the coast - Sun", DAY)).not.toBe(
+      deriveAltKey("sunlife.com", "Blackout hits the coast", DAY),
+    );
+    // And the same tail one character longer DOES fold, so the assertion above
+    // is the floor doing the work rather than the rule failing to fire at all.
+    expect(deriveAltKey("sunlife.com", "Blackout hits the coast - Sunl", DAY)).toBe(
+      deriveAltKey("sunlife.com", "Blackout hits the coast", DAY),
+    );
+  });
+
   it("is 64 lowercase hex characters, the shape the Sighting contract demands", () => {
     expect(deriveAltKey("bbc.co.uk", "Ferry service suspended", DAY)).toMatch(
       /^[0-9a-f]{64}$/,

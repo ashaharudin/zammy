@@ -13,6 +13,7 @@ import * as rowLevelSecurity from "./migrations/0019-enable-row-level-security.j
 import * as articleAltKey from "./migrations/0020-article-alt-key.js";
 import * as providerCoverage from "./migrations/0021-provider-and-storyline-coverage.js";
 import * as sightingPlane from "./migrations/0022-sighting-plane.js";
+import * as rekeyAltKey from "./migrations/0023-rekey-alt-key.js";
 import { createTestDatabase, type TestDatabase } from "./test-support.js";
 
 /**
@@ -535,6 +536,87 @@ describe("migrateToLatest", () => {
       await expect(seedSighting("deepning")).rejects.toThrow(/sightings_plane_check/);
       await expect(seedSighting("DEEPENING")).rejects.toThrow(/sightings_plane_check/);
       await expect(seedSighting("")).rejects.toThrow(/sightings_plane_check/);
+    });
+  });
+
+  describe("the alt-key re-key", () => {
+    // Migration 0023, and the block that cannot be written the way every other
+    // migration's is. There is no "reverts and re-applies cleanly" here: `down`
+    // is a deliberate no-op, because the inverse of "re-key under the new fold"
+    // needs the OLD fold, and the old fold is gone from the code this migration
+    // ships with. So this asserts the properties the migration actually has
+    // rather than the one the convention names.
+    const DAY = "2026-08-27T09:00:00.000Z";
+    const insert = (url: string, title: string, domain: string) => sql`
+      insert into articles (dedup_key, url, title, source_domain, published, latest_seen)
+      values (digest(${url}, 'sha256'), ${url}, ${title}, ${domain},
+              ${DAY}::timestamptz, ${DAY}::timestamptz)
+    `.execute(harness.db);
+
+    const keyOf = async (url: string): Promise<string | null> => {
+      const { rows } = await sql<{ hex: string | null }>`
+        select encode(alt_key, 'hex') as hex from articles where url = ${url}
+      `.execute(harness.db);
+      return rows[0]?.hex ?? null;
+    };
+
+    beforeAll(async () => {
+      await sql`delete from articles`.execute(harness.db);
+      // A row the WIDENED fold keys differently from the exact-match one:
+      // "Toronto Star" does not spell `thestar.com`, but it ends with its stem,
+      // which is rule 2. 268 of the archive's 525 re-keyed rows are this shape.
+      await insert("https://thestar.com/a", "Ferry service suspended - Toronto Star", "thestar.com");
+      // A colliding pair — one story, two URLs — which the re-key must leave
+      // BOTH of unkeyed, for 0020's reason: merging them means deleting an
+      // article row, and `group_id` carries no foreign key.
+      await insert("https://ansa.it/sport/z", "Zelensky visits Serbia", "ansa.it");
+      await insert("https://ansa.it/mondo/z", "Zelensky visits Serbia", "ansa.it");
+    });
+
+    afterAll(async () => {
+      await sql`delete from articles`.execute(harness.db);
+    });
+
+    it("keys a row under the WIDENED fold, not the one it was minted with", async () => {
+      await rekeyAltKey.up(migrationDb());
+
+      // What the ingest path would compute for the same row — the property that
+      // makes re-keyed history foldable at all, and the whole point of the
+      // migration calling `deriveAltKey` rather than an SQL twin of it.
+      expect(await keyOf("https://thestar.com/a")).toBe(
+        deriveAltKey("thestar.com", "Ferry service suspended - Toronto Star", DAY),
+      );
+      // And that key is the SUFFIX-STRIPPED one, which is what moved: under the
+      // exact-match rule "Toronto Star" stayed in the fold.
+      expect(await keyOf("https://thestar.com/a")).toBe(
+        deriveAltKey("thestar.com", "Ferry service suspended", DAY),
+      );
+    });
+
+    it("leaves a colliding pair unkeyed, both halves of it", async () => {
+      expect(await keyOf("https://ansa.it/sport/z")).toBeNull();
+      expect(await keyOf("https://ansa.it/mondo/z")).toBeNull();
+    });
+
+    it("is idempotent, which is what the missing `down` rests on", async () => {
+      // The rollback story is "revert the rules and re-run", so re-running has
+      // to be safe on a database this has already touched. Measured the same way
+      // on the dev archive: 31,539 keyed on every pass.
+      const before = await keyOf("https://thestar.com/a");
+      await rekeyAltKey.up(migrationDb());
+      await rekeyAltKey.up(migrationDb());
+
+      expect(await keyOf("https://thestar.com/a")).toBe(before);
+      expect(await keyOf("https://ansa.it/sport/z")).toBeNull();
+      expect(await keyOf("https://ansa.it/mondo/z")).toBeNull();
+    });
+
+    it("has a `down` that does nothing, and does it without throwing", async () => {
+      // Pinned rather than assumed. The migrator calls `down` on a revert
+      // whatever it contains, so a no-op that threw would turn "this rollback
+      // does nothing" into "this rollback fails".
+      await expect(rekeyAltKey.down()).resolves.toBeUndefined();
+      expect(await keyOf("https://thestar.com/a")).not.toBeNull();
     });
   });
 

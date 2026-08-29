@@ -254,12 +254,15 @@ the 20-point link-mass floor**. At 100% of items it would make link mass
 meaningless — and here it would also corrupt `alt_key`, which is derived from
 the folded title.
 
-**The tokenizer half was already handled and this paragraph did not know it.**
-The strip has been in `headlineTokens` since v6 as `stripSourceAttribution`; G0
-widened it to mastheads with an interior function word. So the 100% never
-arrived. The `alt_key` half is separate and is the larger problem — its own strip
-requires the display name to BE the domain stem — and it is fixed in its own
-change, with the measurements, beside ADR-0018.
+**Both halves are handled, and the 100% never arrived.** The tokenizer has peeled
+that suffix since v6 (`stripSourceAttribution`), which this paragraph did not
+know; G0 widened it to mastheads with an interior function word. Measured over
+the corpus G5 harvested — 1,838 display names, 6,008 items — v9 peels the chrome
+off **96.1% of items**, against v8's 93.1%, and the **3.9% residual** is
+overwhelmingly a name longer than the four-word attribution cap. The `alt_key`
+half is separate and was the larger problem: its own strip required the display
+name to BE the domain stem, which failed on 26.2% of items until G5 replaced it
+(ADR-0018, `stripOutletSuffix`).
 
 ---
 

@@ -462,55 +462,115 @@ export function foldTitleForIdentity(title: string): string {
  * The comparison is loose on both sides — case, spaces and punctuation dropped,
  * a leading "the" ignored — so "The Guardian" matches `theguardian.com` and
  * "Globalnews.ca" matches `globalnews.ca`, while the domain's public suffix is
- * optional because outlets name themselves both ways. It is deliberately NOT
- * fuzzy beyond that: a segment that merely resembles the domain is left alone,
- * because a suffix left on costs one uncollapsed duplicate and a suffix wrongly
- * taken off costs a merge.
+ * optional because outlets name themselves both ways. Every widening below is
+ * still a claim that the segment NAMES THE DOMAIN: none of them is a similarity
+ * score and none of them looks at the segment alone, because a suffix left on
+ * costs one uncollapsed duplicate and a suffix wrongly taken off costs a merge.
  *
- * ## What that refuses to strip, and when it will start to matter
+ * ## The display name does not have to SPELL the domain — four ways it can
+ * ## name it instead
  *
- * The display name has to BE the domain stem.
+ * The original rule was exact: `compareForm(segment)` had to be one of
+ * `domainSpellings(domain)`. That is right for an outlet whose masthead IS its
+ * domain stem, and it is why "The Guardian" comes off `theguardian.com`. It is
+ * also why a quarter of Google News' items would not fold.
  *
- * **Every name below was observed in a real `<source>` element.** That property
- * is what makes the table mean anything, and an earlier version of it did not
- * have it: names were reasoned from the outlet rather than read off the wire, and
- * four of them were wrong in the same direction. Google *abbreviates* mastheads —
- * it sends "BBC", not "BBC News"; "WSJ", not "The Wall Street Journal" — so those
- * outlets fold, where the invented names said they could not. A table of names no
- * provider emits tests nothing.
+ * **Measured on a corpus harvested for this** (`fixtures/google-news-source-names.tsv`,
+ * 2026-08-28): 70 real storyline labels off the dev archive — the deepening
+ * plane's actual work list, not invented queries — run against Google News RSS,
+ * 6,008 items over 1,837 outlets. Every single one of those items ends with the
+ * outlet Google named, so the whole population is attribution and there is no
+ * "is this tail a headline?" question to get wrong on this provider's side.
+ * 5,885 of them carry a trailing ` - Outlet` segment the delimiter split
+ * reaches, and under the exact rule **26.2% of items fail to fold** (756 of
+ * 2,889 on the held-out half below).
  *
- * Measured on names actually observed, at two independent scales:
+ * The four rules below were chosen by splitting those 70 queries in half,
+ * building against one half and measuring on the other, so nothing here is
+ * fitted to the corpus it is scored on:
  *
- *     34.6% of outlets fail to fold   (194 / 561, and 56 / 162 in a second sample)
- *     30.7% of items fail to fold     (62 / 202, general-news queries)
+ *     rule set                     residual   fixes
+ *     exact only (the old rule)      26.2%       —
+ *     + affix                        14.6%    44.2% of failures
+ *     + initialism                   10.8%    58.9%
+ *     + initialsPlusTail              8.0%    69.3%
+ *     + affixReverse                  6.9%    73.7%
  *
- * Item-weighted sits below outlet-weighted because high-volume outlets
- * disproportionately self-name. Which number matters depends on whether the
- * caller is counting articles or newsrooms. **The failure population is the long
- * tail, not the mastheads** — `apa.org` "American Psychological Association
- * (APA)", `biv.com` "Business in Vancouver", `asia.nikkei.com` "Nikkei Asia" —
- * which is the reverse of what the invented table implied. 13 observed outlets,
- * 9 strip and 4 do not:
+ * Two further rules were built and REJECTED on the same held-out set, which is
+ * the half of the experiment worth keeping: a word-permutation match (the
+ * domain spelling the name's words in another order, `indiatimes.com` for "The
+ * Times of India") earned **6 items**, and a hostname match (a display name that
+ * is literally a host under the domain, "news.cgtn.com") earned **0** — `affix`
+ * already catches every one of them. A factorial permutation search for six
+ * items is not a trade.
  *
- *     stripped       theguardian.com  " - The Guardian"
- *     stripped       reuters.com      " - Reuters"
- *     stripped       bbc.co.uk        " - BBC"          Google abbreviates it
- *     stripped       cbc.ca           " - CBC"                  ''
- *     stripped       wsj.com          " - WSJ"                  ''
- *     NOT stripped   nytimes.com      " - The New York Times"   expands the stem
- *     NOT stripped   ft.com           " - Financial Times"      initialism domain
- *     NOT stripped   ecfr.eu          " - European Council on Foreign Relations"
+ * ## Why rules rather than the map the plan asked for
  *
- * Inert while one provider supplies every title: an outlet that always appends
- * " - BBC News" folds to a stable key whether or not the tail comes off, and the
- * production measurement `deriveAltKey` cites already reflects exactly this
- * behaviour. It stops being inert as soon as TWO providers describe one article
- * and spell the outlet differently — a provider that writes the outlet's DISPLAY
- * name, where Currents ships the outlet's own `<title>` tag, would fold to a
- * different key and mint a second row, which is the failure this whole key
- * exists to prevent. The fix is a display-name-to-domain map, which needs a
- * corpus of such titles to be built against and measured on; ADR-0018 records it
- * as an accepted cost, and the plan puts it in the phase that first has one.
+ * The plan and ADR-0018 both name the fix as "a display-name-to-domain map".
+ * One was built — harvested from the same build half, 301 domains and 319 names
+ * — and it LOSES on held-out data: 12.1% residual against the rules' 6.9%,
+ * because the failure population is a long tail. Ranked by item volume, the top
+ * 100 failing outlets account for only 61% of failing items and there are 529
+ * distinct failing (domain, name) pairs in 70 queries.
+ *
+ * The decisive argument is not the 5 points, though. **A map is a fold that
+ * changes every time an outlet is added**, and this comment's last section says
+ * what changing the fold costs: every stored key minted under the old map stops
+ * matching, so a map is a standing commitment to re-key the archive on a
+ * schedule set by whoever edits a data file. A rule that generalises is a fold
+ * that can stay fixed. The map is therefore declined rather than deferred; the
+ * corpus is committed so the next person can re-run the comparison rather than
+ * take this paragraph's word for it.
+ *
+ * ## What it costs — the over-collapse side, which is the one that matters
+ *
+ * `canonicalizeUrl` above establishes over-collapsing as the worse error, and
+ * every rule here widens what counts as an outlet name, so the cost was
+ * measured the way ADR-0018 measured the positional strip: replay the whole fold
+ * over the dev archive (32,279 real articles, 2026-08-28) and count how many
+ * MORE rows collapse.
+ *
+ *     fold                       collision groups   rows absorbed
+ *     exact only                        291              311
+ *     all four rules                    292              312
+ *     a positional strip                362              658
+ *
+ * **One additional merge in 32,279 articles**, and it is a real duplicate:
+ * `cbc.ca` filed "How will the new tariffs hit Canada's economy? | CBC Radio"
+ * and the same headline without the suffix. Against the positional strip's 347
+ * extra merges — the rule ADR-0018 rejected, re-measured here at the same order
+ * as the 348 it recorded.
+ *
+ * The Google side contributes no risk at all on the harvested corpus: 6,008 of
+ * 6,008 items end with the outlet Google named, so there is no non-attribution
+ * tail for a widened rule to eat.
+ *
+ * ## What is left, and why no rule reaches it
+ *
+ * 6.9% of items, 130 outlets on the held-out half. Two populations, and neither
+ * is a rule's job:
+ *
+ *  - **Transliteration.** `chosun.com` "조선일보", `asahi.com` "朝日新聞",
+ *    `sana.sy` "سانا", `mezha.net` "Межа. Новини України." — the display name
+ *    and the domain are the same masthead in two scripts, and nothing short of a
+ *    romanisation table connects them. A map COULD hold these, which is the one
+ *    thing it does better; it holds them only for outlets already seen.
+ *  - **Names with no lexical relation at all**: `wave3.com` "WAVE News",
+ *    `umn.edu` "CIDRAP", `channelnewsasia.com` "CNA".
+ *
+ * A third population is not a fold problem and is recorded here because it looks
+ * like one: 39 of 6,008 items resolve to a PUBLIC SUFFIX rather than a
+ * newsroom — `org.in`, `net.ph`, `gov.ph` — because `SECOND_LEVEL_SUFFIXES`
+ * below lists `co.in` and not its siblings. Those items are mis-attributed at
+ * the `sourceDomain` level, before this function sees them, and fixing it moves
+ * `source_domain` on existing rows. Left alone deliberately.
+ *
+ * ## Changing this is still a migration
+ *
+ * Re-measured for this change: 524 of the dev archive's 32,279 articles (1.62%)
+ * compute a different key under the four rules, 1 stops being keyable, and 0
+ * become keyable that were not. Those rows keep the key they were minted with
+ * unless a migration re-keys them — see migration 0023, which does.
  */
 function stripOutletSuffix(title: string, domain: string): string {
   const outletSpellings = domainSpellings(domain);
@@ -523,13 +583,110 @@ function stripOutletSuffix(title: string, domain: string): string {
     // from the right, one segment at a time.
     const split = /^(.*\S)\s+[|\-\u2013\u2014]\s+(\S.*)$/u.exec(headline);
     if (split === null) break;
-    if (!outletSpellings.has(compareForm(split[2]!))) break;
+    if (!namesTheOutlet(split[2]!, outletSpellings)) break;
     headline = split[1]!.trim();
   }
   return headline;
 }
 
 const MAX_OUTLET_SEGMENTS = 2;
+
+/**
+ * Does this trailing segment NAME the outlet whose domain these spellings are?
+ *
+ * Five ways, in the order they were measured (see `stripOutletSuffix`'s header
+ * for the corpus and the held-out numbers). Each is a separate claim about how
+ * an outlet may write itself, and each is refusable on its own if a later
+ * measurement turns against it.
+ */
+function namesTheOutlet(segment: string, spellings: ReadonlySet<string>): boolean {
+  const forms = compareForms(segment);
+
+  // 1. EXACT — the display name IS the domain stem. "The Guardian" for
+  //    `theguardian.com`, "CBC" for `cbc.ca`. The original rule, and still the
+  //    one that fires most often: 73.8% of the corpus's items fold on it alone.
+  for (const form of forms) if (spellings.has(form)) return true;
+
+  const segmentWords = outletWords(segment);
+  const named = segmentWords.filter((word) => !NAME_FUNCTION_WORDS.has(word));
+
+  // 2. AFFIX — the domain stem is one END of the display name. "Toronto Star"
+  //    for `thestar.com`, "Yahoo Sports" for `yahoo.com`, "Time Magazine" for
+  //    `time.com`. Anchored at a boundary rather than a substring search, which
+  //    is what keeps it from matching a domain stem buried mid-phrase.
+  //
+  //    The workhorse: 317 of the 756 held-out failures, more than the other
+  //    three rules combined.
+  for (const form of forms) {
+    for (const spelling of spellings) {
+      if (spelling.length < MIN_AFFIX) continue;
+      if (form !== spelling && (form.startsWith(spelling) || form.endsWith(spelling))) return true;
+    }
+  }
+
+  // 3. INITIALISM — the name's content words spell the domain. "South China
+  //    Morning Post" for `scmp.com`, "Council on Foreign Relations" for
+  //    `cfr.org`, "World Socialist Web Site" for `wsws.org`. Function words are
+  //    dropped because a domain does not spell them: `cfr.org` is C-F-R, not
+  //    C-O-F-R.
+  if (named.length >= 2 && spellings.has(named.map((word) => word[0]!).join(""))) return true;
+
+  // 4. INITIALS PLUS TAIL — the leading words abbreviate and the rest do not.
+  //    "Los Angeles Times" for `latimes.com`, "New York Post" for `nypost.com`,
+  //    "San Francisco Chronicle" for `sfchronicle.com`. A place name in front of
+  //    a common noun, which is most of the North American local press.
+  for (let cut = 1; cut < named.length; cut += 1) {
+    const abbreviated =
+      named.slice(0, cut).map((word) => word[0]!).join("") + named.slice(cut).join("");
+    if (spellings.has(abbreviated)) return true;
+  }
+
+  // 5. AFFIX, REVERSED — the display name is one END of the domain stem, rather
+  //    than the other way round. "WION" for `wionews.com`, "Globe" for
+  //    `theglobeandmail.com`. Held to `MIN_REVERSE_AFFIX` characters, which is
+  //    the whole of its safety: a two- or three-letter segment is a word as
+  //    often as it is a masthead, and a domain stem beginning with "sun" or
+  //    "post" would then eat a headline's last word. Worth 27 of 756 held-out
+  //    failures — the smallest rule kept, and the first one to drop if its
+  //    over-collapse cost ever stops being zero.
+  for (const form of forms) {
+    if (form.length < MIN_REVERSE_AFFIX) continue;
+    for (const spelling of spellings) {
+      if (spelling !== form && (spelling.startsWith(form) || spelling.endsWith(form))) return true;
+    }
+  }
+
+  return false;
+}
+
+/** A domain stem shorter than this is a word before it is a masthead. */
+const MIN_AFFIX = 3;
+const MIN_REVERSE_AFFIX = 4;
+
+/**
+ * Words a domain would not spell out. Not a stopword list — it is specifically
+ * the words an INITIALISM drops, and it is short on purpose: every entry is a
+ * word observed inside a display name in the corpus.
+ */
+const NAME_FUNCTION_WORDS = new Set([
+  "of", "on", "the", "and", "for", "in", "a", "an", "at", "to",
+  "de", "du", "la", "le", "el",
+]);
+
+/**
+ * The two spellings a segment can have, because a domain cannot carry "&" and
+ * an outlet's display name can. "Sky & Telescope" is `skyandtelescope.org`, so
+ * the ampersand has to be tried both as nothing and as the word.
+ *
+ * Two forms rather than one because the other direction exists too: an outlet
+ * writing "AT&T" against `att.com` needs the ampersand DROPPED. Measured cost of
+ * carrying both: zero additional merges on the dev archive.
+ */
+function compareForms(value: string): string[] {
+  const dropped = compareForm(value);
+  const spelled = compareForm(value.replaceAll("&", " and "));
+  return dropped === spelled ? [dropped] : [dropped, spelled];
+}
 
 /** Lowercase letters and digits only, with a leading "the" dropped. */
 function compareForm(value: string): string {
@@ -539,6 +696,17 @@ function compareForm(value: string): string {
     .replaceAll(/(\p{Script=Latin})\p{Mn}+/gu, "$1")
     .replaceAll(/[^\p{L}\p{N}]+/gu, "")
     .replace(/^the/, "");
+}
+
+/** A display name as words, ampersand spelled, diacritics folded. */
+function outletWords(value: string): string[] {
+  return value
+    .replaceAll("&", " and ")
+    .toLowerCase()
+    .normalize("NFD")
+    .replaceAll(/(\p{Script=Latin})\p{Mn}+/gu, "$1")
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
 }
 
 /**

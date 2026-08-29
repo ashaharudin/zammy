@@ -1,0 +1,1857 @@
+# Google News <source url="…">Display Name</source> pairs, harvested 2026-08-28.
+#
+# WHAT: every distinct (source url, display name) pair Google News RSS emitted
+# across 70 queries, each query one REAL storyline label taken off the dev
+# archive — the deepening plane's actual work list, not invented searches. The
+# third column is how many of the 6,008 items carried that pair.
+#
+# WHY IT IS HERE: `stripOutletSuffix` in @zammy/news-client decides whether a
+# trailing " - Outlet" segment names the outlet, and until G5 it required the
+# display name to BE the domain stem. 26.2% of these items failed that test.
+# The four rules that replaced it were chosen on a held-out half of these
+# queries and are scored against this file, so anyone can re-run the comparison
+# instead of taking the comment's word for it — including the display-name MAP
+# the plan proposed, which this corpus is what rejected.
+#
+# NOT A TEST FIXTURE FOR PARSING: `fixtures/google-news-search-*.xml` are the
+# wire-shape fixtures. This is a measurement corpus.
+#
+# source_url<TAB>display_name<TAB>items
+https://www.theguardian.com	The Guardian	161
+https://www.aljazeera.com	Al Jazeera	135
+https://www.cbc.ca	CBC	105
+https://www.marketbeat.com	MarketBeat	99
+https://www.nytimes.com	The New York Times	96
+https://www.reuters.com	Reuters	92
+https://www.bbc.com	BBC	64
+https://globalnews.ca	Global News	61
+https://sports.yahoo.com	Yahoo Sports	47
+https://www.ctvnews.ca	CTV News	47
+https://www.cbsnews.com	CBS News	45
+https://www.independent.co.uk	The Independent	45
+https://www.cnn.com	CNN	44
+https://apnews.com	AP News	43
+https://www.bloomberg.com	Bloomberg.com	42
+https://www.usatoday.com	USA Today	42
+https://www.cnbc.com	CNBC	39
+https://www.france24.com	France 24	38
+https://www.washingtonpost.com	The Washington Post	38
+https://www.scmp.com	South China Morning Post	37
+https://thehill.com	The Hill	34
+https://www.pbs.org	PBS	34
+https://www.yahoo.com	yahoo.com	34
+https://www.theglobeandmail.com	The Globe and Mail	33
+https://www.bbc.co.uk	BBC	32
+https://www.forbes.com	Forbes	31
+https://www.npr.org	NPR	31
+https://www.olympics.com	olympics.com	31
+https://timesofindia.indiatimes.com	The Times of India	30
+https://abcnews.com	ABC News - Breaking News, Latest News and Videos	29
+https://www.newsweek.com	Newsweek	29
+https://finance.yahoo.com	Yahoo Finance	28
+https://www.euronews.com	Euronews.com	28
+https://www.facebook.com	facebook.com	28
+https://www.foxnews.com	Fox News	28
+https://www.politico.com	Politico	28
+https://www.dw.com	DW.com	27
+https://www.thestar.com	Toronto Star	27
+https://www.nbcnews.com	NBC News	24
+https://finance.biggo.com	finance.biggo.com	22
+https://www.european-athletics.com	European Athletics	22
+https://theconversation.com	The Conversation	21
+https://www.abc.net.au	ABC News & Headlines – Australian Broadcasting Corporation	21
+https://www.axios.com	Axios	21
+https://www.chinadailyhk.com	chinadailyhk	21
+https://time.com	Time Magazine	20
+https://weverse.io	Weverse	20
+https://www.atlanticcouncil.org	Atlantic Council	20
+https://ca.news.yahoo.com	Yahoo News Canada	18
+https://www.castanet.net	Castanet	18
+https://mashable.com	Mashable	17
+https://news.un.org	UN News	17
+https://www.espn.com	ESPN	17
+https://www.fiercepharma.com	Fierce Pharma	17
+https://www.irishtimes.com	The Irish Times	17
+https://www.news24.com.au	news24.com.au	17
+https://newsinfo.inquirer.net	Inquirer.net	16
+https://nypost.com	New York Post	16
+https://sierrawave.net	Sierra Wave	16
+https://www.firstpost.com	Firstpost	16
+https://www.space.com	Space	16
+https://eciks.org	eciks.org	15
+https://www.androidcentral.com	Android Central	15
+https://www.ft.com	Financial Times	15
+https://www.gsmarena.com	GSMArena.com	15
+https://www.huaweicentral.com	Huawei Central	15
+https://www.lemonde.fr	Le Monde.fr	15
+https://www.turkiyetoday.com	Türkiye Today	15
+https://fortune.com	Fortune	14
+https://www.cbssports.com	CBS Sports	14
+https://www.japantimes.co.jp	The Japan Times	14
+https://www.koreajoongangdaily.com	Korea JoongAng Daily	14
+https://www.skyatnightmagazine.com	BBC Sky at Night Magazine	14
+https://www.sfchronicle.com	San Francisco Chronicle	13
+https://www.si.com	Sports Illustrated	13
+https://oilprice.com	Crude Oil Prices Today | OilPrice.com	12
+https://www.rte.ie	RTE.ie	12
+https://www.sanluisobispo.com	San Luis Obispo Tribune	12
+https://fox59.com	Fox 59	11
+https://people.com	People.com	11
+https://thenationaldesk.com	National Desk	11
+https://www.cfr.org	Council on Foreign Relations	11
+https://www.foxweather.com	FOX Weather	11
+https://www.notebookcheck.net	Notebookcheck	11
+https://www.thenationalnews.com	thenationalnews.com	11
+https://www.wionews.com	WION	11
+https://climate.copernicus.eu	Copernicus Climate	10
+https://www.aa.com.tr	Anadolu Ajansı	10
+https://www.androidauthority.com	Android Authority	10
+https://www.dailymail.com	Daily Mail	10
+https://www.euractiv.com	euractiv.com	10
+https://www.ms.now	MS NOW	10
+https://www.thestar.co.uk	thestar.co.uk	10
+https://www.wsj.com	WSJ	10
+https://www.wsws.org	World Socialist Web Site	10
+https://9to5google.com	9to5Google	9
+https://gulfnews.com	Gulf News	9
+https://m.economictimes.com	The Economic Times	9
+https://moderndiplomacy.eu	Modern Diplomacy	9
+https://seekingalpha.com	Seeking Alpha	9
+https://www.businessinsider.com	Business Insider	9
+https://www.gmanetwork.com	GMA Network	9
+https://www.ibtimes.co.uk	International Business Times UK	9
+https://www.inkl.com	inkl	9
+https://www.latimes.com	Los Angeles Times	9
+https://www.newsnationnow.com	NewsNation	9
+https://www.politico.eu	politico.eu	9
+https://www.portsmouth.co.uk	portsmouth.co.uk	9
+https://www.straitstimes.com	The Straits Times	9
+https://www.upi.com	upi.com	9
+https://www.wave3.com	WAVE News	9
+https://abc7news.com	ABC7 Bay Area	8
+https://ici.radio-canada.ca	Radio-Canada	8
+https://mezha.net	Межа. Новини України.	8
+https://nationalpost.com	National Post	8
+https://news.cgtn.com	news.cgtn.com	8
+https://sana.sy	سانا	8
+https://www.aol.com	AOL.com	8
+https://www.beaconjournal.com	Akron Beacon Journal	8
+https://www.britannica.com	Britannica	8
+https://www.cleveland.com	Cleveland.com	8
+https://www.cp24.com	CP24	8
+https://www.foxsports.com	FOX Sports	8
+https://www.lloydslist.com	Lloyd's List	8
+https://www.manchestereveningnews.co.uk	Manchester Evening News	8
+https://www.modernghana.com	Modern Ghana	8
+https://www.netflix.com	Netflix	8
+https://www.rfi.fr	RFI	8
+https://www.thedailybeast.com	The Daily Beast	8
+https://www.thesun.co.uk	The Sun	8
+https://www.washingtonexaminer.com	Washington Examiner	8
+https://asia.nikkei.com	Nikkei Asia	7
+https://awfulannouncing.com	Awful Announcing	7
+https://carnegieendowment.org	Carnegie Endowment for International Peace	7
+https://foreignpolicy.com	Foreign Policy	7
+https://spectrumlocalnews.com	Spectrum News	7
+https://talksport.com	talkSPORT	7
+https://unu.edu	UNU | United Nations University	7
+https://www.downtoearth.org.in	Down To Earth	7
+https://www.foxbusiness.com	Fox Business	7
+https://www.futura-sciences.com	Futura, le média qui explore le monde	7
+https://www.goal.com	Goal.com	7
+https://www.hawaiinewsnow.com	Hawaii News Now	7
+https://www.iisd.org	International Institute for Sustainable Development	7
+https://www.kyivpost.com	Kyiv Post	7
+https://www.pff.com	PFF	7
+https://www.philstar.com	Philstar.com	7
+https://www.smh.com.au	SMH.com.au	7
+https://www.thejournal.ie	The Journal	7
+https://www.thestandard.com.hk	The Standard (HK)	7
+https://www.timesofisrael.com	The Times of Israel	7
+https://www.weforum.org	The World Economic Forum	7
+https://blog.google	blog.google	6
+https://en.tempo.co	Tempo.co English	6
+https://english.nv.ua	The New Voice of Ukraine	6
+https://kyivindependent.com	The Kyiv Independent	6
+https://newrepublic.com	The New Republic	6
+https://ua.news	UA.NEWS	6
+https://www.accuweather.com	AccuWeather	6
+https://www.afr.com	AFR	6
+https://www.aol.ca	AOL.ca	6
+https://www.arabnews.jp	arabnews.jp	6
+https://www.billboard.com	Billboard	6
+https://www.bnnbloomberg.ca	BNN Bloomberg	6
+https://www.calcalistech.com	calcalistech.com	6
+https://www.channelnewsasia.com	CNA	6
+https://www.chathamhouse.org	Chatham House	6
+https://www.chosun.com	조선일보	6
+https://www.cidrap.umn.edu	CIDRAP	6
+https://www.commondreams.org	Common Dreams	6
+https://www.devdiscourse.com	Devdiscourse	6
+https://www.football365.com	Football365	6
+https://www.indiatoday.in	India Today	6
+https://www.jpost.com	The Jerusalem Post	6
+https://www.livescience.com	Live Science	6
+https://www.moneycontrol.com	Moneycontrol.com	6
+https://www.ndtv.com	NDTV	6
+https://www.nfl.com	NFL.com	6
+https://www.piie.com	Peterson Institute for International Economics	6
+https://www.pravda.com.ua	Українська правда	6
+https://www.scientificamerican.com	Scientific American	6
+https://www.techadvisor.com	Tech Advisor	6
+https://www.telegraph.co.uk	The Telegraph	6
+https://www.today.com	TODAY.com	6
+https://www.worldweatherattribution.org	World Weather Attribution	6
+https://www.wthr.com	WTHR	6
+https://en.yenisafak.com	Yeni Safak English	5
+https://ew.com	Entertainment Weekly	5
+https://fansided.com	FanSided	5
+https://gbcode.rthk.hk	gbcode.rthk.hk	5
+https://memeburn.com	Memeburn	5
+https://news.sky.com	Sky News	5
+https://thehub.ca	The Hub | More Signal. Less Noise.	5
+https://thewalrus.ca	The Walrus	5
+https://torontosun.com	Toronto Sun	5
+https://tribune.net.ph	Daily Tribune	5
+https://uk.news.yahoo.com	Yahoo News UK	5
+https://vancouver.citynews.ca	CityNews Vancouver	5
+https://www.abs-cbn.com	ABS-CBN	5
+https://www.ad-hoc-news.de	Ad-hoc-news.de	5
+https://www.androidpolice.com	Android Police	5
+https://www.bastillepost.com	巴士的報	5
+https://www.cdc.gov	Centers for Disease Control and Prevention | CDC (.gov)	5
+https://www.cnet.com	CNET	5
+https://www.detroitnews.com	The Detroit News	5
+https://www.globalbankingandfinance.com	Global Banking & Finance Review	5
+https://www.globaltimes.cn	Global Times	5
+https://www.greenvilleonline.com	Greenville Online	5
+https://www.hklaw.com	Holland & Knight	5
+https://www.indystar.com	IndyStar	5
+https://www.internationalaffairs.org.au	Australian Institute of International Affairs	5
+https://www.irishexaminer.com	Irish Examiner	5
+https://www.irishmirror.ie	Irish Mirror	5
+https://www.khon2.com	KHON2	5
+https://www.koreatimes.co.kr	The Korea Times	5
+https://www.legacy.com	Legacy obituary	5
+https://www.lowyinstitute.org	Lowy Institute	5
+https://www.mirror.co.uk	Daily Mirror	5
+https://www.nature.com	Nature	5
+https://www.news.com.au	News.com.au	5
+https://www.nknews.org	NK News	5
+https://www.phonearena.com	PhoneArena	5
+https://www.rollingstone.com	Rolling Stone	5
+https://www.sbs.com.au	SBS	5
+https://www.scrippsnews.com	Scripps News	5
+https://www.sfgate.com	sfgate.com	5
+https://www.skysports.com	Sky Sports	5
+https://www.sportsmole.co.uk	Sports Mole	5
+https://www.the-sun.com	the-sun.com	5
+https://www.theaustralian.com.au	The Australian	5
+https://www.theweathernetwork.com	The Weather Network	5
+https://www.tradingview.com	TradingView	5
+https://www.transfermarkt.com	Transfermarkt	5
+https://www.wfmd.com	930 WFMD Free Talk	5
+https://www.wfyi.org	WFYI	5
+https://www.wjcl.com	WJCL	5
+https://www.ynetnews.com	Ynetnews	5
+https://www.yorkshirepost.co.uk	Yorkshire Post	5
+https://abc7chicago.com	ABC7 Chicago	4
+https://asianews.network	Asia News Network	4
+https://asiatimes.com	Asia Times	4
+https://ca.sports.yahoo.com	Yahoo Sports Canada	4
+https://ca.style.yahoo.com	Yahoo Lifestyle Canada	4
+https://cryptobriefing.com	Crypto Briefing	4
+https://discoveryalert.com.au	Discovery Alert	4
+https://earthsky.org	EarthSky	4
+https://evrimagaci.org	Evrim Ağacı	4
+https://footballlowdown.com	Football Lowdown	4
+https://guardian.ng	The Guardian Nigeria News	4
+https://heavy.com	heavy.com	4
+https://indianacapitalchronicle.com	Indiana Capital Chronicle	4
+https://montrealgazette.com	Montreal Gazette	4
+https://nanaimonewsnow.com	NanaimoNewsNOW	4
+https://news.bms.com	Bristol Myers Squibb	4
+https://nflspinzone.com	NFL Spin Zone	4
+https://nowtoronto.com	NOW Toronto	4
+https://parade.com	parade.com	4
+https://patch.com	Patch	4
+https://petapixel.com	PetaPixel	4
+https://roundtable.io	roundtable.io	4
+https://science.nasa.gov	NASA Science (.gov)	4
+https://skyandtelescope.org	Sky & Telescope	4
+https://streamlinefeed.co.ke	streamlinefeed.co.ke	4
+https://thebulletin.org	Bulletin of the Atomic Scientists	4
+https://thediplomat.com	The Diplomat – Asia-Pacific	4
+https://toronto.citynews.ca	CityNews Toronto	4
+https://unn.ua	Українські Національні Новини (УНН)	4
+https://wmo.int	World Meteorological Organization WMO	4
+https://www.aninews.in	ANI News	4
+https://www.arabnews.pk	Arab News PK	4
+https://www.asahi.com	朝日新聞	4
+https://www.astronomy.com	Astronomy Magazine	4
+https://www.azernews.az	AzerNews	4
+https://www.bioprocessintl.com	BioProcess International	4
+https://www.biospace.com	BioSpace	4
+https://www.bozemandailychronicle.com	Bozeman Daily Chronicle	4
+https://www.businesswire.com	Business Wire	4
+https://www.chicagotribune.com	Chicago Tribune	4
+https://www.chinadaily.com.cn	China Daily	4
+https://www.clickondetroit.com	ClickOnDetroit | WDIV Local 4	4
+https://www.conference-board.org	The Conference Board	4
+https://www.courthousenews.com	Courthouse News	4
+https://www.csmonitor.com	The Christian Science Monitor	4
+https://www.dailysabah.com	Daily Sabah	4
+https://www.fanatik.com.tr	Fanatik	4
+https://www.fantasylife.com	FantasyLife	4
+https://www.flashscore.com	Flashscore.com	4
+https://www.foley.com	Foley & Lardner LLP	4
+https://www.gizchina.com	Gizchina.com	4
+https://www.i24news.tv	i24NEWS	4
+https://www.insurancebusinessmag.com	Insurance Business	4
+https://www.iranintl.com	Iran International	4
+https://www.irishnews.com	The Irish News	4
+https://www.jdsupra.com	JD Supra	4
+https://www.malaymail.com	Malay Mail	4
+https://www.manilatimes.net	The Manila Times	4
+https://www.medicaldaily.com	Medical Daily	4
+https://www.nationalobserver.com	Canada's National Observer	4
+https://www.nbcsports.com	NBC Sports	4
+https://www.nomadlawyer.org	Nomad Lawyer	4
+https://www.prnewswire.com	PR Newswire	4
+https://www.rappler.com	Rappler	4
+https://www.rediff.com	Rediff	4
+https://www.staradvertiser.com	Honolulu Star-Advertiser	4
+https://www.taipeitimes.com	Taipei Times	4
+https://www.techradar.com	TechRadar	4
+https://www.techtimes.com	Tech Times	4
+https://www.theatlantic.com	The Atlantic	4
+https://www.thetimes.com	The Times	4
+https://www.trtworld.com	TRT World	4
+https://www.usmagazine.com	Us Weekly	4
+https://www.usnews.com	U.S. News & World Report	4
+https://www.voiceofemirates.com	صوت الإمارات	4
+https://www.washingtontimes.com	Washington Times	4
+https://7news.com.au	7NEWS	3
+https://abc45.com	WXLV	3
+https://abc7ny.com	ABC7 Eyewitness News	3
+https://blog.reelgood.com	UpNext by Reelgood	3
+https://business.inquirer.net	Inquirer.net	3
+https://businessupturn.com	Business Upturn	3
+https://dailyhive.com	Daily Hive	3
+https://eastasiaforum.org	East Asia Forum	3
+https://financialpost.com	Financial Post	3
+https://finimize.com	Finimize	3
+https://frontofficesports.com	Front Office Sports	3
+https://gizmodo.com	Gizmodo	3
+https://global.chinadaily.com.cn	China Daily Global Edition	3
+https://global.morningstar.com	Morningstar	3
+https://globalnation.inquirer.net	Inquirer.net	3
+https://grist.org	grist.org	3
+https://guelph.ctvnews.ca	CTV News	3
+https://hongkongfp.com	Hong Kong Free Press HKFP	3
+https://indianexpress.com	The Indian Express	3
+https://insideclimatenews.org	Inside Climate News	3
+https://investinglive.com	investingLive	3
+https://kelownacapnews.com	Kelowna Capital News	3
+https://ktla.com	KTLA	3
+https://lfpress.com	London Free Press	3
+https://littlethings.com	LittleThings.com	3
+https://metro.co.uk	Metro.co.uk	3
+https://mg.co.za	Mail & Guardian	3
+https://montelnews.com	Montel News	3
+https://morningstaronline.co.uk	Morning Star | The People’s Daily	3
+https://mshale.com	Mshale	3
+https://news.bloomberglaw.com	Bloomberg Law News	3
+https://news.meaww.com	news.meaww.com	3
+https://news.ssbcrack.com	SSBCrack	3
+https://newsukraine.rbc.ua	RBC-Ukraine	3
+https://newswav.com	Newswav	3
+https://openthemagazine.com	Open Magazine	3
+https://pluang.com	Pluang	3
+https://portal.fgv.br	Fundação Getulio Vargas	3
+https://pulse2.com	Pulse 2.0	3
+https://punchng.com	Punch Newspapers	3
+https://responsiblestatecraft.org	Responsible Statecraft	3
+https://safety4sea.com	safety4sea	3
+https://similkameenspotlight.com	The Similkameen Spotlight	3
+https://simplywall.st	simplywall.st	3
+https://slate.com	Slate	3
+https://spectrumnews1.com	Spectrum News	3
+https://spotmedia.ro	Spotmedia.ro	3
+https://staceywest.net	The Stacey West	3
+https://techcrunch.com	TechCrunch	3
+https://the-lookout.org	the-lookout.org	3
+https://thelandryhat.com	The Landry Hat	3
+https://thenightly.com.au	The Nightly	3
+https://theprint.in	ThePrint	3
+https://thesun.ng	The Sun Nigeria	3
+https://todayinbc.com	Today in BC	3
+https://truthout.org	Truthout	3
+https://ts2.tech	TechStock²	3
+https://united24media.com	UNITED24 Media	3
+https://usaherald.com	USA Herald	3
+https://vancouversun.com	Vancouver Sun	3
+https://vovworld.vn	VOV World	3
+https://weather.com	The Weather Channel	3
+https://wgntv.com	WGN-TV	3
+https://wsbt.com	WSBT	3
+https://www.americanprogress.org	Center for American Progress	3
+https://www.amnesty.org	Amnesty International	3
+https://www.arabnews.com	Arab News	3
+https://www.autonews.com	Automotive News	3
+https://www.bostonglobe.com	The Boston Globe	3
+https://www.brookings.edu	Brookings	3
+https://www.brusselstimes.com	The Brussels Times	3
+https://www.business-standard.com	Business Standard	3
+https://www.cato.org	Cato Institute	3
+https://www.dallasnews.com	Dallas News	3
+https://www.eurasiareview.com	Eurasia Review	3
+https://www.forex.com	FOREX.com	3
+https://www.freep.com	Detroit Free Press	3
+https://www.freshfields.com	Freshfields	3
+https://www.gov.uk	GOV.UK	3
+https://www.greaterbirminghamchambers.com	Greater Birmingham Chambers of Commerce	3
+https://www.gurufocus.com	GuruFocus	3
+https://www.haaretz.com	Haaretz	3
+https://www.haitilibre.com	HaitiLibre.com	3
+https://www.hindustantimes.com	Hindustan Times	3
+https://www.ibtimes.com	International Business Times	3
+https://www.iea.org	IEA – International Energy Agency	3
+https://www.imdb.com	IMDb	3
+https://www.inc.com	inc.com	3
+https://www.independent.ie	Irish Independent	3
+https://www.indexbox.io	IndexBox	3
+https://www.iru.org	IRU | World Road Transport Organisation	3
+https://www.kotaradio.com	kotaradio.com	3
+https://www.kqed.org	KQED	3
+https://www.live5news.com	Live 5 News	3
+https://www.liverpoolecho.co.uk	Liverpool Echo	3
+https://www.marca.com	MARCA	3
+https://www.marketscreener.com	marketscreener.com	3
+https://www.mediaite.com	Mediaite	3
+https://www.mercurynews.com	The Mercury News	3
+https://www.miragenews.com	Mirage News	3
+https://www.moroccoworldnews.com	Morocco World News	3
+https://www.nationalgeographic.com	National Geographic	3
+https://www.ndtvprofit.com	NDTV Profit	3
+https://www.news.gov.hk	news.gov.hk	3
+https://www.news24.com	news24.com	3
+https://www.newscentermaine.com	newscentermaine.com	3
+https://www.nine.com.au	Nine.com.au	3
+https://www.ohchr.org	ohchr	3
+https://www.orlandosentinel.com	Orlando Sentinel	3
+https://www.outlookbusiness.com	outlookbusiness.com	3
+https://www.pna.gov.ph	Philippine News Agency	3
+https://www.policymagazine.ca	Policy Magazine	3
+https://www.quiverquant.com	Quiver Quantitative	3
+https://www.rbc.com	rbc.com	3
+https://www.reviewjournal.com	Las Vegas Review-Journal	3
+https://www.rferl.org	Radio Free Europe/Radio Liberty	3
+https://www.rmg.co.uk	Royal Museums Greenwich	3
+https://www.scotsman.com	The Scotsman	3
+https://www.seattletimes.com	The Seattle Times	3
+https://www.snopes.com	Snopes	3
+https://www.standard.co.uk	London Evening Standard	3
+https://www.statesman.com	Austin American-Statesman	3
+https://www.syracuse.com	Syracuse.com	3
+https://www.thecooldown.com	The Cool Down	3
+https://www.thehindu.com	The Hindu	3
+https://www.thenews.com.pk	The News International	3
+https://www.vanguardngr.com	Vanguard News	3
+https://www.wbtv.com	WBTV	3
+https://www.wired.com	WIRED	3
+https://www.wrdw.com	WRDW	3
+https://www.wrtv.com	WRTV	3
+https://www.wsoctv.com	WSOC TV	3
+https://www.wyff4.com	WYFF	3
+https://www.yardbarker.com	Yardbarker	3
+http://news.bbc.co.uk	BBC	2
+https://19thnews.org	The 19th News	2
+https://8am.media	8AM Media	2
+https://abc3340.com	WBMA	2
+https://abcnews4.com	WCIV	2
+https://americansongwriter.com	American Songwriter	2
+https://anewz.tv	AnewZ	2
+https://ascendants.in	ascendants.in	2
+https://asian-power.com	Asian Power	2
+https://atozsports.com	A to Z Sports	2
+https://basic-tutorials.com	Basic Tutorials	2
+https://biz.chosun.com	Chosunbiz	2
+https://bleacherreport.com	Bleacher Report	2
+https://bvmsports.com	BVM Sports	2
+https://ca.finance.yahoo.com	Yahoo! Finance Canada	2
+https://canada.autonews.com	Automotive News	2
+https://caspianpost.com	Caspian Post	2
+https://cbs12.com	WPEC	2
+https://ccentral.ca	CCentral	2
+https://chicago.suntimes.com	Chicago Sun-Times	2
+https://cimsec.org	Center for International Maritime Security	2
+https://cinea.ec.europa.eu	European Climate, Infrastructure and Environment Executive Agency	2
+https://climate.ec.europa.eu	climate.ec.europa.eu	2
+https://corporateknights.com	Corporate Knights	2
+https://ctif.org	ctif.org	2
+https://curiocity.com	curiocity.com	2
+https://dailyinvestor.com	Daily Investor	2
+https://decode39.com	Decode39	2
+https://demerarawaves.com	Demerara Waves Online News- Guyana	2
+https://earth.org	Earth.Org	2
+https://easternherald.com	The Eastern Herald	2
+https://en.ilsole24ore.com	Il Sole 24 ORE	2
+https://en.majalla.com	Al Majalla	2
+https://en.people.cn	People's Daily Online	2
+https://en.philenews.com	Philenews	2
+https://en.vijesti.me	vijesti.me	2
+https://en.yna.co.kr	Yonhap News Agency	2
+https://endpoints.news	Endpoints News	2
+https://energynow.ca	EnergyNow	2
+https://english.mathrubhumi.com	Mathrubhumi English	2
+https://english.news.cn	Xinhua	2
+https://eu.36kr.com	36 Kr	2
+https://euobserver.com	EUobserver	2
+https://eutoday.net	EU Today	2
+https://exclaim.ca	Exclaim!	2
+https://federalnewsnetwork.com	Federal News Network	2
+https://fox8.com	FOX 8 News	2
+https://foxbaltimore.com	WBFF	2
+https://halifax.citynews.ca	CityNews Halifax	2
+https://insightcrime.org	InSight Crime	2
+https://intellectia.ai	Intellectia AI	2
+https://internationalfinance.com	internationalfinance.com	2
+https://investingnews.com	Investing News Network	2
+https://ipdefenseforum.com	Indo-Pacific Defense FORUM	2
+https://iranwire.com	IranWire	2
+https://joint-research-centre.ec.europa.eu	joint-research-centre.ec.europa.eu	2
+https://keremeosreview.com	Keremeos Review	2
+https://kimberleybulletin.com	Kimberley Bulletin	2
+https://lakecountrycalendar.com	Lake Country Calendar	2
+https://lastwordonsports.com	Last Word On Sports	2
+https://legis1.com	Legis1	2
+https://lethbridgenewsnow.com	Lethbridge News Now	2
+https://manufacturingchemist.com	Manufacturing Chemist	2
+https://mobilesyrup.com	MobileSyrup	2
+https://natlawreview.com	The National Law Review	2
+https://news.az	Latest news from Azerbaijan	2
+https://news.rthk.hk	香港電台新聞網	2
+https://news.samsung.com	Samsung Global Newsroom	2
+https://newsismybusiness.com	News is My Business	2
+https://nflmocks.com	NFL Mocks	2
+https://novanews.co.za	novanews.co.za	2
+https://novayagazeta.eu	Новая газета Европа	2
+https://nwitimes.com	nwitimes.com	2
+https://nymag.com	New York Magazine	2
+https://perezhilton.com	Perez Hilton	2
+https://publishingperspectives.com	Publishing Perspectives	2
+https://qazinform.com	Qazinform	2
+https://quincyinst.org	Quincy Institute for Responsible Statecraft	2
+https://rcmp.ca	RCMP	2
+https://respawn.outlookindia.com	Outlook Respawn	2
+https://rollcall.com	Roll Call	2
+https://rooseveltinstitute.org	The Roosevelt Institute	2
+https://rsis.edu.sg	S. Rajaratnam School of International Studies (RSIS)	2
+https://san.com	Straight Arrow	2
+https://scanx.trade	scanx.trade	2
+https://sfstandard.com	The San Francisco Standard	2
+https://simpleflying.com	Simple Flying	2
+https://storymaps.arcgis.com	ArcGIS StoryMaps	2
+https://techmymoney.com	Tech My Money	2
+https://technode.com	TechNode	2
+https://the72.co.uk	The72	2
+https://thenarwhal.ca	The Narwhal	2
+https://theowp.org	The Organization for World Peace	2
+https://thepointer.com	The Pointer	2
+https://theprogress.com	Chilliwack Progress	2
+https://tiffinohio.net	TiffinOhio.net	2
+https://tribune.com.pk	The Express Tribune	2
+https://tribuneonlineng.com	Tribune Online	2
+https://turkish-football.com	turkish-football.com	2
+https://uk.finance.yahoo.com	Yahoo Finance UK	2
+https://uk.sports.yahoo.com	Yahoo Sports UK	2
+https://unric.org	unric	2
+https://valorinternational.globo.com	Valor International	2
+https://vancouverisland.ctvnews.ca	CTV News	2
+https://victoriabuzz.com	Victoria Buzz	2
+https://wbjournal.com	Worcester Business Journal	2
+https://westknews.com	West K News	2
+https://winnipeg.citynews.ca	CityNews Winnipeg	2
+https://wng.org	wng.org	2
+https://wtop.com	WTOP News	2
+https://www.abc10.com	ABC10	2
+https://www.aei.org	American Enterprise Institute - AEI	2
+https://www.africanews.com	africanews.com	2
+https://www.allwyn.co.uk	Allwyn UK	2
+https://www.americanimmigrationcouncil.org	American Immigration Council	2
+https://www.androidheadlines.com	Android Headlines	2
+https://www.arnnewscentre.ae	ARN News Centre	2
+https://www.baltimoresun.com	Baltimore Sun	2
+https://www.barrons.com	Barron's	2
+https://www.bastillepost.com	bastillepost.com	2
+https://www.belfastlive.co.uk	Belfast Live	2
+https://www.belfasttelegraph.co.uk	Belfast Telegraph	2
+https://www.benzinga.com	Benzinga	2
+https://www.bignewsnetwork.com	Big News Network.com	2
+https://www.birminghammail.co.uk	Birmingham Live	2
+https://www.bloggingtheboys.com	Blogging The Boys	2
+https://www.bms.com	Bristol Myers Squibb	2
+https://www.breakingnews.ie	BreakingNews.ie	2
+https://www.briefs.co	Briefs Finance	2
+https://www.bristolpost.co.uk	Bristol Live	2
+https://www.businessoffashion.com	The Business of Fashion	2
+https://www.c-span.org	C-SPAN	2
+https://www.canada.ca	canada.ca	2
+https://www.cbp.gov	U.S. Customs and Border Protection (.gov)	2
+https://www.chinadailyasia.com	chinadailyasia.com	2
+https://www.citizen.co.za	The Citizen	2
+https://www.citybiz.co	citybiz	2
+https://www.citybuzz.co	citybuzz -	2
+https://www.claimsjournal.com	Claims Journal	2
+https://www.click2houston.com	Click2Houston	2
+https://www.cnbctv18.com	CNBC TV18	2
+https://www.corsicanadailysun.com	Corsicana Daily Sun	2
+https://www.counterfire.org	Counterfire	2
+https://www.cpac.ca	CPAC	2
+https://www.ctif.org	ctif.org	2
+https://www.dailykos.com	Daily Kos	2
+https://www.dailyrecord.co.uk	Daily Record	2
+https://www.deccanherald.com	Deccan Herald	2
+https://www.derbytelegraph.co.uk	Derbyshire Live	2
+https://www.digitimes.com	digitimes	2
+https://www.discovermagazine.com	Discover Magazine	2
+https://www.droid-life.com	Droid Life	2
+https://www.dublinlive.ie	Dublin Live	2
+https://www.edc.ca	Export Development Canada (EDC)	2
+https://www.ekathimerini.com	eKathimerini.com	2
+https://www.electrive.com	electrive.com	2
+https://www.environewsnigeria.com	EnviroNews Nigeria	2
+https://www.eonline.com	E! News	2
+https://www.esa.int	European Space Agency	2
+https://www.express.co.uk	Daily Express	2
+https://www.fao.org	Food and Agriculture Organization	2
+https://www.fdiintelligence.com	fDi Intelligence	2
+https://www.fiercehealthcare.com	Fierce Healthcare	2
+https://www.football.london	Football London	2
+https://www.fox9.com	FOX 9 Minneapolis-St. Paul	2
+https://www.freemalaysiatoday.com	Free Malaysia Today	2
+https://www.frstrategie.org	Fondation pour la Recherche Stratégique	2
+https://www.fxstreet.com	FXStreet	2
+https://www.gadgetmatch.com	GadgetMatch	2
+https://www.gamesindustry.biz	GamesIndustry.biz	2
+https://www.genengnews.com	Genetic Engineering and Biotechnology News	2
+https://www.gnlm.com.mm	Global New Light Of Myanmar	2
+https://www.govtech.com	GovTech	2
+https://www.gq.com	GQ	2
+https://www.greenwichtime.com	Greenwich Time	2
+https://www.hawaii.edu	University of Hawaii System	2
+https://www.hellomagazine.com	HELLO! Magazine	2
+https://www.hlc.com	Hogan Lovells Cadwalader	2
+https://www.hrw.org	Human Rights Watch	2
+https://www.hulldailymail.co.uk	Hull Live	2
+https://www.humanresourcesonline.net	Human Resources Online	2
+https://www.icihaiti.com	icihaiti.com	2
+https://www.idnfinancials.com	idnfinancials.com	2
+https://www.info.gov.hk	info.gov.hk	2
+https://www.insauga.com	INsauga	2
+https://www.insidethegames.biz	Inside The Games	2
+https://www.investing.com	Investing.com	2
+https://www.irishamerica.com	Irish America	2
+https://www.irishpost.com	The Irish Post	2
+https://www.kalw.org	KALW	2
+https://www.kazu.org	90.3 KAZU	2
+https://www.khou.com	KHOU	2
+https://www.koreaherald.com	The Korea Herald	2
+https://www.kron4.com	KRON4	2
+https://www.ksbw.com	KSBW	2
+https://www.ktvu.com	KTVU	2
+https://www.lawfaremedia.org	Lawfare	2
+https://www.livemint.com	Livemint	2
+https://www.local3news.com	Local 3 News	2
+https://www.lubbockonline.com	Lubbock Avalanche-Journal	2
+https://www.marinelink.com	Marine Link	2
+https://www.marketplace.org	marketplace.org	2
+https://www.mediamatters.org	Media Matters for America	2
+https://www.middleeasteye.net	Middle East Eye	2
+https://www.moomoo.com	Moomoo	2
+https://www.morningstar.com	Morningstar	2
+https://www.motherjones.com	Mother Jones	2
+https://www.nasa.gov	NASA (.gov)	2
+https://www.nationalreview.com	National Review	2
+https://www.nature.org	The Nature Conservancy	2
+https://www.newindianexpress.com	The New Indian Express	2
+https://www.newsbytesapp.com	NewsBytes	2
+https://www.newser.com	Newser	2
+https://www.newsletter.co.uk	Belfast News Letter	2
+https://www.newyorker.com	The New Yorker	2
+https://www.nj.com	NJ.com	2
+https://www.oddsshopper.com	OddsShopper	2
+https://www.opb.org	Oregon Public Broadcasting - OPB	2
+https://www.orfonline.org	orfonline.org	2
+https://www.paralympic.org	Paralympic.org.	2
+https://www.pharmtech.com	PharmTech.com	2
+https://www.pinkun.com	The Pink Un	2
+https://www.planetary.org	The Planetary Society	2
+https://www.pm.gc.ca	pm.gc.ca	2
+https://www.postandcourier.com	Post and Courier	2
+https://www.producer.com	The Western Producer	2
+https://www.pulse.com.gh	Pulse Ghana	2
+https://www.pymnts.com	PYMNTS.com	2
+https://www.qcnews.com	Queen City News	2
+https://www.rand.org	RAND	2
+https://www.rawstory.com	rawstory.com	2
+https://www.realinstitutoelcano.org	Real Instituto Elcano	2
+https://www.redsharknews.com	Red Shark News	2
+https://www.rockawave.com	rockawave.com	2
+https://www.sahi.com	Sahi	2
+https://www.sail-world.com	Sail-World.com	2
+https://www.salon.com	Salon.com	2
+https://www.sciencedaily.com	Science Daily	2
+https://www.seafoodsource.com	SeafoodSource	2
+https://www.severe-weather.eu	Severe Weather Europe	2
+https://www.sheknows.com	SheKnows	2
+https://www.silverandblackpride.com	Silver And Black Pride	2
+https://www.sltrib.com	The Salt Lake Tribune	2
+https://www.sooleader.com	SooLeader.com	2
+https://www.spf.org	笹川平和財団	2
+https://www.spglobal.com	S&P Global	2
+https://www.sportsadda.asia	SportsAdda	2
+https://www.startuphub.ai	StartupHub.ai	2
+https://www.stripes.com	stripes.com	2
+https://www.supplychaindive.com	Supply Chain Dive	2
+https://www.tatlerasia.com	Tatler Asia	2
+https://www.tdtnews.com	Temple Daily Telegram	2
+https://www.telegraphindia.com	Telegraph India	2
+https://www.thebiglead.com	The Big Lead	2
+https://www.thedailystar.net	The Daily Star	2
+https://www.theinertia.com	The Inertia	2
+https://www.thejakartapost.com	The Jakarta Post	2
+https://www.themoscowtimes.com	The Moscow Times	2
+https://www.thenews.pk	The News Pakistan	2
+https://www.theregister.com	The Register	2
+https://www.theringer.com	The Ringer	2
+https://www.thestar.com.my	The Star	2
+https://www.thestatesman.com	The Statesman	2
+https://www.theverge.com	The Verge	2
+https://www.thinkglobalhealth.org	Think Global Health	2
+https://www.timeout.com	Time Out Worldwide	2
+https://www.timeslive.co.za	TimesLIVE	2
+https://www.timesnownews.com	Times Now	2
+https://www.tipranks.com	TipRanks	2
+https://www.tomsguide.com	Tom's Guide	2
+https://www.tradingkey.com	TradingKey	2
+https://www.tvcnews.tv	TVC News	2
+https://www.unesco.org	UNESCO	2
+https://www.vifindia.org	Vivekananda International Foundation (VIF)	2
+https://www.vox.com	vox.com	2
+https://www.wafb.com	WAFB	2
+https://www.walesonline.co.uk	Wales Online	2
+https://www.wealthprofessional.ca	Wealth Professional	2
+https://www.whitecase.com	White & Case LLP	2
+https://www.whitehouse.gov	The White House (.gov)	2
+https://www.who.int	World Health Organization (WHO)	2
+https://www.winnipegfreepress.com	Winnipeg Free Press	2
+https://www.winnipegsun.com	Winnipeg Sun	2
+https://www.wistv.com	WIS News 10	2
+https://www.worldarchery.sport	World Archery	2
+https://www.worldbank.org	World Bank Group	2
+https://www.wral.com	WRAL	2
+https://www.wxyz.com	WXYZ Channel 7	2
+https://yaleclimateconnections.org	Yale Climate Connections	2
+https://yellow.com	Yellow.com	2
+http://en.ce.cn	China Economic Net	1
+http://jamaica-gleaner.com	Jamaica Gleaner	1
+http://texasinsider.org	texasinsider.org	1
+http://www.cbc.ca	CBC	1
+http://www.ktvn.com	KTVN	1
+https://350.org	350.org	1
+https://abacusdata.ca	Abacus Data	1
+https://abbynews.com	Abbotsford News	1
+https://abc11.com	ABC11 News	1
+https://abc30.com	ABC30 Fresno	1
+https://abc7.com	ABC7 Los Angeles	1
+https://about.nike.com	About Nike	1
+https://addisstandard.com	Addis Standard	1
+https://aeroflap.com.br	Aeroflap	1
+https://aerospaceglobalnews.com	Aerospace Global News	1
+https://afj.org	Alliance for Justice	1
+https://africacheck.org	Africa Check	1
+https://aktualita.co	Aktualita.co	1
+https://am.gs.com	Goldman Sachs Asset Management	1
+https://americanbazaaronline.com	The American Bazaar	1
+https://amp.sanluisobispo.com	San Luis Obispo Tribune	1
+https://amp.scmp.com	South China Morning Post	1
+https://anasalhajjieoa.substack.com	Anas Alhajji | Substack	1
+https://angusreid.org	Angus Reid Institute	1
+https://apac.dtn.com	DTN APAC	1
+https://app.dealroom.co	Dealroom	1
+https://arbiterz.com	Arbiterz	1
+https://armenpress.am	Armenpress	1
+https://arstechnica.com	Ars Technica	1
+https://asiasociety.org	Asia Society	1
+https://au.news.yahoo.com	Yahoo News Australia	1
+https://au.sports.yahoo.com	Yahoo Sports Australia	1
+https://autos.yahoo.com	Yahoo Autos	1
+https://azdailysun.com	Arizona Daily Sun	1
+https://balticsentinel.eu	The Baltic Sentinel	1
+https://barcauniversal.com	Barca Universal	1
+https://barrierestarjournal.com	North Thompson News	1
+https://battlefordsnow.com	battlefordsNOW	1
+https://bdnews24.com	bdnews24.com	1
+https://betakit.com	BetaKit	1
+https://biobuzz.io	BioBuzz	1
+https://biz.heraldcorp.com	헤럴드경제	1
+https://block.xyz	Block	1
+https://blog.ucs.org	The Equation - Union of Concerned Scientists	1
+https://blogs.worldbank.org	World Bank Blogs	1
+https://bocanewsnow.com	BocaNewsNow.com	1
+https://borgenproject.org	The Borgen Project	1
+https://borkena.com	Borkena	1
+https://broadview.org	Broadview Magazine	1
+https://brobible.com	BroBible	1
+https://brusselssignal.eu	Brussels Signal	1
+https://businessday.ng	Business News Nigeria	1
+https://businessfacilities.com	Business Facilities	1
+https://businesstech.co.za	businesstech.co.za	1
+https://bworldonline.com	BusinessWorld - BusinessWorld Online	1
+https://ca.billboard.com	Billboard	1
+https://ca.rollingstone.com	Rolling Stone Canada	1
+https://calgary.citynews.ca	CityNews Calgary	1
+https://caliber.az	Caliber.Az	1
+https://canada.constructconnect.com	constructconnect.com	1
+https://canoe.com	canoe.com	1
+https://capcity.news	Cap City News	1
+https://capital.com	Capital.com	1
+https://capitalpress.com	Capital Press	1
+https://cbs6albany.com	WRGB	1
+https://cedmohub.eu	CEDMO	1
+https://centraljersey.com	centraljersey.com	1
+https://cepa.org	Center for European Policy Analysis (CEPA)	1
+https://chamber.ca	Canadian Chamber of Commerce	1
+https://channel4news.substack.com	Channel 4 News | Substack	1
+https://charlestoncitypaper.com	Charleston City Paper	1
+https://chatelaine.com	chatelaine.com	1
+https://cheknews.ca	CHEK News	1
+https://chelsea.news	chelsea.news	1
+https://chroniclet.com	Chronicle Telegram	1
+https://circleid.com	CircleID	1
+https://citynews.com.au	Canberra CityNews	1
+https://ckpgtoday.ca	CKPG Today	1
+https://clareherald.com	The Clare Herald	1
+https://cleantechnica.com	CleanTechnica	1
+https://climateactionnetwork.ca	Climate Action Network Canada	1
+https://climateanalytics.org	Climate Analytics	1
+https://cnduk.org	Campaign for Nuclear Disarmament	1
+https://cnevpost.com	CnEVPost	1
+https://coastmountainnews.com	coastmountainnews.com	1
+https://cochranenow.com	CochraneNow	1
+https://colombiaone.com	ColombiaOne.com	1
+https://coloradonewsline.com	Colorado Newsline	1
+https://commission.europa.eu	European Commission	1
+https://comoxvalleyrecord.com	Comox Valley Record	1
+https://consequence.net	Consequence of Sound	1
+https://constructiondigital.com	Construction Digital	1
+https://coveringclimatenow.org	Covering Climate Now	1
+https://cowboystatedaily.com	Cowboy State Daily	1
+https://cowboyswire.usatoday.com	Cowboys Wire	1
+https://cryptorank.io	CryptoRank	1
+https://ctmirror.org	CT Mirror	1
+https://cyberscoop.com	CyberScoop	1
+https://cyprusshippingnews.com	Cyprus Shipping News	1
+https://daily.fattail.com.au	Fat Tail Daily	1
+https://dailycaller.com	dailycaller.com	1
+https://dailypost.ng	Daily Post Nigeria	1
+https://dailytimesng.com	DAILY TIMES Nigeria	1
+https://dailyvoice.com	DailyVoice.com	1
+https://dallasexpress.com	Dallas Express	1
+https://dallassportsjournal.com	dallassportsjournal.com	1
+https://daoinsights.com	Dao Insights	1
+https://dayton247now.com	WKEF	1
+https://ddnews.gov.in	DD News	1
+https://deadline.com	Deadline	1
+https://decisiondeskhq.substack.com	Decision Desk HQ | Substack	1
+https://defence-industry-space.ec.europa.eu	defence-industry-space.ec.europa.eu	1
+https://defence24.com	Defence24.com	1
+https://defenceweb.co.za	defenceWeb	1
+https://dev.ua	dev.ua	1
+https://disasterphilanthropy.org	Center for Disaster Philanthropy	1
+https://driveteslacanada.ca	driveteslacanada.ca	1
+https://driving.ca	driving.ca	1
+https://eastdevonnews.co.uk	East Devon News	1
+https://eastleighvoice.co.ke	The Eastleigh Voice	1
+https://eciu.net	Energy & Climate Intelligence Unit | ECIU	1
+https://edition.cnn.com	CNN	1
+https://edmonton.citynews.ca	CityNews Edmonton	1
+https://efl.com	The English Football League	1
+https://electrek.co	Electrek	1
+https://electriccarsreport.com	Electric Cars Report	1
+https://emobilityplus.com	EMobility+	1
+https://en.africatopsports.com	Africa Top Sports	1
+https://en.bloomingbit.io	bloomingbit	1
+https://en.haberler.com	Haberler.com	1
+https://en.highnorthnews.com	High North News	1
+https://en.royanews.tv	Roya News	1
+https://en.tennistemple.com	TennisTemple	1
+https://energynewsbeat.co	Energy News Beat	1
+https://english.aaj.tv	Aaj English TV	1
+https://english.aawsat.com	ASHARQ AL-AWSAT English	1
+https://english.ahram.org.eg	Ahram Online	1
+https://english.dotdotnews.com	點新聞	1
+https://english.elpais.com	EL PAÍS English	1
+https://english.kyodonews.net	Japan Wire by Kyodo News	1
+https://english.pnn.ps	Palestinian News Network	1
+https://environment.ec.europa.eu	environment.ec.europa.eu	1
+https://environmentaldefence.ca	Environmental Defence	1
+https://eplindex.com	EPL Index	1
+https://es.tradingview.com	TradingView	1
+https://etfdb.com	ETF Database	1
+https://ethicalmarketingnews.com	Ethical Marketing News	1
+https://eurasiabusinessnews.com	Eurasia Business News	1
+https://europeanconservative.com	The European Conservative	1
+https://europeanlung.org	European Lung Foundation | ELF	1
+https://extra.ie	Extra.ie	1
+https://factcheck.afp.com	AFP Fact Check	1
+https://fakti.bg	fakti.bg	1
+https://fallriverreporter.com	Fall River Reporter	1
+https://fcbusiness.co.uk	fcbusiness	1
+https://firstfocus.org	First Focus on Children	1
+https://firstwordpharma.com	FirstWord Pharma	1
+https://floridianpress.com	Floridian Press	1
+https://focusmalaysia.my	Focus Malaysia	1
+https://foodtank.com	Food Tank	1
+https://footballleagueworld.co.uk	Football League World	1
+https://footballplace.co.uk	Football Place	1
+https://forbesmiddleeast.com	Forbes Middle East	1
+https://forward.com	The Forward	1
+https://fox40.com	FOX40	1
+https://fox56.com	fox56.com	1
+https://fox5sandiego.com	fox5sandiego.com	1
+https://fpif.org	Foreign Policy in Focus	1
+https://fr.tradingview.com	TradingView	1
+https://freedom250.org	Freedom 250	1
+https://from.ncl.ac.uk	Newcastle University	1
+https://frontline.thehindu.com	Frontline Magazine	1
+https://fuelcellsworks.com	Fuel Cells Works	1
+https://futurecfo.net	FutureCFO	1
+https://futurism.com	Futurism	1
+https://gadget.co.za	gadget.co.za	1
+https://gcaptain.com	gCaptain	1
+https://ghanasoccernet.com	GhanaSoccernet	1
+https://gigazine.net	GIGAZINE	1
+https://gjia.georgetown.edu	Georgetown Journal of International Affairs	1
+https://goldenglobes.com	goldenglobes.com	1
+https://grepbeat.com	GrepBeat	1
+https://hcss.nl	The Hague Centre for Strategic Studies	1
+https://healthcare-digital.com	Healthcare Digital	1
+https://healthpolicy-watch.news	Health Policy Watch	1
+https://hirunews.lk	Hiru News	1
+https://hollywoodpq.com	Hollywood PQ	1
+https://hongkongbusiness.hk	Hong Kong Business	1
+https://hothardware.com	HotHardware	1
+https://hrnews.co.uk	hrnews.co.uk	1
+https://hromadske.ua	Hromadske	1
+https://hsph.harvard.edu	Harvard T.H. Chan School of Public Health	1
+https://htxt.co.za	htxt.co.za	1
+https://hutchpost.com	Hutch Post	1
+https://icmagazine.org	Intercontinental Cry	1
+https://ieefa.org	Institute for Energy Economics and Financial Analysis (IEEFA)	1
+https://igamingbusiness.com	iGaming Business	1
+https://independent.ng	Independent Newspaper Nigeria	1
+https://indiawest.com	IndiaWest	1
+https://inews.co.uk	The i Paper	1
+https://infonews.ca	iNFOnews.ca	1
+https://inspenet.com	Inspenet	1
+https://instituteofgeoeconomics.org	地経学研究所	1
+https://insuranceasianews.com	InsuranceAsia News	1
+https://interior-news.com	The Interior News	1
+https://internationalviewpoint.org	International Viewpoint Online magazine	1
+https://invezz.com	Invezz	1
+https://iol.co.za	IOL	1
+https://ips-dc.org	Institute for Policy Studies	1
+https://ir.datavaultsite.com	Datavault AI	1
+https://irishcountrymagazine.ie	Irish Country Magazine	1
+https://jamestown.org	The Jamestown Foundation	1
+https://jang.com.pk	Jang	1
+https://japan-forward.com	JAPAN Forward	1
+https://japantoday.com	Japan Today	1
+https://jayapal.house.gov	House.gov	1
+https://jewishinsider.com	Jewish Insider	1
+https://jewishpress.com	The Jewish Press	1
+https://jingdaily.com	Jing Daily	1
+https://journalarta.com	JournalArta	1
+https://karlobag.eu	Karlobag.eu	1
+https://kashmirconvener.com	Kashmir Convener	1
+https://kdhnews.com	The Killeen Daily Herald	1
+https://keia.org	Korea Economic Institute of America -	1
+https://kelo.com	KELO-AM	1
+https://kfdm.com	KFDM	1
+https://kfiam640.iheart.com	KFI AM 640	1
+https://kommunikasjon.ntb.no	NTB Kommunikasjon	1
+https://kpmg.com	kpmg.com	1
+https://kr-asia.com	KrASIA	1
+https://kstp.com	5 EYEWITNESS NEWS	1
+https://kyma.com	kyma.com	1
+https://lakecowichangazette.com	Lake Cowichan Gazette	1
+https://lancasteronline.com	LancasterOnline	1
+https://langleyadvancetimes.com	Langley Advance Times	1
+https://lansinginstitute.org	Robert Lansing Institute	1
+https://lasvegassun.com	Las Vegas Sun	1
+https://lavocedinewyork.com	La Voce di New York	1
+https://lawandcrime.com	Law and Crime News	1
+https://leadership.ng	LEADERSHIP Newspapers	1
+https://leger360.com	leger360.com	1
+https://libyaupdate.com	libyaupdate.com	1
+https://local21news.com	local21news.com	1
+https://logos-pres.md	logos-pres.md	1
+https://londonlovesbusiness.com	London Business News	1
+https://longisland.news12.com	News12 | Long Island	1
+https://m.naharnet.com	Naharnet	1
+https://macaubusiness.com	Macau Business	1
+https://mainemorningstar.com	Maine Morning Star	1
+https://mainichi.jp	毎日新聞	1
+https://manufacturing-today.com	Manufacturing Today	1
+https://mapleridgenews.com	Maple Ridge News	1
+https://markellisreviews.medium.com	Medium	1
+https://markets.businessinsider.com	markets.businessinsider.com	1
+https://marketwise.com	MarketWise	1
+https://mb.com.ph	Manila Bulletin	1
+https://mb.ntd.com	mb.ntd.com	1
+https://mediaincanada.com	Media in Canada	1
+https://medium.com	Medium	1
+https://meduza.io	Meduza	1
+https://mei.edu	Middle East Institute	1
+https://members.asicentral.com	members.asicentral.com	1
+https://merics.org	Mercator Institute for China Studies (MERICS)	1
+https://metalinjection.net	Metal Injection	1
+https://middle-east-online.com	middle-east-online.com	1
+https://militarnyi.com	Militarnyi	1
+https://mining.com.au	Mining.com.au	1
+https://mobile.aa.com.tr	Anadolu Ajansı	1
+https://monacolife.net	Monaco Life	1
+https://montreal.citynews.ca	CityNews Montreal	1
+https://my.rusi.org	Royal United Services Institute (RUSI)	1
+https://mymodernmet.com	My Modern Met	1
+https://mynorthwest.com	MyNorthwest.com	1
+https://nagalandtribune.in	Nagaland Tribune	1
+https://nai500.com	NAI500	1
+https://nation.africa	Daily Nation	1
+https://nationalsecuritynews.com	National Security News	1
+https://nationaltoday.com	National Today	1
+https://nativenewsonline.net	Native News Online	1
+https://natoassociation.ca	NATO Association	1
+https://naturalresources.house.gov	House Committee on Natural Resources (.gov)	1
+https://nautil.us	Nautilus | Science	1
+https://navdanyainternational.org	Navdanya international	1
+https://neoskosmos.com	Neos Kosmos	1
+https://neuronewsinternational.com	NeuroNews International	1
+https://neweasterneurope.eu	New Eastern Europe	1
+https://newlinesinstitute.org	New Lines Institute	1
+https://news.berkeley.edu	University of California, Berkeley	1
+https://news.constructconnect.com	ConstructConnect News	1
+https://news.dealershipguy.com	Car Dealership Guy News	1
+https://news.kalshi.com	Kalshi News	1
+https://news.laodong.vn	Laodong.vn	1
+https://news.lee.net	Lee News Central	1
+https://news.liga.net	LIGA.net	1
+https://news.mongabay.com	news - Mongabay	1
+https://news.newonnetflix.info	news.newonnetflix.info	1
+https://news.northeastern.edu	Northeastern Global News	1
+https://news.ontario.ca	ontario.ca	1
+https://news.wttw.com	WTTW News	1
+https://newscord.org	NewsCord	1
+https://newseu.cgtn.com	CGTN	1
+https://newsnote.co.za	newsnote	1
+https://newsonair.gov.in	News On AIR	1
+https://newsreel.com.au	newsreel.com.au	1
+https://newsroom.cisco.com	Cisco Newsroom	1
+https://newsroom.ucla.edu	Newsroom | UCLA	1
+https://nigerianobservernews.com	The Nigerian Observer	1
+https://njtoday.news	njtoday.news	1
+https://nokiamob.net	Nokiamob	1
+https://nokiapoweruser.com	nokiapoweruser.com	1
+https://ny1.com	Spectrum News NY1	1
+https://observer.co.uk	The Observer	1
+https://odi.org	ODI: Think change	1
+https://oecd.ai	OECD AI Policy Observatory	1
+https://ohiocapitaljournal.com	Ohio Capital Journal	1
+https://okcfox.com	KOKH	1
+https://olympic.ca	olympic.ca	1
+https://ominecaexpress.com	Vanderhoof Omineca Express	1
+https://oncodaily.com	Oncodaily	1
+https://onefootball.com	OneFootball	1
+https://onu.delegfrance.org	onu.delegfrance.org	1
+https://orthospinenews.com	Ortho Spine News	1
+https://paktribune.com	PakTribune	1
+https://panow.com	paNOW	1
+https://paultan.org	Paul Tan's Automotive News	1
+https://pentictonwesternnews.com	Penticton Western News	1
+https://phandroid.com	Phandroid	1
+https://pharma.economictimes.indiatimes.com	pharma.economictimes.indiatimes.com	1
+https://pharmafile.com	Pharmafile	1
+https://pharmatimes.com	PharmaTimes	1
+https://phys.org	Phys.org	1
+https://pmlive.com	PMLiVE	1
+https://pmnewsnigeria.com	PM News Nigeria	1
+https://politheor.net	POLITHEOR	1
+https://press.on-running.com	press.on-running.com	1
+https://psacunion.ca	Public Service Alliance of Canada	1
+https://publicseminar.org	Public Seminar	1
+https://pulitzercenter.org	Pulitzer Center	1
+https://quantumzeitgeist.com	Quantum Zeitgeist	1
+https://rabble.ca	Rabble.ca	1
+https://radaronline.com	RadarOnline	1
+https://radiomoldova.md	Radio Moldova	1
+https://rdg.today	Reading Today Online	1
+https://readastonvilla.com	Read Aston Villa	1
+https://readeverton.com	Read Everton	1
+https://realeconomy.rsmus.com	The Real Economy Blog	1
+https://realinvestmentadvice.com	Real Investment Advice	1
+https://reason.com	Reason Magazine	1
+https://ridl.io	Riddle Russia	1
+https://rmi.org	RMI	1
+https://rollingout.com	Rolling Out	1
+https://root-nation.com	Root-Nation.com	1
+https://rosslandtelegraph.com	Rossland Telegraph	1
+https://royalbluemersey.sbnation.com	Royal Blue Mersey	1
+https://runningmagazine.ca	Canadian Running Magazine	1
+https://russiaspivottoasia.com	russia's pivot to asia	1
+https://saintswire.usatoday.com	Saints Wire	1
+https://saobserver.net	Salmon Arm Observer	1
+https://saudigazette.com.sa	Saudi Gazette	1
+https://scdailygazette.com	South Carolina Daily Gazette	1
+https://scitechdaily.com	SciTechDaily	1
+https://secretatlanta.co	Secret Atlanta	1
+https://secretchicago.com	Secret Chicago	1
+https://sempremilan.com	SempreMilan	1
+https://senalnews.com	Senal News	1
+https://sfist.com	SFist	1
+https://shop-eat-surf-outdoor.com	Shop Eat Surf Outdoor	1
+https://siege.gg	SiegeGG	1
+https://smileymovement.org	Smiley Movement	1
+https://snjtoday.com	SNJ Today	1
+https://sportstar.thehindu.com	Sportstar	1
+https://srpske.rs	srpske.rs	1
+https://ssir.org	Stanford Social Innovation Review	1
+https://starlust.org	starlust.org	1
+https://stateline.org	Stateline	1
+https://stocktwits.com	Stocktwits	1
+https://streetsoftoronto.com	Streets Of Toronto	1
+https://sundayguardianlive.com	The Sunday Guardian	1
+https://sunset.com	Sunset Magazine	1
+https://surreynowleader.com	Surrey Now-Leader	1
+https://swarajyamag.com	Swarajya	1
+https://swimswam.com	SwimSwam	1
+https://thebusinessjournal.com	thebusinessjournal.com	1
+https://thecityfix.com	TheCityFix	1
+https://theclimatewatch.com	The Climate Watch	1
+https://thedailyrecord.com	Maryland Daily Record	1
+https://thedefensewatch.com	The Defense Watch	1
+https://thedispatch.com	The Dispatch	1
+https://thedriven.io	The Driven IO	1
+https://thelogic.co	The Logic	1
+https://themalaysianreserve.com	The Malaysian Reserve	1
+https://themedialine.org	The Media Line	1
+https://thenationonlineng.net	The Nation Newspaper	1
+https://thepointsguy.com	The Points Guy	1
+https://theshillongtimes.com	The Shillong Times	1
+https://thesoufancenter.org	The Soufan Center	1
+https://thetab.com	The Tab	1
+https://thetimes.com.au	The Times Australia	1
+https://theweek.com	The Week	1
+https://thewhistler.ng	The Whistler Newspaper	1
+https://think.ing.com	ING Think	1
+https://ti-ukraine.org	Transparency International Ukraine	1
+https://ticotimes.net	The Tico Times	1
+https://timesofmalta.com	Times of Malta	1
+https://timesofoman.com	Times of Oman	1
+https://timestabloid.com	Times Tabloid	1
+https://tnsr.org	Texas National Security Review	1
+https://today.rtl.lu	RTL Today	1
+https://todaypress.tv	TodayPress.tv	1
+https://torontolife.com	Toronto Life	1
+https://torquecafe.com	torquecafe.com	1
+https://trailtimes.ca	Trail Times	1
+https://treefrogcreative.ca	Tree Frog creative	1
+https://tribuna.com	Tribuna.com	1
+https://tvpworld.com	TVP World	1
+https://uacrisis.org	Uacrisis.org	1
+https://ubn.news	ubn.news	1
+https://unitaid.org	Unitaid	1
+https://upnorthlive.com	WPBN	1
+https://urbanmatter.com	UrbanMatter	1
+https://variety.com	Variety	1
+https://vernonmatters.ca	Vernon Matters	1
+https://vir.com.vn	Vietnam Investment Review - VIR	1
+https://vocal.media	Vocal	1
+https://vocm.com	VOCM	1
+https://vogue.sg	Vogue Singapore	1
+https://vogueadria.com	Vogue Adria	1
+https://von.gov.ng	Voice of Nigeria	1
+https://vulcanpost.com	Vulcan Post	1
+https://wabcradio.com	77 WABC	1
+https://wach.com	wach.com	1
+https://wanaen.com	WANA News Agency	1
+https://warontherocks.com	War on the Rocks	1
+https://water.fanack.com	Fanack Water	1
+https://wcyb.com	WCYB	1
+https://wdez.com	WDEZ	1
+https://weaintgotnohistory.sbnation.com	We Ain't Got No History	1
+https://weekendpost.co.bw	Weekend Post	1
+https://westcentralonline.com	WestCentralOnline	1
+https://wgan.com	Newsradio WGAN |	1
+https://wgme.com	WGME	1
+https://wibc.com	WIBC 93.1 FM	1
+https://wimsradio.com	wimsradio.com	1
+https://windsorstar.com	Windsor Star	1
+https://wjla.com	WJLA	1
+https://wltribune.com	Williams Lake Tribune	1
+https://womiowensboro.com	WOMI Owensboro	1
+https://world-border-congress.com	World Border Security Congress	1
+https://worldanimalnews.com	World Animal News	1
+https://worldathletics.org	worldathletics.org	1
+https://wowo.com	wowo.com	1
+https://wsau.com	WSAU	1
+https://wwf.panda.org	Panda.org	1
+https://www.10news.com	ABC 10News San Diego	1
+https://www.13wmaz.com	13WMAZ	1
+https://www.14news.com	14 News	1
+https://www.1news.co.nz	1News	1
+https://www.21alivenews.com	WPTA | 21Alive | Fort Wayne, IN	1
+https://www.24-7pressrelease.com	24-7 Press Release Newswire	1
+https://www.270towin.com	270toWin.com	1
+https://www.2oceansvibe.com	2oceansvibe News	1
+https://www.38north.org	38 North	1
+https://www.91mobiles.com	91mobiles.com	1
+https://www.aap.com.au	aap.com.au	1
+https://www.abc4.com	ABC4 Utah	1
+https://www.accessnewswire.com	ACCESS Newswire	1
+https://www.actionnewsnow.com	Action News Now	1
+https://www.agenzianova.com	Agenzia Nova	1
+https://www.ajupress.com	Aju Press	1
+https://www.al.com	AL.com	1
+https://www.all-about-industries.com	All-About-Industries	1
+https://www.alternet.org	Alternet	1
+https://www.am-online.com	AM-online	1
+https://www.anfieldwatch.co.uk	Anfield Watch	1
+https://www.aol.co.uk	AOL.co.uk	1
+https://www.ap.org	ap.org	1
+https://www.arise.tv	Arise News	1
+https://www.ashurstperkinscoie.com	ashurstperkinscoie.com	1
+https://www.asiabusinessoutlook.com	Asia Business Outlook	1
+https://www.asiae.co.kr	아시아경제	1
+https://www.asiafinancial.com	Asia Financial	1
+https://www.aspistrategist.org.au	The Strategist | ASPI's analysis and commentary site	1
+https://www.atlantanewsfirst.com	Atlanta News First	1
+https://www.audacy.com	Audacy	1
+https://www.aurora-israel.co.il	Aurora Israel	1
+https://www.autoblog.com	Autoblog	1
+https://www.autoevolution.com	autoevolution	1
+https://www.automotive-fleet.com	Automotive Fleet	1
+https://www.autonext.co	AutoNext.co	1
+https://www.autoweek.com	Autoweek	1
+https://www.awazthevoice.in	Awaz The Voice	1
+https://www.azcentral.com	azcentral.com and The Arizona Republic	1
+https://www.bakersfield.com	Bakersfield.com	1
+https://www.bandwagon.asia	bandwagon.asia	1
+https://www.banks.senate.gov	Senator Jim Banks (.gov)	1
+https://www.barcablaugranes.com	Barca Blaugranes	1
+https://www.bbntimes.com	BBN Times	1
+https://www.beloitdailynews.com	Beloit Daily News	1
+https://www.benefitsandpensionsmonitor.com	Benefits and Pensions Monitor	1
+https://www.bernama.com	Bernama	1
+https://www.betches.com	Betches	1
+https://www.betootaadvocate.com	The Betoota Advocate	1
+https://www.bigcountrynewsconnection.com	Big Country News |	1
+https://www.bikeradar.com	BikeRadar	1
+https://www.billionaires.africa	Billionaires.Africa	1
+https://www.biopharmadive.com	BioPharma Dive	1
+https://www.birminghamworld.uk	BirminghamWorld	1
+https://www.bizjournals.com	The Business Journals	1
+https://www.bluewin.ch	bluewin.ch	1
+https://www.boston.com	Boston.com	1
+https://www.brazilreports.com	Brazil Reports	1
+https://www.breakingviews.com	Breakingviews	1
+https://www.breitbart.com	breitbart.com	1
+https://www.brennancenter.org	Brennan Center for Justice	1
+https://www.brightontoday.ca	Brighton Today.ca	1
+https://www.brooklynvegan.com	BrooklynVegan	1
+https://www.brownfieldagnews.com	Brownfield Ag News	1
+https://www.bushcenter.org	George W. Bush Presidential Center	1
+https://www.businessdailyafrica.com	Business Daily	1
+https://www.businesstoday.com.my	BusinessToday Malaysia	1
+https://www.c21media.net	C21media	1
+https://www.caledonianrecord.com	Caledonian Record	1
+https://www.cam.ac.uk	University of Cambridge	1
+https://www.canadianbiomassmagazine.ca	Canadian Biomass Magazine	1
+https://www.canadiancattlemen.ca	Canadian Cattlemen	1
+https://www.canadianlawyermag.com	Canadian Lawyer	1
+https://www.capecodtimes.com	Cape Cod Times	1
+https://www.caranddriver.com	Car and Driver	1
+https://www.carbonbrief.org	Carbon Brief	1
+https://www.carexpert.com.au	CarExpert	1
+https://www.carlow-nationalist.ie	carlow-nationalist.ie	1
+https://www.carriermanagement.com	Carrier Management	1
+https://www.carscoops.com	Carscoops	1
+https://www.castanetkamloops.net	Castanet Kamloops	1
+https://www.caymancompass.com	Cayman Compass	1
+https://www.cbs17.com	CBS 17	1
+https://www.cbs8.com	cbs8.com	1
+https://www.ccfc.co.uk	Coventry City Football Club	1
+https://www.cfpublic.org	Central Florida Public Media	1
+https://www.chandralaw.com	Chandra Law Firm	1
+https://www.chase.com	Chase Bank	1
+https://www.chiesaditotti.com	Chiesa Di Totti	1
+https://www.chronicle.gi	Gibraltar Chronicle	1
+https://www.chroniclelive.co.uk	Chronicle Live	1
+https://www.cined.com	CineD	1
+https://www.circleofblue.org	Circle of Blue	1
+https://www.citizen-times.com	The Asheville Citizen Times	1
+https://www.city-journal.org	City Journal	1
+https://www.cjr.org	Columbia Journalism Review	1
+https://www.ckom.com	650 CKOM	1
+https://www.cleveland19.com	Cleveland 19 News	1
+https://www.clickorlando.com	WKMG	1
+https://www.climatecentre.org	Red Cross Red Crescent Climate Centre	1
+https://www.coasttv.com	CoastTV	1
+https://www.collingwoodtoday.ca	CollingwoodToday.ca	1
+https://www.coloradoan.com	The Coloradoan	1
+https://www.columbuscrew.com	Columbus Crew	1
+https://www.commercialappeal.com	The Commercial Appeal	1
+https://www.commonspace.eu	commonspace.eu	1
+https://www.complex.com	Complex	1
+https://www.connexionfrance.com	The Connexion	1
+https://www.constructionenquirer.com	Construction Enquirer	1
+https://www.consumernotice.org	Consumer Notice	1
+https://www.contactmusic.com	Contactmusic.com	1
+https://www.contrariannews.org	The Contrarian	1
+https://www.corkbeo.ie	Cork Beo	1
+https://www.counterview.net	Counterview	1
+https://www.crainsnewyork.com	Crain's New York	1
+https://www.crimeworld.com	Sunday World	1
+https://www.csis.org	CSIS | Center for Strategic and International Studies	1
+https://www.cxodigitalpulse.com	CXO Digitalpulse	1
+https://www.cxtoday.com	CX Today	1
+https://www.dailynews.com	Los Angeles Daily News	1
+https://www.dailynewsegypt.com	Dailynewsegypt	1
+https://www.dailynk.com	DailyNK	1
+https://www.dailysignal.com	Daily Signal	1
+https://www.dailytelegraph.com.au	The Daily Telegraph	1
+https://www.dallascowboys.com	Dallas Cowboys | Official Site of the Dallas Cowboys	1
+https://www.daveockop.com	DaveOCKOP	1
+https://www.davismortuaryservice.com	Davis Mortuary Service	1
+https://www.deccanchronicle.com	Deccan Chronicle	1
+https://www.decisionmarketing.co.uk	DecisionMarketing	1
+https://www.deloitte.com	Deloitte	1
+https://www.democracynow.org	Democracy Now!	1
+https://www.democrata.es	Demócrata	1
+https://www.deseret.com	Deseret News	1
+https://www.desertsun.com	The Desert Sun	1
+https://www.deutschland.de	deutschland.de	1
+https://www.devonlive.com	Devon Live	1
+https://www.dezeen.com	Dezeen	1
+https://www.digitaltrends.com	Digital Trends	1
+https://www.dispatch.com	The Columbus Dispatch	1
+https://www.distractify.com	Distractify	1
+https://www.dojeonmedia.com	Dojeon Media	1
+https://www.dongascience.com	DongA Science	1
+https://www.dorsey.com	Dorsey & Whitney	1
+https://www.draftsharks.com	Draft Sharks	1
+https://www.drive.com.au	drive.com.au	1
+https://www.dubaieye1038.com	Dubai Eye 103.8	1
+https://www.dudleynews.co.uk	Dudleynews.co.uk	1
+https://www.dws.com	DWS Asset Management	1
+https://www.eaglecountryonline.com	Eagle Country 99.3	1
+https://www.earth.com	Earth.com	1
+https://www.ebony.com	EBONY Magazine	1
+https://www.echolive.ie	echo live	1
+https://www.economies.com	Economies.com	1
+https://www.economist.com	The Economist	1
+https://www.edp24.co.uk	Edp24	1
+https://www.eea.europa.eu	European Environment Agency (EEA)	1
+https://www.eenews.net	E&E News by POLITICO	1
+https://www.eesi.org	Environmental and Energy Study Institute (EESI)	1
+https://www.eetimes.com	EE Times	1
+https://www.elitedaily.com	Elite Daily	1
+https://www.elle.com	ELLE	1
+https://www.elon.edu	Elon University	1
+https://www.empireofthekop.com	The Empire of The Kop	1
+https://www.emro.who.int	emro.who.int	1
+https://www.enca.com	eNCA	1
+https://www.engadget.com	Engadget	1
+https://www.enidnews.com	Enidnews.com	1
+https://www.equitypandit.com	Equitypandit	1
+https://www.esgnews.earth	ESG News.earth	1
+https://www.espn.co.uk	ESPN	1
+https://www.essexcountynews.co.uk	essexcountynews.co.uk	1
+https://www.eubusiness.com	EUbusiness.com	1
+https://www.euroconsumers.org	Euroconsumers	1
+https://www.eurotopics.net	eurotopics.net	1
+https://www.eventticketscenter.com	Event Tickets Center	1
+https://www.fantasypros.com	FantasyPros	1
+https://www.fdd.org	Foundation for Defense of Democracies	1
+https://www.fijitimes.com.fj	The Fiji Times	1
+https://www.finedayradio.com	Fine Day 102.3	1
+https://www.finextra.com	Finextra Research	1
+https://www.firerescue1.com	FireRescue1	1
+https://www.floridaweekly.com	Florida Weekly	1
+https://www.flotrack.org	FloTrack	1
+https://www.food-safety.com	Food Safety Magazine	1
+https://www.foodandwaterwatch.org	Food & Water Watch	1
+https://www.foodincanada.com	Food In Canada	1
+https://www.foodnavigator.com	FoodNavigator.com	1
+https://www.fool.com	The Motley Fool	1
+https://www.footballtransfers.com	footballtransfers.com	1
+https://www.foreignaffairs.com	Foreign Affairs	1
+https://www.forexfactory.com	Forex Factory	1
+https://www.fortunebusinessinsights.com	Fortune Business Insights	1
+https://www.fox2detroit.com	FOX 2 Detroit	1
+https://www.fox44news.com	KWKT - FOX 44	1
+https://www.fox5atlanta.com	FOX 5 Atlanta	1
+https://www.fox5dc.com	FOX 5 DC	1
+https://www.fox5vegas.com	FOX5 Vegas	1
+https://www.freightwaves.com	FreightWaves	1
+https://www.futuremarketinsights.com	Future Market Insights	1
+https://www.fzine.com	FZINE Singapore	1
+https://www.gamedeveloper.com	Game Developer	1
+https://www.gamefile.news	Game File | Stephen Totilo	1
+https://www.genevaenvironmentnetwork.org	Geneva Environment Network	1
+https://www.geopoliticalmonitor.com	Geopolitical Monitor	1
+https://www.ghacks.net	gHacks	1
+https://www.giz.de	GIZ	1
+https://www.glamour.co.za	Glamour South Africa	1
+https://www.glasgowlive.co.uk	glasgowlive.co.uk	1
+https://www.globalbrandsmagazine.com	Global Brands Magazine	1
+https://www.globalesports.org	globalesports.org	1
+https://www.globenewswire.com	GlobeNewswire	1
+https://www.goerie.com	Erie Times-News	1
+https://www.goldmansachs.com	Goldman Sachs	1
+https://www.goodmorningamerica.com	Good Morning America	1
+https://www.gov.br	www.gov.br	1
+https://www.govexec.com	GovExec.com	1
+https://www.grassley.senate.gov	Senator Grassley (.gov)	1
+https://www.gtreview.com	Global Trade Review (GTR)	1
+https://www.gulfcoastnewsnow.com	Gulf Coast News and Weather	1
+https://www.hamiltonnews.com	The Spec	1
+https://www.hartlepoolmail.co.uk	Hartlepool Mail	1
+https://www.hawaiicounty.gov	Hawaii County (.gov)	1
+https://www.healthbeat.org	Healthbeat	1
+https://www.healthline.com	Healthline	1
+https://www.heart.co.uk	Heart Radio	1
+https://www.heraldbulletin.com	Herald Bulletin	1
+https://www.heraldnet.com	HeraldNet.com	1
+https://www.heraldonline.com	Rock Hill Herald	1
+https://www.heraldsun.com.au	Herald Sun	1
+https://www.hidropolitikakademi.org	Hidropolitik Akademi	1
+https://www.hilltimes.com	The Hill Times	1
+https://www.hola.com	HOLA	1
+https://www.hopkinsmedicine.org	Johns Hopkins Medicine	1
+https://www.hotcars.com	HotCars	1
+https://www.houstonchronicle.com	Houston Chronicle	1
+https://www.huffpost.com	HuffPost	1
+https://www.humanrightsresearch.org	Human Rights Research Center | HRRC	1
+https://www.iata.org	IATA	1
+https://www.ibj.com	Indianapolis Business Journal	1
+https://www.ibtimes.com.au	International Business Times Australia	1
+https://www.idealista.com	Idealista	1
+https://www.idf.il	idf.il	1
+https://www.ift.org	IFT.org	1
+https://www.iiss.org	The International Institute for Strategic Studies	1
+https://www.imd.org	imd.org	1
+https://www.imeche.org	IMechE	1
+https://www.imperial.ac.uk	Imperial College London	1
+https://www.independent.org	Independent Institute	1
+https://www.inkfreenews.com	InkFreeNews.com	1
+https://www.inquirer.com	Inquirer.com	1
+https://www.insidehalton.com	Inside Halton	1
+https://www.insightsonindia.com	INSIGHTS IAS	1
+https://www.insurancejournal.com	Insurance Journal	1
+https://www.intellinews.com	IntelliNews	1
+https://www.internationalairportreview.com	International Airport Review	1
+https://www.internazionale.it	Internazionale	1
+https://www.interpol.int	Interpol	1
+https://www.intrafish.com	intrafish.com	1
+https://www.investopedia.com	Investopedia	1
+https://www.ipolitics.ca	iPolitics	1
+https://www.ipsnews.net	ipsnews.net	1
+https://www.iris-france.org	IRIS - Institut de relations internationales et stratégiques	1
+https://www.irishstar.com	Irish Star	1
+https://www.ismworld.org	Institute for Supply Management (ISM)	1
+https://www.israeldefense.co.il	israeldefense.co.il	1
+https://www.itv.com	ITVX	1
+https://www.ivpressonline.com	Imperial Valley Press Online	1
+https://www.jacarandafm.com	Jacaranda FM	1
+https://www.jalopnik.com	Jalopnik	1
+https://www.jewishnews.co.uk	Jewish News	1
+https://www.jezebel.com	jezebel.com	1
+https://www.joe.ie	JOE.ie	1
+https://www.jsonline.com	Milwaukee Journal Sentinel	1
+https://www.just-auto.com	Just Auto	1
+https://www.just-food.com	just-food.com	1
+https://www.justeconomix.com	저스트 이코노믹스	1
+https://www.kake.com	KAKE	1
+https://www.kansascity.com	Kansas City Star	1
+https://www.kcbx.org	KCBX	1
+https://www.kcl.ac.uk	King's College London	1
+https://www.kcra.com	KCRA	1
+https://www.kcrg.com	KCRG	1
+https://www.kernradio.com	KERN Radio	1
+https://www.kfyrtv.com	KFYR-TV	1
+https://www.kget.com	KGET.com	1
+https://www.khabor.com	khabor.com	1
+https://www.khaleejtimes.com	Khaleej Times	1
+https://www.kibrispostasi.com	Kıbrıs Postası	1
+https://www.kidderminstershuttle.co.uk	Kidderminster Shuttle	1
+https://www.kitv.com	KITV	1
+https://www.kjzz.org	KJZZ	1
+https://www.kkco11news.com	KKCO 11 News	1
+https://www.klsescreener.com	klsescreener.com	1
+https://www.knoe.com	KNOE	1
+https://www.kolotv.com	KOLO | 8 News Now	1
+https://www.korea.net	Korea.net	1
+https://www.krone.at	Kronen Zeitung	1
+https://www.ksat.com	KSAT	1
+https://www.kslm.news	KSLM Radio	1
+https://www.kten.com	KTEN	1
+https://www.kttn.com	KTTN	1
+https://www.kurdistan24.net	Kurdistan24	1
+https://www.kwqc.com	KWQC	1
+https://www.lancashiretelegraph.co.uk	Lancashire Telegraph	1
+https://www.latestly.com	LatestLY	1
+https://www.law360.com	Law360	1
+https://www.lawcommentary.com	Law Commentary	1
+https://www.lawnews.co.uk	lawnews.co.uk	1
+https://www.lbc.co.uk	lbc.co.uk	1
+https://www.leesburg-news.com	Leesburg-News.com	1
+https://www.legion.org	The American Legion	1
+https://www.lehighvalleylive.com	Lehighvalleylive.com	1
+https://www.leicestermercury.co.uk	Leicester Mercury	1
+https://www.leonarddavid.com	Inside Outer Space	1
+https://www.lex18.com	LEX 18 News	1
+https://www.lifesciencesipreview.com	Life Sciences IP Review	1
+https://www.linkedin.com	LinkedIn	1
+https://www.livelaw.in	Live Law	1
+https://www.livenowfox.com	LiveNOW from FOX	1
+https://www.livingstonenterprise.net	livingstonenterprise.net	1
+https://www.localnewslive.com	localnewslive.com	1
+https://www.localsyr.com	WSYR	1
+https://www.loeb.com	Loeb & Loeb LLP	1
+https://www.loveballymena.online	loveballymena.online	1
+https://www.lung.org	American Lung Association	1
+https://www.luxurytraveladvisor.com	Luxury Travel Advisor	1
+https://www.macaupostdaily.com	The Macau Post Daily	1
+https://www.macombdaily.com	Macomb Daily	1
+https://www.madisoncourier.com	Madison Courier	1
+https://www.makeuseof.com	MakeUseOf	1
+https://www.managingip.com	Managing Intellectual Property	1
+https://www.manitobacooperator.ca	Manitoba Co-operator	1
+https://www.maynoothuniversity.ie	Maynooth University	1
+https://www.mdm.com	Modern Distribution Management	1
+https://www.medpagetoday.com	MedPage Today	1
+https://www.mensjournal.com	Men's Journal	1
+https://www.miamiherald.com	Miami Herald	1
+https://www.michiganfarmnews.com	Michigan Farm News	1
+https://www.mid-day.com	Mid-Day	1
+https://www.middleeastmonitor.com	Middle East Monitor	1
+https://www.military.com	Military.com	1
+https://www.mining.com	Mining.com	1
+https://www.mlex.com	MLex	1
+https://www.mlive.com	MLive.com	1
+https://www.mlssoccer.com	MLSsoccer.com	1
+https://www.mltaikins.com	MLT Aikins	1
+https://www.mobileworldlive.com	Mobile World Live	1
+https://www.montereycountynow.com	Monterey County Weekly	1
+https://www.montereyherald.com	Monterey Herald	1
+https://www.morganlewis.com	Morgan Lewis	1
+https://www.morganstanley.com	Morgan Stanley	1
+https://www.motogp.com	motogp.com	1
+https://www.motor1.com	Motor1.com	1
+https://www.motorbiscuit.com	MotorBiscuit	1
+https://www.movieguide.org	Movieguide	1
+https://www.msn.com	MSN	1
+https://www.mtlblog.com	MTL Blog	1
+https://www.musicbusinessworldwide.com	Music Business Worldwide	1
+https://www.musictimes.com	Music Times	1
+https://www.naacpldf.org	Legal Defense Fund	1
+https://www.naharnet.com	Naharnet	1
+https://www.narcity.com	Narcity	1
+https://www.nationalmemo.com	National Memo	1
+https://www.nb.com	Neuberger Berman	1
+https://www.nbcbayarea.com	NBC Bay Area	1
+https://www.nbcboston.com	NBC Boston	1
+https://www.nbcmiami.com	NBC 6 South Florida	1
+https://www.nbcsandiego.com	NBC 7 San Diego	1
+https://www.nbcwashington.com	NBC4 Washington	1
+https://www.netzeroinvestor.net	Net Zero Investor	1
+https://www.newarab.com	The New Arab	1
+https://www.newbedfordguide.com	New Bedford Guide	1
+https://www.news18.com	News18	1
+https://www.news5cleveland.com	News 5 Cleveland WEWS	1
+https://www.newscientist.com	New Scientist	1
+https://www.newsfilecorp.com	TMX Newsfile	1
+https://www.newsfromthestates.com	News From The States	1
+https://www.newsghana.com.gh	News Ghana	1
+https://www.newsmax.com	Newsmax	1
+https://www.newsradioklbj.com	KLBJ-AM	1
+https://www.newsshooter.com	Newsshooter	1
+https://www.newstalk.com	Newstalk	1
+https://www.newswire.ca	PR Newswire Canada	1
+https://www.newswise.com	Newswise	1
+https://www.newvision.co.ug	NewVision.co.ug	1
+https://www.nextgov.com	Nextgov/FCW	1
+https://www.nfrexperience.com	NFR Experience	1
+https://www.nintendolife.com	Nintendo Life	1
+https://www.nokia.com	Nokia	1
+https://www.notateslaapp.com	Not a Tesla App	1
+https://www.notus.org	News of the United States - NOTUS	1
+https://www.novinite.com	Novinite.com	1
+https://www.nps.gov	National Park Service (.gov)	1
+https://www.numismaticnews.net	Numismatic News	1
+https://www.nydailynews.com	New York Daily News	1
+https://www.nysun.com	The New York Sun	1
+https://www.nzherald.co.nz	NZ Herald	1
+https://www.oaoa.com	Odessa American	1
+https://www.ocregister.com	Orange County Register	1
+https://www.oddschecker.com	Oddschecker	1
+https://www.okfhc.com	Opsahl-Kostel Funeral Home & Crematory Inc.	1
+https://www.oklahoman.com	The Oklahoman	1
+https://www.omfif.org	OMFIF	1
+https://www.on-magazine.co.uk	Yorkshire Magazine	1
+https://www.onenews.ph	OneNews.PH	1
+https://www.onlineathens.com	Online Athens	1
+https://www.onmanorama.com	Onmanorama	1
+https://www.openaccessgovernment.org	Open Access Government	1
+https://www.openpr.com	openPR.com	1
+https://www.orangenews.hk	橙新聞	1
+https://www.oskaloosa.com	Oskaloosa Herald	1
+https://www.ottumwacourier.com	Ottumwa Courier	1
+https://www.outsideonline.com	Outside Magazine	1
+https://www.owensoundsuntimes.com	Owen Sound Sun Times	1
+https://www.oxfordeconomics.com	Oxford Economics	1
+https://www.oxfordmail.co.uk	Oxford Mail	1
+https://www.padilla.senate.gov	Senator Alex Padilla (.gov)	1
+https://www.palmbeachpost.com	The Palm Beach Post	1
+https://www.pcguide.com	PC Guide	1
+https://www.pcmag.com	PCMag	1
+https://www.pembinavalleyonline.com	PembinaValleyOnline	1
+https://www.pennlive.com	PennLive.com	1
+https://www.pentictonnow.com	PentictonNow	1
+https://www.pgpf.org	Peter G. Peterson Foundation	1
+https://www.pharmaceutical-technology.com	Pharmaceutical Technology	1
+https://www.pib.gov.in	PIB	1
+https://www.pinoymetrogeek.com	Pinoy Metro Geek	1
+https://www.pipeline-journal.net	Pipeline Technology Journal	1
+https://www.pogo.org	Project On Government Oversight	1
+https://www.popsci.com	Popular Science	1
+https://www.portugalresident.com	Portugal Resident	1
+https://www.pottsmerc.com	pottsmerc.com	1
+https://www.pressandjournal.co.uk	Press and Journal	1
+https://www.pressdemocrat.com	The Press Democrat	1
+https://www.pressreader.com	PressReader	1
+https://www.preventionweb.net	PreventionWeb	1
+https://www.primetimer.com	primetimer.com	1
+https://www.prio.org	Peace Research Institute Oslo (PRIO)	1
+https://www.prnewsonline.com	prnewsonline.com	1
+https://www.proactiveinvestors.com	Proactive financial news	1
+https://www.proactiveinvestors.com.au	Proactive financial news	1
+https://www.protectionweb.co.za	ProtectionWeb	1
+https://www.prpeak.com	Powell River Peak	1
+https://www.prweb.com	PRWeb	1
+https://www.psychologytoday.com	Psychology Today	1
+https://www.pubaffairsbruxelles.eu	PubAffairs Bruxelles	1
+https://www.pulpandpapercanada.com	Pulp and Paper Canada	1
+https://www.pv-magazine.com	pv magazine Global	1
+https://www.qatar-tribune.com	Qatar Tribune	1
+https://www.qcintel.com	Quantum Commodity Intelligence	1
+https://www.qualcomm.com	Qualcomm	1
+https://www.queerty.com	Queerty	1
+https://www.raiders.com	Raiders.com	1
+https://www.rblandmark.com	Riverside-Brookfield Landmark	1
+https://www.rcdmallorca.es	RCD Mallorca	1
+https://www.rdworldonline.com	R&D World	1
+https://www.readtangle.com	Tangle News	1
+https://www.realtor.com	Realtor.com	1
+https://www.recordedfuture.com	Recorded Future	1
+https://www.recordpatriot.com	Benzie County Record Patriot	1
+https://www.redcross.ca	Red Cross	1
+https://www.redcross.org.uk	British Red Cross	1
+https://www.reflector.com	reflector.com	1
+https://www.resilience.org	resilience.org	1
+https://www.roadandtrack.com	Road & Track	1
+https://www.rochesterfirst.com	RochesterFirst	1
+https://www.rotoballer.com	RotoBaller	1
+https://www.rttnews.com	RTTNews	1
+https://www.runblogrun.com	runblogrun.com	1
+https://www.russiamatters.org	Russia Matters	1
+https://www.sailingscuttlebutt.com	Scuttlebutt Sailing News	1
+https://www.saltwire.com	PNI Atlantic News	1
+https://www.samsungmobilepress.com	Samsung Mobile Press	1
+https://www.sciencealert.com	ScienceAlert	1
+https://www.scotusblog.com	SCOTUSblog	1
+https://www.seahawks.com	Seattle Seahawks	1
+https://www.sentinelassam.com	The Sentinel - of this Land, for its People	1
+https://www.sfu.ca	Simon Fraser University	1
+https://www.shawlocal.com	Shaw Local	1
+https://www.silive.com	SILive.com	1
+https://www.smithsonianmag.com	Smithsonian Magazine	1
+https://www.soccernews.com	soccernews.com	1
+https://www.southcarolinapublicradio.org	South Carolina Public Radio	1
+https://www.southeastradio.ie	South East Radio	1
+https://www.sowetan.co.za	Sowetan	1
+https://www.sportbible.com	SPORTbible	1
+https://www.sportico.com	Sportico.com	1
+https://www.sportingnews.com	sportingnews.com	1
+https://www.sportscapemagazine.com	Sportscape Magazine	1
+https://www.sportsnet.ca	Sportsnet.ca	1
+https://www.sportsvideo.org	Sports Video Group	1
+https://www.stamfordadvocate.com	Stamford Advocate	1
+https://www.starnewskorea.com	starnewskorea.com	1
+https://www.statnews.com	STAT	1
+https://www.stgeorgeutah.com	St. George News	1
+https://www.stocktitan.net	Stock Titan	1
+https://www.stokesentinel.co.uk	The Sentinel	1
+https://www.storyboard18.com	Storyboard18	1
+https://www.stratfordtoday.ca	StratfordToday.ca	1
+https://www.stuff.co.nz	Stuff	1
+https://www.sunderlandecho.com	Sunderland Echo	1
+https://www.surinametimes.com	Times of Suriname	1
+https://www.swissinfo.ch	SWI swissinfo.ch	1
+https://www.swooon.com	Swooon	1
+https://www.sydneytimes.net.au	Sydney Times	1
+https://www.tag24.com	tag24.com	1
+https://www.tbsnews.net	The Business Standard	1
+https://www.tcd.ie	Trinity College Dublin	1
+https://www.teamtalk.com	TEAMtalk	1
+https://www.techeblog.com	TechEBlog -	1
+https://www.technology.org	Technology Org	1
+https://www.techrepublic.com	TechRepublic	1
+https://www.techzine.eu	Techzine Global	1
+https://www.telecompaper.com	Telecompaper	1
+https://www.telegram.com	Worcester Telegram	1
+https://www.telegraphherald.com	TelegraphHerald.com	1
+https://www.tennessean.com	The Tennessean	1
+https://www.texastribune.org	The Texas Tribune	1
+https://www.theaccountant-online.com	theaccountant-online.com	1
+https://www.thealabamanewswire.com	The Alabama News Wire	1
+https://www.thebody.com	TheBody	1
+https://www.thebusinesscouncil.ca	Business Council of Canada	1
+https://www.thecanadianpressnews.ca	thecanadianpressnews.ca	1
+https://www.thecoastguard.ca	thecoastguard.ca	1
+https://www.thedailynewsonline.com	TheDailyNewsOnline.com	1
+https://www.thedailyscrumnews.com	The Daily Scrum News	1
+https://www.thedailyupside.com	The Daily Upside	1
+https://www.thedrive.com	The Drive	1
+https://www.theeastafrican.co.ke	The EastAfrican	1
+https://www.theedgesingapore.com	The Edge Singapore	1
+https://www.theenergymix.com	The Energy Mix	1
+https://www.thefiscaltimes.com	The Fiscal Times	1
+https://www.thegardenisland.com	The Garden Island	1
+https://www.thegazette.com	thegazette.com	1
+https://www.thehawk.in	thehawk.in	1
+https://www.thehindubusinessline.com	BusinessLine	1
+https://www.thejusticeconnection.org	Justice Connection	1
+https://www.themercury.com.au	The Mercury	1
+https://www.themirror.com	The Mirror US	1
+https://www.thenakedscientists.com	The Naked Scientists	1
+https://www.thenation.com	The Nation	1
+https://www.theolivepress.es	Olive Press News Spain	1
+https://www.thepeterboroughexaminer.com	The Peterborough Examiner	1
+https://www.thepharmaletter.com	The Pharma Letter	1
+https://www.theraven.fm	The Raven 100.7	1
+https://www.thescore.com	theScore	1
+https://www.thesun.ie	The Irish Sun	1
+https://www.thesunchronicle.com	The Sun Chronicle	1
+https://www.thethings.com	TheThings	1
+https://www.thetransferflow.com	The Transfer Flow	1
+https://www.thetrucker.com	TheTrucker.com	1
+https://www.thevibes.com	The Vibes	1
+https://www.thewestmorlandgazette.co.uk	Westmorland Gazette	1
+https://www.thewhig.com	The Kingston Whig Standard	1
+https://www.thisdaylive.com	THISDAYLIVE	1
+https://www.thisisanfield.com	This Is Anfield	1
+https://www.thisismoney.co.uk	This is Money	1
+https://www.thompsonhinesmartrade.com	thompsonhinesmartrade.com	1
+https://www.ticketnews.com	TicketNews	1
+https://www.timeschronicle.ca	Times Chronicle	1
+https://www.timesfreepress.com	Chattanooga Times Free Press	1
+https://www.tmz.com	TMZ	1
+https://www.toronto.com	Toronto.com	1
+https://www.torontomu.ca	Toronto Metropolitan University (TMU)	1
+https://www.tovima.com	tovima.com	1
+https://www.townandcountrymag.com	Town & Country Magazine	1
+https://www.toyassociation.org	The Toy Association	1
+https://www.tradewindsnews.com	TradeWinds News	1
+https://www.transportenvironment.org	transportenvironment.org	1
+https://www.traveldailymedia.com	Travel Daily Media	1
+https://www.tri-cityherald.com	Tri-City Herald	1
+https://www.tribuneindia.com	The Tribune	1
+https://www.triodos-im.com	Triodos Investment Management	1
+https://www.trustedreviews.com	Trusted Reviews	1
+https://www.ttnews.com	Transport Topics	1
+https://www.u105.com	U105	1
+https://www.ucanews.com	ucanews.com	1
+https://www.ukrinform.net	Ukrinform	1
+https://www.un.org	Welcome to the United Nations	1
+https://www.undercurrentnews.com	Undercurrent News	1
+https://www.unicef.org	UNICEF	1
+https://www.universetoday.com	Universe Today	1
+https://www.universityofcalifornia.edu	University of California	1
+https://www.unwomen.org	UN Women	1
+https://www.uppermichiganssource.com	Upper Michigan's Source	1
+https://www.uslchampionship.com	uslchampionship.com	1
+https://www.valleynewslive.com	Valley News Live	1
+https://www.vancouverisawesome.com	Vancouver Is Awesome	1
+https://www.vaticannews.va	Vatican News	1
+https://www.verdict.co.uk	verdict.co.uk	1
+https://www.vice.com	vice.com	1
+https://www.visiontimes.com	Vision Times	1
+https://www.wam.ae	وكالة وام	1
+https://www.wapt.com	WAPT	1
+https://www.wate.com	WATE 6 On Your Side	1
+https://www.watermagazine.co.uk	Water Magazine	1
+https://www.wbaltv.com	WBAL-TV	1
+https://www.wccbcharlotte.com	WCCB Charlotte	1
+https://www.wcnc.com	WCNC	1
+https://www.wcpo.com	WCPO 9 News	1
+https://www.westernpeople.ie	westernpeople.ie	1
+https://www.westhawaiitoday.com	West Hawaii Today	1
+https://www.wfmz.com	WFMZ.com	1
+https://www.whalesbook.com	Whalesbook	1
+https://www.wharfedaleobserver.co.uk	Wharfedale Observer	1
+https://www.whichev.net	whichev.net	1
+https://www.whitecapsfc.com	whitecapsfc.com	1
+https://www.whsv.com	WHSV	1
+https://www.wiltonbulletin.com	CT Insider	1
+https://www.wired.me	WIRED Middle East	1
+https://www.wishtv.com	WISH-TV	1
+https://www.wjhg.com	WJHG	1
+https://www.wjtv.com	WJTV	1
+https://www.wkrn.com	WKRN News 2	1
+https://www.wkyc.com	WKYC	1
+https://www.wlfi.com	WLFI	1
+https://www.wlky.com	WLKY	1
+https://www.wlns.com	WLNS 6 News	1
+https://www.wlwt.com	WLWT	1
+https://www.wmbfnews.com	WMBF	1
+https://www.wmtw.com	WMTW	1
+https://www.wndu.com	WNDU	1
+https://www.wnep.com	WNEP	1
+https://www.wokv.com	104.5 WOKV	1
+https://www.womanandhome.com	Woman & Home	1
+https://www.wonderwall.com	wonderwall.com	1
+https://www.wonkette.com	wonkette.com	1
+https://www.world-grain.com	World Grain	1
+https://www.worldvision.ca	World Vision Canada	1
+https://www.wpr.org	WPR	1
+https://www.wpxi.com	WPXI	1
+https://www.wsbtv.com	WSB-TV	1
+https://www.wsls.com	WSLS	1
+https://www.wthitv.com	WTHI-TV	1
+https://www.wtxl.com	WTXL ABC 27 Tallahassee News	1
+https://www.wwf.eu	WWF EU	1
+https://www.yalemedicine.org	Yale Medicine	1
+https://www.yankodesign.com	Yanko Design	1
+https://www.yourconroenews.com	The Courier of Montgomery County	1
+https://www.yourlocalguardian.co.uk	Sutton Guardian	1
+https://www.zmescience.com	ZME Science	1
+https://www2.newsfilecorp.com	TMX Newsfile	1
+https://wzmq19.com	WZMQ 19 News	1
+https://ymcinema.com	Y.M.Cinema	1
+https://yourgreatermoncton.ca	Your Greater Moncton	1
+https://yoursouthshore.ca	Your South Shore	1
+https://za.usembassy.gov	U.S. Embassy & Consulates in South Africa (.gov)	1

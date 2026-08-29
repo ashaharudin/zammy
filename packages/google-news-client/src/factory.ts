@@ -44,14 +44,11 @@ export interface GoogleNewsClientConfig {
    *
    * **The destination exists now too**, which is what changed with G5:
    * `storyline_coverage` landed with G3 (migration 0021) and
-   * `queueStorylineDeepening` plans against it.
-   *
-   * One thing is still outstanding and it is a REASON NOT TO SET THIS YET rather
-   * than a hazard in the code: the fold above reaches an outlet only when its
-   * display name collapses to its domain stem, and Google writes display names,
-   * so a Google item and its Currents twin still mint two rows for a large
-   * minority of outlets. Widening that fold is its own change, with its own
-   * corpus and its own re-key migration.
+   * `queueStorylineDeepening` plans against it. A third thing landed with it and
+   * is worth naming here, because it is what makes the fold above actually
+   * reach: `stripOutletSuffix` stopped requiring an outlet's display name to BE
+   * its domain stem, taking the fold failure from 26.2% of items to 6.9% on
+   * held-out data.
    *
    * So the flag is a real switch rather than a placeholder, and what turning it
    * on costs is stated where an operator will read it (`.env.example`). It stays
