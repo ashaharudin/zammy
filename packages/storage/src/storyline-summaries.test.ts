@@ -395,6 +395,31 @@ describe("storyline day summaries in storage", () => {
       });
     });
 
+    it("refuses to null a sentence that stands, even when told to", async () => {
+      // The caller routes a refused REWRITE to `bumpSummaryAttempts`, so this
+      // upsert should never be asked to do it — which is exactly why it is
+      // asserted. The one race that is unrecoverable here is a writer deciding
+      // "there is no row to protect" from a read taken before its model call,
+      // while another writer lands a sentence in between.
+      await write("night", "The sentence that stands.", 4);
+      await write("night", null, 99);
+
+      const night = (
+        await readStorylineDaySummaries(harness.db, {
+          storylineId: arcId,
+          dayKey: "2026-08-20",
+        })
+      ).find((row) => row.segment === "night");
+
+      expect(night?.summary).toBe("The sentence that stands.");
+      // The count travels with the summary: advanced past a sentence that was
+      // not rewritten, it would retire a rewrite that is still owed.
+      expect(night?.articleCount).toBe(4);
+      // The attempt DOES land — that is the part of the write that is about
+      // the ask rather than about the sentence.
+      expect(night?.attempts).toBe(1);
+    });
+
     it("survives the storyline it belongs to being deleted", async () => {
       // The whole reason there is no foreign key: a preserve that cascades away
       // with its arc is a preserve that deletes itself.

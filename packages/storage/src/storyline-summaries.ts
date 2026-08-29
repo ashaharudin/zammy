@@ -346,15 +346,31 @@ export async function writeStorylineDaySummary(
       generated_at: write.generatedAt,
     })
     .onConflict((oc) =>
-      oc.columns(["storyline_id", "day_key", "segment"]).doUpdateSet({
-        summary: write.summary,
-        article_count: write.articleCount,
+      oc.columns(["storyline_id", "day_key", "segment"]).doUpdateSet((eb) => ({
+        // **A null summary never replaces one that stands, in SQL.**
+        //
+        // The caller already routes that case to `bumpSummaryAttempts`, so this
+        // is defence rather than the mechanism — but it is defence against the
+        // one race that is unrecoverable here. The caller decides "there is no
+        // row to protect" from a read taken before its model call; a
+        // concurrent writer that landed a sentence in between would otherwise
+        // have it overwritten with a null, on the one table nothing can
+        // rebuild. The article count travels with the summary for the same
+        // reason: a count advanced past a sentence that was not rewritten
+        // would retire a rewrite that is still owed.
+        summary: eb.fn.coalesce("excluded.summary", "storyline_day_summaries.summary"),
+        article_count: eb
+          .case()
+          .when(eb.ref("excluded.summary"), "is not", null)
+          .then(eb.ref("excluded.article_count"))
+          .else(eb.ref("storyline_day_summaries.article_count"))
+          .end(),
         label: write.label,
         model_id: write.modelId,
         attempts: write.attempts,
         segmented: write.segmented,
         generated_at: write.generatedAt,
-      }),
+      })),
     )
     .execute();
 }

@@ -250,13 +250,19 @@ export async function runChorePass(
  * `pg_TRY_advisory_lock`, not `pg_advisory_lock`: a second run must skip, not
  * queue behind the first and then start the same night's work an hour late.
  *
+ * Exported for `storyline-summary-cli.ts`, which is not a pass and still has to
+ * contend with one: it writes the same rows the `summaries` pass writes, and the
+ * losing side of that race can overwrite a sentence with a refusal it decided on
+ * from a stale read. Every other operator CLI here writes rows a later pass can
+ * rebuild; that one does not.
+ *
  * Session-scoped, on a PINNED connection — through a transaction-mode pooler a
  * session lock is taken on one backend and looked for on another, so
  * `pg_try_advisory_lock` returns true every time and both schedulers run the
  * night. That is why every caller of this builds its handle with
  * `session: true` (§4.1, `wiring.createConfiguredDb`).
  */
-async function withPassLock(
+export async function withPassLock(
   db: Kysely<Database>,
   key: number,
   run: () => Promise<void>,

@@ -816,7 +816,12 @@ export async function runSummaryChore(
   );
 
   const tally = await summaryPass(
-    { db: deps.db, ...deps.summarizer },
+    // The pass's clock governs BOTH halves. `createSummarizer` leaves `now`
+    // unset, so without this the window arithmetic here would read the chore's
+    // clock while the age-and-cliff arithmetic inside read the wall clock —
+    // identical in production, and a seam a frozen test clock falls straight
+    // through.
+    { db: deps.db, ...deps.summarizer, now: deps.now },
     {
       from,
       to: todayStart,

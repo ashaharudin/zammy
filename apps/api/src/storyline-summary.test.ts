@@ -92,6 +92,24 @@ describe("validateSummary", () => {
     expect(validateSummary('**Summary:** ""')).toBeNull();
   });
 
+  it("keeps a leading time of day that is part of the sentence", () => {
+    // "Evening" here is the first word of the answer, not a label on it.
+    // Stripping it — as the segment names in the heading list used to — stored
+    // a lowercase fragment for ever.
+    expect(validateSummary("Evening — the talks collapsed.")).toBe(
+      "Evening — the talks collapsed.",
+    );
+    expect(validateSummary("Morning brought no movement.")).toBe(
+      "Morning brought no movement.",
+    );
+  });
+
+  it("unwraps a quoted answer whose terminator sits outside the quotes", () => {
+    expect(validateSummary('"The pause held".')).toBe("The pause held.");
+    expect(validateSummary('"The pause held."')).toBe("The pause held.");
+    expect(validateSummary('“The pause held.”')).toBe("The pause held.");
+  });
+
   it("collapses the newlines a model formats with", () => {
     expect(validateSummary("The pause\nheld through\nthe evening.")).toBe(
       "The pause held through the evening.",

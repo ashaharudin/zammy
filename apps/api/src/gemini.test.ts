@@ -127,6 +127,7 @@ describe("the Gemini client", () => {
     expect(await client.generate({ prompt: "name this story" })).toEqual({
       ok: false,
       reason: "http 404",
+      failure: "unreachable",
     });
     expect(calls).toHaveLength(1);
   });
@@ -150,7 +151,7 @@ describe("the Gemini client", () => {
 
     const result = await client.generate({ prompt: "name this story" });
 
-    expect(result).toEqual({ ok: false, reason: "http 429" });
+    expect(result).toEqual({ ok: false, reason: "http 429", failure: "unreachable" });
     expect(calls).toHaveLength(3);
   });
 
@@ -160,7 +161,7 @@ describe("the Gemini client", () => {
 
     const result = await client.generate({ prompt: "name this story" });
 
-    expect(result).toEqual({ ok: false, reason: "http 400" });
+    expect(result).toEqual({ ok: false, reason: "http 400", failure: "unreachable" });
     expect(calls).toHaveLength(1);
   });
 
@@ -171,6 +172,10 @@ describe("the Gemini client", () => {
     expect(await client.generate({ prompt: "name this story" })).toEqual({
       ok: false,
       reason: "blocked: SAFETY",
+      // The model looked at the prompt and declined it — a verdict on the
+      // prompt, not a failure to reach the model. The summariser counts this
+      // against the span; the labeler does not care either way.
+      failure: "answered",
     });
   });
 
@@ -185,6 +190,7 @@ describe("the Gemini client", () => {
     expect(await client.generate({ prompt: "name this story" })).toEqual({
       ok: false,
       reason: "empty (MAX_TOKENS)",
+      failure: "answered",
     });
   });
 
@@ -222,6 +228,7 @@ describe("the Gemini client", () => {
     expect(await client.generate({ prompt: "name this story" })).toEqual({
       ok: false,
       reason: "thoughts only (MAX_TOKENS)",
+      failure: "answered",
     });
   });
 
@@ -232,6 +239,9 @@ describe("the Gemini client", () => {
     expect(await client.generate({ prompt: "name this story" })).toEqual({
       ok: false,
       reason: "unexpected response shape",
+      // OUR problem to fix — this model has changed response shape under a
+      // pinned id before — so it must not count against whatever was asked.
+      failure: "unreachable",
     });
   });
 
@@ -241,7 +251,11 @@ describe("the Gemini client", () => {
 
     const result = await client.generate({ prompt: "name this story" });
 
-    expect(result).toEqual({ ok: false, reason: "network: ECONNRESET" });
+    expect(result).toEqual({
+      ok: false,
+      reason: "network: ECONNRESET",
+      failure: "unreachable",
+    });
     expect(calls).toHaveLength(2);
   });
 
@@ -258,7 +272,7 @@ describe("the Gemini client", () => {
       signal: controller.signal,
     });
 
-    expect(result).toEqual({ ok: false, reason: "aborted" });
+    expect(result).toEqual({ ok: false, reason: "aborted", failure: "unreachable" });
     expect(calls).toHaveLength(1);
   });
 });
@@ -421,7 +435,11 @@ describe("the Gemini client's rate limiter", () => {
       backoffBaseMs: 0,
     });
 
-    expect(await client.generate({ prompt: "one" })).toEqual({ ok: false, reason: "http 429" });
+    expect(await client.generate({ prompt: "one" })).toEqual({
+      ok: false,
+      reason: "http 429",
+      failure: "unreachable",
+    });
     // A different call, well under the window's ceiling — and still held.
     expect(await client.generate({ prompt: "two" })).toEqual({
       ok: true,
@@ -567,7 +585,7 @@ describe("the Gemini client's rate limiter", () => {
     await time.run();
     const results = await calls;
 
-    expect(results[0]).toEqual({ ok: false, reason: "http 429" });
+    expect(results[0]).toEqual({ ok: false, reason: "http 429", failure: "unreachable" });
     expect(results[1]).toEqual({ ok: true, text: "Fort Hood Crash" });
     expect(results[2]).toEqual({ ok: true, text: "Fort Hood Crash" });
     // The waiter due at :60 held rather than firing inside the cooldown — and
@@ -641,7 +659,7 @@ describe("the Gemini client's rate limiter", () => {
     await client.generate({ prompt: "one" });
     const second = await client.generate({ prompt: "two", signal: controller.signal });
 
-    expect(second).toEqual({ ok: false, reason: "aborted" });
+    expect(second).toEqual({ ok: false, reason: "aborted", failure: "unreachable" });
     expect(at).toEqual([0]);
   });
 

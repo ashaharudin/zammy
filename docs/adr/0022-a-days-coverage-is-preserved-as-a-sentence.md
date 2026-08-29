@@ -81,10 +81,13 @@ midnight. So:
   5xx, a timeout or a pacer that will not queue writes no row and costs no
   attempt: it says nothing about the span. The two must not be one, or an
   outage retires spans it never read.
-- The **day sentence follows its quarters even past the window.** Nothing else
-  outranks the freeze; this does, because a quarter can legitimately change
-  there (a first write, a successful retry) and a day summary that omits a
-  quarter of its own day is worse than one written twice.
+- The **day sentence follows its quarters even past the window.** A quarter can
+  legitimately change there (a first write, a successful retry), and a day
+  summary that omits a quarter of its own day is worse than one written twice.
+  The **attempt cap still outranks it**: a span whose three asks were all
+  refused is retired, and stays retired, whatever moves underneath it. Three
+  refusals is the model declining that span, and following the quarters is not
+  worth an unbounded bill.
 
 ## The cliff, and the days that only get one sentence
 

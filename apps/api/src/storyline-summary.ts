@@ -204,10 +204,17 @@ export function validateSummary(raw: string): string | null {
       .replace(/^\d+[.)]\s+/, "")
       .replace(/^(?:\*\*|__|\*|_)+/, "")
       .replace(/(?:\*\*|__|\*|_)+$/, "")
-      .replace(
-        /^(?:summary|day summary|overall|overall summary|night|morning|afternoon|evening)\s*[:\-–—]\s*/i,
-        "",
-      )
+      // The heading words only. The SEGMENT names deliberately are not here,
+      // and were: "Evening — the talks collapsed." is a correct answer whose
+      // first word is part of the sentence, and stripping it stored a
+      // lowercase fragment for ever. A model that genuinely prefixes
+      // "Morning:" is rarer than a sentence that opens with a time of day.
+      .replace(/^(?:summary|day summary|overall|overall summary)\s*[:\-–—]\s*/i, "")
+      // The whole answer in quotes, with the terminator inside or outside them.
+      // Done as a pair rather than as two independent trims, which left the
+      // closing quote behind on `"The pause held".` — the trailing trim cannot
+      // fire while the last character is the period.
+      .replace(/^["'“‘]\s*(.+?)\s*["'”’](\s*[.!?])?$/, "$1$2")
       .replace(/^["'“‘]+/, "")
       .replace(/["'”’]+$/, "")
       .trim();

@@ -57,7 +57,11 @@ beforeEach(async () => {
  *                           timeout, or the pacer refusing to queue) — which
  *                           must cost NOTHING
  */
-type StubAnswer = string | null | { unusable: string };
+type StubAnswer =
+  | string
+  | null
+  | { unusable: string }
+  | { failure: "unreachable" | "answered"; reason: string };
 
 function stub(answers: StubAnswer[]): TextGenerator & { prompts: string[] } {
   const prompts: string[] = [];
@@ -71,9 +75,13 @@ function stub(answers: StubAnswer[]): TextGenerator & { prompts: string[] } {
       const answer = answers[Math.min(index, answers.length - 1)];
       index += 1;
       if (answer === null || answer === undefined) {
-        return { ok: false, reason: "stubbed transport failure" };
+        return { ok: false, reason: "stubbed transport failure", failure: "unreachable" };
       }
-      if (typeof answer === "object") return { ok: true, text: answer.unusable };
+      if (typeof answer === "object") {
+        return "unusable" in answer
+          ? { ok: true, text: answer.unusable }
+          : { ok: false, reason: answer.reason, failure: answer.failure };
+      }
       return { ok: true, text: answer };
     },
   };
@@ -366,6 +374,64 @@ describe("the pubDate cliff", () => {
   });
 });
 
+/**
+ * `ok: false` is not one thing, and treating it as one is the bug that hides
+ * behind a passing suite: the client returns it for a safety block and for a
+ * timeout alike, and only the first is the model's verdict on the span.
+ */
+describe("a blocked or empty answer is a refusal, not an outage", () => {
+  const BLOCKED = { failure: "answered" as const, reason: "blocked: SAFETY" };
+  const EMPTY = { failure: "answered" as const, reason: "empty (MAX_TOKENS)" };
+
+  it("counts a safety block against the span", async () => {
+    const id = await seedThreeQuarters();
+    const outcome = await summarizeStorylineDay(deps(stub([BLOCKED])), candidate(id, "2026-08-14"));
+
+    expect(outcome.refused).toBeGreaterThan(0);
+    expect(outcome.unavailable).toBe(0);
+    // A row, so the refusal is visible and bounded. Asking a blocked prompt
+    // again gets the same block, which is what the attempt cap is for.
+    const night = (await rowsFor(id, "2026-08-14")).find((row) => row.segment === "night");
+    expect(night).toMatchObject({ summary: null, attempts: 1 });
+  });
+
+  it("counts a candidate that answered nothing against the span too", async () => {
+    const id = await seedThreeQuarters();
+    const outcome = await summarizeStorylineDay(deps(stub([EMPTY])), candidate(id, "2026-08-14"));
+    expect(outcome.refused).toBeGreaterThan(0);
+    expect(outcome.unavailable).toBe(0);
+  });
+
+  it("does not stop the pass, the way a run of real outages does", async () => {
+    // The circuit breaker is for "the API is down", and a storyline whose
+    // headlines trip the safety filter is not that. Left misclassified, the
+    // oldest-first walk would halt at the same day every night and every day
+    // newer than it would age out of the window unwritten.
+    const id = await seedThreeQuarters();
+    const [group] = await sql<{ group_id: string }>`
+      select group_id from storyline_groups where storyline_id = ${id}::uuid limit 1
+    `.execute(db).then((result) => result.rows);
+    for (let i = 0; i < 6; i += 1) await article("2026-08-13T09:00:00Z", group!.group_id);
+    const other = await article("2026-08-13T10:00:00Z");
+    await sql`
+      insert into storyline_groups (storyline_id, group_id) values (${id}::uuid, ${other})
+    `.execute(db);
+
+    const tally = await summaryPass(deps(stub([BLOCKED])), {
+      from: new Date("2026-08-01T00:00:00Z"),
+      to: NOW,
+      minArticlesExclusive: 4,
+      minGroups: 2,
+      ratePerMinute: 0,
+      now: () => NOW,
+    });
+
+    expect(tally.stoppedBy).toBe("exhausted");
+    expect(tally.days).toBe(2);
+    expect(tally.unavailable).toBe(0);
+  });
+});
+
 describe("segmented never lies about a day that has quarters", () => {
   it("keeps segmented true when a day row is retried past the cliff", async () => {
     const id = await seedThreeQuarters();
@@ -387,6 +453,24 @@ describe("segmented never lies about a day that has quarters", () => {
     // `segmented: false` means "we could not tell when this day's coverage
     // landed", and three quarter sentences sitting beside it say otherwise.
     expect(day?.segmented).toBe(true);
+  });
+
+  it("marks a day whose every quarter was REFUSED as unsegmented", async () => {
+    const id = await seedThreeQuarters();
+    // Fresh, and nothing answers: three null quarter rows and a null day row.
+    await summarizeStorylineDay(deps(stub([UNUSABLE])), candidate(id, "2026-08-14"));
+
+    // Nine days later the day itself is retried and answers.
+    await summarizeStorylineDay(
+      deps(stub(["The whole day."]), { now: () => new Date("2026-08-24T05:00:00.000Z") }),
+      candidate(id, "2026-08-14"),
+    );
+
+    const day = (await rowsFor(id, "2026-08-14")).find((row) => row.segment === "day");
+    expect(day?.summary).toBe("The whole day.");
+    // Quarter ROWS exist, but none of them carries a sentence — so nothing
+    // here places this day's coverage in time, which is what `false` says.
+    expect(day?.segmented).toBe(false);
   });
 });
 

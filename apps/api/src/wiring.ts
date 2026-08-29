@@ -228,7 +228,7 @@ export function createLabeler(
  * client, and the difference only shows up as a rate nobody is watching.
  */
 export function summarySharesLabelerPacer(config: Config): boolean {
-  return config.SUMMARY_API_KEY === undefined;
+  return !config.SUMMARY_API_KEY;
 }
 
 export function createModelPacer(config: Config): ModelPacer {
@@ -254,7 +254,10 @@ export function createSummarizer(
   logger?: Summarizer["logger"],
   pacer?: ModelPacer,
 ): Summarizer {
-  const apiKey = config.SUMMARY_API_KEY ?? config.GEMINI_API_KEY;
+  // `||`, so an empty string falls through to the labeler's key the way an
+  // absent variable does — config already normalizes it, and this is the line
+  // that would be wrong if that ever regressed.
+  const apiKey = config.SUMMARY_API_KEY || config.GEMINI_API_KEY;
   const shared = summarySharesLabelerPacer(config) ? pacer : undefined;
   return {
     generator: apiKey

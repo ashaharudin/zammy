@@ -53,6 +53,14 @@ export interface SummarizerDeps {
    * boundary rather than about the news.
    */
   cliffDays: number;
+  /**
+   * The caller's abort, threaded into the model call itself.
+   *
+   * The pass checks its own signal before admitting a call, which stops it
+   * starting new work — but a call already in flight would otherwise run out
+   * the full `GEMINI_TIMEOUT_MS` and its retries after the caller has given up.
+   */
+  signal?: AbortSignal;
   now?: () => Date;
   logger?: {
     warn(fields: Record<string, unknown>, message: string): void;
@@ -308,7 +316,14 @@ export async function summarizeStorylineDay(
     // its four quarter sentences still standing beside it — the one column
     // whose whole job is to not lie, lying.
     segmented:
-      segmentsAreHonest || [...stored.keys()].some((segment) => segment !== "day"),
+      segmentsAreHonest ||
+      [...stored.values()].some(
+        // A quarter row with no sentence is not evidence the day's coverage
+        // could be placed in time — it is a refusal, and a day whose every
+        // quarter was refused and whose day row is retried past the cliff is
+        // exactly the "we could not tell when this landed" case.
+        (row) => row.segment !== "day" && row.summary !== null,
+      ),
     quartersRewritten,
     now,
     outcome,
@@ -433,8 +448,19 @@ async function ask(
   // client's OWN retries (a 503, a 429 it waited out) are invisible from here
   // and are not in this number.
   outcome.modelCalls += 1;
-  const result = await deps.generator!.generate({ prompt });
-  if (!result.ok) return { kind: "unavailable", reason: result.reason };
+  const result = await deps.generator!.generate({
+    prompt,
+    ...(deps.signal ? { signal: deps.signal } : {}),
+  });
+  if (!result.ok) {
+    // `failure`, never the reason string: the client knows which of the two
+    // happened and the reason is prose for a log line. A safety block and a
+    // candidate that answered nothing ARE the model's verdict on this prompt
+    // and cost an attempt; everything else is an outage and costs nothing.
+    return result.failure === "answered"
+      ? { kind: "refused", reason: result.reason }
+      : { kind: "unavailable", reason: result.reason };
+  }
 
   const validated = validateSummary(result.text);
   if (validated === null) {
@@ -625,6 +651,11 @@ export async function summaryPass(
   const batchSize = options.batchSize ?? 200;
 
   let consecutiveUnavailable = 0;
+  // The abort reaches the model call itself, not just the admission check.
+  const askDeps: SummarizerDeps = options.signal
+    ? { ...deps, signal: options.signal }
+    : deps;
+
   const gate: CallGate = {
     async before(): Promise<string | null> {
       if (options.signal?.aborted) return "signal";
@@ -665,7 +696,7 @@ export async function summaryPass(
       tally.days += 1;
       let outcome: DaySummaryOutcome;
       try {
-        outcome = await summarizeStorylineDay(deps, candidate, gate);
+        outcome = await summarizeStorylineDay(askDeps, candidate, gate);
       } catch (error) {
         // Never throws for one day's sake, exactly as the linker and the label
         // pass don't: a day this run could not summarise is a day standing

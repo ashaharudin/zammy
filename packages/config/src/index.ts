@@ -733,7 +733,17 @@ const EnvSchema = z
      * shared-pacer behaviour above is a decision this file records rather than
      * an accident of there being one key.
      */
-    SUMMARY_API_KEY: z.string().trim().optional(),
+    // `|| undefined`, not a bare `.optional()`: an env var that is PRESENT and
+    // EMPTY — which is exactly what `.env.example` ships and what a dashboard's
+    // blank field sends — parses as `""`, and `SUMMARY_API_KEY ?? GEMINI_API_KEY`
+    // does not fall through an empty string. Without this, copying the example
+    // file and filling in `GEMINI_API_KEY` gives a working labeler and a
+    // summariser with no model at all, silently.
+    SUMMARY_API_KEY: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => value || undefined),
     /**
      * Days after a UTC day closes during which its sentences may still be
      * rewritten. Past this the day is frozen, which is what makes it a preserve.

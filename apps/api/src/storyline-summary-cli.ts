@@ -5,6 +5,7 @@ import {
   summaryDayBounds,
   summaryDayKey,
 } from "@zammy/storage";
+import { CHORE_LOCK_KEYS, withPassLock } from "./chore-runner.js";
 import { summaryPass } from "./storyline-summary-service.js";
 import { createConfiguredDb, createSummarizer } from "./wiring.js";
 
@@ -86,7 +87,12 @@ if (storylineId !== undefined && !/^[0-9a-f-]{36}$/i.test(storylineId)) {
 }
 
 const config = loadConfig();
-const db = createConfiguredDb(config);
+// `session: true`, which every other operator CLI here deliberately avoids:
+// this one takes the `summaries` pass lock, and a session-scoped advisory lock
+// through a transaction-mode pooler is taken on one backend and looked for on
+// another — `pg_try_advisory_lock` then returns true every time and the lock is
+// decoration (`chore-runner.ts` has the full argument).
+const db = createConfiguredDb(config, { session: true });
 
 try {
   if (show) await printSummaries();
@@ -156,8 +162,37 @@ async function run(): Promise<void> {
   }
 
   const startedAt = Date.now();
+  // The SAME lock the nightly pass takes, because this writes the same rows.
+  //
+  // Every other operator CLI in this repo writes state a later pass rebuilds,
+  // so overlapping a scheduled run costs duplicated work and nothing else.
+  // These rows are the one thing here that nothing rebuilds, and the race is
+  // not benign: both runs read "no row", both call the model, and whichever
+  // finishes second writes its own verdict over the first — so a contract
+  // failure on this side can bury a sentence the nightly pass had just
+  // written. (The upsert refuses to null a standing summary as well, which is
+  // the belt to this lock's braces.)
+  const ran = await withPassLock(db, CHORE_LOCK_KEYS.summaries, async () => {
+    await runPass({ summarizer, from, to, startedAt });
+  });
+  if (!ran) {
+    console.error(
+      "another summary run holds the lock — nothing was done. The nightly pass " +
+        "is at 05:00 UTC; wait for it, or re-run after it finishes.",
+    );
+    process.exitCode = 0; // Overlap is expected, exactly as it is for a chore.
+  }
+}
+
+async function runPass(input: {
+  summarizer: ReturnType<typeof createSummarizer>;
+  from: Date;
+  to: Date;
+  startedAt: number;
+}): Promise<void> {
+  const { from, to, startedAt } = input;
   const tally = await summaryPass(
-    { db, ...summarizer },
+    { db, ...input.summarizer },
     {
       from,
       to,

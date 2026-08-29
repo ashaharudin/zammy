@@ -33,11 +33,24 @@ Three states, and the difference between the first two is the whole feature:
 - **row, `summary` null** — the model answered and the answer was unusable.
 - **row, `summary` set** — the sentence.
 
-The middle one is a **refusal** and costs the span an attempt. An unreachable
-model — a 429, a 5xx, a timeout, the pacer declining to queue — writes nothing at
-all and costs nothing, because it says nothing about the span. Collapsing the two
-is how three nights of quota errors would take every span in the window to
-`SUMMARY_MAX_ATTEMPTS` without the model having declined one of them.
+The middle one is a **refusal** and costs the span an attempt. The line between
+the two is drawn by the client, on `GenerateResult.failure`, never on the reason
+string:
+
+| the model… | | costs an attempt? |
+|---|---|---|
+| answered, and the answer failed the contract | refusal | yes |
+| blocked the prompt (`SAFETY`) | refusal | yes |
+| answered with an empty candidate, or only thinking | refusal | yes |
+| 429, 5xx, timeout, network fault | unreachable | **no** |
+| a 4xx, an unparseable body, a shape we do not know | unreachable | **no** |
+| the local pacer declined to queue the call | unreachable | **no** |
+
+Collapsing the two is how three nights of quota errors would take every span in
+the window to `SUMMARY_MAX_ATTEMPTS` without the model having declined one of
+them. Collapsing them the other way is just as bad: a storyline whose headlines
+trip the safety filter would look like an outage, and the pass's
+outage-circuit-breaker would halt at the same day every night.
 
 **No foreign key on `storyline_id`, deliberately.** `storyline_groups` and
 `storyline_days` cascade from `storylines`, which is right for them and would be
@@ -130,6 +143,8 @@ rather than about the coverage. Two of those are enforced by
 prompt's, exactly as "name the event, not the entity" is the label prompt's.
 A wrapper (`**Summary:** "…"`) is stripped rather than refused — a chat-tuned
 model returns one often enough that refusing would make refusal the common case.
+The segment names are deliberately *not* in the strip list: "Evening — the talks
+collapsed." is a correct answer whose first word is part of the sentence.
 
 **The sentence-count check knows about abbreviations**, and that is not a
 nicety: `U.S. officials paused the wall` is a period, a space and a capital
@@ -183,6 +198,12 @@ it protects.
 CLI run against a live server puts two pacers on one key and up to 2× the ceiling
 through it. What that costs is not this run — it is the server's labels falling
 back to the bigram extractor, which are sticky until the drift trigger fires.
+
+The CLI takes the **same advisory lock** as the nightly pass, and skips (exit 0)
+if the pass holds it. It is the only operator command here that does: every other
+one writes state a later pass rebuilds, and these rows are the one thing nothing
+rebuilds — two runs deciding independently what a span should say, and the loser
+overwriting the winner, is not a race worth having.
 
 ## Verifying it
 

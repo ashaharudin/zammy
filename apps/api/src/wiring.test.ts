@@ -41,6 +41,16 @@ describe("summarySharesLabelerPacer", () => {
   it("shares when neither is set, which is the no-model case anyway", () => {
     expect(summarySharesLabelerPacer(config())).toBe(true);
   });
+
+  it("treats a PRESENT but EMPTY second key as unset", () => {
+    // Which is what `.env.example` and a blank dashboard field send. Read as a
+    // key, it both silences the summariser (`?? ` does not fall through "")
+    // and inverts this decision — the two lanes stop sharing a window on the
+    // strength of a key that does not exist.
+    expect(
+      summarySharesLabelerPacer(config({ GEMINI_API_KEY: "one-key", SUMMARY_API_KEY: "" })),
+    ).toBe(true);
+  });
 });
 
 describe("createSummarizer", () => {
@@ -59,6 +69,17 @@ describe("createSummarizer", () => {
     );
     expect(summarizer.generator).not.toBeNull();
     expect(summarizer.modelId).toBe("some-other-model");
+  });
+
+  it("still uses GEMINI_API_KEY when the second key is present and empty", () => {
+    // The failure this pins is silent: a working labeler beside a summariser
+    // with no model at all, from doing exactly what the docs say — copy
+    // `.env.example`, fill in one key, turn the flag on.
+    const summarizer = createSummarizer(
+      config({ GEMINI_API_KEY: "one-key", SUMMARY_API_KEY: "" }),
+    );
+    expect(summarizer.generator).not.toBeNull();
+    expect(summarizer.modelId).not.toBeNull();
   });
 
   it("builds a generator from SUMMARY_API_KEY alone", () => {
