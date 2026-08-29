@@ -263,13 +263,53 @@ describe("latestNews offline — the recorded /v2 feed (PROBE-FINDINGS 6c)", () 
 });
 
 describe("per-call date range ceiling — fixture mode reproduces the wall", () => {
+  /**
+   * The window is RELATIVE to now, and that is the whole of what this test
+   * learned on 2026-08-29.
+   *
+   * It used to ask for a fixed `2026-07-01 … 2026-08-06` — 36 days, comfortably
+   * over `CURRENTS_MAX_RANGE_DAYS`. But the two ceilings are checked in order:
+   * the 30-day LOOKBACK clamps `startDate` forward first, and only what
+   * survives that is measured against the RANGE ceiling. As the calendar
+   * advanced, the clamp ate more of the window every day, and on 2026-08-29 it
+   * reached `2026-07-30` — leaving exactly 7 days, which is at the ceiling
+   * rather than over it. The call stopped throwing and started returning an
+   * adjustment, so a green test went red having caught nothing and blocked a
+   * production migration on its way past.
+   *
+   * A fixed window cannot express "over the range ceiling" because the thing it
+   * is measured against moves. These offsets keep it wrong on purpose in both
+   * directions at once: 21 days back is well inside the 30-day lookback, so
+   * nothing is clamped, and the 20-day span left over is well past the 7-day
+   * range ceiling. Both margins are large enough that no arithmetic near a
+   * boundary decides the outcome.
+   */
+  const DAY_MS = 86_400_000;
+
   it("throws the same local error as live mode for an over-range search", async () => {
+    const now = Date.now();
+
     await expect(
       client.search({
         keywords: ["climate"],
-        startDate: new Date("2026-07-01T00:00:00Z"),
-        endDate: new Date("2026-08-06T00:00:00Z"),
+        startDate: new Date(now - 21 * DAY_MS),
+        endDate: new Date(now - 1 * DAY_MS),
       }),
     ).rejects.toMatchObject({ name: "NewsInvalidQueryError" });
+  });
+
+  it("does not throw for a window inside both ceilings, which is what makes the above a range test", () => {
+    // The control the old shape did not have. Without it, a mistake that made
+    // `search` reject everything — or a lookback clamp quietly doing the
+    // rejecting — reads as this suite passing.
+    const now = Date.now();
+
+    return expect(
+      client.search({
+        keywords: ["climate"],
+        startDate: new Date(now - 5 * DAY_MS),
+        endDate: new Date(now - 1 * DAY_MS),
+      }),
+    ).resolves.toBeDefined();
   });
 });
