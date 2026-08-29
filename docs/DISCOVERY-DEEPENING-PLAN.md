@@ -864,6 +864,24 @@ Three consequences, in increasing order of how much they matter:
   "33 articles of 31,308 straddle a UTC midnight" — a figure measured on one
   provider whose two emissions are minutes apart, and it does not survive a
   provider that emits a bare date in another timezone.
+
+  **The defect is real and the mechanism above is wrong — corrected 2026-08-29,
+  see [ADR-0022](adr/0022-a-bare-date-widens-the-lookup-not-the-fold.md).** The
+  paragraph reasons from the stamp to the fix: if Google's date names a Pacific
+  day, then bucketing on the Pacific day makes its assertion exactly one bucket.
+  Measured against the 150 bare-date Google News sightings on the dev archive
+  whose story Currents also holds, **it does the opposite** — the same-bucket
+  share falls from 84.7% under UTC to 78.7% under Pacific, because Google's date
+  disagrees with the archive's clock in BOTH directions (12 pairs a day early, 11
+  a day late) and no fixed offset can absorb a two-sided error. All 24 hourly
+  boundaries were scored; the best of them, 03:00Z, reaches 86.0%. The two worked
+  examples above are genuine and are among the 12 — a fix that repaired them and
+  broke 20 others would have looked like a success from here.
+
+  So the repair is not a bucket at all: a bare-dated sighting is RESOLVED against
+  its own day and the two adjacent ones and still STORED under one, which closes
+  all 23 misses, matched more than one day in 0 of 1,749 sightings, and — because
+  the fold is untouched — owes no migration.
 - **`published = LEAST(...)` writes the degraded stamp onto articles the
   discovery plane already held.** That is the next section.
 
@@ -1265,10 +1283,16 @@ every one is a G5 correction, and together they are smaller than the measurement
 that found them. The first two are unconditional; items 3 and 4 are what a windowed
 frontier owes on top, and they exist because windowing was measured above and came
 back half a fix. **Item 5 was discharged on 2026-08-29 — accepted in writing, on
-the finding that it was not a deepening defect at all — so the live gate is four
-items.** The description that discharged it is
-`docs/G6-ITEM-5-GROUP-REPARENTING.md`, and it corrects two claims this section
-makes; both are marked in place below.
+the finding that it was not a deepening defect at all.** The description that
+discharged it is `docs/G6-ITEM-5-GROUP-REPARENTING.md`, and it corrects two claims
+this section makes; both are marked in place below.
+
+**Items 1 and 2 were also discharged on 2026-08-29** — item 1 and the handover
+half of item 2 by ADR-0021 (#185), the day-bucket half of item 2 by ADR-0022 — so
+**the live gate is items 3 and 4, and both are conditional on the frontier being
+windowed.** Which is to say: nothing unconditional is outstanding, and G7's
+verdict now rests on its own argument rather than on a list of repairs. The
+verdict is unchanged — the acceptance test below has not been run.
 
 1. **Never hand a deepening sighting's `url` to an existing article.** Not
    conditional on the stamp: all 3,087 sightings this phase drew carry a
@@ -1276,12 +1300,31 @@ makes; both are marked in place below.
    handover is a downgrade in every case — including the 9 of Span B's 12 where
    the earlier-emission claim was true. A newly MINTED article keeps the redirect,
    which is the price of the provider and not a defect.
-2. **Refuse the rest of the display-field handover to a bare-date sighting**, and
+2. ~~**Refuse the rest of the display-field handover to a bare-date sighting**, and
    decide in the same change what a bare date means for `alt_key`'s day bucket —
-   the two are one question about whether a date is an emission time. The measured
+   the two are one question about whether a date is an emission time.~~ The measured
    prize is the 103 of Span A's 104 corruptions that a bare stamp drove; the
    measured cost is that the test misfires on ~1.7% of in-window items, in the
    safe direction. Both numbers are above; neither ships unmeasured.
+
+   **DISCHARGED — in two changes rather than one, and the split was the right
+   call.** The handover half landed with
+   [ADR-0021](adr/0021-the-earliest-emission-is-not-authoritative-for-every-field.md)
+   (#185), which also discharges item 1. The day-bucket half landed with
+   [ADR-0022](adr/0022-a-bare-date-widens-the-lookup-not-the-fold.md), separately
+   because it was the only one of the two that could have touched the FOLD, which
+   ADR-0018 prices as a migration.
+
+   **And it did not touch it.** This item asks what a bare date means for the day
+   bucket and the section above answers "Pacific". Measured, that answer is wrong
+   in the expensive direction: over the 150 bare-date sightings whose story
+   Currents also holds, a Pacific bucket takes the same-bucket share from 84.7%
+   DOWN to 78.7%, because the disagreement between Google's date and the archive's
+   clock is two-sided and no fixed offset absorbs it. So the fold stays where it
+   is and the LOOKUP widens instead — a bare-dated sighting resolves against its
+   own day and the two adjacent ones while still being stored under one, closing
+   all 23 misses with 0 ambiguous matches in 1,749 sightings, and owing no
+   migration.
 3. **If the frontier is windowed, the far edge is 6 days back, not 8.** The cliff
    is at day 8/9, `BOUND_PADDING_MS` adds a day to whatever the planner asks, and
    day 8 is already 3.9% degraded. 7 is the arithmetic ceiling and 6 is the number
@@ -1350,7 +1393,8 @@ makes; both are marked in place below.
    gets today, and `absorbMergedGroup` currently marks `link_dirty_at` and stops.
    That needs its own measurement and is NOT a G7 gate.
 
-   **G7 is therefore gated on four items, not five.**
+   **G7 is therefore gated on four items, not five** — and on two, not four,
+   once items 1 and 2 landed later the same day.
 
 **And re-run this instrument afterwards**, with the acceptance test being the one
 G5 stated and did not get: the cloud comes back byte-identical across a run.
@@ -1365,14 +1409,19 @@ phase written here, and it should be argued as the smaller thing it is.
 ## G7 — The scheduler, and the §9 trade
 
 **Depends on**: G6 saying yes. **G6 said NO — see its verdict above**, which
-carried a five-item gating list; **item 5 was discharged on 2026-08-29 and four
-remain**. The yield is there; two defects it uncovered are
-not survivable by a scheduler, and both are G5 corrections rather than new phases.
-**Windowing the crawl inside the eight-day `pubDate` cliff was measured and is
-half a fix** — it restores the fold and touches neither the URL handover nor
-group re-parenting, and it forecloses the backfill this section is written around
-(group re-parenting is now accepted rather than owed — item 5).
-Do not start this until the gating list lands and G6's instrument has been re-run.
+carried a five-item gating list; **items 1, 2 and 5 were discharged on 2026-08-29
+and two remain**, both conditional on the frontier being windowed. The yield is
+there; two defects it uncovered are not survivable by a scheduler, and both are
+G5 corrections rather than new phases. **Windowing the crawl inside the eight-day
+`pubDate` cliff was measured and is half a fix** — it restores the fold and
+touches neither the URL handover nor group re-parenting, and it forecloses the
+backfill this section is written around (group re-parenting is now accepted
+rather than owed — item 5).
+
+**What is left before this can start is the acceptance test, not the list.** The
+repairs have landed; what has not happened is re-running G6's instrument and
+seeing the cloud come back byte-identical across a run, which is the check G5
+stated and did not get. Until that has been done the verdict above stands.
 
 Turn the cloud into a crawl frontier: storylines fetched on a schedule rather
 than on a click, arcs backfilled by slicing their spans.

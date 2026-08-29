@@ -1,5 +1,5 @@
 import { sql, type Kysely } from "kysely";
-import type { Sighting } from "@zammy/news-client";
+import { altKeyProbe, type Sighting } from "@zammy/news-client";
 import { hexToBytea, type Database, type SightingPlane } from "./database.js";
 import { lowerGroupPosition } from "./grouping.js";
 import { readGroupStorylines, refreshStorylineDerivations } from "./storylines.js";
@@ -167,9 +167,20 @@ export async function ingestSightings(
     for (const sighting of input.sightings) {
       const dedupKey = hexToBytea(sighting.dedupKey);
       const altKey = sighting.altKey === null ? null : hexToBytea(sighting.altKey);
+      // The key that gets STORED is `altKey`; these are the keys the lookup is
+      // allowed to MATCH, which is the same one key for every sighting but a
+      // bare-dated one (`altKeyProbe`, ADR-0022).
+      const altKeyMatches = altKeyProbe(sighting).map(hexToBytea);
       const published = new Date(sighting.published);
 
-      const article = await resolveArticle(trx, sighting, dedupKey, altKey, published);
+      const article = await resolveArticle(
+        trx,
+        sighting,
+        dedupKey,
+        altKey,
+        altKeyMatches,
+        published,
+      );
 
       const inserted = await trx
         .insertInto("sightings")
@@ -472,15 +483,31 @@ export async function ingestSightings(
  * So the URL-keyed majority behaves precisely as it did before this existed, and
  * an article with `altKey === null` — a source-truncated title, no source domain
  * — takes the pre-ADR-0018 path in full.
+ *
+ * ## Two alt-key arguments, and the difference between them is the point
+ *
+ * `altKey` is what a NEW article is minted with, and there is exactly one of it.
+ * `altKeyMatches` is what the LOOKUP is allowed to match, and for a sighting
+ * whose provider sent a bare date instead of a time it holds the adjacent days
+ * as well (`altKeyProbe`, ADR-0022). Widening the lookup is not widening the
+ * fold: nothing here writes a key it did not derive, so a stored key still means
+ * exactly what it meant when the row was minted, and the migration ADR-0018
+ * demands for a fold change is not owed for this one.
+ *
+ * The two are never independent — `altKeyMatches` is empty exactly when `altKey`
+ * is null, and its first element is `altKey` — and they are passed separately
+ * rather than derived from each other here so that the insert below cannot
+ * accidentally store a probe-only neighbour.
  */
 async function resolveArticle(
   trx: Kysely<Database>,
   sighting: Sighting,
   dedupKey: Buffer,
   altKey: Buffer | null,
+  altKeyMatches: readonly Buffer[],
   published: Date,
 ): Promise<ResolvedArticle> {
-  const existing = await findArticle(trx, dedupKey, altKey);
+  const existing = await findArticle(trx, dedupKey, altKeyMatches);
   if (existing) return { ...existing, was_created: false };
 
   // Nothing COMMITTED holds either key. What is left is a concurrent
@@ -525,7 +552,7 @@ async function resolveArticle(
     // The winner committed between our lookup and our insert, so it is visible
     // now. If it somehow is not, the conflict was not the one this fence is for
     // and hiding it would be worse than failing the batch.
-    const winner = await findArticle(trx, dedupKey, altKey);
+    const winner = await findArticle(trx, dedupKey, altKeyMatches);
     if (!winner) throw error;
     return { ...winner, was_created: false };
   }
@@ -551,25 +578,101 @@ interface ResolvedArticle {
  * title that has since drifted onto another article's key — the URL match is
  * taken, and the alt key stays what it has always been, a fallback.
  *
- * `alt_key = …` never matches a NULL, so no `is not null` guard is needed; the
- * partial index has the same predicate and serves this lookup directly.
+ * `alt_key = any(…)` never matches a NULL, so no `is not null` guard is needed;
+ * the partial index has the same predicate and serves this lookup directly.
+ *
+ * ## Why a SET of alt keys rather than one
+ *
+ * `altKeyProbe` hands one key for every sighting but a bare-dated one, which
+ * gets its own day plus the two adjacent ones (ADR-0022). So the ordering gains
+ * a second tier: a match on the sighting's OWN day beats a match on a neighbour,
+ * because the own-day key is the provider's own assertion and a neighbour is
+ * this system's allowance for the fact that the assertion is a date and the
+ * archive holds a clock reading.
+ *
+ * ## And why BOTH neighbours matching is a refusal rather than a tie-break
+ *
+ * `dedup_key` and `alt_key` are each unique, so a match on the URL key or on the
+ * own-day key names exactly one row and there is nothing to break a tie about.
+ * The only ambiguous shape is the own day matching NOTHING while both neighbours
+ * match different articles. Picking either would fold a Tuesday instalment onto
+ * Monday's row and Tuesday's article would never be minted at all — losing an
+ * article, which ADR-0002 settles as the worse error against showing a
+ * duplicate. So the fallback is refused and the sighting mints its own row under
+ * its own day, exactly as it did before the widening existed.
+ *
+ * **This is a tie-break's replacement, NOT a defence against the recurring-column
+ * risk, and it must not be read as one.** The damaging shape for a daily column
+ * is one neighbour matching, not two — a column running every day has an
+ * instalment on each side only where the archive happens to hold both — and one
+ * neighbour matching is exactly the shape all 23 recovered folds have, so it
+ * cannot be refused without giving the whole widening back. Counted over the
+ * four desk columns ADR-0022 names, of the 40 days where a bare-dated instalment
+ * would find no own-day article, this refuses **2 and folds 38**. The exposure is
+ * accepted and measured, not closed; see ADR-0022.
+ *
+ * The refusal costs nothing measured: over the 1,749 bare-date sightings the dev
+ * archive holds, the widened set matched articles on more than one day **0
+ * times**. It is a guard for a shape that is reachable rather than observed —
+ * the same standard `deriveAltKey` applies to a title that folds to nothing.
  */
 async function findArticle(
   trx: Kysely<Database>,
   dedupKey: Buffer,
-  altKey: Buffer | null,
+  altKeyMatches: readonly Buffer[],
 ): Promise<{ id: string; published: Date; group_id: string } | undefined> {
-  return trx
+  const [ownDay] = altKeyMatches;
+  // Four, because four is the most that can match: the URL key, the own-day key
+  // and — for a bare-dated sighting — its two neighbours. Every one of those is
+  // unique on its own index, so no fifth row is reachable, and the limit is a
+  // ceiling rather than a choice: the decision below reads at most the two
+  // neighbour rows, and the ordering has already put anything decisive first.
+  const rows = await trx
     .selectFrom("articles")
-    .select(["id", "published", "group_id"])
+    .select((eb) => [
+      "id",
+      "published",
+      "group_id",
+      eb("dedup_key", "=", dedupKey).as("by_url"),
+      // `coalesce`, because `alt_key` is nullable and `null = $1` is NULL, not
+      // false — a row that matched by URL and carries no alt key at all would
+      // otherwise come back with a `null` under a `boolean` type, which reads
+      // correctly today only because `by_url` short-circuits ahead of it.
+      ...(ownDay === undefined
+        ? [sql<boolean>`false`.as("by_own_day")]
+        : [sql<boolean>`coalesce(alt_key = ${ownDay}, false)`.as("by_own_day")]),
+    ])
     .where((eb) =>
-      altKey === null
+      ownDay === undefined
         ? eb("dedup_key", "=", dedupKey)
-        : eb.or([eb("dedup_key", "=", dedupKey), eb("alt_key", "=", altKey)]),
+        : eb.or([
+            eb("dedup_key", "=", dedupKey),
+            eb("alt_key", "in", [...altKeyMatches]),
+          ]),
     )
     .orderBy(sql`(dedup_key = ${dedupKey})`, "desc")
-    .limit(1)
-    .executeTakeFirst();
+    .$if(ownDay !== undefined, (qb) =>
+      qb.orderBy(sql`(alt_key = ${ownDay!})`, "desc"),
+    )
+    // A total order, because a `limit` over an unordered tie is a different
+    // article on different days. It decides nothing on its own — every shape
+    // that reaches it is either unique or refused below.
+    .orderBy("id", "asc")
+    .limit(4)
+    .execute();
+
+  const best = rows[0];
+  if (best === undefined) return undefined;
+
+  // A URL or own-day match is unique by index, so the ordering above has
+  // already named the one row. This is also what keeps the insert fence sound:
+  // a lost race raises on the key that was INSERTED, which is always the own-day
+  // key, so the winner is found by that arm and never by a refusable one.
+  if (best.by_url || best.by_own_day) return best;
+
+  // Only neighbours matched. One article is the fold this widening exists for;
+  // two is the recurring-column signature, and the header says why that refuses.
+  return new Set(rows.map((row) => row.id)).size === 1 ? best : undefined;
 }
 
 /**

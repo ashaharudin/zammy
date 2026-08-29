@@ -123,6 +123,32 @@ guess:
   a UTC midnight at all. Changing `APP_TIMEZONE` would silently re-key every
   article minted afterwards while leaving history keyed the old way.
 
+  **Amended 2026-08-29 — that bound is survivorship, and the real number is
+  larger.** "33 articles carry sightings that straddle a UTC midnight" counts the
+  straddles the fold SURVIVED: a pair the bucket split is not one article with
+  two sightings, it is two articles, and it can appear in that figure only by
+  having folded. The measurement that can see the split ones counts identities
+  rather than articles — of 31,752 distinct `(source_domain, folded title)` pairs
+  on the dev archive, **22 recur on ADJACENT UTC days**, and reading all 22 puts
+  18 of them at one story filed twice across a midnight and 4 at a genuine
+  recurring desk headline (`ft.com` "Company Announcements",
+  `winnipegfreepress.com` "AP News in Brief at 12:04 a.m. EDT", `upi.com`
+  "Directors Corner - Korea Regional Review", a `cbc.ca` daily fire-hazard
+  bulletin). So the bucket is buying the four and paying eighteen, on one
+  provider whose two emissions are minutes apart.
+
+  **And it does not survive a provider that emits a bare DATE**, which is the
+  case ADR-0018 could not have measured: Google News stops reporting a
+  publication time past about eight days (plan §G6). The repair is
+  [ADR-0022](0022-a-bare-date-widens-the-lookup-not-the-fold.md), and the
+  important thing about it here is what it did NOT do — the obvious fix, moving
+  the bucket to the provider's own Pacific day, was measured against 150
+  cross-provider twin pairs and makes folding **worse** (84.7% same-bucket to
+  78.7%), and no hourly boundary of the 24 beats 86.0%. The fold below is at its
+  optimum on the evidence available, and the residual is repaired by widening the
+  LOOKUP to the adjacent days for a bare-dated sighting, which stores no new key
+  and owes no migration.
+
 - **`dedup_key` can stop hashing `url`, and that is intended.** Both keys are
   minted once, by the sighting that created the row, and never rewritten —
   rewriting either would change an article's identity under a live unique index,

@@ -352,11 +352,23 @@ export function deriveDedupKey(canonicalUrl: string): string {
  * of one story that straddle a UTC midnight land in different buckets and do NOT
  * fold. That is deliberate — a day bucket is what stops a domain's recurring
  * column headline ("Morning Briefing") from collapsing a month of instalments
- * into one article — and the cost is bounded and measured: 33 articles of
- * 31,308 on the dev archive carry sightings that straddle a UTC midnight at all.
- * Changing `APP_TIMEZONE` would silently re-key every article minted afterwards
- * while leaving history keyed the old way, so the zone is fixed here rather than
- * threaded in as a parameter.
+ * into one article — and the cost is bounded and measured: 22 of the dev
+ * archive's 31,752 distinct (domain, folded title) pairs recur on adjacent UTC
+ * days, 18 of them one story filed twice across a midnight and 4 a genuine daily
+ * desk column. Changing `APP_TIMEZONE` would silently re-key every article
+ * minted afterwards while leaving history keyed the old way, so the zone is
+ * fixed here rather than threaded in as a parameter.
+ *
+ * **UTC is not merely the configured zone, it is the measured optimum.** A
+ * provider that sends a bare DATE rather than a time puts that date on a clock
+ * of its own, and the obvious repair is to move this bucket to match it. It was
+ * tried: over the 150 Google News sightings on the dev archive whose story
+ * Currents also holds, a Pacific-day bucket takes the same-bucket share from
+ * 84.7% DOWN to 78.7%, because the disagreement is two-sided — 12 pairs a day
+ * early and 11 a day late — and no fixed offset can be. All 24 hourly boundaries
+ * were scored and the best (03:00Z) reaches 86.0%, two pairs better than this
+ * one. So the residual is repaired by widening the LOOKUP rather than the
+ * bucket: see `altKeyProbe` and ADR-0022.
  *
  * ## Changing the fold is a migration, not an edit
  *
@@ -394,6 +406,127 @@ export function deriveAltKey(
     .update(`${domain}\n${folded}\n${day.toISOString().slice(0, 10)}`)
     .digest("hex");
 }
+
+/**
+ * The alt keys a sighting may be RESOLVED against — its own, plus the two
+ * adjacent days when the provider sent a bare date instead of a time (ADR-0022).
+ *
+ * Only the lookup widens. `sighting.altKey` is still the one key that gets
+ * STORED, and it is passed through verbatim rather than recomputed, so nothing
+ * here can make an article's identity disagree with the sighting that minted it
+ * — ADR-0018's rule, unchanged. The neighbours are probe-only: they are never
+ * written, never indexed, and vanish the moment the lookup returns.
+ *
+ * ## Why the neighbours, and why exactly one day either side
+ *
+ * A `publishedIsDateOnly` stamp asserts a DATE (ADR-0021). The archive's own
+ * timestamp for the same story is a real clock reading, usually from a different
+ * newsroom's clock, and the two disagree about which calendar day the story
+ * belongs to — in BOTH directions. Measured over the 150 bare-date Google News
+ * sightings in the dev archive that have a same-domain, same-folded-title
+ * Currents twin (plan §G6):
+ *
+ * ```
+ * google day minus twin day     -1: 12    0: 127    +1: 11
+ * ```
+ *
+ * So 127 of 150 fold today and 23 do not, and the 23 sit one day out on either
+ * side. Widening to D-1/D/D+1 resolves **all 150**, and none of the 1,749
+ * bare-date sightings measured matched articles on more than one day, so the
+ * widening was never ambiguous on the archive it was measured against.
+ *
+ * ## Why this is not a wider day bucket
+ *
+ * The obvious alternative is to MOVE the fold's day boundary — key on the
+ * provider's own Pacific day rather than UTC. That was measured and it is
+ * WORSE: it fixes the 12 and breaks 20 more, taking the same-bucket share from
+ * 84.7% to 78.7%, and it costs a whole-archive re-key of 7,232 rows to do it.
+ * All 24 hourly boundaries were scored and the best of them (03:00Z) reaches
+ * 86.0% — a two-pair improvement on doing nothing. ADR-0022 carries the sweep.
+ * The residual is a genuine disagreement between two clocks, not a fixed offset,
+ * and no boundary can remove it.
+ *
+ * ## What it costs, and why it is bounded
+ *
+ * A day bucket is what stops a domain's recurring headline ("Morning Briefing")
+ * from collapsing a month of instalments into one article, so relaxing it is
+ * exactly the risk this trades on. It is relaxed for bare-date sightings ONLY,
+ * which is a population one provider produces, and the archive's exposure was
+ * counted rather than assumed: of 31,752 distinct (domain, folded title) pairs
+ * on the dev archive, **22 recur on adjacent UTC days and 4 of those are a
+ * recurring desk headline** — `ft.com` "Company Announcements",
+ * `winnipegfreepress.com` "AP News in Brief at 12:04 a.m. EDT", `upi.com`
+ * "Directors Corner - Korea Regional Review" and a `cbc.ca` daily fire-hazard
+ * bulletin. The other 18 are duplicates the day bucket is currently splitting.
+ * No bare-date sighting matched any of the four.
+ *
+ * That exposure is ACCEPTED, not closed. `findArticle` refuses the fallback when
+ * the own day matches nothing and both neighbours match different articles, but
+ * that is a tie-break's replacement rather than a defence: a daily column's
+ * damaging shape is ONE neighbour matching, which is also the shape all 23
+ * recovered folds have, so it cannot be refused without giving the widening
+ * back. Over the four desk columns above, of the 40 days where a bare-dated
+ * instalment would find no own-day article, the refusal catches 2.
+ */
+export function altKeyProbe(sighting: Sighting): readonly string[] {
+  if (sighting.altKey === null) return [];
+  if (sighting.publishedIsDateOnly !== true) return [sighting.altKey];
+
+  const at = Date.parse(sighting.published);
+  if (Number.isNaN(at)) return [sighting.altKey];
+
+  // Derived from the sighting's OWN stored fields, which is safe only because
+  // every adapter derives `altKey` from exactly these three —
+  // `deriveAltKey(domain, title, published)` beside `sourceDomain: domain` in
+  // all three `normalizeSighting`s.
+  //
+  // CHECKED rather than assumed, because the one adapter that could break it
+  // would break it invisibly: Google News keys on the PUBLISHER's domain read
+  // out of `<source url>`, not on its own `url`'s host, and "correcting" that
+  // to `sourceDomain(url)` would send every neighbour into a `news.google.com`
+  // key space shared by every publisher on the wire — where a folded title
+  // could reach a wholly unrelated article. Failing back to the single stored
+  // key is exactly `main`'s behaviour before this function existed, so the
+  // degradation is a return to the old path rather than a guess; the loud
+  // version of this check lives in the adapters' own fixture tests, where a
+  // broken invariant should be caught long before a batch runs.
+  if (!altKeyProbeIsConsistent(sighting)) return [sighting.altKey];
+
+  const neighbour = (offsetMs: number): string | null =>
+    deriveAltKey(
+      sighting.sourceDomain,
+      sighting.title,
+      new Date(at + offsetMs).toISOString(),
+    );
+
+  return [
+    sighting.altKey,
+    ...[neighbour(-ONE_DAY_MS), neighbour(ONE_DAY_MS)].filter(
+      (key): key is string => key !== null && key !== sighting.altKey,
+    ),
+  ];
+}
+
+/**
+ * Does re-deriving this sighting's alt key from its own stored fields reproduce
+ * the key it carries?
+ *
+ * `altKeyProbe` derives the two neighbours that way, so a provider that ever
+ * keyed on something it did not store would silently probe the wrong days. It
+ * is called BY `altKeyProbe` on every widened lookup — three sha256s where the
+ * lookup already costs a round trip — and exported so the adapters' own fixture
+ * tests can assert it over real payloads, which is where a violation should be
+ * caught rather than degraded around.
+ */
+export function altKeyProbeIsConsistent(sighting: Sighting): boolean {
+  return (
+    deriveAltKey(sighting.sourceDomain, sighting.title, sighting.published) ===
+    sighting.altKey
+  );
+}
+
+/** One UTC day. The unit `deriveAltKey`'s day bucket is expressed in. */
+const ONE_DAY_MS = 86_400_000;
 
 /** A title the SOURCE cut short, in either of the two spellings seen. */
 const TRUNCATED_TITLE = /(\.\.\.|…)$/u;

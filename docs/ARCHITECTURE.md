@@ -863,7 +863,8 @@ single upstream page cannot have, so the client stays stateless and returns `Sig
 
 Per fetched sighting, in one transaction:
 
-1. Resolve the article — **`dedup_key`, then `alt_key`, then insert** (ADR-0018) — and fold:
+1. Resolve the article — **`dedup_key`, then `alt_key`, then insert** (ADR-0018; a bare-dated
+   sighting matches three alt keys, ADR-0022) — and fold:
    `published = LEAST(existing, incoming)`, `latest_seen = GREATEST(…)`, `sighting_count + 1`.
    Display fields come from the earliest sighting, so a later re-emission does not rewrite the
    headline. Both KEYS are exempt from that handover: they are minted once, by the sighting that
@@ -908,6 +909,16 @@ URL key matches nothing. No key is minted for a title the source itself truncate
 stories across outlets do not collapse either, on purpose: the
 wordcloud's breadth gate counts distinct sources and needs those rows (§10.3). They are **grouped**
 instead (§14.3), keeping every row and every `source_domain` intact.
+
+**One key is stored; a bare-dated sighting is MATCHED on three**
+([ADR-0022](adr/0022-a-bare-date-widens-the-lookup-not-the-fold.md)). A provider that reports a DATE
+rather than a publication time — Google News, past about eight days — puts that date on a clock of
+its own, and it disagrees with the archive's own timestamp about which UTC day a story belongs to in
+both directions. So such a sighting resolves against its own day and the two adjacent ones while
+still being minted under one, and the fold above is unchanged: every stored `alt_key` is still
+reproducible from `(source_domain, title, published)` alone. Moving the day bucket instead was
+measured and refused — it makes cross-provider folding worse, and no hourly boundary of the 24 beats
+the one in use by more than two pairs in 150.
 
 **Ordering across sliced calls.** Upstream sorts each response `published` DESC, but sliced window
 queries return independently-sorted batches. Nothing downstream may assume fetch order is display

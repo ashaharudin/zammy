@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { NewsInvalidQueryError, deriveAltKey, sourceDomain } from "@zammy/news-client";
+import {
+  NewsInvalidQueryError,
+  altKeyProbe,
+  altKeyProbeIsConsistent,
+  deriveAltKey,
+  sourceDomain,
+} from "@zammy/news-client";
 import { FixtureGoogleNewsClient } from "./fixture-client.js";
 import { GoogleNewsFixtureStore } from "./fixture-store.js";
 import { ITEMS_PER_QUERY } from "./raw.js";
@@ -239,6 +245,38 @@ describe("how often the fold actually works, measured on the captures", () => {
     // being favourable — the honest read is the corpus-wide 24.4% -> 6.7%.
     expect(folds).toBe(115);
     for (const page of pages) expect(page.normalization.dropped.no_identity).toBe(0);
+  });
+
+  /**
+   * The invariant `altKeyProbe`'s neighbours rest on (ADR-0022), asserted where
+   * it is most likely to break: this is the one adapter whose key is NOT derived
+   * from its own `url`, so `deriveAltKey(sourceDomain, title, published)` and
+   * `altKey` agreeing here is a real claim rather than a tautology.
+   */
+  it("re-derives every item's alt key from the fields the item stored", async () => {
+    const gn = await client();
+    const pages = [
+      await gn.search({ keywords: ["x"], ...CAPPED_WINDOW }),
+      await gn.search({ keywords: ["x"], ...DEEP_WINDOW }),
+    ];
+    const sightings = pages.flatMap((page) => page.sightings);
+
+    expect(sightings).toHaveLength(120);
+    let widened = 0;
+    for (const sighting of sightings) {
+      expect(altKeyProbeIsConsistent(sighting)).toBe(true);
+      // And the lookup widens only where the stamp says it may.
+      expect(altKeyProbe(sighting)).toHaveLength(sighting.publishedIsDateOnly ? 3 : 1);
+      if (sighting.publishedIsDateOnly) widened += 1;
+    }
+
+    // Counted, not assumed, because the conditional above is only a real
+    // assertion if BOTH branches are taken — and a reader who believes these
+    // captures predate the cliff would "simplify" it to `toHaveLength(1)` and
+    // silence the only fixture-level guard the widening has. 29 of the 120
+    // carry a midnight-Pacific stamp: all 20 of the deep window at 08:00:00 GMT
+    // (a PST capture) and 9 of the capped window's 100 at 07:00:00 GMT.
+    expect(widened).toBe(29);
   });
 
   /**

@@ -919,6 +919,281 @@ describe("resolving an article by URL key, then by alt key", () => {
 });
 
 /**
+ * A bare date resolves against its neighbours, and only a bare date does
+ * (ADR-0022).
+ *
+ * The defect: a provider that sends a DATE puts it on a clock of its own, the
+ * archive holds a real time on the newsroom's clock, and the two disagree about
+ * which calendar day the story belongs to — measured over 150 twin pairs on the
+ * dev archive, 12 a day early and 11 a day late. The fold cannot reconcile that
+ * because it is not a fixed offset, so the LOOKUP widens instead and the fold
+ * stays exactly where it is. These assertions are as much about what does NOT
+ * move as about what does.
+ */
+describe("a bare-dated sighting resolves against the adjacent days", () => {
+  let harness: TestDatabase;
+  const TOPIC = testFingerprint("d0e0f0a1");
+  const DOMAIN = "pbs.example";
+
+  let uuid = 0;
+  const emission = (input: {
+    url: string;
+    title: string;
+    published: string;
+    dateOnly?: boolean;
+    domain?: string;
+  }): Sighting => {
+    uuid += 1;
+    const domain = input.domain ?? DOMAIN;
+    return {
+      id: `00000000-0000-4000-8000-${String(600 + uuid).padStart(12, "0")}`,
+      url: input.url,
+      provider: input.dateOnly ? "google-news" : "currents",
+      providerSightingId: input.url,
+      dedupKey: deriveDedupKey(input.url),
+      altKey: deriveAltKey(domain, input.title, input.published),
+      title: input.title,
+      description: null,
+      author: null,
+      imageUrl: null,
+      language: "en",
+      categories: [],
+      sourceCategories: [],
+      sourceDomain: domain,
+      published: input.published,
+      ...(input.dateOnly ? { publishedIsDateOnly: true } : {}),
+      raw: { id: uuid },
+    };
+  };
+
+  const ingest = async (...sightings: Sighting[]) =>
+    ingestSightings(harness.db, {
+      plane: "search",
+      timeZone: "UTC",
+      fingerprint: TOPIC,
+      sightings,
+    });
+
+  beforeAll(async () => {
+    harness = await createTestDatabase();
+    await migrateToLatest(harness.db);
+    await upsertTopic(harness.db, { fingerprint: TOPIC, keywords: ["press"] });
+  });
+
+  afterAll(async () => {
+    await harness.drop();
+  });
+
+  it("folds onto an article the archive filed on the NEXT day", async () => {
+    // The worked case from plan §G6, with the domain renamed: pbs.org filed
+    // "Karoline Leavitt is leaving her role as Trump's White House press
+    // secretary" at 2026-08-13T00:32:39Z and Google reported the same headline
+    // as a bare 2026-08-12. Byte-identical titles, two rows, and no fold on
+    // earth that works on the TITLE could have joined them.
+    const held = emission({
+      url: "https://pbs.example/leavitt",
+      title: "Karoline Leavitt is leaving her role as press secretary",
+      published: "2026-08-13T00:32:39.000Z",
+    });
+    const created = await ingest(held);
+    const articleId = created.createdArticles[0]!.id;
+
+    const bare = emission({
+      url: "https://news.google.example/rss/articles/CBMiswFB",
+      title: "Karoline Leavitt is leaving her role as press secretary",
+      published: "2026-08-12T07:00:00.000Z",
+      dateOnly: true,
+    });
+    expect(bare.altKey).not.toBe(held.altKey);
+
+    const result = await ingest(bare);
+    expect(result.articlesCreated).toBe(0);
+
+    const rows = await harness.db
+      .selectFrom("sightings")
+      .select("article_id")
+      .where("id", "in", [held.id, bare.id])
+      .execute();
+    expect(new Set(rows.map((row) => row.article_id))).toEqual(new Set([articleId]));
+  });
+
+  it("folds onto an article the archive filed on the PREVIOUS day", async () => {
+    // The other direction, and it is not symmetric decoration: the archive's
+    // twin sits a day EARLIER as often as it sits a day later — 12 against 11
+    // over the measured pairs — so a probe in one direction would close half
+    // the defect and read as if it had closed all of it.
+    const held = emission({
+      url: "https://pbs.example/hormuz",
+      title: "Why Trump wants Iran to pay compensation",
+      published: "2026-08-10T19:53:41.000Z",
+    });
+    const created = await ingest(held);
+
+    const result = await ingest(
+      emission({
+        url: "https://news.google.example/rss/articles/CBMiaHR0",
+        title: "Why Trump wants Iran to pay compensation",
+        published: "2026-08-11T07:00:00.000Z",
+        dateOnly: true,
+      }),
+    );
+    expect(result.articlesCreated).toBe(0);
+    expect(created.createdArticles).toHaveLength(1);
+  });
+
+  it("mints the article under its OWN day, never a neighbour's", async () => {
+    // The whole claim that this is not a fold change. A bare-dated sighting
+    // that folds writes no key at all; one that mints writes the key
+    // `deriveAltKey` gave it, and a re-derivation — a migration, a repair —
+    // reproduces it from the stored columns exactly as before.
+    const bare = emission({
+      url: "https://news.google.example/rss/articles/CBMiNEsY",
+      title: "Wildfire evacuation order lifted",
+      published: "2026-08-19T07:00:00.000Z",
+      dateOnly: true,
+    });
+    const created = await ingest(bare);
+
+    const article = await harness.db
+      .selectFrom("articles")
+      .select("alt_key")
+      .where("id", "=", created.createdArticles[0]!.id)
+      .executeTakeFirstOrThrow();
+    expect(article.alt_key).toEqual(hexToBytea(bare.altKey!));
+    expect(article.alt_key).toEqual(
+      hexToBytea(
+        deriveAltKey(DOMAIN, "Wildfire evacuation order lifted", "2026-08-19T07:00:00.000Z")!,
+      ),
+    );
+  });
+
+  it("leaves the day bucket alone for a sighting that carries a real time", async () => {
+    // The regression this trades against. A day bucket is what stops a domain's
+    // recurring headline from collapsing a month of instalments into one
+    // article, and it is relaxed for bare dates ONLY. 22 of the dev archive's
+    // 31,752 distinct (domain, folded title) pairs recur on adjacent days and
+    // four of those are a daily desk column.
+    const first = await ingest(
+      emission({
+        url: "https://pbs.example/brief-monday",
+        title: "AP News in Brief at 12:04 a.m. EDT",
+        published: "2026-08-05T04:04:35.000Z",
+      }),
+    );
+    const second = await ingest(
+      emission({
+        url: "https://pbs.example/brief-tuesday",
+        title: "AP News in Brief at 12:04 a.m. EDT",
+        published: "2026-08-06T04:05:17.000Z",
+      }),
+    );
+    expect(first.articlesCreated).toBe(1);
+    expect(second.articlesCreated).toBe(1);
+  });
+
+  it("prefers the article on the sighting's OWN day when a neighbour also matches", async () => {
+    // Never observed — the widened set matched articles on more than one day in
+    // 0 of the 1,749 bare-date sightings measured — which is precisely why the
+    // precedence is written down instead of left to whichever row the planner
+    // returns first.
+    const title = "Overnight ferry service resumes";
+    const neighbour = emission({
+      url: "https://pbs.example/ferry-neighbour",
+      title,
+      published: "2026-08-21T23:30:00.000Z",
+    });
+    const ownDay = emission({
+      url: "https://pbs.example/ferry-own-day",
+      title,
+      published: "2026-08-22T18:00:00.000Z",
+    });
+    await ingest(neighbour);
+    const target = await ingest(ownDay);
+    const ownDayId = target.createdArticles[0]!.id;
+
+    const bare = emission({
+      url: "https://news.google.example/rss/articles/CBMiRmZlcnJ5",
+      title,
+      published: "2026-08-22T07:00:00.000Z",
+      dateOnly: true,
+    });
+    expect(await ingest(bare)).toMatchObject({ articlesCreated: 0 });
+
+    const row = await harness.db
+      .selectFrom("sightings")
+      .select("article_id")
+      .where("id", "=", bare.id)
+      .executeTakeFirstOrThrow();
+    expect(row.article_id).toBe(ownDayId);
+  });
+
+  it("refuses the fallback when both neighbours match and the own day does not", async () => {
+    // The recurring-column signature, and the one shape the widening must NOT
+    // resolve: this domain filed the same folded headline on Monday and on
+    // Wednesday, and Tuesday's instalment arrives with a bare date. Picking
+    // either neighbour would file Tuesday's sighting against Monday's row and
+    // Tuesday's article would never be minted at all — losing an article, which
+    // ADR-0018 settles as the worse error against showing a duplicate.
+    const title = "AP News in Brief at 12:04 a.m. EDT";
+    await ingest(
+      emission({ url: "https://pbs.example/brief-mon", title, published: "2026-08-24T04:04:35.000Z" }),
+    );
+    await ingest(
+      emission({ url: "https://pbs.example/brief-wed", title, published: "2026-08-26T04:04:35.000Z" }),
+    );
+
+    const tuesday = emission({
+      url: "https://news.google.example/rss/articles/CBMiVHVlcw",
+      title,
+      published: "2026-08-25T07:00:00.000Z",
+      dateOnly: true,
+    });
+    const result = await ingest(tuesday);
+
+    // Minted, under its own day, exactly as it would have been before the
+    // widening existed.
+    expect(result.articlesCreated).toBe(1);
+    const article = await harness.db
+      .selectFrom("articles")
+      .select("alt_key")
+      .where("id", "=", result.createdArticles[0]!.id)
+      .executeTakeFirstOrThrow();
+    expect(article.alt_key).toEqual(hexToBytea(tuesday.altKey!));
+  });
+
+  it("folds a bare date onto a bare-dated article, but only in one arrival order", async () => {
+    // A KNOWN RESIDUE, asserted so it cannot be mistaken for an oversight
+    // (ADR-0022's asymmetry consequence). The probe is carried by the ARRIVING
+    // sighting and matched against STORED keys, so folding does not chain: a row
+    // minted under D-1 is invisible to a sighting on D+1, whose own neighbours
+    // are D and D+2. Three emissions of one story therefore collapse to one
+    // article or to two depending only on which arrived first.
+    const outward = ["2026-09-01", "2026-09-02", "2026-09-03"];
+    const inward = ["2026-09-12", "2026-09-11", "2026-09-13"];
+    const run = async (title: string, days: string[]): Promise<number> => {
+      let created = 0;
+      for (const day of days) {
+        const result = await ingest(
+          emission({
+            url: `https://news.google.example/rss/${title}-${day}`,
+            title,
+            published: `${day}T07:00:00.000Z`,
+            dateOnly: true,
+          }),
+        );
+        created += result.articlesCreated;
+      }
+      return created;
+    };
+
+    // Oldest first: D-1 mints, D folds onto it, D+1 cannot see it and mints.
+    expect(await run("Ferry timetable published", outward)).toBe(2);
+    // Middle first: both neighbours fold onto the row keyed on their own day.
+    expect(await run("Harbour timetable published", inward)).toBe(1);
+  });
+});
+
+/**
  * The plane, on the row (ADR-0019, migration 0022).
  *
  * Small, and worth its own block because the failure it guards is silent in one

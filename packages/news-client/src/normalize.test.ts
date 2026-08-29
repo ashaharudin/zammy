@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  altKeyProbe,
+  altKeyProbeIsConsistent,
   canonicalizeUrl,
   deriveAltKey,
   deriveDedupKey,
@@ -8,6 +10,7 @@ import {
   normalizeImage,
   sourceDomain,
 } from "./normalize.js";
+import { Sighting } from "./sighting.js";
 
 /**
  * The half of normalization that is the same whoever sent the article
@@ -440,5 +443,116 @@ describe("deriveAltKey", () => {
     expect(deriveAltKey("bbc.co.uk", "Ferry service suspended", DAY)).toMatch(
       /^[0-9a-f]{64}$/,
     );
+  });
+});
+
+/**
+ * `altKeyProbe` — the keys a sighting may be MATCHED on, which is the same one
+ * key `deriveAltKey` gave it unless the provider sent a bare date (ADR-0022).
+ *
+ * The distinction these assertions exist to hold is that the fold did not
+ * change. A neighbour is never stored, never indexed, and never derived for a
+ * sighting that carries a real time.
+ */
+describe("altKeyProbe", () => {
+  const DAY = "2026-08-27T09:00:00.000Z";
+  const sighting = (over: Record<string, unknown>): Sighting =>
+    Sighting.parse({
+      id: "00000000-0000-4000-8000-000000000001",
+      provider: "currents",
+      providerSightingId: "x",
+      url: "https://example.com/a",
+      dedupKey: deriveDedupKey("https://example.com/a"),
+      altKey: deriveAltKey("example.com", "Ferry service suspended", DAY),
+      title: "Ferry service suspended",
+      description: null,
+      author: null,
+      imageUrl: null,
+      language: "en",
+      categories: [],
+      sourceCategories: [],
+      sourceDomain: "example.com",
+      published: DAY,
+      raw: {},
+      ...over,
+    });
+
+  it("hands back the one stored key for a sighting that carries a real time", () => {
+    const one = sighting({});
+    expect(altKeyProbe(one)).toEqual([one.altKey]);
+  });
+
+  it("adds the day either side when the provider sent a bare date", () => {
+    // Both sides, because the archive's twin sits a day EARLIER as often as it
+    // sits a day later: over the 150 bare-date Google News sightings on the dev
+    // archive that have a same-domain, same-folded-title Currents twin, the
+    // day-bucket delta is -1 for 12 and +1 for 11 (ADR-0022).
+    const bare = sighting({ published: "2026-08-27T07:00:00.000Z", publishedIsDateOnly: true });
+    const keys = altKeyProbe(bare);
+    expect(keys).toEqual([
+      bare.altKey,
+      deriveAltKey("example.com", "Ferry service suspended", "2026-08-26T07:00:00.000Z"),
+      deriveAltKey("example.com", "Ferry service suspended", "2026-08-28T07:00:00.000Z"),
+    ]);
+    // The sighting's own key comes FIRST, which is what `findArticle`'s
+    // precedence reads: the provider's own assertion beats this system's
+    // allowance for the fact that the assertion is a date.
+    expect(keys[0]).toBe(bare.altKey);
+  });
+
+  it("always leads with the stored key, whichever path it returns by", () => {
+    // Load-bearing beyond the precedence: `resolveArticle`'s savepoint fence
+    // re-resolves a lost insert race through the SAME match set, and a 23505 on
+    // `articles_alt_key_idx` can only name the value that was inserted — which
+    // is `altKey`. If any path here ever returned a set not led by it, the fence
+    // could fail to find the row that beat it and would raise instead.
+    for (const over of [
+      {},
+      { published: "2026-08-27T07:00:00.000Z", publishedIsDateOnly: true },
+      { published: "2026-08-27T07:00:00.000Z", publishedIsDateOnly: true, sourceDomain: "other.example" },
+    ]) {
+      const one = sighting(over);
+      expect(altKeyProbe(one)[0]).toBe(one.altKey);
+    }
+  });
+
+  it("hands back nothing at all when the sighting has no key", () => {
+    // Not `[null]` and not a throw: an unkeyable article takes the
+    // pre-ADR-0018 path in full, identified by its URL alone, and an empty set
+    // is what `findArticle` reads as "do not consult the fallback".
+    expect(altKeyProbe(sighting({ altKey: null, publishedIsDateOnly: true }))).toEqual([]);
+  });
+
+  it("re-derives every adapter's key from the fields that adapter stored", () => {
+    // The invariant the neighbours rest on. All three adapters write
+    // `altKey: deriveAltKey(domain, title, published)` beside
+    // `sourceDomain: domain`, so the sighting's own stored fields reproduce its
+    // key — including Google News, where `domain` is the PUBLISHER's and not
+    // the redirect's host.
+    expect(altKeyProbeIsConsistent(sighting({}))).toBe(true);
+    expect(
+      altKeyProbeIsConsistent(
+        sighting({ published: "2026-08-27T07:00:00.000Z", publishedIsDateOnly: true }),
+      ),
+    ).toBe(true);
+    // And it is false the moment they disagree, which is the only way it earns
+    // its place in the adapters' own fixture tests.
+    expect(altKeyProbeIsConsistent(sighting({ sourceDomain: "other.example" }))).toBe(false);
+  });
+
+  it("falls back to the single stored key when that invariant is broken", () => {
+    // The failure this exists for is invisible, not loud: an adapter keying on
+    // a domain it did not store would send both neighbours into another
+    // newsroom's key space, where a folded title can reach an unrelated
+    // article. Narrowing to the stored key is exactly the behaviour before this
+    // function existed, so a broken invariant costs the widening and nothing
+    // else.
+    const broken = sighting({
+      published: "2026-08-27T07:00:00.000Z",
+      publishedIsDateOnly: true,
+      sourceDomain: "other.example",
+    });
+    expect(altKeyProbeIsConsistent(broken)).toBe(false);
+    expect(altKeyProbe(broken)).toEqual([broken.altKey]);
   });
 });
