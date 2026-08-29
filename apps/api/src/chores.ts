@@ -782,6 +782,7 @@ export async function runSummaryChore(
       written: 0,
       recomputed: 0,
       refused: 0,
+      unavailable: 0,
       skipped: 0,
       model: 0,
       failures: 0,
@@ -798,9 +799,17 @@ export async function runSummaryChore(
   }
 
   const now = deps.now();
-  // From the start of today's UTC day, not from `now`: a rolling 24 hours would
-  // cut yesterday off at 05:00 and leave its last five hours unsummarised for
-  // ever once the day froze.
+  // The window is whole UTC days, both ends, and neither end is `now`.
+  //
+  // The START, because a rolling 24 hours would cut yesterday off at 05:00 and
+  // leave its last five hours unsummarised for ever once the day froze.
+  //
+  // The END, because the pass fires at 05:00 — INSIDE the night quarter of the
+  // day it would otherwise include. Summarising today would write a `night`
+  // sentence over 00:00-05:00 and then freeze it: tomorrow's recompute needs
+  // more than `SUMMARY_RECOMPUTE_DELTA` new articles in the one remaining hour,
+  // which essentially never happens, so every night quarter would permanently
+  // describe five sixths of its span. A day is summarised once it has finished.
   const todayStart = summaryDayBounds(summaryDayKey(now)).from;
   const from = new Date(
     todayStart.getTime() - deps.summaryGate.windowDays * 86_400_000,
@@ -810,7 +819,7 @@ export async function runSummaryChore(
     { db: deps.db, ...deps.summarizer },
     {
       from,
-      to: now,
+      to: todayStart,
       minArticlesExclusive: deps.summaryGate.minArticlesExclusive,
       minGroups: deps.summaryGate.minGroups,
       now: deps.now,

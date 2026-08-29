@@ -43,6 +43,9 @@ import { createConfiguredDb, createSummarizer } from "./wiring.js";
  * sweep regardless of its own gate.
  */
 
+/** One page of the plan. A dry run is a cost estimate, not a full enumeration. */
+const PLAN_LIMIT = 5_000;
+
 const args = process.argv.slice(2);
 const flag = (name: string): string | undefined =>
   args.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -60,14 +63,20 @@ const num = (name: string): number | undefined => {
   return value;
 };
 
-const day = (name: string): Date | undefined => {
+/**
+ * A day flag as an instant. `end: true` gives the day's END, so `--to` is
+ * INCLUSIVE — `--to=2026-08-18` covers the 18th, which is what somebody typing
+ * a date means and what the banner prints.
+ */
+const day = (name: string, end = false): Date | undefined => {
   const raw = flag(name);
   if (raw === undefined) return undefined;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
     console.error(`--${name} must be YYYY-MM-DD (got '${raw}')`);
     process.exit(64);
   }
-  return summaryDayBounds(raw).from;
+  const bounds = summaryDayBounds(raw);
+  return end ? bounds.to : bounds.from;
 };
 
 const storylineId = flag("storyline");
@@ -116,15 +125,14 @@ async function run(): Promise<void> {
     warn: (fields, message) => console.warn(message, JSON.stringify(fields)),
   });
   const now = new Date();
+  const todayStart = summaryDayBounds(summaryDayKey(now)).from;
   // Defaults: the same window the nightly pass covers, so a bare invocation is
-  // "run tonight's pass by hand" rather than "spend the archive".
-  const to = day("to") ?? now;
+  // "run tonight's pass by hand" rather than "spend the archive" — including
+  // its end, which is the start of TODAY rather than `now`. A day is summarised
+  // once it has finished (`runSummaryChore` has why).
+  const to = day("to", true) ?? todayStart;
   const from =
-    day("from") ??
-    new Date(
-      summaryDayBounds(summaryDayKey(now)).from.getTime() -
-        config.SUMMARY_WINDOW_DAYS * 86_400_000,
-    );
+    day("from") ?? new Date(todayStart.getTime() - config.SUMMARY_WINDOW_DAYS * 86_400_000);
 
   console.log(
     `model: ${
@@ -134,7 +142,9 @@ async function run(): Promise<void> {
     }`,
   );
   console.log(
-    `window: ${summaryDayKey(from)} .. ${summaryDayKey(to)}` +
+    // `to` is exclusive as an instant, so the last day it covers is the one
+    // before it — printing the raw key would name a day that is not in scope.
+    `window: ${summaryDayKey(from)} .. ${summaryDayKey(new Date(to.getTime() - 1))}` +
       `${storylineId ? `  storyline ${storylineId}` : ""}` +
       `  bar: >${config.SUMMARY_MIN_ARTICLES_PER_DAY} articles and ` +
       `>=${config.SUMMARY_MIN_GROUPS} groups\n`,
@@ -165,8 +175,8 @@ async function run(): Promise<void> {
 
   console.log(
     `\n${tally.days} days: ${tally.written} written, ${tally.recomputed} rewritten, ` +
-      `${tally.refused} refused, ${tally.skipped} already current, ` +
-      `${tally.failures} failed`,
+      `${tally.refused} refused, ${tally.unavailable} unreachable, ` +
+      `${tally.skipped} already current, ${tally.failures} failed`,
   );
   console.log(
     `${tally.model} model calls, stopped by ${tally.stoppedBy}, ` +
@@ -189,7 +199,7 @@ async function printPlan(from: Date, to: Date): Promise<void> {
     to,
     minArticlesExclusive: config.SUMMARY_MIN_ARTICLES_PER_DAY,
     minGroups: config.SUMMARY_MIN_GROUPS,
-    limit: 5_000,
+    limit: PLAN_LIMIT,
     ...(storylineId ? { storylineId } : {}),
   });
   for (const candidate of candidates) {
@@ -202,4 +212,11 @@ async function printPlan(from: Date, to: Date): Promise<void> {
     `\n${candidates.length} qualifying storyline-days, at most ` +
       `${candidates.length * 5} model calls`,
   );
+  // The plan reads ONE page. Saying so beats a silently truncated cost estimate
+  // for somebody about to decide whether a backfill is affordable.
+  if (candidates.length === PLAN_LIMIT) {
+    console.log(
+      `(that is the first ${PLAN_LIMIT} only — narrow --from/--to to see the rest)`,
+    );
+  }
 }

@@ -28,9 +28,16 @@ prompts and the contract) and
 
 Three states, and the difference between the first two is the whole feature:
 
-- **no row** — no articles landed in that segment.
-- **row, `summary` null** — the model was asked and would not answer.
+- **no row** — no articles landed in that segment, *or* the model could not be
+  reached when it was tried.
+- **row, `summary` null** — the model answered and the answer was unusable.
 - **row, `summary` set** — the sentence.
+
+The middle one is a **refusal** and costs the span an attempt. An unreachable
+model — a 429, a 5xx, a timeout, the pacer declining to queue — writes nothing at
+all and costs nothing, because it says nothing about the span. Collapsing the two
+is how three nights of quota errors would take every span in the window to
+`SUMMARY_MAX_ATTEMPTS` without the model having declined one of them.
 
 **No foreign key on `storyline_id`, deliberately.** `storyline_groups` and
 `storyline_days` cascade from `storylines`, which is right for them and would be
@@ -82,10 +89,15 @@ Two consequences worth knowing:
 
 - **A refusal never destroys a sentence that stands.** A rewrite the model
   declines bumps `attempts` and leaves the older sentence and its
-  `article_count` alone, so the rewrite is still owed and will be retried.
-- **The day sentence follows its quarters.** If any quarter was rewritten, the
-  day is rewritten too — the sentences it was built from are not the ones it was
-  built from.
+  `article_count` alone, so the rewrite is still owed and will be retried. An
+  unreachable model does not even bump the attempt.
+- **The day sentence follows its quarters, window or no window.** If any quarter
+  was written or rewritten, the day is rewritten too — the sentences it was built
+  from are not the ones it was built from. This outranks the freeze on purpose:
+  a quarter can legitimately change past the window (a first write of a quarter
+  that had no row, a successful retry of a refusal), and a frozen day sentence
+  beside a quarter it has never seen would be a day summary that omits part of
+  its own day.
 
 ## The cliff
 
@@ -128,9 +140,25 @@ names a country.
 
 **Nightly**, as the `summaries` chore pass at `0 5 * * *` UTC — its own schedule,
 not a step of the 04:00 storyline night, because that pass is already the
-expensive one and they spend the same key. It looks back
-`SUMMARY_WINDOW_DAYS` (8) from the start of today's UTC day, and it writes
-nothing at all until `SUMMARIES_ENABLED=true`.
+expensive one and they spend the same key. It writes nothing at all until
+`SUMMARIES_ENABLED=true`.
+
+Its window is whole UTC days at **both** ends: `SUMMARY_WINDOW_DAYS` (8) back
+from the start of today, up to the start of today. Today is excluded because the
+pass fires at 05:00, inside the `night` quarter it would otherwise summarise and
+then freeze — a night sentence permanently describing five sixths of its span.
+
+Within that window the walk is **oldest day first**. The pass has a ceiling and
+the ceiling is reached, so a bounded night has to leave something unwritten, and
+the order decides what: oldest-first spends it on the days about to fall out of
+the window, and defers the newest day, which is still there tomorrow.
+
+`SUMMARY_MAX_PER_RUN` is a *spend* bound and `SUMMARY_BUDGET_MS` is the *clock*
+bound — the same split `CHORE_MAX_LABELS` and `CHORE_LABEL_BUDGET_MS` make. At
+30 rpm the pass's own 2 s spacing means the budget is what actually stops a
+healthy night, somewhere around 30–40 calls. And a run of unreachable asks stops
+the pass early rather than spending the whole ceiling discovering the API is
+still down.
 
 ```bash
 pnpm chores summaries --max-summaries=30 --summary-rate=10

@@ -817,11 +817,20 @@ const EnvSchema = z
      * Model calls one nightly summary pass may spend. A day costs between 1 and
      * 5 of them, so this is not a count of days.
      *
-     * 120 against a 30 rpm key is at least 4 minutes of pacing, which fits
-     * inside `SUMMARY_BUDGET_MS` with room for the calls themselves. The bound
-     * costs nothing durable: the pass is resumable across nights — it re-reads
-     * the rows and skips what is current — so a ceiling defers sentences rather
-     * than dropping them.
+     * **It is a SPEND bound, and `SUMMARY_BUDGET_MS` is the clock bound — the
+     * same split `CHORE_MAX_LABELS` and `CHORE_LABEL_BUDGET_MS` make, and the
+     * same warning applies: do not read this number as a duration.** At 30 rpm
+     * the pass's own spacing is 2 s per call, so 120 calls is 240 s of *sleeping
+     * alone*, before a single model answer — which means the budget below is
+     * what actually stops a healthy night, somewhere around 30-40 calls. 120
+     * stays anyway, exactly as 50 stayed for labels: pinning it to today's
+     * latency would bake a pathology into a deployment parameter and throttle a
+     * fast night later.
+     *
+     * What a bounded night costs is bounded too, and deliberately so: the walk
+     * is OLDEST-day-first, so the ceiling is spent on the days closest to
+     * falling out of `SUMMARY_WINDOW_DAYS`, and what it defers is the newest
+     * day — which is still there tomorrow.
      */
     SUMMARY_MAX_PER_RUN: z.coerce.number().int().min(1).max(100_000).default(120),
     /**

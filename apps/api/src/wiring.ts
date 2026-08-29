@@ -214,6 +214,23 @@ export function createLabeler(
  * its own when nobody hands it one, which is what every single-model caller
  * (the server, the operator CLIs) wants.
  */
+/**
+ * Does the summariser count against the labeler's window?
+ *
+ * Yes while they are on one key, which is the default and the case the shared
+ * pacer exists for. **No the moment `SUMMARY_API_KEY` is set** — that knob's
+ * whole purpose is that the two lanes stop competing, so handing the second key
+ * the first key's window would be the opposite of what was asked for, and would
+ * halve a rate limit somebody paid for.
+ *
+ * A predicate rather than an inline `?:` because it is the one branch here with
+ * a wrong answer that is invisible at runtime: both spellings produce a working
+ * client, and the difference only shows up as a rate nobody is watching.
+ */
+export function summarySharesLabelerPacer(config: Config): boolean {
+  return config.SUMMARY_API_KEY === undefined;
+}
+
 export function createModelPacer(config: Config): ModelPacer {
   return createPacer({
     maxRequestsPerMinute: config.GEMINI_MAX_RPM,
@@ -238,7 +255,7 @@ export function createSummarizer(
   pacer?: ModelPacer,
 ): Summarizer {
   const apiKey = config.SUMMARY_API_KEY ?? config.GEMINI_API_KEY;
-  const shared = config.SUMMARY_API_KEY ? undefined : pacer;
+  const shared = summarySharesLabelerPacer(config) ? pacer : undefined;
   return {
     generator: apiKey
       ? createGeminiClient({
@@ -247,9 +264,16 @@ export function createSummarizer(
           baseUrl: config.GEMINI_BASE_URL,
           thinkingLevel: config.SUMMARY_THINKING_LEVEL,
           timeoutMs: config.GEMINI_TIMEOUT_MS,
-          maxRequestsPerMinute: config.GEMINI_MAX_RPM,
-          maxRateWaitMs: config.GEMINI_MAX_RATE_WAIT_MS,
-          ...(shared ? { pacer: shared } : {}),
+          // The ceiling and the queue cap belong to whichever pacer ends up
+          // governing this client, so they are passed ONLY when it builds its
+          // own — a shared pacer already has its own copy of both, and passing
+          // them alongside one would read as if they still applied.
+          ...(shared
+            ? { pacer: shared }
+            : {
+                maxRequestsPerMinute: config.GEMINI_MAX_RPM,
+                maxRateWaitMs: config.GEMINI_MAX_RATE_WAIT_MS,
+              }),
         })
       : null,
     modelId: apiKey ? config.SUMMARY_MODEL : null,

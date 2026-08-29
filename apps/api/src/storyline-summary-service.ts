@@ -72,6 +72,13 @@ export interface SummarizerDeps {
  */
 export interface CallGate {
   before(): Promise<string | null>;
+  /**
+   * What the call it just admitted produced. The pass uses it to notice a run
+   * of unreachable asks and stop, which is a decision about the NIGHT rather
+   * than about any span — so it belongs here beside the other reasons to stop,
+   * and not in the day summariser.
+   */
+  after?(kind: "answered" | "unavailable"): void;
 }
 
 /** What one storyline-day cost and produced. */
@@ -82,8 +89,23 @@ export interface DaySummaryOutcome {
   written: number;
   /** Rows rewritten because their span gained articles inside the window. */
   recomputed: number;
-  /** Asks that produced nothing usable. */
+  /**
+   * Asks the model ANSWERED and whose answer was unusable. These cost an
+   * attempt, because three of them is a span the model will not describe.
+   */
   refused: number;
+  /**
+   * Asks that never reached an answer — a timeout, a 5xx, a 429, or the pacer
+   * refusing to queue any longer.
+   *
+   * Counted apart from `refused` and, crucially, costing NO attempt. Collapsing
+   * the two is how an outage retires a span for ever: three nights of 429s
+   * would take every span in the window to `maxAttempts` without the model
+   * having declined a single one, and the days would then age out of the
+   * window unwritten. "The model will not describe this" and "we could not ask"
+   * are different facts and only the first is about the span.
+   */
+  unavailable: number;
   /** Spans that needed no ask. */
   skipped: number;
   /** Model calls made. Every ask, including a retry of an earlier refusal. */
@@ -98,9 +120,19 @@ const EMPTY = (storylineId: string, dayKey: string): DaySummaryOutcome => ({
   written: 0,
   recomputed: 0,
   refused: 0,
+  unavailable: 0,
   skipped: 0,
   modelCalls: 0,
 });
+
+/**
+ * What one ask produced. Three outcomes, not two — see `DaySummaryOutcome`'s
+ * `unavailable` for why the last two must not be one.
+ */
+type AskResult =
+  | { kind: "sentence"; text: string }
+  | { kind: "refused"; reason: string }
+  | { kind: "unavailable"; reason: string };
 
 /** What to do about one span, given what stands and what is there now. */
 type SpanDecision = "write" | "retry" | "recompute" | "skip";
@@ -139,8 +171,21 @@ export function decideSpan(input: {
   // clear the row, which is the deliberate act this refuses to make automatic.
   if (existing.attempts >= maxAttempts) return "skip";
   if (existing.summary === null) return "retry";
-  if (!input.withinSettlingWindow) return "skip";
+  // BEFORE the window check, and that order is the bug this had.
+  //
+  // The force is set when a quarter of this day was just rewritten, and a
+  // quarter can be rewritten past the window by the two paths that legitimately
+  // ignore it: a FIRST write of a quarter that had no row (a late group lands
+  // afternoon coverage on a day that had none), and a successful RETRY of an
+  // earlier refusal. Checking the window first made the force unreachable in
+  // exactly those cases, so the day sentence kept describing quarters that had
+  // moved underneath it — a day summary that omits a quarter which now exists.
+  //
+  // It is not a hole in the freeze: the write that set the force was itself
+  // permitted, and this only keeps the day consistent with the quarters it is
+  // built from.
   if (input.forceRecompute === true) return "recompute";
+  if (!input.withinSettlingWindow) return "skip";
   return input.articleCount - existing.articleCount > input.recomputeDelta
     ? "recompute"
     : "skip";
@@ -191,6 +236,11 @@ export async function summarizeStorylineDay(
   }
   let quartersRewritten = false;
 
+  // Past the cliff no quarter is asked — but the day's quarters are still spans
+  // that needed no ask, and a tally where the numbers do not add up is a tally
+  // nobody trusts.
+  if (!segmentsAreHonest) outcome.skipped += segments.length;
+
   if (segmentsAreHonest) {
     for (const input of segments) {
       const decision = decideSpan({
@@ -211,7 +261,7 @@ export async function summarizeStorylineDay(
         return outcome;
       }
 
-      const text = await ask(
+      const result = await ask(
         deps,
         buildSegmentSummaryPrompt({
           label: candidate.label,
@@ -222,6 +272,8 @@ export async function summarizeStorylineDay(
         outcome,
       );
 
+      gate?.after?.(result.kind === "unavailable" ? "unavailable" : "answered");
+
       await record(deps, {
         candidate,
         segment: input.segment,
@@ -230,14 +282,14 @@ export async function summarizeStorylineDay(
         // Quarters exist only where they are honest, so a quarter row is always
         // written as segmented. The DAY row is where the distinction is read.
         segmented: true,
-        text,
+        result,
         now,
         outcome,
         decision,
       });
 
-      if (text !== null) {
-        sentences.set(input.segment, text);
+      if (result.kind === "sentence") {
+        sentences.set(input.segment, result.text);
         quartersRewritten = true;
       }
     }
@@ -249,7 +301,14 @@ export async function summarizeStorylineDay(
     sentences,
     stored: stored.get("day"),
     withinSettlingWindow,
-    segmented: segmentsAreHonest,
+    // `segmented` says whether this day's coverage could be placed in time, and
+    // a day that ALREADY has quarter rows is such a day whatever its age is
+    // now. Without the second clause, a day whose `day` row was refused while
+    // it was fresh and retried past the cliff would be re-marked `false` with
+    // its four quarter sentences still standing beside it — the one column
+    // whose whole job is to not lie, lying.
+    segmented:
+      segmentsAreHonest || [...stored.keys()].some((segment) => segment !== "day"),
     quartersRewritten,
     now,
     outcome,
@@ -286,11 +345,10 @@ async function summarizeDay(
     // did — the sentences it is built from are not the ones it was built from.
     forceRecompute: input.quartersRewritten,
   });
-  if (decision === "skip") {
+  if (decision === "skip" || articleCount === 0) {
     input.outcome.skipped += 1;
     return;
   }
-  if (articleCount === 0) return;
 
   const stop = await input.gate?.before();
   if (stop) {
@@ -321,14 +379,15 @@ async function summarizeDay(
           members: dayMembers(input.segments, deps.sampleSize),
         });
 
-  const text = await ask(deps, prompt, input.outcome);
+  const result = await ask(deps, prompt, input.outcome);
+  input.gate?.after?.(result.kind === "unavailable" ? "unavailable" : "answered");
   await record(deps, {
     candidate: input.candidate,
     segment: "day",
     existing: input.stored,
     articleCount,
     segmented: input.segmented,
-    text,
+    result,
     now: input.now,
     outcome: input.outcome,
     decision,
@@ -355,22 +414,28 @@ function dayMembers(segments: SummarySegmentInput[], sampleSize: number): Summar
     .sort((a, b) => a.published.getTime() - b.published.getTime());
 }
 
-/** One model call, validated. Null means nothing usable came back. */
+/**
+ * One model call, validated.
+ *
+ * The distinction it draws is the important part. `generate` returns `ok:
+ * false` for a 429, a 503, a network fault, a timeout AND for the pacer's own
+ * "I will not queue you that long" — none of which is the model saying
+ * anything about this span. Only an answer that fails the contract is a
+ * REFUSAL, and only a refusal costs an attempt.
+ */
 async function ask(
   deps: SummarizerDeps,
   prompt: string,
   outcome: DaySummaryOutcome,
-): Promise<string | null> {
+): Promise<AskResult> {
   // Counted here, at the ask, so the number means "what did this cost" — a
   // retry of an earlier refusal counts, because it is another call. The
   // client's OWN retries (a 503, a 429 it waited out) are invisible from here
   // and are not in this number.
   outcome.modelCalls += 1;
   const result = await deps.generator!.generate({ prompt });
-  if (!result.ok) {
-    deps.logger?.debug?.({ reason: result.reason }, "summary: the model did not answer");
-    return null;
-  }
+  if (!result.ok) return { kind: "unavailable", reason: result.reason };
+
   const validated = validateSummary(result.text);
   if (validated === null) {
     // The raw text is kept, bounded, for the same reason the labeler keeps it:
@@ -380,9 +445,9 @@ async function ask(
       { text: result.text.slice(0, 120) },
       "summary failed the one-sentence contract",
     );
-    return null;
+    return { kind: "refused", reason: `contract: ${result.text.slice(0, 80)}` };
   }
-  return validated;
+  return { kind: "sentence", text: validated };
 }
 
 /**
@@ -402,13 +467,27 @@ async function record(
     existing: StoredSummary | undefined;
     articleCount: number;
     segmented: boolean;
-    text: string | null;
+    result: AskResult;
     now: Date;
     outcome: DaySummaryOutcome;
     decision: SpanDecision;
   },
 ): Promise<void> {
-  const { candidate, segment, existing, text } = input;
+  const { candidate, segment, existing, result } = input;
+
+  // Nothing was learned about this span, so nothing about it is written — not
+  // even an attempt. The next run selects it again and asks again.
+  if (result.kind === "unavailable") {
+    input.outcome.unavailable += 1;
+    deps.logger?.debug?.(
+      { storylineId: candidate.storylineId, dayKey: candidate.dayKey, segment,
+        reason: result.reason },
+      "summary: could not reach the model; the span stands where it stood",
+    );
+    return;
+  }
+
+  const text = result.kind === "sentence" ? result.text : null;
 
   if (text === null) {
     input.outcome.refused += 1;
@@ -483,14 +562,36 @@ export interface SummaryPassTally {
   days: number;
   written: number;
   recomputed: number;
+  /** The model answered and the answer was unusable. Costs the span an attempt. */
   refused: number;
+  /** The model could not be reached. Costs the span nothing — see the outcome type. */
+  unavailable: number;
   skipped: number;
   /** Model calls spent — the `chore_runs.model_calls` number. */
   model: number;
   /** Days whose processing threw. One day's failure never stops the pass. */
   failures: number;
-  stoppedBy: "exhausted" | "max-summaries" | "budget" | "signal" | "no-model";
+  stoppedBy:
+    | "exhausted"
+    | "max-summaries"
+    | "budget"
+    | "signal"
+    | "no-model"
+    | "unavailable";
 }
+
+/**
+ * Consecutive unreachable asks that end the pass.
+ *
+ * Not a tuning knob and not in config: it is a circuit breaker on one shape of
+ * night. When the key is 429ing or the endpoint is down, every ask costs a
+ * timeout and returns the same nothing, and a pass that keeps going spends the
+ * whole night's ceiling discovering that the API is still down. Five in a row is
+ * past any plausible transient — the client has already retried each of them
+ * internally — and stopping loses nothing, because an unreachable ask writes no
+ * row and the next pass reselects the span.
+ */
+const CONSECUTIVE_UNAVAILABLE_LIMIT = 5;
 
 export async function summaryPass(
   deps: SummarizerDeps,
@@ -501,6 +602,7 @@ export async function summaryPass(
     written: 0,
     recomputed: 0,
     refused: 0,
+    unavailable: 0,
     skipped: 0,
     model: 0,
     failures: 0,
@@ -522,6 +624,7 @@ export async function summaryPass(
   const spacingMs = rate > 0 ? Math.ceil(60_000 / rate) : 0;
   const batchSize = options.batchSize ?? 200;
 
+  let consecutiveUnavailable = 0;
   const gate: CallGate = {
     async before(): Promise<string | null> {
       if (options.signal?.aborted) return "signal";
@@ -531,9 +634,15 @@ export async function summaryPass(
       if (options.maxSummaries !== undefined && tally.model >= options.maxSummaries) {
         return "max-summaries";
       }
+      if (consecutiveUnavailable >= CONSECUTIVE_UNAVAILABLE_LIMIT) return "unavailable";
       if (tally.model > 0 && spacingMs > 0) await sleep(spacingMs);
       tally.model += 1;
       return null;
+    },
+    after(kind): void {
+      // The run is counted across DAYS as well as within one: an outage does
+      // not stop at a day boundary.
+      consecutiveUnavailable = kind === "unavailable" ? consecutiveUnavailable + 1 : 0;
     },
   };
 
@@ -575,6 +684,7 @@ export async function summaryPass(
       tally.written += outcome.written;
       tally.recomputed += outcome.recomputed;
       tally.refused += outcome.refused;
+      tally.unavailable += outcome.unavailable;
       tally.skipped += outcome.skipped;
       options.onProgress?.({ days: tally.days, modelCalls: tally.model });
 
@@ -582,9 +692,17 @@ export async function summaryPass(
         tally.stoppedBy =
           outcome.stoppedBy === "signal" ||
           outcome.stoppedBy === "budget" ||
-          outcome.stoppedBy === "max-summaries"
+          outcome.stoppedBy === "max-summaries" ||
+          outcome.stoppedBy === "unavailable"
             ? outcome.stoppedBy
             : "exhausted";
+        if (tally.stoppedBy === "unavailable") {
+          deps.logger?.warn(
+            { days: tally.days, unavailable: tally.unavailable },
+            "summary pass stopping: the model has been unreachable for every recent ask. " +
+              "Nothing was written and nothing was retired; the next pass reselects it.",
+          );
+        }
         break walk;
       }
     }

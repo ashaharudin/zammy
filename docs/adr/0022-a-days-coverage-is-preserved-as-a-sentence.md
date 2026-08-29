@@ -77,6 +77,14 @@ midnight. So:
   keeps the nightly pass reading three days of history instead of all of it.
 - A **refusal never destroys a sentence that stands.** A rewrite the model
   declines leaves the older sentence in place and bumps an attempt count.
+- A **refusal is the model answering unusably, and nothing else.** A 429, a
+  5xx, a timeout or a pacer that will not queue writes no row and costs no
+  attempt: it says nothing about the span. The two must not be one, or an
+  outage retires spans it never read.
+- The **day sentence follows its quarters even past the window.** Nothing else
+  outranks the freeze; this does, because a quarter can legitimately change
+  there (a first write, a successful retry) and a day summary that omits a
+  quarter of its own day is worse than one written twice.
 
 ## The cliff, and the days that only get one sentence
 
@@ -102,6 +110,10 @@ evening coverage* and *we could not tell when that day's coverage landed*.
   thing, and a sentence assembled from tokens would be worse than silence. A
   span the model will not describe stays undescribed, three attempts and then
   never again.
+- **A bounded night defers rather than drops — but only because the walk is
+  oldest-day-first.** The ceiling is reached on a busy corpus, and the days
+  nearest to falling out of the window are the ones that cannot wait, so they
+  are the ones the ceiling is spent on.
 - **The day sentence is built from the quarters', not from the articles.** It
   cannot contradict them and it costs ~150 tokens instead of ~3,000. What it
   gives up is the chance to notice something across the day that no quarter

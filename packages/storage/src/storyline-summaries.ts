@@ -61,7 +61,7 @@ export interface SummaryCandidateDay {
   label: string | null;
 }
 
-/** Keyset position in the candidate walk: strictly descending `(day, id)`. */
+/** Keyset position in the candidate walk: strictly ascending `(day, id)`. */
 export interface SummaryCandidateCursor {
   dayKey: string;
   storylineId: string;
@@ -102,6 +102,15 @@ export interface SummaryCandidateOptions {
  * window and its own writes do not move the cursor: unlike the label pass, what
  * this selects is a property of `articles`, which the summary pass never
  * touches — so the walk is stable even though the pass is writing throughout it.
+ *
+ * **OLDEST day first, which is the opposite of every other read here.** The
+ * pass has a ceiling and the ceiling is reached: a night that cannot drain its
+ * window has to leave something unwritten, and the order decides WHAT. Newest
+ * first leaves the oldest end unwritten — and that end is about to fall out of
+ * the window, after which nothing selects it again, so a bounded night would
+ * silently lose the days it was closest to losing. Oldest first spends the
+ * ceiling on exactly the days that are running out of chances; the newest day
+ * is still there tomorrow, and is the day most likely to be rewritten anyway.
  */
 export async function readSummaryCandidateDays(
   db: Kysely<Database>,
@@ -137,13 +146,15 @@ export async function readSummaryCandidateDays(
        ${
          // The keyset, applied AFTER aggregation because the day key is an
          // aggregate's grouping column, not a row's. Tuple comparison, so the
-         // tie-break on storyline id is the same one the ORDER BY makes.
+         // tie-break on storyline id is the same one the ORDER BY makes — and
+         // both sides are text, so the comparison and the ordering agree on
+         // collation rather than one of them sorting as `uuid`.
          options.after
            ? sql`and (to_char(a.published at time zone 'UTC', 'YYYY-MM-DD'), sg.storyline_id::text)
-                     < (${options.after.dayKey}, ${options.after.storylineId})`
+                     > (${options.after.dayKey}, ${options.after.storylineId})`
            : sql``
        }
-     order by 2 desc, sg.storyline_id desc
+     order by 2 asc, sg.storyline_id::text asc
      limit ${options.limit}
   `.execute(db);
 

@@ -293,7 +293,7 @@ describe("storyline day summaries in storage", () => {
       ).toEqual([]);
     });
 
-    it("walks the whole window on a keyset, newest day first", async () => {
+    it("walks the whole window on a keyset, OLDEST day first", async () => {
       const a = await article({ published: "2026-07-06T01:00:00.000Z" });
       const b = await article({ published: "2026-07-06T13:00:00.000Z" });
       for (const day of ["2026-07-06", "2026-07-07", "2026-07-08"]) {
@@ -304,12 +304,16 @@ describe("storyline day summaries in storage", () => {
       }
       const arc = await storyline([a.groupId, b.groupId], "Three Days");
 
+      // Oldest first, and that is the decision rather than an accident: the
+      // pass has a ceiling, and a bounded night must spend it on the days
+      // about to fall out of the window rather than on the newest day, which
+      // is still there tomorrow.
       const first = await readSummaryCandidateDays(harness.db, {
         ...window,
         storylineId: arc,
         limit: 2,
       });
-      expect(first.map((day) => day.dayKey)).toEqual(["2026-07-08", "2026-07-07"]);
+      expect(first.map((day) => day.dayKey)).toEqual(["2026-07-06", "2026-07-07"]);
 
       const next = await readSummaryCandidateDays(harness.db, {
         ...window,
@@ -317,7 +321,7 @@ describe("storyline day summaries in storage", () => {
         limit: 2,
         after: { dayKey: first[1]!.dayKey, storylineId: first[1]!.storylineId },
       });
-      expect(next.map((day) => day.dayKey)).toEqual(["2026-07-06"]);
+      expect(next.map((day) => day.dayKey)).toEqual(["2026-07-08"]);
     });
   });
 

@@ -44,8 +44,22 @@ beforeEach(async () => {
   nextArticle = 0;
 });
 
-/** A stub model: answers from a queue, and records every prompt it was given. */
-function stub(answers: Array<string | null>): TextGenerator & { prompts: string[] } {
+/**
+ * A stub model: answers from a queue, and records every prompt it was given.
+ *
+ * Three kinds of answer, because the service distinguishes three and the
+ * distinction is load-bearing:
+ *
+ *   "a sentence."           the model answered usably
+ *   { unusable: "..." }     the model ANSWERED and the answer fails the
+ *                           contract — a refusal, which costs an attempt
+ *   null                    the call never reached an answer (429, 503,
+ *                           timeout, or the pacer refusing to queue) — which
+ *                           must cost NOTHING
+ */
+type StubAnswer = string | null | { unusable: string };
+
+function stub(answers: StubAnswer[]): TextGenerator & { prompts: string[] } {
   const prompts: string[] = [];
   let index = 0;
   return {
@@ -56,12 +70,17 @@ function stub(answers: Array<string | null>): TextGenerator & { prompts: string[
       // test that only cares about the first two calls need not spell them all.
       const answer = answers[Math.min(index, answers.length - 1)];
       index += 1;
-      return answer === null || answer === undefined
-        ? { ok: false, reason: "stubbed refusal" }
-        : { ok: true, text: answer };
+      if (answer === null || answer === undefined) {
+        return { ok: false, reason: "stubbed transport failure" };
+      }
+      if (typeof answer === "object") return { ok: true, text: answer.unusable };
+      return { ok: true, text: answer };
     },
   };
 }
+
+/** An answer that arrives and fails the one-sentence contract. */
+const UNUSABLE = { unusable: "One sentence. And then a second one." };
 
 const NOW = new Date("2026-08-15T05:00:00.000Z");
 
@@ -200,7 +219,7 @@ describe("summarizing one storyline-day", () => {
 
   it("records a refusal as a row with no sentence, and retries it until the cap", async () => {
     const id = await seedThreeQuarters();
-    const refusing = deps(stub([null]));
+    const refusing = deps(stub([UNUSABLE]));
 
     await summarizeStorylineDay(refusing, candidate(id, "2026-08-14"));
     let night = (await rowsFor(id, "2026-08-14")).find((row) => row.segment === "night");
@@ -347,6 +366,30 @@ describe("the pubDate cliff", () => {
   });
 });
 
+describe("segmented never lies about a day that has quarters", () => {
+  it("keeps segmented true when a day row is retried past the cliff", async () => {
+    const id = await seedThreeQuarters();
+    // Fresh: the quarters are written, the day itself refuses.
+    await summarizeStorylineDay(
+      deps(stub(["Night.", "Morning.", "Evening.", UNUSABLE])),
+      candidate(id, "2026-08-14"),
+    );
+
+    // Nine days later the retry succeeds — past the cliff.
+    await summarizeStorylineDay(
+      deps(stub(["The day, at last."]), { now: () => new Date("2026-08-24T05:00:00.000Z") }),
+      candidate(id, "2026-08-14"),
+    );
+
+    const rows = await rowsFor(id, "2026-08-14");
+    const day = rows.find((row) => row.segment === "day");
+    expect(day?.summary).toBe("The day, at last.");
+    // `segmented: false` means "we could not tell when this day's coverage
+    // landed", and three quarter sentences sitting beside it say otherwise.
+    expect(day?.segmented).toBe(true);
+  });
+});
+
 describe("a refusal never destroys a sentence that stands", () => {
   it("keeps the older sentence and bumps attempts when a rewrite is refused", async () => {
     const id = await seedThreeQuarters();
@@ -359,7 +402,7 @@ describe("a refusal never destroys a sentence that stands", () => {
       await article("2026-08-14T22:00:00Z", group!.group_id);
     }
 
-    await summarizeStorylineDay(deps(stub([null])), candidate(id, "2026-08-14"));
+    await summarizeStorylineDay(deps(stub([UNUSABLE])), candidate(id, "2026-08-14"));
 
     const evening = (await rowsFor(id, "2026-08-14")).find((row) => row.segment === "evening");
     expect(evening?.summary).toBe("The good sentence.");
@@ -367,6 +410,150 @@ describe("a refusal never destroys a sentence that stands", () => {
     // The count is NOT advanced, so the rewrite is still owed and will be
     // retried — a night the API was down must not silently retire the work.
     expect(evening?.articleCount).toBe(2);
+  });
+});
+
+/**
+ * An outage must not retire a span. Collapsing "the model declined" into "we
+ * could not ask" is how three nights of 429s take every span in the window to
+ * `maxAttempts` without the model having declined a single one — after which
+ * the days age out of the window and the preserve for that week is never
+ * written.
+ */
+describe("unreachable is not refused", () => {
+  it("writes nothing and costs no attempt when the call never lands", async () => {
+    const id = await seedThreeQuarters();
+    const down = deps(stub([null]));
+
+    const outcome = await summarizeStorylineDay(down, candidate(id, "2026-08-14"));
+
+    expect(outcome.unavailable).toBeGreaterThan(0);
+    expect(outcome.refused).toBe(0);
+    // No row at all — not a row with attempts: 1. The span stands where it
+    // stood and the next run asks again.
+    expect(await rowsFor(id, "2026-08-14")).toEqual([]);
+  });
+
+  it("does not consume the attempt budget over repeated outages", async () => {
+    const id = await seedThreeQuarters();
+    const down = deps(stub([null]));
+
+    for (let night = 0; night < 5; night += 1) {
+      await summarizeStorylineDay(down, candidate(id, "2026-08-14"));
+    }
+    // Five nights of outage, and the span is still askable — which is the whole
+    // point. Under the collapsed behaviour it would have been retired on night
+    // three, for ever.
+    const recovered = await summarizeStorylineDay(
+      deps(stub(["The API came back."])),
+      candidate(id, "2026-08-14"),
+    );
+    expect(recovered.written).toBe(4);
+  });
+
+  it("leaves a standing sentence untouched when a rewrite cannot be sent", async () => {
+    const id = await seedThreeQuarters();
+    await summarizeStorylineDay(deps(stub(["The good sentence."])), candidate(id, "2026-08-14"));
+
+    const [group] = await sql<{ group_id: string }>`
+      select group_id from storyline_groups where storyline_id = ${id}::uuid limit 1
+    `.execute(db).then((result) => result.rows);
+    for (let i = 0; i < 6; i += 1) await article("2026-08-14T22:00:00Z", group!.group_id);
+
+    await summarizeStorylineDay(deps(stub([null])), candidate(id, "2026-08-14"));
+
+    const evening = (await rowsFor(id, "2026-08-14")).find((row) => row.segment === "evening");
+    expect(evening?.summary).toBe("The good sentence.");
+    // Not even an attempt: an outage says nothing about this span.
+    expect(evening?.attempts).toBe(0);
+  });
+
+  it("stops the pass once the model has been unreachable for a run of asks", async () => {
+    // Otherwise a night of 429s spends the whole ceiling discovering that the
+    // API is still down. Two qualifying days, so the run of unreachable asks
+    // has to cross a day boundary to reach the limit — which is the case the
+    // counter is written for.
+    const id = await seedThreeQuarters();
+    const [group] = await sql<{ group_id: string }>`
+      select group_id from storyline_groups where storyline_id = ${id}::uuid limit 1
+    `.execute(db).then((result) => result.rows);
+    for (let i = 0; i < 6; i += 1) await article("2026-08-13T09:00:00Z", group!.group_id);
+    const other = await article("2026-08-13T10:00:00Z");
+    await sql`
+      insert into storyline_groups (storyline_id, group_id) values (${id}::uuid, ${other})
+    `.execute(db);
+
+    const model = stub([null]);
+    const tally = await summaryPass(deps(model), {
+      from: new Date("2026-08-01T00:00:00Z"),
+      to: NOW,
+      minArticlesExclusive: 4,
+      minGroups: 2,
+      maxSummaries: 500,
+      ratePerMinute: 0,
+      now: () => NOW,
+    });
+
+    expect(tally.stoppedBy).toBe("unavailable");
+    expect(tally.model).toBeLessThan(500);
+  });
+});
+
+/**
+ * The day sentence must follow its quarters even past the settling window,
+ * because a quarter can legitimately change there: a first write of a quarter
+ * that had no row, and a successful retry of a refusal, both ignore the window
+ * by design.
+ */
+describe("the day follows its quarters", () => {
+  const AGED = { now: () => new Date("2026-08-20T05:00:00.000Z") };
+
+  it("rewrites a frozen day when a NEW quarter appears under it", async () => {
+    const id = await seedThreeQuarters();
+    await summarizeStorylineDay(deps(stub(["First."])), candidate(id, "2026-08-14"));
+
+    // A late group lands afternoon coverage on a day that had none.
+    const [group] = await sql<{ group_id: string }>`
+      select group_id from storyline_groups where storyline_id = ${id}::uuid limit 1
+    `.execute(db).then((result) => result.rows);
+    await article("2026-08-14T14:00:00Z", group!.group_id);
+
+    await summarizeStorylineDay(deps(stub(["Second."]), AGED), candidate(id, "2026-08-14"));
+
+    const rows = await rowsFor(id, "2026-08-14");
+    expect(rows.find((row) => row.segment === "afternoon")?.summary).toBe("Second.");
+    // The day was rewritten WITH it. Left frozen, it would describe a day one
+    // of whose quarters it has never seen.
+    expect(rows.find((row) => row.segment === "day")?.summary).toBe("Second.");
+  });
+
+  it("rewrites a frozen day when a refused quarter is finally written", async () => {
+    const id = await seedThreeQuarters();
+    // The evening refuses; the day is written from what the others gave.
+    await summarizeStorylineDay(
+      deps(stub(["Night.", "Morning.", UNUSABLE, "Day."])),
+      candidate(id, "2026-08-14"),
+    );
+    expect((await rowsFor(id, "2026-08-14")).find((row) => row.segment === "day")?.summary).toBe(
+      "Day.",
+    );
+
+    await summarizeStorylineDay(deps(stub(["Retried."]), AGED), candidate(id, "2026-08-14"));
+
+    const rows = await rowsFor(id, "2026-08-14");
+    expect(rows.find((row) => row.segment === "evening")?.summary).toBe("Retried.");
+    expect(rows.find((row) => row.segment === "day")?.summary).toBe("Retried.");
+  });
+
+  it("still freezes a day nothing happened to", async () => {
+    const id = await seedThreeQuarters();
+    await summarizeStorylineDay(deps(stub(["First."])), candidate(id, "2026-08-14"));
+
+    const model = stub(["Should never be asked."]);
+    const outcome = await summarizeStorylineDay(deps(model, AGED), candidate(id, "2026-08-14"));
+
+    expect(outcome.modelCalls).toBe(0);
+    expect(model.prompts).toEqual([]);
   });
 });
 
