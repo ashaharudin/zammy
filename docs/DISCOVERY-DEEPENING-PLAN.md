@@ -932,6 +932,17 @@ articles changed `group_id`** across both runs, 211 of them in Span A alone. ADR
 hazard; this is a channel that needs no mislabelling at all, because
 `plane` gates *which rows are counted* and cannot gate *what a row says*.
 
+> **Followed up 2026-08-29 (`docs/G6-ITEM-5-GROUP-REPARENTING.md`, gating item 5).**
+> The two channels have since been SEPARATED, against a restore of this phase's
+> own pre-run dump, with a harness that reproduces the three `board-pre-*` boards
+> above byte-identically. **The group channel accounts for every one of the 16
+> board membership changes across the three windows; the `published` handover for
+> none of them.** The bridging is also not a deepening property — the same code
+> path runs on both discovery-plane callers and predates the plane by 335 commits
+> — so this is grouping working as ADR-0009 designed it, not a leak `plane`
+> failed to gate. The count that means something is **264 pre-existing articles
+> changed arc**, all by gaining, none by losing.
+
 Both channels have a fix and neither is in this phase's scope. The narrow one:
 refuse the display-field handover to a sighting whose timestamp is a bare date.
 **That test is a heuristic and its error direction is the safe one**, which is
@@ -1185,6 +1196,14 @@ this one is not about the timestamp.
 a narrower window changes that, and a scheduler is a call-volume increase by
 definition.
 
+> **Corrected 2026-08-29 (`docs/G6-ITEM-5-GROUP-REPARENTING.md`, gating item 5).**
+> Timestamp-independent is right; "scales with call volume" is not. Groups only
+> ever coarsen and a repeated merge is a no-op, so the channel is monotone and
+> idempotent and converges to a fixed point — volume changes how fast it is
+> reached, not where. The count is also wrong in both directions: the figure that
+> means anything is **264 pre-existing articles changed which storylines they
+> belong to**, all of them by GAINING arcs, none by losing coverage.
+
 **And the window costs G7 the thing G7 is for.** This section's own scope line is
 "arcs backfilled by slicing their spans"; a six-day ceiling means an arc
 discovered late can never have its history fetched at all. What survives is *the
@@ -1224,17 +1243,32 @@ worse in exactly the way G7 changes things:
    is bounded by how often people click. Under a scheduler it is unbounded, and
    it is precisely the endogenous loop ADR-0019 built `plane` to prevent,
    arriving by a route `plane` cannot see.
+
+   > **Corrected 2026-08-29 (gating item 5).** The claim holds; "unbounded" does
+   > not, for the group half. That half converges to a fixed point and cannot
+   > ratchet, so a scheduler reaches the same end state sooner rather than a worse
+   > one. **Which half moved the cloud was also measured, and it is the opposite
+   > of the ordering here**: over G6's three windows the group channel accounts
+   > for all 16 board membership changes and the `published` handover for none —
+   > its signature is score-only (`Leavitt … 68|49, 62.574 → 54.126`) plus one
+   > boundary swap. ADR-0021 fixes the channel that moved the board least. The
+   > residual harm is not misfiled articles but a correct merge amplifying a
+   > pre-existing arc split into several inflated board rows.
 2. **G7's own work is what the `pubDate` cliff punishes.** Backfilling an arc by
    slicing its span means fetching almost exclusively items older than eight
    days, where 90% of stamps are a bare date in the wrong timezone. Today's
    leading-edge fetch runs at 1.7% degraded and is fine; the crawl frontier
    would run at ~90%.
 
-**What G7 is gated on.** Five items, none of them a phase of its own — every one
-is a G5 correction, and together they are smaller than the measurement that found
-them. The first two are unconditional; the last three are what a windowed frontier
-owes on top, and they exist because windowing was measured above and came back
-half a fix.
+**What G7 is gated on.** Five items as written, none of them a phase of its own —
+every one is a G5 correction, and together they are smaller than the measurement
+that found them. The first two are unconditional; items 3 and 4 are what a windowed
+frontier owes on top, and they exist because windowing was measured above and came
+back half a fix. **Item 5 was discharged on 2026-08-29 — accepted in writing, on
+the finding that it was not a deepening defect at all — so the live gate is four
+items.** The description that discharged it is
+`docs/G6-ITEM-5-GROUP-REPARENTING.md`, and it corrects two claims this section
+makes; both are marked in place below.
 
 1. **Never hand a deepening sighting's `url` to an existing article.** Not
    conditional on the stamp: all 3,087 sightings this phase drew carry a
@@ -1259,10 +1293,64 @@ half a fix.
    at day 12. The honest form is a metric on the share of
    deepening sightings arriving with a bare-date stamp, alerting when it moves —
    not a number in config that was true on 2026-08-29.
-5. **Close the group-re-parenting channel, or accept it in writing.** 259
-   pre-existing articles changed `group_id`; that is timestamp-independent,
-   untouched by any window, and it scales with call volume. Nothing above fixes
-   it and this phase does not know what should.
+5. ~~**Close the group-re-parenting channel, or accept it in writing.**~~
+   **DISCHARGED 2026-08-29 — accepted in writing, and the item as written was
+   the wrong item.** Described and measured in
+   `docs/G6-ITEM-5-GROUP-REPARENTING.md`, against a restore of this phase's own
+   pre-run dump. Four findings, in the order that changes the framing:
+
+   - **It is not deepening-specific, and G6's wording above is too narrow.**
+     `groupCreatedArticles` runs `groupArticle` — and so `mergeBridgedGroups` —
+     over every arrival in one loop, and only *then* branches on
+     `intent.attachTo`. Its other two callers are both discovery plane.
+     `mergeBridgedGroups` landed in `d40cce6` (ADR-0009, 2026-08-13); the
+     deepening plane landed in `0dec1fa` (#179, 2026-08-28), 335 commits later,
+     and ADR-0009 measured this channel on discovery data. **`plane` was never
+     going to gate it, because it is not a plane leak — it is grouping.** What
+     deepening changes is arrival density: 1.90 merges per 100 arrivals against
+     ADR-0009's 0.33, because a call returns 100 items about ONE story, which is
+     the maximal condition for bridging.
+   - **It converges; it does not scale the way this list assumed.** Groups only
+     ever coarsen and a repeated merge is a no-op, so the channel is monotone and
+     idempotent and has a FIXED POINT. Call volume changes how fast it is
+     reached, not where it is. The "scales with call volume" claim at the top of
+     this section and in the verdict's point 1 is wrong on that reading and is
+     corrected in place there.
+   - **The blast radius is additive, and 259 counts the wrong population.** 28 of
+     the 259 changed no arc at all, and 33 articles OUTSIDE the 259 changed arc
+     without changing `group_id` — the winner group's own members, whom a
+     `group_id` diff cannot see. Corrected: **264 pre-existing articles changed
+     which storylines they belong to, every one of them GAINED arcs, and not one
+     lost coverage.** 32 of the 55 merges are the singleton adoption ADR-0005
+     already permitted, so the population this item was about is 23.
+   - **The merges are right.** All 13 merges moving five or more articles pair
+     leads of the same story, read by hand; eleven are unambiguous syndication
+     heals and two are ADR-0009's stated "same story, not the same piece" cost.
+     The 43 cross-arc unions are overwhelmingly unions of arcs that were ALREADY
+     duplicates of one event — Gilman ×3, Nizhnekamsk ×2, USS Lincoln ×2,
+     Eurovision ×3. Genuine cross-event contamination is about 2 of 43, both
+     single- or two-article.
+
+   **So there is nothing to close at the grouping layer, and closing it would
+   forfeit correct repairs** — the 38-article Swedish school attack, the
+   35-article Pixel 11 launch. Refusing the merge on the deepening plane alone
+   was considered and is rejected: the channel is general, so it fixes nothing in
+   principle and buys a permanent divergence between the two planes' grouping.
+
+   **What the item exposed is real, and it is a different item.** A correct merge
+   multiplies a PRE-EXISTING arc split into several inflated board rows: group
+   30218 absorbed three Eurovision groups and all three arcs now hold it, so
+   `Burgas Eurovision Host` 37|33, `Eurovision hosting rule change` 34|32 and
+   `Eurovision Conflict Rule` 33|31 take three top-20 slots for one story and push
+   four arcs off the board. **That is the Nepal split recorded above, amplified**,
+   and the damage is proportional to how badly `storyline-label-merge` has already
+   failed on the event. The follow-up worth measuring is therefore the opposite of
+   this item: **feed the merge back into label-merge as evidence** — a bridge merge
+   is stronger proof that two arcs are one event than anything `mergeCollidingLabels`
+   gets today, and `absorbMergedGroup` currently marks `link_dirty_at` and stops.
+   That needs its own measurement and is NOT a G7 gate.
+
+   **G7 is therefore gated on four items, not five.**
 
 **And re-run this instrument afterwards**, with the acceptance test being the one
 G5 stated and did not get: the cloud comes back byte-identical across a run.
@@ -1277,11 +1365,13 @@ phase written here, and it should be argued as the smaller thing it is.
 ## G7 — The scheduler, and the §9 trade
 
 **Depends on**: G6 saying yes. **G6 said NO — see its verdict above**, which
-carries a five-item gating list. The yield is there; two defects it uncovered are
+carried a five-item gating list; **item 5 was discharged on 2026-08-29 and four
+remain**. The yield is there; two defects it uncovered are
 not survivable by a scheduler, and both are G5 corrections rather than new phases.
 **Windowing the crawl inside the eight-day `pubDate` cliff was measured and is
 half a fix** — it restores the fold and touches neither the URL handover nor
-group re-parenting, and it forecloses the backfill this section is written around.
+group re-parenting, and it forecloses the backfill this section is written around
+(group re-parenting is now accepted rather than owed — item 5).
 Do not start this until the gating list lands and G6's instrument has been re-run.
 
 Turn the cloud into a crawl frontier: storylines fetched on a schedule rather
