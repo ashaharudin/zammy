@@ -228,7 +228,12 @@ export function createLabeler(
  * client, and the difference only shows up as a rate nobody is watching.
  */
 export function summarySharesLabelerPacer(config: Config): boolean {
-  return !config.SUMMARY_API_KEY;
+  // Unset, empty — or set to the SAME credential, which is the natural
+  // "be explicit" move and the obvious thing to do when uncommenting the line
+  // in `.env.example`. What decides this is which KEY is being spent, not which
+  // variable it was read from; two pacers on one key is the 2x overshoot the
+  // shared pacer exists to prevent.
+  return !config.SUMMARY_API_KEY || config.SUMMARY_API_KEY === config.GEMINI_API_KEY;
 }
 
 export function createModelPacer(config: Config): ModelPacer {

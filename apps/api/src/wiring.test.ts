@@ -42,6 +42,16 @@ describe("summarySharesLabelerPacer", () => {
     expect(summarySharesLabelerPacer(config())).toBe(true);
   });
 
+  it("shares when both variables hold the SAME key", () => {
+    // Which is which variable it was read from, not which key is spent — and
+    // spelling one key twice must not buy two windows on it.
+    expect(
+      summarySharesLabelerPacer(
+        config({ GEMINI_API_KEY: "one-key", SUMMARY_API_KEY: "one-key" }),
+      ),
+    ).toBe(true);
+  });
+
   it("treats a PRESENT but EMPTY second key as unset", () => {
     // Which is what `.env.example` and a blank dashboard field send. Read as a
     // key, it both silences the summariser (`?? ` does not fall through "")

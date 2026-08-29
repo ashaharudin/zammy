@@ -42,11 +42,20 @@ const DESCRIPTION_CHARS = 200;
  * only knowable as vocabulary.
  */
 const NON_TERMINAL_ABBREVIATIONS = new Set([
-  "mr", "mrs", "ms", "dr", "prof", "rev", "hon", "st", "mt", "ft",
-  "jr", "sr", "gen", "col", "sgt", "capt", "lt", "sen", "rep", "gov",
-  "pres", "supt", "det", "insp", "cmdr", "adm",
-  "inc", "ltd", "co", "corp", "dept", "univ", "assn",
-  "vs", "etc", "approx", "est", "no", "fig", "al",
+  // Honorifics and ranks. The military and diplomatic ones are here because
+  // this corpus is news: `Maj. Gen. Smith took command.` is one sentence, and a
+  // missing entry does not merely lose that summary — temperature is 0, so all
+  // three attempts return the identical sentence, fail the identical check, and
+  // retire the span with a null summary for ever.
+  "mr", "mrs", "ms", "mx", "dr", "prof", "rev", "hon", "st", "mt", "ft",
+  "jr", "sr", "gen", "maj", "brig", "col", "sgt", "capt", "cpl", "pvt", "lt",
+  "cmdr", "adm", "sen", "rep", "gov", "sec", "amb", "pres", "supt", "det",
+  "insp", "messrs",
+  // Organisations and places.
+  "inc", "ltd", "co", "corp", "dept", "univ", "assn", "bros",
+  "ave", "blvd", "rd", "sq",
+  // Everything else that ends in a period without ending a sentence.
+  "vs", "etc", "approx", "est", "no", "fig", "al", "min", "max",
   "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sept", "sep", "oct", "nov", "dec",
 ]);
 
@@ -174,6 +183,89 @@ export function buildDayFromArticlesPrompt(input: {
   ].join("\n");
 }
 
+
+/**
+ * The markers a chat-tuned model wraps an answer in.
+ *
+ * Emphasis and quotation are handled by the same three rules below because they
+ * fail the same way: each is a wrapper when it is BALANCED around the whole
+ * answer and part of the sentence when it is not, and a strip that cannot tell
+ * the difference quietly stores `The pause_ held` or
+ * `We will not yield," said Kim, adding "never.` for ever.
+ */
+const WRAPPERS: ReadonlyArray<{ open: string; close: string }> = [
+  { open: "**", close: "**" },
+  { open: "__", close: "__" },
+  { open: "*", close: "*" },
+  { open: "_", close: "_" },
+  { open: '"', close: '"' },
+  { open: "'", close: "'" },
+  { open: "\u201c", close: "\u201d" },
+  { open: "\u2018", close: "\u2019" },
+];
+
+/**
+ * A leading bullet or list number.
+ *
+ * `*` only when whitespace follows it: `* The pause held` is a bullet and
+ * `*The pause held*` is emphasis, and the two are one character apart.
+ */
+function stripBullet(text: string): string {
+  return text.replace(/^(?:[-\u2022>]+|\*(?=\s))\s*/, "").replace(/^\d+[.)]\s+/, "");
+}
+
+/**
+ * `Summary:`, however the model decorated it.
+ *
+ * The emphasis markers are matched HERE rather than stripped beforehand,
+ * because `**Summary**:` puts one of them between the word and the colon —
+ * strip the leading `**` first and the heading no longer matches its own
+ * regex, and what gets stored is `Summary**: the pause held`. All three real
+ * forms (`**Summary:**`, `**Summary**:`, `Summary:`) are one pattern.
+ *
+ * The word list is deliberately short. The SEGMENT names are not in it: "Evening
+ * — the talks collapsed." is a correct answer whose first word is part of the
+ * sentence, and so is "Overall — the ceasefire held." Only the words that
+ * cannot plausibly open a sentence about the news belong here.
+ */
+const EMPHASIS = "(?:\\*\\*|__|\\*|_)*";
+const HEADING = new RegExp(
+  `^${EMPHASIS}\\s*(?:summary|day summary|overall summary)\\s*${EMPHASIS}\\s*[:\\-\u2013\u2014]\\s*${EMPHASIS}\\s*`,
+  "i",
+);
+
+function stripHeading(text: string): string {
+  return text.replace(HEADING, "");
+}
+
+/**
+ * One layer of balanced wrapping, and NOTHING unbalanced.
+ *
+ * Two shapes count as wrapping the whole answer: `"…"` and `"…".` — the
+ * terminator sits inside the quotes or outside them, and a model does both. What
+ * does not count is a delimiter that appears again inside, which is the test
+ * that keeps a quoted quotation intact.
+ */
+function unwrapDelimiters(text: string): string {
+  for (const { open, close } of WRAPPERS) {
+    if (!text.startsWith(open)) continue;
+    for (const tail of ["", ".", "!", "?"]) {
+      const suffix = close + tail;
+      // `>=`, not `>`: an EMPTY wrapper — `""`, which is what a heading strip
+      // leaves of `**Summary:** ""` — must unwrap to nothing and be refused,
+      // rather than surviving as a two-character "sentence".
+      if (text.length < open.length + suffix.length) continue;
+      if (!text.endsWith(suffix)) continue;
+      const inner = text.slice(open.length, text.length - suffix.length);
+      // A second occurrence means these are quotation marks in a sentence, not
+      // a wrapper round one.
+      if (inner.includes(open) || inner.includes(close)) continue;
+      return `${inner.trim()}${tail}`;
+    }
+  }
+  return text;
+}
+
 /**
  * Is what came back usable? Returns the cleaned sentence, or null.
  *
@@ -195,29 +287,12 @@ export function validateSummary(raw: string): string | null {
   let text = raw.replaceAll(/\s+/g, " ").trim();
   if (!text) return null;
 
-  // Strip in a loop: real output nests these — a bullet inside bold inside a
-  // heading — and one pass leaves whichever layer happened to be outermost.
+  // Stripped in a loop, because real output NESTS these — a bullet outside bold
+  // outside a heading outside a quote — and one pass removes whichever layer
+  // happened to be outermost.
   for (let pass = 0; pass < 4; pass += 1) {
     const before = text;
-    text = text
-      .replace(/^[-*•>]+\s*/, "")
-      .replace(/^\d+[.)]\s+/, "")
-      .replace(/^(?:\*\*|__|\*|_)+/, "")
-      .replace(/(?:\*\*|__|\*|_)+$/, "")
-      // The heading words only. The SEGMENT names deliberately are not here,
-      // and were: "Evening — the talks collapsed." is a correct answer whose
-      // first word is part of the sentence, and stripping it stored a
-      // lowercase fragment for ever. A model that genuinely prefixes
-      // "Morning:" is rarer than a sentence that opens with a time of day.
-      .replace(/^(?:summary|day summary|overall|overall summary)\s*[:\-–—]\s*/i, "")
-      // The whole answer in quotes, with the terminator inside or outside them.
-      // Done as a pair rather than as two independent trims, which left the
-      // closing quote behind on `"The pause held".` — the trailing trim cannot
-      // fire while the last character is the period.
-      .replace(/^["'“‘]\s*(.+?)\s*["'”’](\s*[.!?])?$/, "$1$2")
-      .replace(/^["'“‘]+/, "")
-      .replace(/["'”’]+$/, "")
-      .trim();
+    text = unwrapDelimiters(stripHeading(stripBullet(text))).trim();
     if (text === before) break;
   }
 

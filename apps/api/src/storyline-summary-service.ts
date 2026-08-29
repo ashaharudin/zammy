@@ -303,11 +303,29 @@ export async function summarizeStorylineDay(
     }
   }
 
+  const dayRow = stored.get("day");
+  // The DURABLE half of the force. `quartersRewritten` lives for the length of
+  // this call, and the pass can end between the quarters and the day — the gate
+  // stops on the budget or the ceiling, which is what the docs say actually
+  // stops a healthy night. The flag would be gone by the next run, the quarter
+  // would be current, and a day past its window would keep a sentence that
+  // omits a quarter it has never seen. Comparing stamps survives that: every
+  // row a single run writes carries the SAME `now`, so `>` is true only when a
+  // later run genuinely wrote a quarter after this day sentence.
+  const quartersOutranTheDay =
+    dayRow !== undefined &&
+    [...stored.values()].some(
+      (row) =>
+        row.segment !== "day" &&
+        row.summary !== null &&
+        row.generatedAt.getTime() > dayRow.generatedAt.getTime(),
+    );
+
   await summarizeDay(deps, {
     candidate,
     segments,
     sentences,
-    stored: stored.get("day"),
+    stored: dayRow,
     withinSettlingWindow,
     // `segmented` says whether this day's coverage could be placed in time, and
     // a day that ALREADY has quarter rows is such a day whatever its age is
@@ -324,7 +342,7 @@ export async function summarizeStorylineDay(
         // exactly the "we could not tell when this landed" case.
         (row) => row.segment !== "day" && row.summary !== null,
       ),
-    quartersRewritten,
+    quartersRewritten: quartersRewritten || quartersOutranTheDay,
     now,
     outcome,
     gate,

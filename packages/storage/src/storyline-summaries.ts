@@ -1,4 +1,4 @@
-import { sql, type Kysely } from "kysely";
+import { sql, type ExpressionBuilder, type Kysely } from "kysely";
 import type { Database, SummarySegment } from "./database.js";
 
 /**
@@ -359,17 +359,21 @@ export async function writeStorylineDaySummary(
         // reason: a count advanced past a sentence that was not rewritten
         // would retire a rewrite that is still owed.
         summary: eb.fn.coalesce("excluded.summary", "storyline_day_summaries.summary"),
-        article_count: eb
-          .case()
-          .when(eb.ref("excluded.summary"), "is not", null)
-          .then(eb.ref("excluded.article_count"))
-          .else(eb.ref("storyline_day_summaries.article_count"))
-          .end(),
-        label: write.label,
-        model_id: write.modelId,
+        // Everything that DESCRIBES the sentence travels with the sentence.
+        //
+        // Keeping the summary while letting these through would be worse than
+        // overwriting it outright, because the row would then look intact and
+        // lie about itself: a preserved sentence attributed to a label and a
+        // model that never produced it, and `segmented` flipped by a write that
+        // did not place anything in time. `attempts` and nothing else is about
+        // the ASK rather than the sentence, so it is the one field that lands
+        // either way.
+        article_count: keptWithSummary(eb, "article_count"),
+        label: keptWithSummary(eb, "label"),
+        model_id: keptWithSummary(eb, "model_id"),
+        segmented: keptWithSummary(eb, "segmented"),
+        generated_at: keptWithSummary(eb, "generated_at"),
         attempts: write.attempts,
-        segmented: write.segmented,
-        generated_at: write.generatedAt,
       })),
     )
     .execute();
@@ -394,6 +398,26 @@ export async function bumpSummaryAttempts(
     .where("day_key", "=", input.dayKey)
     .where("segment", "=", input.segment)
     .execute();
+}
+
+
+/**
+ * A column that is only overwritten when the incoming row carries a sentence.
+ *
+ * `case when excluded.summary is not null then excluded.<col> else
+ * storyline_day_summaries.<col> end`, written once because five columns need
+ * it and five hand-written copies is five chances to forget one.
+ */
+function keptWithSummary(
+  eb: ExpressionBuilder<Database, "storyline_day_summaries">,
+  column: "article_count" | "label" | "model_id" | "segmented" | "generated_at",
+) {
+  return eb
+    .case()
+    .when(eb.ref("excluded.summary" as never), "is not", null)
+    .then(eb.ref(`excluded.${column}` as never))
+    .else(eb.ref(`storyline_day_summaries.${column}` as never))
+    .end();
 }
 
 /** Rows written for one arc, oldest day first — the CLI's report and the read path's. */

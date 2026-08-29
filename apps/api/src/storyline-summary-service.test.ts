@@ -7,6 +7,7 @@ import {
   decideSpan,
   summarizeStorylineDay,
   summaryPass,
+  type CallGate,
   type SummarizerDeps,
 } from "./storyline-summary-service.js";
 
@@ -627,6 +628,50 @@ describe("the day follows its quarters", () => {
     const rows = await rowsFor(id, "2026-08-14");
     expect(rows.find((row) => row.segment === "evening")?.summary).toBe("Retried.");
     expect(rows.find((row) => row.segment === "day")?.summary).toBe("Retried.");
+  });
+
+  it("remembers across runs that a quarter outran the day", async () => {
+    // The force is in memory for the length of one call, and the pass can stop
+    // between the quarters and the day — on the budget or the ceiling, which is
+    // what actually stops a healthy night. Without a durable check the flag is
+    // gone by the next run, the quarter is current, and a frozen day keeps a
+    // sentence that omits a quarter it has never seen.
+    const id = await seedThreeQuarters();
+    await summarizeStorylineDay(deps(stub(["First."])), candidate(id, "2026-08-14"));
+
+    const [group] = await sql<{ group_id: string }>`
+      select group_id from storyline_groups where storyline_id = ${id}::uuid limit 1
+    `.execute(db).then((result) => result.rows);
+    await article("2026-08-14T14:00:00Z", group!.group_id);
+
+    // Run A: the afternoon is written, and the run is cut off before the day.
+    const cutOff: CallGate = {
+      before: async () => null,
+      after: () => {},
+    };
+    let asks = 0;
+    await summarizeStorylineDay(deps(stub(["Afternoon."]), AGED), candidate(id, "2026-08-14"), {
+      before: async () => (asks++ === 0 ? null : "budget"),
+      after: cutOff.after,
+    });
+    expect(
+      (await rowsFor(id, "2026-08-14")).find((row) => row.segment === "afternoon")?.summary,
+    ).toBe("Afternoon.");
+    expect((await rowsFor(id, "2026-08-14")).find((row) => row.segment === "day")?.summary).toBe(
+      "First.",
+    );
+
+    // Run B, a fresh call with no memory of run A, and the day still frozen.
+    await summarizeStorylineDay(
+      deps(stub(["The day, caught up."]), {
+        now: () => new Date("2026-08-21T05:00:00.000Z"),
+      }),
+      candidate(id, "2026-08-14"),
+    );
+
+    expect((await rowsFor(id, "2026-08-14")).find((row) => row.segment === "day")?.summary).toBe(
+      "The day, caught up.",
+    );
   });
 
   it("still freezes a day nothing happened to", async () => {

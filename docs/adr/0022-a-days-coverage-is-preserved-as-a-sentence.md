@@ -73,8 +73,10 @@ midnight. So:
 - A **rewrite** needs both: the day is less than three days past its close, and
   the span gained more than four articles. The window says when a day is still
   open to revision; the delta says whether the change was worth a model call.
-- Past the window, **frozen**. That is what makes it a preserve, and it is what
-  keeps the nightly pass reading three days of history instead of all of it.
+- Past the window, **frozen**. That is what makes it a preserve. (What bounds
+  how far the nightly pass READS is a separate knob — `SUMMARY_WINDOW_DAYS`,
+  which is wider, because a day still has to be SEEN after it stops being
+  revisable: a slow story can cross the article bar on its fourth day.)
 - A **refusal never destroys a sentence that stands.** A rewrite the model
   declines leaves the older sentence in place and bumps an attempt count.
 - A **refusal is the model answering unusably, and nothing else.** A 429, a

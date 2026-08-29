@@ -420,6 +420,55 @@ describe("storyline day summaries in storage", () => {
       expect(night?.attempts).toBe(1);
     });
 
+    it("does not re-caption the row it just protected", async () => {
+      // Keeping the sentence while letting its provenance through is worse than
+      // overwriting it: the row then looks intact and lies about itself.
+      await writeStorylineDaySummary(harness.db, {
+        storylineId: arcId,
+        dayKey: "2026-08-20",
+        segment: "night",
+        summary: "The sentence that stands.",
+        articleCount: 4,
+        label: "The label it was written under",
+        modelId: "model-one",
+        attempts: 0,
+        segmented: true,
+        generatedAt: new Date("2026-08-21T05:00:00.000Z"),
+      });
+      await writeStorylineDaySummary(harness.db, {
+        storylineId: arcId,
+        dayKey: "2026-08-20",
+        segment: "night",
+        summary: null,
+        articleCount: 99,
+        label: "A LATER label",
+        modelId: "model-two",
+        attempts: 1,
+        segmented: false,
+        generatedAt: new Date("2026-08-30T05:00:00.000Z"),
+      });
+
+      const night = (
+        await readStorylineDaySummaries(harness.db, {
+          storylineId: arcId,
+          dayKey: "2026-08-20",
+        })
+      ).find((row) => row.segment === "night");
+
+      expect(night?.summary).toBe("The sentence that stands.");
+      expect(night?.modelId).toBe("model-one");
+      expect(night?.segmented).toBe(true);
+      expect(night?.generatedAt.toISOString()).toBe("2026-08-21T05:00:00.000Z");
+      const label = await harness.db
+        .selectFrom("storyline_day_summaries")
+        .select("label")
+        .where("storyline_id", "=", arcId)
+        .where("day_key", "=", "2026-08-20")
+        .where("segment", "=", "night")
+        .executeTakeFirst();
+      expect(label?.label).toBe("The label it was written under");
+    });
+
     it("survives the storyline it belongs to being deleted", async () => {
       // The whole reason there is no foreign key: a preserve that cascades away
       // with its arc is a preserve that deletes itself.

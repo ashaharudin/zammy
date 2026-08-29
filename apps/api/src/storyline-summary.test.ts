@@ -110,6 +110,45 @@ describe("validateSummary", () => {
     expect(validateSummary('“The pause held.”')).toBe("The pause held.");
   });
 
+  it("leaves a sentence that merely BEGINS and ENDS with a quotation alone", () => {
+    // The lazy-unwrap version of this stored
+    // `We will not yield," said Kim, adding "never.` — unbalanced quotes, for
+    // ever, on a table nothing rebuilds.
+    const quoted = '"We will not yield," said Kim, adding "never".';
+    expect(validateSummary(quoted)).toBe(quoted);
+  });
+
+  it("strips the heading however the model decorated it", () => {
+    // `**Summary**:` puts an emphasis marker BETWEEN the word and the colon.
+    // Stripping the leading `**` first leaves `Summary**: …`, which then fails
+    // to match the heading pattern and is stored verbatim.
+    expect(validateSummary("**Summary:** The pause held.")).toBe("The pause held.");
+    expect(validateSummary("**Summary**: The pause held.")).toBe("The pause held.");
+    expect(validateSummary('> **Summary**: "U.S. officials paused the wall."')).toBe(
+      "U.S. officials paused the wall.",
+    );
+    expect(validateSummary("**The pause held.**")).toBe("The pause held.");
+  });
+
+  it("leaves unbalanced emphasis inside a sentence alone", () => {
+    // `_The pause_ held …` is italics on two words, not a wrapper round the
+    // answer, and an unpaired strip turns it into `The pause_ held …`.
+    expect(validateSummary("_The pause_ held through the afternoon.")).toBe(
+      "_The pause_ held through the afternoon.",
+    );
+  });
+
+  it("keeps a leading Overall that is part of the sentence", () => {
+    // The same class as the segment names: only the words that cannot open a
+    // sentence about the news belong in the heading list.
+    expect(validateSummary("Overall — the ceasefire held through Tuesday.")).toBe(
+      "Overall — the ceasefire held through Tuesday.",
+    );
+    expect(validateSummary("Overall summary: The ceasefire held.")).toBe(
+      "The ceasefire held.",
+    );
+  });
+
   it("collapses the newlines a model formats with", () => {
     expect(validateSummary("The pause\nheld through\nthe evening.")).toBe(
       "The pause held through the evening.",
@@ -139,6 +178,15 @@ describe("sentenceCount", () => {
     expect(sentenceCount("The U.S. Army confirmed the pause.")).toBe(1);
     expect(sentenceCount("Acme Inc. Ltd. filed the notice.")).toBe(1);
     expect(sentenceCount("Sept. 3 was the deadline.")).toBe(1);
+  });
+
+  it("knows the ranks and honorifics a news corpus is full of", () => {
+    // A missing entry costs more than one summary: temperature is 0, so all
+    // three attempts return the identical sentence and the span is retired.
+    expect(sentenceCount("Sec. Rubio met Kim in Geneva.")).toBe(1);
+    expect(sentenceCount("Maj. Gen. Smith took command of the operation.")).toBe(1);
+    expect(sentenceCount("Amb. Chen delivered the note.")).toBe(1);
+    expect(sentenceCount("Crews closed Ave. Rodriguez for the day.")).toBe(1);
   });
 
   it("still counts a boundary after a quote", () => {

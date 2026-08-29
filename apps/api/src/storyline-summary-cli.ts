@@ -243,9 +243,17 @@ async function printPlan(from: Date, to: Date): Promise<void> {
         `${String(candidate.groupCount).padStart(3)}g  ${candidate.label ?? "—"}`,
     );
   }
+  const ceiling = num("max-summaries") ?? config.SUMMARY_MAX_PER_RUN;
+  const upperBound = candidates.length * 5;
   console.log(
     `\n${candidates.length} qualifying storyline-days, at most ` +
-      `${candidates.length * 5} model calls`,
+      `${upperBound} model calls` +
+      // The upper bound alone reads as the cost of ONE run, and it is not:
+      // the run stops at the ceiling and the rest waits for the next one.
+      (upperBound > ceiling
+        ? ` — but this run would stop at ${ceiling} (--max-summaries), so it ` +
+          `would take about ${Math.ceil(upperBound / ceiling)} runs`
+        : ""),
   );
   // The plan reads ONE page. Saying so beats a silently truncated cost estimate
   // for somebody about to decide whether a backfill is affordable.
