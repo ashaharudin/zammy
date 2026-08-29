@@ -587,6 +587,17 @@ describe("metrics (§12) — the numbers that make the design observable", () =>
     // A rising truncation rate means timelines are silently thinning (§11).
     expect(await value("zammy_truncated_segments_total")).toBe(1);
 
+    // Stamp quality, by provider (ADR-0021). Asserted here because this counter
+    // is the only alarm on a detector that fails SILENTLY: nothing forces an
+    // adapter to set `publishedIsDateOnly`, and a provider that changed its
+    // convention would simply stop matching. Currents times everything it sends,
+    // so the discovery plane is the denominator — every sighting lands under
+    // `clock` and none under `date_only`.
+    expect(await value("zammy_sightings_stamped_total", { provider: "currents", stamp: "clock" })).toBeGreaterThanOrEqual(100);
+    expect(
+      await value("zammy_sightings_stamped_total", { provider: "currents", stamp: "date_only" }),
+    ).toBeNaN();
+
     // p95 by servedFrom needs reads labeled by source.
     expect(await value("zammy_timeline_read_seconds_count", { served_from: "upstream" })).toBe(2);
     expect(await value("zammy_timeline_read_seconds_count", { served_from: "cache" })).toBe(1);

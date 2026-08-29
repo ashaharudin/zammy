@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted (two consequences below are amended by ADR-0021: `url` no longer always moves when an earlier sighting wins the display fields — an aggregator's copy never hands one over — and the day-bucket risk bounded here at "33 articles of 31,308" was measured on ONE provider whose emissions are minutes apart, which does not survive a provider that emits a bare date in another timezone; see plan §G6)
 ---
 
 # A fallback identity catches the duplicates the URL cannot

@@ -11,7 +11,7 @@ import {
   type NormalizeOutcome,
   type Sighting,
 } from "@zammy/news-client";
-import { parsePublished, type RawGoogleNewsItem } from "./raw.js";
+import { isDateOnlyStamp, parsePublished, type RawGoogleNewsItem } from "./raw.js";
 
 /**
  * The provider id, stored on every sighting as `sightings.provider`.
@@ -26,9 +26,10 @@ export const PROVIDER = "google-news";
 /**
  * Google News RSS → `Sighting` (ARCHITECTURE 5.2).
  *
- * Four things depart from what the other two adapters do — marked `DEPARTURE`
+ * Five things depart from what the other two adapters do — marked `DEPARTURE`
  * below, in the order the code reaches them: **identity**, the **drop** on a
- * missing one, **description**, **attribution**. Every one is a consequence of
+ * missing one, **description**, **attribution**, and the two **claims** this
+ * adapter makes about its own sighting (ADR-0021). Every one is a consequence of
  * the same fact: **the `<link>` is not the article.** It is an opaque `CBM…`
  * redirect, so it cannot carry identity, cannot name the publisher, and cannot
  * be resolved without a headless browser (DESIGN-DISCOVERY-AND-DEEPENING §2a).
@@ -202,6 +203,32 @@ export function normalizeSighting(
     sourceDomain: domain,
 
     published,
+
+    // DEPARTURE — the two claims this adapter makes about its OWN fields, both
+    // of them warnings to the storage layer's display-field handover (ADR-0002)
+    // and neither of them expressible by any other adapter.
+    //
+    // The first is unconditional and follows from the same fact the whole
+    // header is about: the `<link>` is not the article. Of the nine display
+    // columns it gates, SEVEN can only ever lose information when handed to a
+    // row Currents minted — the redirect `url`, the chromed `title`, and the
+    // five fields written as unconditional literals above. The other two,
+    // `language` and `sourceDomain`, are real values, and `sourceDomain` is the
+    // newsroom's own domain this adapter works to get right; they are refused
+    // with the rest anyway and it costs nothing, because a fold onto an existing
+    // article is only reachable through an `alt_key` derived from
+    // `sourceDomain`, so the domains already agree by the time it runs.
+    //
+    // The refusal holds even when the earlier-emission claim driving the
+    // handover is perfectly true — being first is not being first-hand.
+    //
+    // The second is per-item, because the degradation is: this provider times
+    // recent items properly and stops timing older ones. `isDateOnlyStamp`
+    // carries the measurement and the reason it is Pacific rather than a
+    // constant.
+    isAggregatorCopy: true,
+    publishedIsDateOnly: isDateOnlyStamp(publishedMs),
+
     raw,
   });
 }

@@ -90,7 +90,14 @@ export interface CreatedArticle {
  *  3. only when the sighting is genuinely new, fold its timestamp into the
  *     article — `published = LEAST`, `latest_seen = GREATEST` — and hand the
  *     display fields to it if it is now the EARLIEST emission, so a later
- *     re-emission never rewrites the headline (ADR-0002);
+ *     re-emission never rewrites the headline (ADR-0002). **Step 3 has two
+ *     exceptions (ADR-0021), and they are the only conditional part of this
+ *     function**: a sighting that says its timestamp is a bare date folds
+ *     neither timestamp and hands over nothing, and one that says it is an
+ *     aggregator's copy hands over no display field — keeping only the
+ *     timestamp fold and `provider`, which is a fact about the emission rather
+ *     than a rendering of the article. Both are opt-in claims made by the
+ *     adapter; every other adapter's path is unchanged;
  *  4. link the article to the topic, per ARTICLE, so one repeatedly-re-emitted
  *     post cannot flood the topic's timeline;
  *  5. and once per batch, re-derive the storylines holding a group whose
@@ -184,27 +191,78 @@ export async function ingestSightings(
       if (inserted) {
         result.sightingsInserted += 1;
 
+        // TWO CLAIMS THE ADAPTER MAKES ABOUT ITS OWN SIGHTING (ADR-0021).
+        // Both are absent on every adapter but Google News and on every row
+        // predating them, so `!== true` is the whole of the guard and the
+        // untouched path behaves exactly as it did.
+        //
+        // `movesTheClock` — a date-only sighting is a real observation of a real
+        // article and is stored as one: the `sightings` row above is already
+        // written, carrying its own timestamp, and `sighting_count` still counts
+        // it below. What it may not do is REDEFINE an article somebody else
+        // timed properly. Measured (plan §G6, dev archive 2026-08-29): 116 of
+        // 169 absorbed articles had a 12:09-style timestamp dragged back onto a
+        // 07:00 day boundary, and because that made the arriving sighting the
+        // "earliest emission" it took the url and the title with it. The cloud
+        // reads `published` for window membership and `max(published)` for the
+        // recency decay, so this was also the route by which a plane that feeds
+        // no ranking still moved the board.
+        //
+        // `firstHand` — an aggregator's copy may not hand over what it renders.
+        // Unconditional, and wider than the url on purpose: the aggregator that
+        // exists sends `description`, `author` and `imageUrl` as null and both
+        // category arrays as empty BY CONSTRUCTION, so a handover does not
+        // merely swap a good field for a worse one, it empties five populated
+        // ones. That is a reader-visible loss — a card's summary and hero image
+        // — on the leading-edge regime this plane actually runs in, where the
+        // stamp is honest and `movesTheClock` is therefore no defence at all.
+        const movesTheClock = sighting.publishedIsDateOnly !== true;
+        const firstHand = sighting.isAggregatorCopy !== true;
+
+        // Two predicates, neutralized to a constant `false` where the sighting
+        // is not entitled. Expressed this way rather than by building a smaller
+        // SET object so the column list below stays one field per line and keeps
+        // reading as ADR-0002's rule with its exceptions marked, which is what
+        // it is.
+        //
+        // `earlier` is the EMISSION test and `earlierFirstHand` the RECORD test,
+        // and `provider` is deliberately on the first: which upstream reported
+        // the earliest emission is a fact about the emission, not a rendering of
+        // the article, and `articles.provider` is documented as exactly that.
+        const earlier = movesTheClock ? sql`${published} < published` : sql`false`;
+        const earlierFirstHand = firstHand ? earlier : sql`false`;
+
         // All SET expressions see the OLD row, so every comparison below is
         // against the article as it stood before this sighting.
         await trx
           .updateTable("articles")
           .set({
+            // Outside the guard deliberately: the observation happened whatever
+            // its timestamp is worth, and a sighting that may not move the clock
+            // is still a sighting.
             sighting_count: sql`sighting_count + 1`,
-            published: sql`least(published, ${published})`,
-            latest_seen: sql`greatest(latest_seen, ${published})`,
-            url: sql`case when ${published} < published then ${sighting.url} else url end`,
-            title: sql`case when ${published} < published then ${sighting.title} else title end`,
-            description: sql`case when ${published} < published then ${sighting.description} else description end`,
-            author: sql`case when ${published} < published then ${sighting.author} else author end`,
-            image_url: sql`case when ${published} < published then ${sighting.imageUrl} else image_url end`,
-            language: sql`case when ${published} < published then ${sighting.language} else language end`,
-            categories: sql`case when ${published} < published then ${sighting.categories}::text[] else categories end`,
-            source_category: sql`case when ${published} < published then ${sighting.sourceCategories}::text[] else source_category end`,
-            source_domain: sql`case when ${published} < published then ${sighting.sourceDomain} else source_domain end`,
-            // Handed over with the rest of the display fields, so `provider`
-            // keeps meaning "whoever reported the earliest emission" even when
-            // the second provider is the one that reached further back.
-            provider: sql`case when ${published} < published then ${sighting.provider} else provider end`,
+            published: movesTheClock ? sql`least(published, ${published})` : sql`published`,
+            latest_seen: movesTheClock ? sql`greatest(latest_seen, ${published})` : sql`latest_seen`,
+            url: sql`case when ${earlierFirstHand} then ${sighting.url} else url end`,
+            title: sql`case when ${earlierFirstHand} then ${sighting.title} else title end`,
+            description: sql`case when ${earlierFirstHand} then ${sighting.description} else description end`,
+            author: sql`case when ${earlierFirstHand} then ${sighting.author} else author end`,
+            image_url: sql`case when ${earlierFirstHand} then ${sighting.imageUrl} else image_url end`,
+            language: sql`case when ${earlierFirstHand} then ${sighting.language} else language end`,
+            categories: sql`case when ${earlierFirstHand} then ${sighting.categories}::text[] else categories end`,
+            source_category: sql`case when ${earlierFirstHand} then ${sighting.sourceCategories}::text[] else source_category end`,
+            source_domain: sql`case when ${earlierFirstHand} then ${sighting.sourceDomain} else source_domain end`,
+            // NOT handed over with the display fields — this is the one column
+            // on the EMISSION predicate rather than the first-hand one, and the
+            // asymmetry is deliberate (ADR-0021). `provider` answers "who got
+            // there first", which an aggregator's copy can legitimately be, and
+            // not "whose record is this", which it cannot. So an article can
+            // read `google-news` while every field a reader sees is the
+            // newsroom's. Migration 0013's own note — "who got there first, not
+            // who is authoritative" — is the rule being followed; its OTHER
+            // sentence, that this follows the same rule as every other
+            // denormalized display field, stopped being true here.
+            provider: sql`case when ${earlier} then ${sighting.provider} else provider end`,
             // `dedup_key` and `alt_key` are deliberately NOT in this list. They
             // are IDENTITY, minted once by `resolveArticle` and never rewritten,
             // and the two reasons are independent. Rewriting either would change
@@ -223,8 +281,10 @@ export async function ingestSightings(
           .execute();
 
         // The fold may have dragged this article — and therefore its group's
-        // position on the §7.3 keyset axis — earlier in time (§14.3).
-        await lowerGroupPosition(trx, { articleId: article.id, published });
+        // position on the §7.3 keyset axis — earlier in time (§14.3). A sighting
+        // that was not allowed to move the clock cannot have dragged anything,
+        // so `movesTheClock` gates this and the storyline re-derivation below.
+        if (movesTheClock) await lowerGroupPosition(trx, { articleId: article.id, published });
 
         // And the storyline layer above it moves too. A day slot IS its day's
         // earliest member article, so an article that moved earlier can leave
@@ -248,7 +308,7 @@ export async function ingestSightings(
         // What is left is rare. Measured on the dev archive: 334 articles of
         // 31,308 carry more than one sighting at all, and 33 have sightings
         // that straddle a UTC midnight.
-        if (published < article.published && !createdIds.has(article.id)) {
+        if (movesTheClock && published < article.published && !createdIds.has(article.id)) {
           movedGroups.add(article.group_id);
         }
       }

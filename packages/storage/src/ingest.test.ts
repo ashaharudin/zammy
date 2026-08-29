@@ -1027,3 +1027,286 @@ describe("stamping the plane a fetch was made on", () => {
     expect(Number(nulls.n)).toBe(1);
   });
 });
+
+/**
+ * The two claims an adapter may make about its own fields, and what the fold
+ * does with them (ADR-0021; plan §G6 for the measurements).
+ *
+ * Both guard a failure that is silent and reader-visible at once: an absorbed
+ * sighting quietly replacing a working outlet link with an aggregator redirect,
+ * or dragging a properly-timed article back onto a day boundary. Measured on the
+ * dev archive before the guard existed, 116 of 169 absorbed articles lost their
+ * URL and the same 116 had `published` moved earlier — 106 of them onto a
+ * 07:00Z day boundary rather than onto a real time.
+ *
+ * The `undefined` cases matter as much as the `true` ones and are asserted
+ * beside them: every adapter but Google News sends neither flag, and ADR-0002's
+ * handover has to go on working exactly as it did for them.
+ */
+describe("a sighting that warns the fold about its own fields", () => {
+  let harness: TestDatabase;
+  const TOPIC = testFingerprint("c3f70000");
+  let uuid = 0;
+
+  const emission = (input: {
+    url: string;
+    title: string;
+    published: string;
+    provider?: string;
+    isAggregatorCopy?: boolean;
+    publishedIsDateOnly?: boolean;
+  }): Sighting => {
+    uuid += 1;
+    return {
+      id: `00000000-0000-4000-8000-${String(uuid).padStart(12, "0")}`,
+      url: input.url,
+      provider: input.provider ?? "currents",
+      providerSightingId: input.url,
+      dedupKey: deriveDedupKey(input.url),
+      // Null throughout: this block is about the DISPLAY handover, and a shared
+      // alt key would fold these rows for a reason that is not the one under
+      // test. Each pair below is folded by an explicitly shared `dedupKey`.
+      altKey: null,
+      title: input.title,
+      description: null,
+      author: null,
+      imageUrl: null,
+      language: "en",
+      categories: [],
+      sourceCategories: [],
+      sourceDomain: "example.com",
+      published: input.published,
+      ...(input.isAggregatorCopy === undefined
+        ? {}
+        : { isAggregatorCopy: input.isAggregatorCopy }),
+      ...(input.publishedIsDateOnly === undefined
+        ? {}
+        : { publishedIsDateOnly: input.publishedIsDateOnly }),
+      raw: { id: uuid },
+    };
+  };
+
+  /** Two emissions of one story: the same `dedupKey`, so the second folds. */
+  const foldOnto = async (first: Sighting, second: Sighting): Promise<void> => {
+    await ingestSightings(harness.db, {
+      plane: "search",
+      timeZone: "UTC",
+      fingerprint: TOPIC,
+      sightings: [first],
+    });
+    await ingestSightings(harness.db, {
+      plane: "deepening",
+      timeZone: "UTC",
+      fingerprint: TOPIC,
+      sightings: [{ ...second, dedupKey: first.dedupKey }],
+    });
+  };
+
+  const article = async (dedupKey: string) =>
+    harness.db
+      .selectFrom("articles")
+      .select(["url", "title", "published", "sighting_count", "provider"])
+      .where("dedup_key", "=", Buffer.from(dedupKey, "hex"))
+      .executeTakeFirstOrThrow();
+
+  beforeAll(async () => {
+    harness = await createTestDatabase();
+    await migrateToLatest(harness.db);
+    await upsertTopic(harness.db, { fingerprint: TOPIC, keywords: ["stamp"] });
+  });
+
+  afterAll(async () => {
+    await harness.drop();
+  });
+
+  it("hands the display fields to an earlier emission when neither flag is set", async () => {
+    // The control, and the reason it is first: everything below is a REFUSAL,
+    // and a refusal proves nothing unless the thing being refused would
+    // otherwise happen. This is ADR-0002 unchanged.
+    const late = emission({
+      url: "https://example.com/control-late",
+      title: "Control, late emission",
+      published: "2026-08-13T12:09:10.000Z",
+    });
+    const early = emission({
+      url: "https://example.com/control-early",
+      title: "Control, early emission",
+      published: "2026-08-13T07:00:00.000Z",
+    });
+    await foldOnto(late, early);
+
+    const row = await article(late.dedupKey);
+    expect(row.url).toBe("https://example.com/control-early");
+    expect(row.title).toBe("Control, early emission");
+    expect(row.published.toISOString()).toBe("2026-08-13T07:00:00.000Z");
+    expect(row.sighting_count).toBe(2);
+  });
+
+  it("keeps the newsroom's record when an aggregator's copy arrives earlier", async () => {
+    // The earlier-emission claim here is TRUE and the timestamp is honest, and
+    // the display handover is refused anyway — a `CBM…` redirect and an
+    // aggregator's rendering are not the better record even when they really did
+    // come first. Measured: 9 of the 12 URL losses in the leading-edge run were
+    // exactly this case, where a bare-date test would have found nothing wrong.
+    const late = emission({
+      url: "https://outlet.example.com/real-story",
+      title: "Opaque, late emission",
+      published: "2026-08-13T12:09:10.000Z",
+    });
+    const early = emission({
+      url: "https://news.google.com/rss/articles/CBMiOPAQUE?oc=5",
+      title: "Opaque, early emission - Outlet Name",
+      published: "2026-08-13T09:30:00.000Z",
+      provider: "google-news",
+      isAggregatorCopy: true,
+    });
+    await foldOnto(late, early);
+
+    const row = await article(late.dedupKey);
+    expect(row.url).toBe("https://outlet.example.com/real-story");
+    expect(row.title).toBe("Opaque, late emission");
+    // The timestamp fold and `provider` DO still move, which is what keeps this
+    // an exception to ADR-0002 rather than a repeal of it: this sighting really
+    // did see the article, and really did see it earlier. What it may not do is
+    // describe it.
+    expect(row.published.toISOString()).toBe("2026-08-13T09:30:00.000Z");
+    expect(row.provider).toBe("google-news");
+  });
+
+  it("lets a date-only sighting move nothing at all, while still counting it", async () => {
+    // The §G6 fix. `least(published, ...)` would drag 12:09 back to the 07:00
+    // day boundary, and that would then make the arriving sighting the earliest
+    // emission and take the title and url with it — which is how a plane that
+    // feeds no ranking still moved the cloud, since the trend window and the
+    // recency decay both read `published`.
+    const timed = emission({
+      url: "https://outlet.example.com/timed-story",
+      title: "Dated, the properly timed emission",
+      published: "2026-08-13T12:09:10.000Z",
+    });
+    const dated = emission({
+      url: "https://news.google.com/rss/articles/CBMiDATED?oc=5",
+      title: "Dated, the day-boundary emission",
+      published: "2026-08-13T07:00:00.000Z",
+      provider: "google-news",
+      isAggregatorCopy: true,
+      publishedIsDateOnly: true,
+    });
+    await foldOnto(timed, dated);
+
+    const row = await article(timed.dedupKey);
+    expect(row.published.toISOString()).toBe("2026-08-13T12:09:10.000Z");
+    expect(row.url).toBe("https://outlet.example.com/timed-story");
+    expect(row.title).toBe("Dated, the properly timed emission");
+    expect(row.provider).toBe("currents");
+    // The observation is NOT discarded — it is stored, counted, and carries its
+    // own timestamp on its own row. It simply may not redefine the article.
+    expect(row.sighting_count).toBe(2);
+    const sighting = await harness.db
+      .selectFrom("sightings")
+      .select(["published", "plane"])
+      .where("id", "=", dated.id)
+      .executeTakeFirstOrThrow();
+    expect(sighting.published.toISOString()).toBe("2026-08-13T07:00:00.000Z");
+    expect(sighting.plane).toBe("deepening");
+  });
+
+  it("still lets a date-only sighting MINT an article with the only timestamp it has", async () => {
+    // The limit of the fix, asserted so nobody reads it as wider than it is.
+    // A date-only stamp is refused as a REDEFINITION of somebody else's article,
+    // never as a value — when it is all there is, it is what the row gets, and a
+    // real timestamp arriving later cannot repair it because `least` keeps the
+    // earlier one. That is a known residue of this change, not an oversight.
+    const dated = emission({
+      url: "https://news.google.com/rss/articles/CBMiMINTED?oc=5",
+      title: "Minted from a bare date",
+      published: "2026-08-13T07:00:00.000Z",
+      provider: "google-news",
+      isAggregatorCopy: true,
+      publishedIsDateOnly: true,
+    });
+    await ingestSightings(harness.db, {
+      plane: "deepening",
+      timeZone: "UTC",
+      fingerprint: TOPIC,
+      sightings: [dated],
+    });
+
+    const row = await article(dated.dedupKey);
+    expect(row.published.toISOString()).toBe("2026-08-13T07:00:00.000Z");
+    expect(row.url).toBe("https://news.google.com/rss/articles/CBMiMINTED?oc=5");
+    expect(row.sighting_count).toBe(1);
+
+    // AND IT IS PERMANENT, which is the half of the residue that matters. A real
+    // clock time arriving afterwards is LATER than the day boundary, so `least`
+    // keeps the boundary and the handover never fires. Asserted rather than
+    // described, because ADR-0021 claims this is asserted.
+    await ingestSightings(harness.db, {
+      plane: "search",
+      timeZone: "UTC",
+      fingerprint: TOPIC,
+      sightings: [
+        {
+          ...emission({
+            url: "https://outlet.example.com/the-real-record",
+            title: "The newsroom's own record, arriving later",
+            published: "2026-08-13T14:22:07.000Z",
+          }),
+          dedupKey: dated.dedupKey,
+        },
+      ],
+    });
+
+    const after = await article(dated.dedupKey);
+    expect(after.published.toISOString()).toBe("2026-08-13T07:00:00.000Z");
+    expect(after.url).toBe("https://news.google.com/rss/articles/CBMiMINTED?oc=5");
+    expect(after.sighting_count).toBe(2);
+  });
+
+  it("keeps an aggregator's EMPTY fields off a populated article", async () => {
+    // The loss a url-only guard leaves behind, and the reason ADR-0021's
+    // exception is the whole display handover rather than one column. This
+    // sighting's stamp is honest and genuinely earlier — the leading-edge
+    // regime, where 98.3% of items carry a real clock — so `publishedIsDateOnly`
+    // is no defence at all here. The adapter sends description, author and
+    // imageUrl as null and both category arrays empty BY CONSTRUCTION, so
+    // without the guard this handover empties five populated fields and a
+    // reader's card loses its summary and its hero image.
+    const populated: Sighting = {
+      ...emission({
+        url: "https://outlet.example.com/populated",
+        title: "The newsroom's record, with everything on it",
+        published: "2026-08-13T12:09:10.000Z",
+      }),
+      description: "Crews worked through the night.",
+      author: "Jane Reporter",
+      imageUrl: "https://outlet.example.com/hero.jpg",
+      categories: ["world"],
+      sourceCategories: ["regional"],
+    };
+    const aggregated = emission({
+      url: "https://news.google.com/rss/articles/CBMiEMPTY?oc=5",
+      title: "The aggregator's rendering - Outlet Name",
+      published: "2026-08-13T09:30:00.000Z",
+      provider: "google-news",
+      isAggregatorCopy: true,
+    });
+    await foldOnto(populated, aggregated);
+
+    const row = await harness.db
+      .selectFrom("articles")
+      .select(["url", "title", "description", "author", "image_url", "categories", "provider"])
+      .where("dedup_key", "=", Buffer.from(populated.dedupKey, "hex"))
+      .executeTakeFirstOrThrow();
+    expect(row.description).toBe("Crews worked through the night.");
+    expect(row.author).toBe("Jane Reporter");
+    expect(row.image_url).toBe("https://outlet.example.com/hero.jpg");
+    expect(row.categories).toEqual(["world"]);
+    expect(row.title).toBe("The newsroom's record, with everything on it");
+    expect(row.url).toBe("https://outlet.example.com/populated");
+    // `provider` is the one field that DOES move, and deliberately: which
+    // upstream reported the earliest emission is a fact about the emission, not
+    // a rendering of the article, and `articles.provider` is documented as that.
+    expect(row.provider).toBe("google-news");
+  });
+});
