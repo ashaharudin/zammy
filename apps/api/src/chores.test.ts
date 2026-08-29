@@ -31,6 +31,18 @@ import { labelWords } from "./storyline-label-merge.js";
  */
 
 const NOW = new Date("2026-08-14T03:00:00.000Z");
+
+/** No generator: the summary pass writes nothing and spends nothing (ADR-0022). */
+const SUMMARIZER = {
+  generator: null,
+  modelId: null,
+  sampleSize: 8,
+  maxAttempts: 3,
+  settlingDays: 3,
+  recomputeDelta: 4,
+  cliffDays: 8,
+};
+const SUMMARY_GATE = { windowDays: 8, minArticlesExclusive: 4, minGroups: 2 };
 const TZ = { timeZone: "UTC" };
 
 let harness: TestHarness;
@@ -463,6 +475,11 @@ describe("the late-candidate sweep is gated out of the nightly pass", () => {
     // call, which is what these two tests want — the sweep is the subject.
     labeler: { generator: null, sampleSize: 10, driftFactor: 2, now: () => NOW },
     rules: { graceDays: 14, maxComponent: 25 },
+    // The summary pass is not what these tests are about, and `runStorylinePass`
+    // does not run it — it is its own pass on its own schedule. These are here
+    // because `StorylinePassDeps` is one type for every pass.
+    summarizer: SUMMARIZER,
+    summaryGate: SUMMARY_GATE,
   };
 
   async function seedCorpus(day: string): Promise<void> {
@@ -545,6 +562,11 @@ describe("the graph shape on the nightly report", () => {
     linker: LINKER,
     labeler: { generator: null, sampleSize: 10, driftFactor: 2, now: () => NOW },
     rules: { graceDays: 14, maxComponent: 25 },
+    // The summary pass is not what these tests are about, and `runStorylinePass`
+    // does not run it — it is its own pass on its own schedule. These are here
+    // because `StorylinePassDeps` is one type for every pass.
+    summarizer: SUMMARIZER,
+    summaryGate: SUMMARY_GATE,
   };
 
   async function seedCorpus(day: string): Promise<void> {

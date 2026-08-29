@@ -46,6 +46,18 @@ function deps(overrides: Partial<StorylinePassDeps> = {}): StorylinePassDeps {
     },
     now: () => NOW,
     log: { info: () => {}, warn: () => {} },
+    // No generator anywhere here: every pass runs its no-model path, so a test
+    // that reaches the network is a test that fails rather than one that bills.
+    summarizer: {
+      generator: null,
+      modelId: null,
+      sampleSize: 8,
+      maxAttempts: 3,
+      settlingDays: 3,
+      recomputeDelta: 4,
+      cliffDays: 8,
+    },
+    summaryGate: { windowDays: 8, minArticlesExclusive: 4, minGroups: 2 },
     linker: {
       enabled: true,
       rules: {
@@ -139,6 +151,7 @@ describe("the pass table", () => {
     expect([...CHORE_PASSES]).toEqual([
       "retention",
       "storylines",
+      "summaries",
       "dormancy",
       "bridges",
       "late-candidates",
@@ -159,6 +172,13 @@ describe("the pass table", () => {
     expect(choreLockKey("labels")).toBe(CHORE_LOCK_KEYS.storylines);
     expect(choreLockKey("late-candidates")).toBe(CHORE_LOCK_KEYS.storylines);
     expect(choreLockKey("retention")).toBe(CHORE_LOCK_KEYS.retention);
+    // `summaries` is a family of one: it writes only `storyline_day_summaries`,
+    // so it conflicts with neither of the others on any table. What it shares
+    // with the label pass is the model KEY, and that is the 429 cooldown's
+    // problem rather than the lock's — losing a night of history to a slow
+    // label pass would be the worse trade.
+    expect(choreLockKey("summaries")).toBe(CHORE_LOCK_KEYS.summaries);
+    expect(choreLockKey("summaries")).not.toBe(CHORE_LOCK_KEYS.storylines);
     // And these are the CLI's original keys, so a laptop run and a scheduled
     // run contend rather than both running the night.
     expect(CHORE_LOCK_KEYS.retention).toBe(7_226_461_502);

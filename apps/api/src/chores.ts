@@ -17,6 +17,12 @@ import { storyDfDay } from "./story-df.js";
 import { labelPass, type LabelPassTally } from "./storyline-backfill.js";
 import { readChangedSetBatch } from "./storyline-changed-set.js";
 import { labelLinkedStorylines, type LabelerDeps } from "./storyline-label-service.js";
+import {
+  summaryPass,
+  type SummarizerDeps,
+  type SummaryPassTally,
+} from "./storyline-summary-service.js";
+import { summaryDayBounds, summaryDayKey } from "@zammy/storage";
 import type { LabelMergeRules } from "./storyline-label-merge.js";
 import {
   mergeAgreeingLabels,
@@ -729,6 +735,107 @@ export async function runStorylineGraphChore(deps: ChoreDeps): Promise<Storyline
   return graph;
 }
 
+/**
+ * The nightly summary pass — the historical preserve (ADR-0022,
+ * docs/STORYLINE-SUMMARIES.md).
+ *
+ * Its own pass on its own schedule (`0 5 * * *`), not a step of the storyline
+ * night, and the separation is the decision rather than an accident of where the
+ * code landed. The 04:00 pass is already the expensive one — 52.6 s on the last
+ * verified full run, and it is the pass that has been killed at `maxDuration`
+ * before — and it spends the same key. Stacking a hundred prose calls onto it
+ * would turn one slow night into one that loses its `chore_runs` row and starves
+ * live labelling at the same time.
+ *
+ * ## The window
+ *
+ * `SUMMARY_WINDOW_DAYS` back from the START of today's UTC day, so a pass firing
+ * at 05:00 covers the whole of yesterday and not the 19 hours of it that fall
+ * inside a rolling 24. Everything older than the window is the backfill CLI's
+ * business — deliberately, because past the pubDate cliff a day can only honestly
+ * carry one sentence and that is a decision an operator makes, not a thing that
+ * happens at 5am.
+ *
+ * ## Two things it says out loud
+ *
+ * A pass that is switched off logs and returns rather than being absent, for the
+ * reason the late-candidate sweep's skipped tally exists: "it ran and wrote
+ * nothing" and "it never ran" are different facts.
+ *
+ * And a non-UTC `APP_TIMEZONE` is a warning here rather than a config refusal.
+ * The summaries are keyed on UTC days unconditionally, so they stay internally
+ * consistent whatever the app's timezone is — what changes is that this table's
+ * `day_key` and `storyline_days.day_key` stop naming the same 24 hours, which is
+ * a surprise for whoever joins them later and not an error today.
+ */
+export async function runSummaryChore(
+  deps: StorylinePassDeps & { sleep?: (ms: number) => Promise<void> },
+): Promise<SummaryPassTally & { enabled: boolean }> {
+  if (deps.summariesEnabled !== true) {
+    deps.log.info(
+      {},
+      "summary pass is off (SUMMARIES_ENABLED=false) — nothing written (ADR-0022)",
+    );
+    return {
+      enabled: false,
+      days: 0,
+      written: 0,
+      recomputed: 0,
+      refused: 0,
+      skipped: 0,
+      model: 0,
+      failures: 0,
+      stoppedBy: "exhausted",
+    };
+  }
+
+  if (deps.config.timeZone !== "UTC") {
+    deps.log.warn(
+      { appTimezone: deps.config.timeZone },
+      "summaries are keyed on UTC days regardless of APP_TIMEZONE, so their day_key " +
+        "no longer names the same 24 hours as storyline_days.day_key",
+    );
+  }
+
+  const now = deps.now();
+  // From the start of today's UTC day, not from `now`: a rolling 24 hours would
+  // cut yesterday off at 05:00 and leave its last five hours unsummarised for
+  // ever once the day froze.
+  const todayStart = summaryDayBounds(summaryDayKey(now)).from;
+  const from = new Date(
+    todayStart.getTime() - deps.summaryGate.windowDays * 86_400_000,
+  );
+
+  const tally = await summaryPass(
+    { db: deps.db, ...deps.summarizer },
+    {
+      from,
+      to: now,
+      minArticlesExclusive: deps.summaryGate.minArticlesExclusive,
+      minGroups: deps.summaryGate.minGroups,
+      now: deps.now,
+      ...(deps.maxSummaries !== undefined ? { maxSummaries: deps.maxSummaries } : {}),
+      ...(deps.summaryBudgetMs !== undefined ? { budgetMs: deps.summaryBudgetMs } : {}),
+      ...(deps.summaryRatePerMinute !== undefined
+        ? { ratePerMinute: deps.summaryRatePerMinute }
+        : {}),
+      ...(deps.sleep ? { sleep: deps.sleep } : {}),
+    },
+  );
+
+  deps.log.info(
+    { ...tally, from: from.toISOString(), windowDays: deps.summaryGate.windowDays },
+    tally.stoppedBy === "exhausted"
+      ? "storyline summary pass — the historical preserve (ADR-0022)"
+      : // Its own message for the same reason the label pass has one: the
+        // difference between "there was nothing to do" and "we ran out of room"
+        // is the whole reading of the line.
+        `storyline summary pass stopped early (${tally.stoppedBy}) — ` +
+        "the rest is deferred to the next pass, which reselects it",
+  );
+  return { enabled: true, ...tally };
+}
+
 export interface StorylinePassDeps extends ChoreDeps {
   /** The bar the live write path judges at — see `wiring.createLinkerConfig`. */
   linker: LinkerConfig;
@@ -783,6 +890,26 @@ export interface StorylinePassDeps extends ChoreDeps {
    * not run is not a state worth having two ways to spell.
    */
   lateCandidatesChangedOnly?: boolean;
+  /**
+   * The summariser (ADR-0022). Required for the same reason `labeler` is: with
+   * no key the object still exists and only its `generator` is null, and "no
+   * summariser at all" is not a state the pass can be in.
+   */
+  summarizer: Omit<SummarizerDeps, "db">;
+  /** `SUMMARIES_ENABLED`. Off, the pass runs and writes nothing, loudly. */
+  summariesEnabled?: boolean;
+  /** Which storyline-days one pass looks at, and the bar they must clear. */
+  summaryGate: {
+    windowDays: number;
+    minArticlesExclusive: number;
+    minGroups: number;
+  };
+  /** Ceiling on MODEL CALLS one summary pass may spend — `--max-summaries`. */
+  maxSummaries?: number;
+  /** Wall-clock ceiling for the summary pass — `SUMMARY_BUDGET_MS`. */
+  summaryBudgetMs?: number;
+  /** Model calls per minute for the summary pass — `--summary-rate`. */
+  summaryRatePerMinute?: number;
 }
 
 export interface StorylinePassReport {

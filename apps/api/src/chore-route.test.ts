@@ -155,6 +155,27 @@ describe("parseChoreRequest", () => {
       parseChoreRequest(new URL("http://x/api/chores?pass=labels&max-labels=lots"), {}),
     ).toEqual({ pass: "labels", overrides: {} });
   });
+
+  it("reads the summary pass's own ceiling", () => {
+    // A count of MODEL CALLS, not of days — a day costs between one and five.
+    expect(
+      parseChoreRequest(new URL("http://x/api/chores?pass=summaries&max-summaries=30"), {}),
+    ).toMatchObject({ pass: "summaries", overrides: { maxSummaries: 30 } });
+    expect(
+      parseChoreRequest(new URL("http://x/api/chores?pass=summaries&max-summaries=0"), {}),
+    ).toEqual({ pass: "summaries", overrides: {} });
+  });
+
+  it("maps the summary schedule to its pass", () => {
+    // 05:00 UTC, an hour after the storyline night: they spend the same key, and
+    // the 04:00 pass is the one that has been killed at maxDuration before.
+    expect(SCHEDULE_PASSES["0 5 * * *"]).toBe("summaries");
+    expect(
+      parseChoreRequest(new URL("http://x/api/chores"), {
+        "x-vercel-cron-schedule": "0 5 * * *",
+      }),
+    ).toMatchObject({ pass: "summaries" });
+  });
 });
 
 describe("createHandler", () => {

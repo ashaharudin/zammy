@@ -12,10 +12,10 @@ copy of the reasoning in those files.
 | | Chores | Ingest drain |
 |---|---|---|
 | Entry point | `chores-cli.ts` (Compose) and `api/chores.ts` (Vercel), sharing [chore-runner.ts](../apps/api/src/chore-runner.ts) | `api/drain.ts` → [drain.ts](../apps/api/src/drain.ts) |
-| Touches | Postgres, and Gemini for labels | **Redis**, and the upstream news API |
+| Touches | Postgres, and Gemini for labels and summaries | **Redis**, and the upstream news API |
 | Exactly-once | Postgres advisory lock, two domains | none needed — see below |
 | Cadence | nightly | as often as every ~5 min, if you want hot topics covered |
-| Spends money | yes, the label pass | yes, every fill |
+| Spends money | yes, the label pass and the summary pass | yes, every fill |
 | Built? | yes, both — **not scheduled anywhere yet** | **yes, as a route** |
 
 They are on this page together because they are both "work on a timer that no user is waiting for",
@@ -23,9 +23,10 @@ and that is the *only* thing they share. Every dependency, bound and failure mod
 
 ## The chores
 
-Two composites are what a scheduler points at — `retention` and `storylines` — and every step of
-them is also addressable on its own, for a re-run that must not drag the whole night with it:
-`dormancy`, `bridges`, `late-candidates`, `labels`, `label-merge`, `graph`. Eight names, one
+Three passes are what a scheduler points at — `retention` (03:00 UTC), `storylines` (04:00) and
+`summaries` (05:00) — and every step of the composite second one is also addressable on its own, for
+a re-run that must not drag the whole night with it: `dormancy`, `bridges`, `late-candidates`,
+`labels`, `label-merge`, `graph`. Nine names, one
 [pass table](../apps/api/src/chore-runner.ts), reached identically as `pnpm chores <name>` and as
 `POST /api/chores?pass=<name>`.
 
@@ -34,8 +35,11 @@ concurrent run *skips* rather than queues. That lock is what replaced BullMQ's e
 clock moved outside the app, and it matters most for the label pass, which spends real money per
 call.
 
-**There are two lock domains, not eight keys.** Retention has its own; every storyline-family pass
-shares one. A key per pass is the obvious shape and is wrong, because `storylines` *contains*
+**There are three lock domains, not nine keys.** Retention has its own; every storyline-family pass
+shares one; `summaries` has its own because it conflicts with neither on any table — it writes only
+`storyline_day_summaries`. Sharing the storyline lock would have stopped it overlapping a long label
+pass on the shared model key, at the price of losing a night of history to a `skipped` row that reads
+like the mechanism working, which is the worse end of that trade for a preserve. A key per pass is the obvious shape and is wrong, because `storylines` *contains*
 `labels` — a per-pass key would let "re-run just the label pass" run it twice at once while the
 scheduler was midway through the night. The keys are the ones `chores-cli.ts` has always used, which
 is what makes a laptop run and a scheduled run contend rather than both spending the budget. `graph`
@@ -84,6 +88,15 @@ previous step just changed:
    what makes the whole thing converge, each night's labels being the next night's candidates.
 6. [`runStorylineGraphChore`](../apps/api/src/chores.ts:652) — reads the graph's shape, changing
    nothing, so the row describes the archive the night *leaves* rather than the one it found.
+
+**`summaries`** runs [`runSummaryChore`](../apps/api/src/chores.ts) — the historical preserve
+(ADR-0022): one sentence per qualifying storyline-day and per populated six-hour UTC segment of it,
+kept for ever and exempt from retention. It is the only thing here that writes rows nothing can
+rebuild, which is why it is the only thing here retention must never reach. It runs an hour after
+the storyline night rather than inside it, because that pass is already the expensive one and the two
+spend the same model key — its own schedule means a slow label night costs labels rather than costing
+labels *and* a day of history. Off until `SUMMARIES_ENABLED=true`; the full map is
+[docs/STORYLINE-SUMMARIES.md](STORYLINE-SUMMARIES.md).
 
 **The property worth protecting: no chore touches Redis.** [chores.ts:58](../apps/api/src/chores.ts:58)
 states it outright — the runner needs no cache, no queue, and no `REDIS_URL` that resolves to

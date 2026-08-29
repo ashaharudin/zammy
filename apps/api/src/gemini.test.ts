@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { createGeminiClient, type FetchLike } from "./gemini.js";
+import { createGeminiClient, createPacer, type FetchLike } from "./gemini.js";
 
 /**
  * The one external model call (ADR-0011), tested against RECORDED RESPONSES and
@@ -717,5 +717,91 @@ describe("the Gemini client's rate limiter", () => {
     for (let i = 0; i < 5; i += 1) await client.generate({ prompt: "name this story" });
 
     expect(at).toEqual([0, 0, 0, 0, 0]);
+  });
+});
+
+/**
+ * A pacer shared by two clients (ADR-0022).
+ *
+ * The reason this exists at all: the per-minute ceiling belongs to the KEY, and
+ * `SUMMARY_MODEL` made "one process, one model" false. Two clients each counting
+ * their own window admit up to 2x the limit — the same overshoot two PROCESSES
+ * on one key produce, except this one is inside a single process and therefore
+ * entirely preventable.
+ */
+describe("a shared pacer", () => {
+  function clock() {
+    let at = 0;
+    return {
+      now: () => at,
+      sleep: async (ms: number) => {
+        at += ms;
+      },
+    };
+  }
+
+  function paced(now: () => number, response: Response) {
+    const at: number[] = [];
+    const fetch: FetchLike = async () => {
+      at.push(now());
+      return response.clone();
+    };
+    return { fetch, at };
+  }
+
+  it("counts two models' calls against ONE window", async () => {
+    const time = clock();
+    const first = paced(time.now, jsonResponse(RESPONSES.ok));
+    const second = paced(time.now, jsonResponse(RESPONSES.ok));
+    const pacer = createPacer({
+      maxRequestsPerMinute: 2,
+      sleep: time.sleep,
+      now: time.now,
+    });
+    const shared = { ...OPTIONS, sleep: time.sleep, now: time.now, pacer };
+    const labeler = createGeminiClient({ ...shared, fetch: first.fetch });
+    const summarizer = createGeminiClient({
+      ...shared,
+      model: "another-model",
+      fetch: second.fetch,
+    });
+
+    await labeler.generate({ prompt: "name this story" });
+    await summarizer.generate({ prompt: "summarise this morning" });
+    // The third call is the one the ceiling of 2 has to push into the next
+    // window — and it does not matter which client makes it.
+    await labeler.generate({ prompt: "name this story" });
+
+    expect(first.at).toEqual([0, 60_000]);
+    expect(second.at).toEqual([0]);
+  });
+
+  it("lets a 429 on one client hold the other back", async () => {
+    const time = clock();
+    const limited = paced(
+      time.now,
+      new Response(JSON.stringify({ error: {} }), {
+        status: 429,
+        headers: { "retry-after": "30" },
+      }),
+    );
+    const other = paced(time.now, jsonResponse(RESPONSES.ok));
+    const pacer = createPacer({
+      maxRequestsPerMinute: 100,
+      sleep: time.sleep,
+      now: time.now,
+    });
+    const shared = { ...OPTIONS, sleep: time.sleep, now: time.now, pacer, maxRetries: 0 };
+
+    await createGeminiClient({ ...shared, fetch: limited.fetch }).generate({
+      prompt: "name this story",
+    });
+    await createGeminiClient({ ...shared, fetch: other.fetch }).generate({
+      prompt: "summarise this morning",
+    });
+
+    // The other waiter is about to make the same mistake, and the cooldown is
+    // the client's — now the pacer's — rather than the call's.
+    expect(other.at).toEqual([30_000]);
   });
 });

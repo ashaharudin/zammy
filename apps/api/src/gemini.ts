@@ -90,6 +90,43 @@ export interface GeminiOptions {
   fetch?: FetchLike;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  /**
+   * A pacer to SHARE rather than one of this client's own.
+   *
+   * The ceiling belongs to the KEY, not to the model id, so two clients pointed
+   * at two models on one key must count against one window — otherwise adding a
+   * second model to the deployment silently doubles the rate through it, which
+   * is the mistake `SUMMARY_MODEL` would otherwise be. When this is set,
+   * `maxRequestsPerMinute` and `maxRateWaitMs` are the shared pacer's, not
+   * this client's, and a 429 either client earns holds BOTH back.
+   *
+   * Absent, the client builds its own from those two options — which is what
+   * every caller with one model does, and what every existing test does.
+   */
+  pacer?: ModelPacer;
+}
+
+/**
+ * The rate limiter, as an object two clients can hold.
+ *
+ * It is the pacer and nothing else: `admit` returns the reason to give up or
+ * null to proceed, and `noteRetryAfter` is how a 429 on any client using it
+ * holds every other one back. Extracted from `createGeminiClient`'s closure for
+ * exactly one reason — a second model on the same key (see `pacer` above).
+ */
+export interface ModelPacer {
+  admit(signal: AbortSignal | undefined): Promise<string | null>;
+  /** A 429 said "not before this instant". Absolute, in the client's clock. */
+  noteRetryAfter(until: number): void;
+}
+
+export interface PacerOptions {
+  /** The provider's per-minute ceiling, in requests. 0 disables the pacer. */
+  maxRequestsPerMinute?: number;
+  /** How long a call may sit in the queue before giving up on the model. */
+  maxRateWaitMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
 }
 
 export interface GenerateRequest {
@@ -226,23 +263,23 @@ function parseRetryAfter(headers: Headers, now: number): number | null {
   return Number.isNaN(at) ? null : Math.max(0, at - now);
 }
 
-export function createGeminiClient(options: GeminiOptions): TextGenerator {
+/**
+ * Build a pacer.
+ *
+ * One of these per KEY, not per client: `createGeminiClient` makes its own when
+ * a caller has one model, and `wiring.ts` builds one and hands it to both the
+ * labeler's client and the summariser's, because the ceiling they share is the
+ * key's. Its scope is still one PROCESS, which is the most it can promise — two
+ * processes on one key are two windows, caught by the 429 cooldown rather than
+ * by either window (STORYLINE-LABELS, "The pacer's scope").
+ */
+export function createPacer(options: PacerOptions = {}): ModelPacer {
   const {
-    apiKey,
-    model,
-    baseUrl,
-    thinkingLevel = "",
-    timeoutMs = 8_000,
-    maxRetries = 2,
-    backoffBaseMs = 250,
     maxRequestsPerMinute = 30,
     maxRateWaitMs = 120_000,
-    fetch: fetchImpl = globalThis.fetch,
-    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
     now = Date.now,
   } = options;
-
-  const url = `${baseUrl.replace(/\/+$/, "")}/models/${encodeURIComponent(model)}:generateContent`;
 
   /**
    * When each recent request was — or WILL BE — sent, oldest first. A sliding
@@ -347,6 +384,40 @@ export function createGeminiClient(options: GeminiOptions): TextGenerator {
   }
 
   return {
+    admit,
+    noteRetryAfter(until: number): void {
+      // `Math.max`, never assignment: two clients on one pacer can each earn a
+      // 429, and the later, shorter answer must not shorten the earlier, longer
+      // hold the other one is already sitting out.
+      cooldownUntil = Math.max(cooldownUntil, until);
+    },
+  };
+}
+
+export function createGeminiClient(options: GeminiOptions): TextGenerator {
+  const {
+    apiKey,
+    model,
+    baseUrl,
+    thinkingLevel = "",
+    timeoutMs = 8_000,
+    maxRetries = 2,
+    backoffBaseMs = 250,
+    maxRequestsPerMinute = 30,
+    maxRateWaitMs = 120_000,
+    fetch: fetchImpl = globalThis.fetch,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now = Date.now,
+  } = options;
+
+  const url = `${baseUrl.replace(/\/+$/, "")}/models/${encodeURIComponent(model)}:generateContent`;
+
+  // The client's own, unless a caller shares one — see `GeminiOptions.pacer`.
+  const pacer =
+    options.pacer ??
+    createPacer({ maxRequestsPerMinute, maxRateWaitMs, sleep, now });
+
+  return {
     async generate(request: GenerateRequest): Promise<GenerateResult> {
       let lastReason = "no attempt made";
 
@@ -357,7 +428,7 @@ export function createGeminiClient(options: GeminiOptions): TextGenerator {
         // the same ceiling, and a client that paced only first attempts would
         // send 3x the limit on the exact day the API is unhappy enough to make
         // every call retry.
-        const refusal = await admit(request.signal);
+        const refusal = await pacer.admit(request.signal);
         if (refusal) {
           // On a retry the first failure is still the story; the pacer only
           // explains why there was no second ask. A log line that said only
@@ -405,7 +476,7 @@ export function createGeminiClient(options: GeminiOptions): TextGenerator {
             // client back for as long as the API asked, not just this call:
             // the other waiters are about to make the same mistake.
             const after = parseRetryAfter(response.headers, now());
-            if (after !== null) cooldownUntil = Math.max(cooldownUntil, now() + after);
+            if (after !== null) pacer.noteRetryAfter(now() + after);
             continue;
           }
           // 5xx is worth a second ask; everything else is our bug and asking

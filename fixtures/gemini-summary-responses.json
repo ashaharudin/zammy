@@ -1,0 +1,141 @@
+{
+  "_comment": [
+    "generateContent response payloads for the storyline summariser's tests",
+    "(ADR-0022). The tests must never reach the live API, so these stand in for",
+    "it.",
+    "",
+    "PROVENANCE, stated plainly because it differs from",
+    "`gemini-label-responses.json`: every RESPONSE SHAPE here was copied from that",
+    "file, where each one was confirmed against the real endpoint (most on",
+    "2026-08-14, the `thinking` one on 2026-08-28). What is NOT recorded is the",
+    "TEXT — these are the answers a one-sentence prose contract is expected to",
+    "provoke, written to exercise `validateSummary`, not answers this model has",
+    "been observed to give.",
+    "",
+    "That distinction matters and is why it is at the top of the file: the",
+    "labeler's own history is a model changing its response shape under a pinned",
+    "id, so a fixture is evidence about the CLIENT and never about the model. The",
+    "live `--storyline` run (docs/STORYLINE-SUMMARIES.md, 'Verifying it') is what",
+    "says whether this contract holds; replace the texts here with what it",
+    "returns."
+  ],
+
+  "ok": {
+    "candidates": [
+      {
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Construction on the Big Bend border wall stayed paused as the contractor waited on a federal review.\n"
+            }
+          ]
+        },
+        "finishReason": "STOP"
+      }
+    ],
+    "usageMetadata": {
+      "promptTokenCount": 903,
+      "candidatesTokenCount": 21,
+      "totalTokenCount": 924
+    }
+  },
+
+  "wrapped": {
+    "_comment": "The wrapper `validateSummary` strips rather than refuses — a chat-tuned model returns this often enough that refusing would make refusal the common case.",
+    "candidates": [
+      {
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "**Summary:** \"Construction on the Big Bend border wall stayed paused as the contractor waited on a federal review.\""
+            }
+          ]
+        },
+        "finishReason": "STOP"
+      }
+    ]
+  },
+
+  "two_sentences": {
+    "_comment": "Refused: the contract is one sentence, and two is the failure the cap cannot catch.",
+    "candidates": [
+      {
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "The wall pause held through the morning. Officials would not say when work resumes."
+            }
+          ]
+        },
+        "finishReason": "STOP"
+      }
+    ]
+  },
+
+  "abbreviated": {
+    "_comment": "ACCEPTED, and the reason this fixture exists: 'U.S.' is a period, a space and a capital letter inside ONE sentence. A naive boundary test reads it as two and rejects every summary that names a country.",
+    "candidates": [
+      {
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "U.S. Customs and Border Protection said Mr. Alvarez had signed the pause order that morning."
+            }
+          ]
+        },
+        "finishReason": "STOP"
+      }
+    ]
+  },
+
+  "essay": {
+    "_comment": "Refused on length. Not hypothetical — a model asked for prose pads a slow quarter rather than saying little.",
+    "candidates": [
+      {
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "In a development that observers of the long-running border infrastructure dispute will recognise as characteristic of the wider pattern of federal-state friction that has defined the last several months of litigation, negotiation and quiet administrative delay, construction along the Big Bend stretch remained suspended."
+            }
+          ]
+        },
+        "finishReason": "STOP"
+      }
+    ]
+  },
+
+  "thinking": {
+    "_comment": "The shape gemma-4-26b-a4b-it returned on 2026-08-28: a `thought` part, then the answer. `answerText` must read the discriminator rather than concatenating.",
+    "candidates": [
+      {
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "The coverage is about a construction pause; I should name the place and what happened.",
+              "thought": true
+            },
+            {
+              "text": "Construction on the Big Bend border wall stayed paused as the contractor waited on a federal review."
+            }
+          ]
+        },
+        "finishReason": "STOP"
+      }
+    ]
+  },
+
+  "truncated": {
+    "_comment": "The whole output budget spent before a word was written — costs a summary, and is the one failure that IS a reason to raise maxOutputTokens.",
+    "candidates": [{ "finishReason": "MAX_TOKENS" }]
+  },
+
+  "blocked": {
+    "promptFeedback": { "blockReason": "SAFETY" }
+  }
+}

@@ -4,16 +4,18 @@ import { CHORE_PASSES, isChorePass, runChorePass, type ChorePass } from "./chore
 import { choreDepsFromConfig } from "./wiring.js";
 
 /**
- * `pnpm chores <pass> [--label-rate=N] [--max-labels=N] [--late-candidates]
- * [--changed-only|--full]`, and `pnpm chores status [--pass=N] [--limit=N]` —
+ * `pnpm chores <pass> [--label-rate=N] [--max-labels=N] [--max-summaries=N]
+ * [--summary-rate=N] [--late-candidates] [--changed-only|--full]`, and
+ * `pnpm chores status [--pass=N] [--limit=N]` —
  * the nightly chores as a one-shot process (ARCHITECTURE 9.1).
  *
  * A chore, not a command: unlike `regroup` or `backfill:storylines` this is not
  * something an operator decides to do, it is what happens every night. What
  * makes it a CLI anyway is where the clock now lives — outside the app, in the
  * platform's scheduler (see `chores.ts`, "Where the schedule lives"). The
- * schedules this replaced were `0 3 * * *` for retention and `0 4 * * *` for
- * storylines, in UTC; whatever schedules this must reproduce them, including the
+ * schedules this replaced were `0 3 * * *` for retention, `0 4 * * *` for
+ * storylines and `0 5 * * *` for summaries, in UTC; whatever schedules this must
+ * reproduce them, including the
  * timezone, or the day boundaries the passes bucket by shift under them. On the
  * Vercel deployment that scheduler is Supabase Cron against `api/chores.ts`
  * (VERCEL-ALL-IN-SCOPE §3.3), and this file and that route deliberately share
@@ -59,12 +61,14 @@ const wantsStatus = command === "status";
 if (named.length !== 1 || (!wantsStatus && !isChorePass(command ?? ""))) {
   console.error(
     `usage: chores <${CHORE_PASSES.join("|")}|status> [--label-rate=N] [--max-labels=N] ` +
-      "[--late-candidates] [--changed-only|--full]",
+      "[--max-summaries=N] [--summary-rate=N] [--late-candidates] [--changed-only|--full]",
   );
   console.error("");
   console.error("  retention        the retention report, the trailing-corpus prune, and the");
   console.error("                   REINDEX CONCURRENTLY sweep");
   console.error("  storylines       dormancy, bridge sweep, labels, label merge, graph shape");
+  console.error("  summaries        the historical preserve: one sentence per storyline-day");
+  console.error("                   and per populated 6-hour UTC segment of it (ADR-0022)");
   console.error("");
   console.error("  Any single step of the storyline pass is also addressable on its own, for");
   console.error("  a re-run that must not drag the whole night with it:");
@@ -95,6 +99,18 @@ if (named.length !== 1 || (!wantsStatus && !isChorePass(command ?? ""))) {
   );
   console.error(
     "  --max-labels       overrides CHORE_MAX_LABELS (default 50) for this run only.",
+  );
+  console.error(
+    "  --max-summaries    overrides SUMMARY_MAX_PER_RUN (default 120) for this run.",
+  );
+  console.error(
+    "                     It counts MODEL CALLS, not days: a day costs 1-5.",
+  );
+  console.error(
+    "  --summary-rate     model calls per minute for the summary pass. Lower it when",
+  );
+  console.error(
+    "                     the server is labelling — one key, two pacers.",
   );
   console.error(
     "  --label-budget     wall-clock ceiling for the label pass, in seconds. NOT",
@@ -208,6 +224,14 @@ async function runPass(pass: ChorePass): Promise<number> {
   if (labelRate !== undefined) deps.labelRatePerMinute = labelRate;
   const maxLabels = num("max-labels");
   if (maxLabels !== undefined) deps.maxLabels = maxLabels;
+  // The summary pass's twin of both. `--summary-rate` can only usefully go
+  // SLOWER for the same reason `--label-rate` can: the client enforces the
+  // ceiling regardless, and what this buys is not competing with a server that
+  // is labelling on the same key.
+  const maxSummaries = num("max-summaries");
+  if (maxSummaries !== undefined) deps.maxSummaries = maxSummaries;
+  const summaryRate = num("summary-rate");
+  if (summaryRate !== undefined) deps.summaryRatePerMinute = summaryRate;
   // The budget is a ROUTE concern and is dropped here unless asked for.
   // `CHORE_LABEL_BUDGET_MS` exists because `api/chores.ts` is killed at 300 s;
   // a terminal has no such deadline, and inheriting the configured night's
@@ -217,6 +241,11 @@ async function runPass(pass: ChorePass): Promise<number> {
   const labelBudget = num("label-budget");
   if (labelBudget !== undefined) deps.labelBudgetMs = labelBudget * 1000;
   else delete deps.labelBudgetMs;
+  // And the summary pass's, dropped here for the identical reason: the budget
+  // exists to beat a serverless function's deadline, and a terminal has none.
+  // Inheriting it would truncate the one run whose purpose is to drain a
+  // backlog in a single sitting.
+  delete deps.summaryBudgetMs;
   // `--late-candidates` runs the sweep inside the storyline pass for one night
   // without editing the environment, because the honest way to drain the backlog
   // fixing candidate retrieval exposed is an operator watching the graph shape,
