@@ -58,8 +58,11 @@ G1–G4 and G8 are mutually independent and can run in any order or in parallel.
 **G5 was gated on all five and all five had landed** — G1 (#170), G2 (#169),
 G3 (#172), G4 (#173) and G8 (ADR-0020). **G5 has now landed too**, with
 migrations `0022` and `0023`; see its section for the four decisions that
-departed from what it assumed. G6 is next and is a decision gate. G7 is gated on
-G6 returning a yield worth having.
+departed from what it assumed. **G6 has run: 89.2% yield, and a NO-GO
+on G7 that overrides its own pre-registered rule.** The yield is worth having
+and nothing is reverted; G6 found two defects in G5 that a click-driven plane
+bounds and a scheduler would not. G7 is gated on those landing, not on the
+yield.
 
 **G0 has landed too** (#176) and was never on the gate for anything — it is
 independent by construction. What it turned out to be worth to the deepening
@@ -506,6 +509,19 @@ storyline is created by the deepening plane; the cloud is unchanged by the
 fetch (G2 holding under real conditions, verified — not assumed); and
 `storyline_coverage` records only spans actually fetched.
 
+**Three of those four hold under real traffic and the third does not — G6
+measured it, and this clause is left standing rather than softened because the
+gap between what it claims and what happens is the point.** Across 41 live
+fetches: the click path works, zero storylines were formed, and coverage was
+recorded on exactly the 19 calls that reached a clean end of results. But **the
+cloud is NOT unchanged by the fetch.** No deepening-plane article is counted —
+the `plane` predicate holds perfectly — and the board moves anyway, because an
+absorbed sighting rewrites an EXISTING discovery-plane article's `published`
+(which is both the volume bucket and the decay input) and a minted article can
+bridge two existing groups, re-parenting discovery-plane articles into a
+different arc. `plane` gates which rows are counted; it cannot gate what a
+counted row says. G6's verdict carries the measurement and the fix.
+
 **One ordering constraint on turning the flag on, and it is on a database rather
 than on code.** G0's owed repair steps have run on dev only; production is a
 separate hand dispatch (see G0's Landed note). Enabling the deepening plane
@@ -571,9 +587,702 @@ call newsworthy.
 **Done when**: the yield number exists, is written down here, and a go/no-go on
 G7 is recorded with it.
 
+### Pre-registration — written and committed before any number was looked at
+
+This subsection was written, committed and dated **before the first Google News
+call of this phase was made**, because the plan's own instruction is to state the
+kill criteria before looking and because the bias G5 identified points at the
+answer that says yes. What follows is a decision rule, not a summary: the
+verdict below is whatever this rule returns.
+
+**Which archive, and why it is the dev one.** The number comes from the **dev
+archive** — 32,279 articles, 2026-07-14 to 2026-08-27, a real Currents corpus —
+and not from production. Production has no local database access at all (the
+credential exists only as a GitHub secret, and `repair (production)` is pinned to
+`refs/heads/main` and runs three fixed commands), so a production number would
+need a new CI job, which needs a push, which is not this phase's call to make.
+The three-way classification this gate turns on is a `sightings`/`articles` join;
+without psql it cannot be computed at all. Production is measured **black-box**
+alongside, as corroboration and not as the number — see below.
+
+**The confound the dev archive has, named before it is measured.** A deepening
+fetch's default window is `now - 7d … now`, and on the dev archive that is its
+**thinnest** week: 2026-08-22 to 2026-08-27 hold 26–219 articles a day against
+1,615–3,802 a day over 2026-08-10 to 2026-08-13. An archive that never looked at
+a span cannot have "already had" what Google News finds there, so measuring at
+the edge would return a yield near 100% that says nothing about the design and
+everything about a laptop that was switched off. Production does not have this
+problem — its four crons run continuously — so measuring at the dev edge would be
+unrepresentative in the flattering direction.
+
+So the primary measurement is run over a span the dev archive **densely covers**:
+
+- **Span A (primary), 2026-08-10T00:00Z → 2026-08-17T00:00Z** — seven days, the
+  width `DEEPEN_SPAN_MS` actually asks for, holding 12,145 of the archive's
+  32,279 articles over 395–675 distinct domains a day. This is the archive at its
+  most competitive, so it biases the yield **down**, which is the safe direction
+  for a gate that is being warned against talking itself into a number.
+- **Span B (sensitivity), 2026-08-21T00:00Z → 2026-08-28T00:00Z** — the same
+  seven-day width at the archive's thin edge, run on the same arcs, to show how
+  much of the answer is the archive's density rather than the design's merit.
+
+Neither span is production's condition exactly. Span A is denser than
+production's steady state and Span B is thinner, so the two are reported as a
+**bracket**, and the verdict is taken on Span A.
+
+**The three classes, because two would flatter.** G5 measured a residual 6.9%
+cross-provider fold failure on `fixtures/google-news-source-names.tsv`, so
+roughly one in fourteen Google News items the archive already holds will mint a
+second row and look brand new. Every item ingested on the deepening plane is
+therefore classified:
+
+1. **Absorbed** — the item folded onto an article the **discovery plane** already
+   held. Detected as `exists (select 1 from sightings where article_id = a.id and
+   plane is distinct from 'deepening')`, which is the ranker's own predicate, so
+   an article this experiment itself minted can never be counted as absorbed.
+2. **Genuinely new** — a row this fetch brought into existence with no
+   same-domain, same-UTC-day twin in the pre-experiment archive.
+3. **Fold miss** — a row this fetch brought into existence that **does** have such
+   a twin. `alt_key` is scoped to `(source_domain, folded title, UTC day)`, so a
+   fold miss is by construction same-domain and same-day; candidates are
+   generated by a deliberately over-eager positional strip plus a folded-title
+   Jaccard floor, and every candidate is reviewed by hand rather than counted.
+   Class 3 is measured on this experiment's own output, not extrapolated from
+   G5's 6.9%.
+
+**Corrected yield** is class 2 alone. Class 3 is subtracted, never counted.
+
+**The decision rule.** Let `N` be corrected yield as a share of items ingested on
+the deepening plane, taken as the **median over arcs** so one enormous arc cannot
+carry the verdict, and let `A` be new articles per call.
+
+- **Kill, ahead of the yield number**, if G5's guarantee has broken: any storyline
+  formed by a deepening-plane article, or any label spent on one. That is a
+  correctness failure and it outranks an economics question.
+- **Kill** if the fold-miss class is more than half of the apparent new articles.
+  A yield that is mostly `alt_key` failing is the duplicate generator this gate
+  was written to catch, wearing the answer that says go.
+- **No-go on G7** if median `N` < 20% — the deepening plane's articles are then
+  overwhelmingly ones Currents already had, in the plan's own words, and G3/G4
+  become dead weight to revert.
+- **Go on G7** if median `N` >= 20% **and** median `A` >= 8. The 8 is not
+  invented: `IngestResult.articlesCreated` records the discovery plane's own
+  measured baseline as "~8 of 20" unique articles per upstream call, so a
+  deepening call clearing 8 is at least as productive per call as the plane the
+  system already pays for.
+- **Anything else is inconclusive, and inconclusive resolves to no-go.** G7 buys
+  a scheduler and spends §9's invariant; an undecided gate does not pay for that.
+- **Inconclusive** also if throttling or refusals cut the sample below 10 arcs
+  with a completed fetch on Span A.
+
+**What is deliberately not measured here.** Whether the deepening plane's
+articles are any *good* — relevance to the arc is assumed from the provenance
+rule and the `deepeningQuery` gate, and judging it needs a rater, not a query.
+And nothing here re-opens `MAX_ATTRIBUTION_WORDS` or the fold: G5 closed both
+with a corpus this phase has no budget to re-harvest.
+
+### Landed — the number, and the verdict
+
+**89.2% of what the deepening plane ingests is an article the discovery plane
+did not have. The pre-registered rule therefore says GO — and the verdict on G7
+is NO-GO anyway, overridden on two defects the rule was not written to catch and
+the run found regardless.**
+
+Measured on the **dev archive**, 2026-08-29, over **2026-08-10 → 2026-08-17**,
+the week that archive covers most densely. 25 arcs asked, 24 fetched, one refused
+by the grounding gate. The instrument is `pnpm measure:deepening-yield`, which
+drives `processDeepenJob` itself rather than a re-implementation of it; the
+transcripts are gitignored under `apps/api/.g6/`.
+
+```
+items the plane touched (distinct articles)   1,904
+  absorbed — the discovery plane had them       126    6.6%
+  minted by this fetch                        1,778   93.4%
+    of which a fold miss                         79    4.1%
+  CORRECTED YIELD                             1,699   89.2%
+
+median per-arc yield share                    91.0%   (rule needed >= 20%)
+median new articles per call                     82   (rule needed >= 8)
+```
+
+Both pre-registered thresholds are cleared by an order of magnitude, and they
+are cleared **against the bias**: Span A is the archive at its densest, which is
+the condition most favourable to "Currents already had it". The sensitivity run
+over the archive's thin edge is reported below and moves the number the way the
+pre-registration predicted, which is the only thing it was run to check.
+
+**The pre-registered rule returns GO, and the NO-GO below overrides it. That is
+stated plainly rather than dressed up, because the honest description of what
+happened is that the rule was written to catch one thing and the run found
+another.** The rule's kill-ahead-of-yield clause names a specific guarantee —
+a storyline formed, or a label spent, by a deepening article — and **that
+guarantee held perfectly**. What broke is a guarantee the pre-registration did
+not enumerate: G5's own "the cloud is unchanged by the fetch". So the refusal of
+G7 is a judgement made OUTSIDE the pre-registered rule, on evidence collected
+while executing it, and a reader is entitled to weigh it differently. The
+evidence is in "What absorption actually costs" and "The `pubDate` cliff"
+below; the yield itself is not in dispute and nothing is reverted.
+
+#### Is the yield real, or is it `alt_key` failing?
+
+This is the question the plan says the whole gate turns on, so it was attacked
+rather than asserted.
+
+**The at-risk population was measured, not assumed.** Of the 1,778 minted
+articles, **881 (50%) have a same-domain article in the pre-run archive within
+36 hours** — the only rows that *could* be a fold miss, since `alt_key` is
+scoped to `(source_domain, folded title, UTC day)`. The other 897 have no
+same-domain neighbour in that window at all, and **571 of those 897 are on a
+domain the archive has never held** in its whole 2,033-domain history, so no
+fold of any kind could have reached them. Against the 881, best-match title
+overlap distributes:
+
+```
+>= 0.9   38      0.4-0.5  17
+0.8-0.9  22      0.3-0.4  29
+0.7-0.8  10      0.2-0.3  52
+0.6-0.7   7      0.1-0.2 178
+                 0.0-0.1 523
+```
+
+That histogram is an independent recomputation against a `pg_restore` of the
+pre-run archive rather than the instrument's own output, and it puts 77 rows at
+or above 0.6 where the instrument reports 79 — the instrument scopes twins by
+article id and the recomputation by the snapshot, which differ on a handful of
+rows. Two rows either way changes the yield by one tenth of a point; both are
+reported rather than reconciled.
+
+The mass is at the bottom: 753 of 881 score below 0.3, which is a different
+story from the same newsroom on the same day — an outlet covering an arc
+publishes repeatedly. **Eighteen of the 79 at or above 0.6 were read by hand**
+and all but two are the same story under a headline the fold could not
+reconcile; the two that are not are a follow-up carrying new facts
+(`nbcnews.com` naming the soldiers a day after reporting the crash). The 0.4–0.6
+band was read too, ten of twenty-two, and about three quarters are real (`globalnews.ca` re-cutting a wildfire headline,
+`forbes.com` "Tosses Out" against "Throws Out"), which would take the corrected
+figure from 1,699 to about 1,683 — **89.2% to 88.4%.** The verdict does not turn
+on that, which is why the auditable 0.6 count is the one carried above.
+
+**Two thirds of the yield is depth and one third is breadth**, and the split is
+worth naming because the design is called *deepening*: 1,207 of the 1,778 are
+from newsrooms the archive already knew (more of what those outlets published on
+that arc) and 571 are from 332 domains it had never seen, against a pre-run base
+of 2,033 — a 16% expansion of the archive's newsroom list from 24 calls. Read on
+one arc it is obvious what that buys: "Bald Range Wildfire" gained
+KamloopsBCNow, Castanet, AM 1150, Victoria Buzz, Goldstream Gazette, Grand Forks
+Gazette — the regional press for a British Columbia fire, none of which Currents
+indexes. **Relevance was eyeballed, not measured**, exactly as the
+pre-registration said it would not be: attachment is by provenance, so nothing
+here rates it, and every sampled title from two arcs was on subject.
+
+Per arc, so the medians above can be checked rather than believed. `items` is
+this fetch's batch after the topic-collision correction, `net` is `new` minus
+`miss`, and `gain` is how many distinct articles the ARC itself ended up
+holding that it did not hold before.
+
+```
+ items absrb   new miss  net  gain  arc (Span A, 2026-08-10 - 2026-08-17)
+    35     1    34    1   33    33  Infantino FIFA leadership crisis
+   100     9    91   11   80    90  Leavitt White House Exit
+    99     9    90    1   89    94  Google Pixel 11 Launch
+    62     1    61    0   61    61  Lala Hawaii Hurricane Watch
+    99     2    97    5   92    84  Canada US Trade War
+   100     5    95    4   91    95  Qusra settler siege
+   100     2    98    0   98    98  McIlroy St Jude Championship
+    50     3    47    1   46    46  Trump Vaccine Overhaul
+    55     0    55    2   53    59  USS Lincoln Deployment Crisis
+   100     9    91    7   84    86  Trump Turkey Plane Decoy
+    75     1    74    4   70    74  Texas Apache Crash
+    24     1    23    1   22    19  Russian Torture Allegations
+   100     7    93    9   84    76  Trump Turkey Flight Swap
+    77    13    64    2   62    67  Ukraine Nizhnekamsk Drone Strike
+    42     9    33    2   31    50  Eurovision hosting rule change
+   100    11    89   10   79    90  North Korea Missile Launch
+    82    13    69    4   65    68  Harvard Antisemitism Lawsuit
+    55     4    51    3   48    33  Trump Catering Truck Ruse
+    97     6    91    6   85    90  Transshipment Scam
+   100     8    92    0   92    82  Typhoon Dolphin China
+   100     5    95    3   92    95  Bald Range Wildfire
+    99     6    93    4   89    82  Strait of Hormuz Crisis
+    99     4    95    5   90    93  Gilman Russia Release
+   100     0   100    0  100   100  Canadian Open Tennis
+```
+
+**`gain` is not `new` and drifts both ways, which is worth understanding before
+either column is quoted.** Against `new`: 13 arcs gained fewer, 6 exactly as
+many, and 5 MORE. Both directions have a mechanism and neither is a miscount.
+
+*Fewer* is G5's own attachment rule working: only SEEDED groups are attached, so
+a minted article that JOINED an existing same-day group brings nothing to the arc
+— it inherits whatever arcs that group already had. "Trump Catering Truck Ruse"
+is the extreme, 33 against 51, which says a third of its minted articles landed
+in groups that already existed.
+
+*More* is the group-merge channel: a minted article can bridge two existing
+groups, and the merged group arrives carrying every article already in it.
+"Eurovision hosting rule change" gained 50 on 33 minted. That is the same
+re-parenting the cloud section below is about, seen from the arc's side, and it
+is the one number here that a deepening fetch has no business moving.
+
+**The yield figures above are computed from `new` and `miss`, never from
+`gain`.** `gain` is reported because the plan's question says "adds to a clicked
+arc" and it is the honest answer to that literal question; it is not the yield,
+because it mixes in a grouping decision the fetch did not make.
+
+#### The `pubDate` cliff — the finding that decides G7
+
+**Google News RSS stops reporting a publication TIME for items more than about
+eight days old, and reports midnight US Pacific instead.** Measured over all
+3,087 deepening-plane sightings this phase produced, by the item's age at fetch:
+
+```
+age (days)     0    1    2    3    4    5    6    7    8 |    9   11   12   13   14   15   16   17   18   19   20
+% at 07:00Z  0.0  0.0  0.0  1.4  1.5  2.7  4.0  0.0  3.9 | 70.8 92.5 77.4 83.5 83.2 85.4 95.0 93.9 89.8 88.7 97.1
+items         11   73   65  215  194  221  101  170  103 |   24  106  124   97  107  322  398  361  246  115   34
+```
+
+07:00:00Z is midnight PDT, and `raw` carries it verbatim —
+`"pubDate": "Thu, 13 Aug 2026 07:00:00 GMT"` — so this is Google's payload and
+not our parse. The cliff sits between day 8 and day 9 and it is sharp:
+**1.7% degraded at eight days or fresher (20 of 1,153), 89.4% beyond that
+(1,729 of 1,934).**
+
+Three consequences, in increasing order of how much they matter:
+
+- **Intra-day ordering is gone** for anything older than a week. A day slot's
+  lead article is its earliest member, and 100 items sharing one instant order
+  arbitrarily.
+- **`alt_key`'s day bucket breaks for about 29% of the clock.** Google says
+  07:00Z of Pacific date D; the real article is anywhere in D 07:00Z … D+1
+  07:00Z, so every twin Currents timestamped between 00:00Z and 07:00Z — seven
+  hours of twenty-four — lands in a different UTC day and cannot fold whatever
+  the fold does to the title. Two of the three worked examples are exactly this:
+  `pbs.org` "Karoline Leavitt is leaving her role as Trump's White House press
+  secretary", **byte-identical headlines**, Currents at `2026-08-13T00:32:39Z`
+  and Google at `2026-08-12T07:00:00Z`, two rows. Same for `techradar.com` at
+  `03:07:51Z`. ADR-0018 named the day bucket as load-bearing and bounded it at
+  "33 articles of 31,308 straddle a UTC midnight" — a figure measured on one
+  provider whose two emissions are minutes apart, and it does not survive a
+  provider that emits a bare date in another timezone.
+- **`published = LEAST(...)` writes the degraded stamp onto articles the
+  discovery plane already held.** That is the next section.
+
+**What this does to the phases is the opposite of intuitive.** The plane as G5
+ships it plans `now - 7d … now`, which is **inside the cliff** — 1.7% degraded
+over the 1,153 sightings this phase drew from that window. **G7 is the phase
+that walks off it**: a crawl frontier backfills history by slicing spans, and
+every slice older than about eight days is in the 90% zone. So the defect is
+almost invisible today and structural for the phase being decided.
+
+#### What absorption actually costs — and G5's "the cloud is unchanged" does not hold
+
+Absorption is not the free, silent fold the design assumes. Of the **126**
+pre-existing articles a deepening sighting folded onto in Span A:
+
+```
+url replaced with a news.google.com/rss/articles/CBMi… redirect   104   83%
+title replaced with the Google-chromed " - Outlet" form           101   80%
+published flattened onto the 07:00Z day boundary                  104   83%
+```
+
+The mechanism is ADR-0002's own display-field handover working exactly as
+written: the earliest emission wins the display fields, and a stamp of 07:00Z
+is earlier than almost any real time that day, so **the degraded sighting wins**.
+`dedup_key` and `alt_key` are correctly left alone — identity is safe — but
+`url`, `title` and `published` are not identity, and all three get worse.
+
+A worked case, `articles.id = 678`:
+
+```
+was  https://www.abc.net.au/news/2026-08-10/ukraine-kills-13-including-child-…/107021852
+     2026-08-10 12:09:10+00
+     "Ukraine kills 13 in drone attack on Russian city of Nizhnekamsk"
+now  https://news.google.com/rss/articles/CBMiswFBVV95cUxNMHE4NnJDTDBoWGlqRS1q…?oc=5
+     2026-08-10 07:00:00+00
+     "… of Nizhnekamsk - ABC News & Headlines – Australian Broadcasting Corporation"
+```
+
+This is a reader-visible regression on an article the discovery plane held
+cleanly: a link that now hops through Google, a headline carrying outlet chrome,
+and a fabricated timestamp. **Note what is NOT claimed**: a *newly minted*
+Google News article has no other URL to carry, so its redirect link is the price
+of the provider and not a defect. Production already shows both — its
+"US Venezuela Oil Deal" arc leads on a `sightingCount: 1` Google row, which is
+the honest case.
+
+**And the cloud moved, which G5's Done-when says it must not.** Re-running
+`readTrendingStorylines`' exact query against the archive and against a pre-run
+restore of it, three 24-hour windows:
+
+```
+2026-08-21   IDENTICAL, 20 rows
+2026-08-13   Google Pixel 11 Launch 70 articles/32 domains -> 74/33;
+             "Made by Google Launch" appears; "Tata Sons Leadership Transition" falls out
+2026-08-14   Leavitt White House Exit unchanged at 68/49 but score 62.574 -> 54.126;
+             USS Lincoln Deployment Crisis 37/33 -> 43/38; "USS Abraham Lincoln Crisis" appears
+```
+
+The plane predicate is doing its job — no deepening-only article is counted. The
+leak is through the articles it does count: an absorbed sighting **moves an
+existing discovery-plane article's `published`**, which changes both which
+window it falls in (volume) and `max(published)` (the decay), and a minted
+article can **bridge two existing groups**, which re-parents discovery-plane
+articles into a different group and therefore a different arc — **259 pre-existing
+articles changed `group_id`** across both runs, 211 of them in Span A alone. ADR-0019 anticipated a mislabelled plane as the
+hazard; this is a channel that needs no mislabelling at all, because
+`plane` gates *which rows are counted* and cannot gate *what a row says*.
+
+Both channels have a fix and neither is in this phase's scope. The narrow one:
+refuse the display-field handover to a sighting whose timestamp is a bare date.
+**That test is a heuristic and its error direction is the safe one**, which is
+the argument for it rather than an apology: a bare date arrives as exactly
+`07:00:00 GMT` in the `pubDate` string (`08:00:00` outside daylight saving, and a
+backfill into winter months will see it), a real article CAN publish on that
+second, and 20 of the 1,153 items this phase drew from inside the eight-day
+window carry it — 1.7%. A false positive refuses one handover, which leaves the existing
+article's own URL, title and timestamp in place. That is the outcome the archive
+wants anyway. The broad one: stop treating a deepening sighting's `published` as
+an emission time at all. Whichever is chosen owes its own measurement.
+
+The handover splits exactly on the stamp, which is what makes the narrow fix the
+right size. Over all 169 absorbed articles in both runs:
+
+```
+deepening sighting carried a bare-date stamp   126   106 lost their URL   84.1%
+deepening sighting carried a real clock time    43    10 lost their URL   23.3%
+```
+
+The 43-row group is the case ADR-0002 was written for — Google genuinely saw an
+earlier emission — and its 10 handovers are correct. **The defect is the 106
+handovers inside the 126-row group**, not the group: the other 20 kept their
+fields because the archive's own timestamp was already earlier than 07:00Z, which
+is the same rule working by luck rather than by judgement.
+
+#### The sensitivity run, and what it did NOT show
+
+Span B, **2026-08-21 → 2026-08-28**, the archive's thin edge, same instrument, 17
+arcs (only 17 clear the sample's `>= 5 articles, >= 2 domains` bar in that
+window, which is itself the thinness):
+
+```
+                        Span A (dense)   Span B (thin edge)
+arcs fetched                        24                   17
+items touched                    1,904                1,167
+absorbed                       126 6.6%              43 3.7%
+fold misses (of minted)        79 4.4%             10 0.9%
+median per-arc yield             91.0%                92.7%
+mean yield                       89.2%                95.5%
+```
+
+Every count in that table is DISTINCT articles. The per-arc medians are per arc
+and can count an article twice when two arcs both drew it, which is why the two
+bases are labelled rather than mixed.
+
+The pre-registration predicted Span B would read higher because the archive
+looked less there, and it does. **The size of the gap is the finding: 6.3
+points, not 40.** Had the Span A number been an artifact of a switched-off
+laptop, the thin edge would have run away from it. It does not, so the yield
+survives its own worst-case confound and the two spans bracket production rather
+than bounding it loosely.
+
+One number inside the table is a second confirmation of the cliff rather than a
+statement about archive density: fold misses fall from **4.4% of minted articles
+to 0.9%** between the spans. Span B's items are inside the eight-day window
+where `pubDate` is still a real time, so the day bucket holds and the fold works
+— which is what the cliff predicts and not what "the archive is thinner here"
+would predict.
+
+#### Throttling, refusals, and what a call costs
+
+**41 live Google News calls in two runs of under seven minutes each (Span A
+03:13:45–03:20:31Z, Span B 03:24:50–03:29:15Z), paced at one per 15 seconds
+against a `GOOGLE_NEWS_BURST_CALL_LIMIT` of 5 per 60s. Zero throttling of any
+kind: no 429, no 5xx, no breaker trip, no empty feed, no `NewsQuotaError`, and
+no retry.** There is no header to read, so that is an observation over 41 calls
+and not a limit — it says the ceiling was not met at roughly 3.5 calls a minute
+sustained for seven minutes, and nothing whatever about where it is. Anyone
+reading this as a budget should note what it does NOT cover: no burst above that
+pace, no run longer than seven minutes, and nothing about a second client on the
+same egress IP.
+
+The only losses were `normalizeBatch`'s, and they are tiny and of one kind: five
+calls dropped items, seven items in total across 41 calls (0.2%), every one of
+them `no_identity` — an item with no usable link. No `schema`, `no_title`,
+`no_url`, `bad_url` or `bad_published` drop occurred at all, which is a
+statement about a feed nothing contractual guarantees and is worth re-checking
+rather than assuming.
+
+Latency, end to end including ingest, grouping and attach:
+
+```
+Span A  min 940ms   p50 1,968ms   p90 2,354ms   max 2,613ms
+Span B  min 576ms   p50 1,634ms   p90 1,942ms   max 2,419ms
+```
+
+**The grounding gate fired once in 42 arcs** — "Institutional Portfolio Shifts",
+an arc of 103 articles over 16 domains whose label shares no word with its own
+profile. That is the gate doing exactly its job: a diffuse market-roundup arc is
+one where a wrong attachment is cheap to make and expensive to keep.
+
+**Coverage was recorded on 19 of 41 calls.** The other 22 returned a full 100
+items, so `isLastPage` was false, so `recordStorylineCoverage` was correctly
+skipped and the gap stays open — behaving as `processDeepenJob` documents. At a
+seven-day span **more than half of all calls buy no coverage at all**, which is
+a fact G7 has to plan around rather than discover: depth on this provider comes
+only from narrower slices, and `DEEPEN_SPAN_MS`' seven days is explicitly "a
+guess with a stated reason".
+
+#### The G5 guarantees that DID hold
+
+- **Zero storylines formed.** 26,883 before, 26,883 after, across 41 fetches and
+  2,902 minted articles.
+- **Zero labels spent.** `label_at` moved on no row. The plan asked for this
+  ahead of the yield number and it is clean: `groupCreatedArticles` returns from
+  the `attachTo` branch before the linker and before the label tail, and the
+  archive agrees.
+- **No `topic_coverage` row was written by the deepening provider**, which is
+  the claim G5's "coverage goes to `storyline_coverage`" actually makes. The
+  topic ROW is minted as G5 said it would be — 23 new topics for 24 Span A
+  fetches, the 24th colliding with a topic a reader had already searched.
+- **The plane predicate excludes what it is supposed to exclude.** Every one of
+  the 2,902 minted articles is invisible to `readTrendingStorylines`. The cloud
+  moved anyway, through the two channels above, which is a different failure from
+  the one G2 was built to stop.
+
+#### `MIN_SOURCE_DOMAINS` on discovery-plane domains: the floor selects, the score does not
+
+The plan asks whether a floor computed on discovery-plane domains still selects
+arcs a human would call newsworthy. Measured two ways.
+
+**On the dev archive**, one 48-hour window, gate inputs restricted to the
+discovery plane exactly as `readTrendingStorylines` restricts them: 980 arcs
+clear the floor, **516 of them (53%) sit at exactly two domains** — but only 13
+of those carry five or more articles, and only 6 arcs of 980 (0.6%) have the
+wire-pile shape of three or more articles per domain. As a population problem
+this is small.
+
+**On production's live board, 2026-08-29** — 22 arcs — it is not a population
+problem, it is a ranking one:
+
+```
+ 37 art   2 dom | Securities Fraud Lawsuits         rank  3 of 22
+ 23 art   2 dom | Securities Fraud Class Actions    rank  4 of 22
+ 19 art  18 dom | Lake America Renaming Controversy rank  5 of 22
+ 14 art  14 dom | Lake Ontario Naming History       rank  6 of 22
+```
+
+Two wire piles — 18.5 and 11.5 articles per domain, one PR wire firing
+repeatedly — rank **above** two stories with genuine multi-newsroom coverage.
+The floor admitted them honestly: two domains is two domains. What promoted them
+is that ADR-0014's score is `volume x decay` **with no domain term at all**, so
+the same repetition that should be evidence *against* an arc is the thing
+lifting it.
+
+So the answer is split, and it matters that it is: **the floor is not the broken
+part and raising it is the wrong lever.** Raising it to three would drop
+"Lake America" (18 domains, 19 articles) only by accident of volume and would
+still admit a three-outlet wire pile. The lever that fits the observed failure is
+a domain term in the ordering — but **no threshold ships here**: this is one
+board on one day, the repo's rule is that no threshold ships unmeasured, and
+setting one needs a labelled sample of arcs a human has actually judged. It is
+recorded as the measured observation it is, for whoever takes it.
+
+#### The Nepal split is real, it has got worse, and it distorts per-arc yield
+
+The brief named two arcs for one event. **Production's board on 2026-08-29 holds
+three**:
+
+```
+Nepal Tibet Floods        arc 783 articles / 182 domains   window 33/24
+Nepal Hydropower Floods   arc  82 articles /  50 domains   window  2/2
+Nepal China Floods        arc   4 articles /   4 domains   window  2/2
+```
+
+Every per-arc number this phase reports is computed **per storyline**, so a split
+event is three fetches of one subject, three coverage ledgers, and — under G5's
+attachment rule — three arcs each accumulating their own Google News articles
+with nothing merging them. It does not bias the yield SHARE, which is a ratio
+inside each fetch. It does inflate **calls per event**, and it is the one place
+where G7's economics are worse than this phase's arithmetic suggests: a crawl
+frontier pays the split three times per pass, forever, and the deepening plane
+feeds each fragment separately rather than growing the survivor. The label-merge
+pass is the mechanism that should collapse these and has not; that is
+`storyline-label-merge`'s problem and not this phase's, but G7 should not be
+planned as though each arc were an event.
+
+#### What this phase deliberately did not do
+
+- **It did not measure production.** The reason is in the pre-registration and
+  it is access, not preference. Two production facts ARE reported — the live
+  cloud, and the arc payloads showing Google-redirect URLs already reaching
+  readers — and both are public reads. **No arc was clicked on production**:
+  once absorption was shown to replace a good URL with a redirect, manufacturing
+  more of that on the live archive to corroborate a number already established
+  on dev was not a trade worth making.
+- **It did not rate relevance.** Attachment is by provenance and nothing here
+  judges it.
+- **It did not re-open the fold, `MAX_ATTRIBUTION_WORDS`, or `MIN_SOURCE_DOMAINS`'
+  value.** G5 closed the first two on a corpus this phase has no budget to
+  re-harvest, and the third is argued above to be the wrong lever anyway.
+- **It did not fix the `pubDate` defect.** G6 is a decision gate; the fix is a
+  change to the ingest fold with its own measurement to make, and inventing it
+  inside a measurement phase is how a gate stops being one.
+
+#### The obvious escape — window the crawl inside the cliff — was measured, and it is half a fix
+
+The first thing anyone will propose on reading the cliff is to keep the frontier
+on the safe side of it. **Span B already is that experiment** — 17 fetches, all
+at the leading edge — so this is measured rather than argued:
+
+```
+                            Span A (backfill)   Span B (leading edge)
+corrected yield                       89.2%                   95.5%
+stamps degraded                        ~89%                    3.1%
+fold misses (of minted)                 4.4%                   0.9%
+absorbed articles losing their URL       83%                     28%
+```
+
+The fold recovers almost completely, and that is the whole of what the window
+buys. Four things it does not settle, in the order they will bite.
+
+**The window has to be about a day narrower than the cliff, and G5's current
+constant already sits on the edge with no margin.** `BOUND_PADDING_MS` pads
+`after:` a day outward — deliberately, so an under-fetch is impossible — so a
+planner window whose far edge is D days back asks the wire for D+1. Span B's far
+edge was 8 days back and **the wire returned 24 items 9 days old, 17 of them
+degraded (71%)**. The arithmetic limit is therefore a far edge 7 days back, and
+the bucket that lands on (day 8) is already 3.9% degraded against 0% at day 7 —
+so **7 is the ceiling and 6 is the number with margin**, not 8.
+
+Which is worth stating twice, because `DEEPEN_SPAN_MS` is *already* 7 days and
+`queueStorylineDeepening` plans `to ≈ now`: the shipped leading-edge fetch puts
+the wire's far edge on **day 8, the last bucket before the cliff**, by accident.
+Widening that constant reads like a tuning change and is a change to how well the
+fold works.
+
+**The URL handover is a SEPARATE defect and the window does not touch it.**
+Every one of the **3,087** deepening sightings this phase produced carries a
+`news.google.com/rss/articles/CBMi…` redirect; **not one carries the outlet's own
+URL**. So handing the display fields to a Google sighting is never an improvement
+on the `url` column, whatever the timestamp says. Split by run and by stamp:
+
+```
+                         absorbed   lost their URL
+Span A  bare-date stamp       123              103
+Span A  real clock time         3                1
+Span B  bare-date stamp         3                3
+Span B  real clock time        40                9
+```
+
+Span B still loses 12 of 43, and **9 of those 12 are the honest case** — Google
+genuinely saw an earlier emission, ADR-0002 says the earliest emission wins the
+display fields, and the archive trades a working link for a redirect anyway. A
+bare-date test fixes the timestamp and the title; it cannot fix this, because
+this one is not about the timestamp.
+
+**Group re-parenting is timestamp-independent and scales with call volume.**
+259 pre-existing articles changed `group_id` across the two runs. Nothing about
+a narrower window changes that, and a scheduler is a call-volume increase by
+definition.
+
+**And the window costs G7 the thing G7 is for.** This section's own scope line is
+"arcs backfilled by slicing their spans"; a six-day ceiling means an arc
+discovered late can never have its history fetched at all. What survives is *the
+same leading-edge fetch G5 already ships, on a timer instead of a click* — a real
+thing, since it trades §9's invariant for freshness on arcs nobody clicked, but a
+much smaller thing than this section describes, and it should be **re-scoped and
+re-argued rather than shipped under the current framing**.
+
+So the window is a workaround that forfeits backfill, and the handover fix is
+needed for the windowed case anyway. The fix is the cheaper of the two and
+forfeits nothing.
+
+**One truncation fact that binds either way**: 9 of Span B's 17 calls hit the
+100-item cap at the leading edge, so a windowed crawl still needs subdivision —
+roughly three to four slices per busy arc per pass. Against 150 background calls
+a day that is comfortable for production's 22-arc board and unmeasured for
+anything wider; the active-arc count was not read, so no budget is asserted here.
+
+#### The verdict on G7
+
+**NO-GO, and it is a "not yet" rather than a "never".**
+
+The yield rule returns GO by a wide margin and that result stands: the deepening
+plane is not a duplicate generator, `alt_key` is not quietly absorbing its
+output, and G3 and G4 are not dead weight. **Nothing is reverted.** Two thirds
+depth and one third breadth, 71 genuinely-new articles per call against the
+discovery plane's own recorded baseline of ~8 per call, is a good trade for one
+HTTP request.
+
+**G7 is refused on evidence the pre-registered rule did not ask for.** The rule
+returned GO; the two findings below are not in it, and the case for letting them
+outrank it is the shape of the defect rather than its current size — both get
+worse in exactly the way G7 changes things:
+
+1. **G5's "the cloud is unchanged by the fetch" is false as written**, through
+   `published` handover and group re-parenting. Under a click-driven plane this
+   is bounded by how often people click. Under a scheduler it is unbounded, and
+   it is precisely the endogenous loop ADR-0019 built `plane` to prevent,
+   arriving by a route `plane` cannot see.
+2. **G7's own work is what the `pubDate` cliff punishes.** Backfilling an arc by
+   slicing its span means fetching almost exclusively items older than eight
+   days, where 90% of stamps are a bare date in the wrong timezone. Today's
+   leading-edge fetch runs at 1.7% degraded and is fine; the crawl frontier
+   would run at ~90%.
+
+**What G7 is gated on.** Five items, none of them a phase of its own — every one
+is a G5 correction, and together they are smaller than the measurement that found
+them. The first two are unconditional; the last three are what a windowed frontier
+owes on top, and they exist because windowing was measured above and came back
+half a fix.
+
+1. **Never hand a deepening sighting's `url` to an existing article.** Not
+   conditional on the stamp: all 3,087 sightings this phase drew carry a
+   `news.google.com/…CBMi…` redirect and none carries an outlet URL, so the
+   handover is a downgrade in every case — including the 9 of Span B's 12 where
+   the earlier-emission claim was true. A newly MINTED article keeps the redirect,
+   which is the price of the provider and not a defect.
+2. **Refuse the rest of the display-field handover to a bare-date sighting**, and
+   decide in the same change what a bare date means for `alt_key`'s day bucket —
+   the two are one question about whether a date is an emission time. The measured
+   prize is the 103 of Span A's 104 corruptions that a bare stamp drove; the
+   measured cost is that the test misfires on ~1.7% of in-window items, in the
+   safe direction. Both numbers are above; neither ships unmeasured.
+3. **If the frontier is windowed, the far edge is 6 days back, not 8.** The cliff
+   is at day 8/9, `BOUND_PADDING_MS` adds a day to whatever the planner asks, and
+   day 8 is already 3.9% degraded. 7 is the arithmetic ceiling and 6 is the number
+   with margin. Note this makes `DEEPEN_SPAN_MS` load-bearing on the fold: at 7
+   days with `to ≈ now` it puts the wire's far edge on day 8 today, by accident.
+4. **Do not pin that window to a measured constant without a monitor on it.** The
+   cliff is Google's behaviour, not a contract, and its exact location rests on
+   **24 items** — day 9 was reached by Span B alone, since Span A's window started
+   at day 12. The honest form is a metric on the share of
+   deepening sightings arriving with a bare-date stamp, alerting when it moves —
+   not a number in config that was true on 2026-08-29.
+5. **Close the group-re-parenting channel, or accept it in writing.** 259
+   pre-existing articles changed `group_id`; that is timestamp-independent,
+   untouched by any window, and it scales with call volume. Nothing above fixes
+   it and this phase does not know what should.
+
+**And re-run this instrument afterwards**, with the acceptance test being the one
+G5 stated and did not get: the cloud comes back byte-identical across a run.
+
+**If the frontier IS windowed, re-scope this section before building it.** Its own
+line above is "arcs backfilled by slicing their spans", and a six-day ceiling
+forecloses exactly that: an arc discovered late can never have its history
+fetched. What is left is the leading-edge fetch G5 already ships, on a timer
+rather than a click — still worth doing, still a genuine §9 trade, but not the
+phase written here, and it should be argued as the smaller thing it is.
+
 ## G7 — The scheduler, and the §9 trade
 
-**Depends on**: G6 saying yes.
+**Depends on**: G6 saying yes. **G6 said NO — see its verdict above**, which
+carries a five-item gating list. The yield is there; two defects it uncovered are
+not survivable by a scheduler, and both are G5 corrections rather than new phases.
+**Windowing the crawl inside the eight-day `pubDate` cliff was measured and is
+half a fix** — it restores the fold and touches neither the URL handover nor
+group re-parenting, and it forecloses the backfill this section is written around.
+Do not start this until the gating list lands and G6's instrument has been re-run.
 
 Turn the cloud into a crawl frontier: storylines fetched on a schedule rather
 than on a click, arcs backfilled by slicing their spans.
