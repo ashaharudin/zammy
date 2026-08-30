@@ -7,6 +7,7 @@ import {
   sentenceCount,
   validateSummary,
   SUMMARY_MAX_CHARS,
+  SUMMARY_MAX_WORDS,
 } from "./storyline-summary.js";
 
 /**
@@ -155,6 +156,14 @@ describe("validateSummary", () => {
     );
   });
 
+  it("leaves the model real headroom over what the prompt asked for", () => {
+    // 35 words at the measured 6.69 characters each is ~234; the cap is ~45
+    // words. A model has to overshoot its instruction by nearly a third before
+    // the backstop fires, which is the difference between a refusal that means
+    // "not one sentence about one day" and one that means "two words too long".
+    expect(SUMMARY_MAX_CHARS).toBeGreaterThan(SUMMARY_MAX_WORDS * 7);
+  });
+
   it("takes a sentence exactly at the cap and refuses one character more", () => {
     const atCap = `${"a".repeat(SUMMARY_MAX_CHARS - 1)}.`;
     expect(validateSummary(atCap)).toBe(atCap);
@@ -209,7 +218,11 @@ describe("the prompts", () => {
     // both prompts.
     expect(prompt).toContain("1. Wall work halted at Big Bend");
     expect(prompt).toContain("2. Contractor confirms Big Bend pause");
-    expect(prompt).toContain(`at most ${SUMMARY_MAX_CHARS} characters`);
+    // WORDS in the prompt, characters in the validator. A model cannot count
+    // characters, and asking in a unit it cannot measure is what made the cap
+    // the binding constraint instead of the backstop.
+    expect(prompt).toContain(`at most ${SUMMARY_MAX_WORDS} words`);
+    expect(prompt).not.toContain("characters");
   });
 
   it("omits the label line entirely when the arc has no label", () => {

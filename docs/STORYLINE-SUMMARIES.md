@@ -137,8 +137,19 @@ The **day** call is over the quarters' own sentences: ~150 tokens instead of
 past the cliff, or one whose every quarter was refused — falls back to the
 articles.
 
-The contract is one sentence, at most 240 characters, about **what happened**
-rather than about the coverage. The **first** ask is at temperature 0, so the
+The contract is one sentence about **what happened** rather than about the
+coverage. Its length is asked for in **words** (35) and enforced in
+**characters** (300), and the mismatch is deliberate: a model cannot count
+characters and can roughly count words, so the prompt uses the unit it can act
+on and the stored row is checked in the unit a reader can check exactly.
+
+That was not the original shape, and the measurement is why it changed. Under a
+240-*character* instruction, 31 of the first 48 live answers landed between 216
+and 240 characters and the longest was exactly 240 — the model writes to whatever
+limit it is given, and three spilled over. Those refusals were sentences one or
+two words too long, not bad answers. At 35 words ≈ 234 characters against a
+300-character backstop, a refusal now means the answer is genuinely not one
+sentence about one day. The **first** ask is at temperature 0, so the
 same coverage names the same day on a replay; a **retry** is not, because the
 failures worth retrying are deterministic ones. Measured live 2026-08-29: a
 refused answer re-asked at temperature 0 came back byte-identical and 241

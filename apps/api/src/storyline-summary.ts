@@ -18,15 +18,38 @@ import type { SummaryMember, SummaryQuarter } from "@zammy/storage";
  */
 
 /**
- * The cap, in characters.
+ * What the PROMPT asks for, in words.
  *
- * Characters and not tokens or words, for the same reason the label's contract
- * counts words: this is the unit a reader of a stored row can check. 240 is
- * about two lines of prose — long enough for "who did what, and what came of
- * it", short enough that a model padding its way through a slow news quarter
- * runs into the wall rather than filling the column.
+ * Words rather than characters, because a model cannot count characters and can
+ * roughly count words — and asking in a unit it cannot measure is what put the
+ * binding constraint somewhere neither side could see. MEASURED over the first
+ * 48 live summaries (2026-08-29, `Canada US Trade War` and others): the model
+ * writes to whatever limit it is given, so under a 240-CHARACTER instruction
+ * **31 of 48 answers landed between 216 and 240 characters**, the longest was
+ * exactly 240, and three spilled over and were refused — the tail of a
+ * distribution pressed against a wall, not a set of outliers.
+ *
+ * 35 words is that distribution's own shape (observed 20-40, mean 32.2) stated
+ * in the unit the model can act on.
  */
-export const SUMMARY_MAX_CHARS = 240;
+export const SUMMARY_MAX_WORDS = 35;
+
+/**
+ * The cap, in characters — the BACKSTOP now, not the target.
+ *
+ * Characters here and words in the prompt, deliberately: a stored row is checked
+ * in the unit a reader can check exactly, and the model is asked in the unit it
+ * can approximate. They are related by the measured 6.69 characters per word, so
+ * 35 words is about 234 characters and this cap is about 45 — a model would have
+ * to overshoot its instruction by nearly a third before the wall is reached.
+ *
+ * That headroom is the whole change. At 240 the cap WAS the instruction, badly
+ * expressed, and every refusal it produced was a sentence one or two words too
+ * long that a retry could not fix (temperature 0 replays it; see
+ * `storyline-summary-service.ts`). At 300 a refusal means the answer is genuinely
+ * not one sentence about one day.
+ */
+export const SUMMARY_MAX_CHARS = 300;
 
 /** How much of an article's description reaches the prompt. The labeler's 200. */
 const DESCRIPTION_CHARS = 200;
@@ -76,7 +99,7 @@ export function describeSegment(segment: SummaryQuarter): string {
 /** The rules block, identical for every prompt here — one contract, one wording. */
 const RULES = [
   "Rules:",
-  `- Exactly ONE sentence, at most ${SUMMARY_MAX_CHARS} characters.`,
+  `- Exactly ONE sentence, at most ${SUMMARY_MAX_WORDS} words.`,
   "- Say what HAPPENED. Do not describe the coverage itself: no 'reports say',",
   "  'articles describe', 'headlines focus on'.",
   "- Name the people, places and organisations involved rather than referring to",
@@ -269,8 +292,11 @@ function unwrapDelimiters(text: string): string {
 /**
  * Is what came back usable? Returns the cleaned sentence, or null.
  *
- * Two of the three clauses are mechanical and enforced here — one sentence, at
- * most 240 characters. The third — "say what happened, not what was reported" —
+ * Two of the three clauses are mechanical and enforced here — one sentence, and
+ * a length backstop. Note that the backstop is not what the PROMPT asks for:
+ * the prompt bounds words, this bounds characters, and the gap between them is
+ * headroom for a model that counts words approximately and characters not at
+ * all. The third — "say what happened, not what was reported" —
  * is not checkable and is deliberately left to the prompt, exactly as
  * `validateLabel` leaves "name the event, not the entity". A regex over
  * "reports" would reject a sentence about a report and accept a paraphrase of
