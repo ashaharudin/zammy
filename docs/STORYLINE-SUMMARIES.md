@@ -138,7 +138,11 @@ past the cliff, or one whose every quarter was refused — falls back to the
 articles.
 
 The contract is one sentence, at most 240 characters, about **what happened**
-rather than about the coverage. Two of those are enforced by
+rather than about the coverage. The **first** ask is at temperature 0, so the
+same coverage names the same day on a replay; a **retry** is not, because the
+failures worth retrying are deterministic ones. Measured live 2026-08-29: a
+refused answer re-asked at temperature 0 came back byte-identical and 241
+characters long again, and the same span re-asked warm answered in 217. Two of those are enforced by
 [`validateSummary`](../apps/api/src/storyline-summary.ts); the third is the
 prompt's, exactly as "name the event, not the entity" is the label prompt's.
 A wrapper (`**Summary:** "…"`) is stripped rather than refused — a chat-tuned

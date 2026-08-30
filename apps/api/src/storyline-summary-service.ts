@@ -20,6 +20,7 @@ import {
   buildDayFromSegmentsPrompt,
   buildSegmentSummaryPrompt,
   validateSummary,
+  SUMMARY_MAX_CHARS,
 } from "./storyline-summary.js";
 
 /**
@@ -278,6 +279,7 @@ export async function summarizeStorylineDay(
           members: input.members,
         }),
         outcome,
+        stored.get(input.segment)?.attempts ?? 0,
       );
 
       gate?.after?.(result.kind === "unavailable" ? "unavailable" : "answered");
@@ -412,7 +414,7 @@ async function summarizeDay(
           members: dayMembers(input.segments, deps.sampleSize),
         });
 
-  const result = await ask(deps, prompt, input.outcome);
+  const result = await ask(deps, prompt, input.outcome, input.stored?.attempts ?? 0);
   input.gate?.after?.(result.kind === "unavailable" ? "unavailable" : "answered");
   await record(deps, {
     candidate: input.candidate,
@@ -460,6 +462,8 @@ async function ask(
   deps: SummarizerDeps,
   prompt: string,
   outcome: DaySummaryOutcome,
+  /** Asks already spent on this span. 0 on a first write. */
+  attempt: number,
 ): Promise<AskResult> {
   // Counted here, at the ask, so the number means "what did this cost" — a
   // retry of an earlier refusal counts, because it is another call. The
@@ -468,6 +472,17 @@ async function ask(
   outcome.modelCalls += 1;
   const result = await deps.generator!.generate({
     prompt,
+    // **A retry at temperature 0 is a replay.** Measured against the live model
+    // on 2026-08-29: three of 45 answers failed the contract, and the one that
+    // was re-asked came back byte-identical and 241 characters long again —
+    // one over the cap. The whole retry budget would be spent re-reading the
+    // same refusal, and the span retired for a sentence the model could easily
+    // have written shorter.
+    //
+    // So the FIRST ask stays deterministic, because a replay of the same
+    // coverage should name the same day; a retry deliberately does not, because
+    // its purpose is a different sample rather than the same one.
+    ...(attempt > 0 ? { temperature: RETRY_TEMPERATURE } : {}),
     ...(deps.signal ? { signal: deps.signal } : {}),
   });
   if (!result.ok) {
@@ -485,8 +500,15 @@ async function ask(
     // The raw text is kept, bounded, for the same reason the labeler keeps it:
     // the prompt iterates on live output, and the answers it REFUSES are the
     // only evidence of which way to iterate.
+    // Sliced past the CAP, not under it. At 120 characters every refusal looked
+    // identical — a sentence cut off mid-word — and the line could not say
+    // which clause of the contract failed: a 300-character answer and a
+    // two-sentence one are indistinguishable from their first 120 characters.
+    // The prompt is expected to iterate on live output (ADR-0022), and these
+    // are the only evidence of which way to iterate, so the whole rejected
+    // answer goes in the line.
     deps.logger?.warn(
-      { text: result.text.slice(0, 120) },
+      { text: result.text.slice(0, SUMMARY_MAX_CHARS + 60), length: result.text.length },
       "summary failed the one-sentence contract",
     );
     return { kind: "refused", reason: `contract: ${result.text.slice(0, 80)}` };
@@ -636,6 +658,15 @@ export interface SummaryPassTally {
  * row and the next pass reselects the span.
  */
 const CONSECUTIVE_UNAVAILABLE_LIMIT = 5;
+
+/**
+ * The sampling temperature a RETRY uses. The first ask is always 0.
+ *
+ * Low enough that the second answer is still about the same coverage, high
+ * enough that it is not the same string — which is the whole point, since the
+ * failures being retried are deterministic ones (`ask` has the measurement).
+ */
+const RETRY_TEMPERATURE = 0.4;
 
 export async function summaryPass(
   deps: SummarizerDeps,

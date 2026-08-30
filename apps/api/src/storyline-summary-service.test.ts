@@ -247,6 +247,31 @@ describe("summarizing one storyline-day", () => {
     ).toBe(3);
   });
 
+  it("does not replay the first ask when it retries a refusal", async () => {
+    // Measured live: a refused answer re-asked at temperature 0 came back
+    // byte-identical and one character over the cap again. The retry budget
+    // would be spent re-reading the same refusal and the span retired for a
+    // sentence the model could easily have written shorter.
+    const id = await seedThreeQuarters();
+    const temperatures: Array<number | undefined> = [];
+    const watching: TextGenerator = {
+      async generate(request: GenerateRequest) {
+        temperatures.push(request.temperature);
+        return { ok: true as const, text: "One sentence. And a second." };
+      },
+    };
+
+    await summarizeStorylineDay(deps(watching), candidate(id, "2026-08-14"));
+    // Every first ask is deterministic: the same coverage should name the same
+    // day on a replay.
+    expect(temperatures.every((value) => value === undefined)).toBe(true);
+
+    temperatures.length = 0;
+    await summarizeStorylineDay(deps(watching), candidate(id, "2026-08-14"));
+    expect(temperatures.length).toBeGreaterThan(0);
+    expect(temperatures.every((value) => typeof value === "number" && value > 0)).toBe(true);
+  });
+
   it("costs nothing to re-run over work that is already current", async () => {
     const id = await seedThreeQuarters();
     await summarizeStorylineDay(deps(stub(["A sentence."])), candidate(id, "2026-08-14"));
