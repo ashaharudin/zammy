@@ -25,7 +25,18 @@ describe("query construction", () => {
 
   it("maps our names onto GNews's", async () => {
     const { fetch, calls } = stubFetch([{ body: okBody() }]);
-    await makeClient({ fetch }).search({
+    await makeClient({
+      fetch,
+      // **A fixed clock, because this test asserts the WIRE ENCODING and the
+      // client clamps to the tier's lookback before encoding anything.**
+      //
+      // Without it the window below is measured against the real clock, so the
+      // test was true only while `2026-08-01` was inside `maxLookbackDays` (30)
+      // of today. That stopped being so at 2026-08-31T00:00Z, and the failure
+      // is the one a date-dependent test always gives: it passed in every run
+      // for months and then broke on a push that touched nothing near it.
+      now: () => Date.parse("2026-08-08T00:00:00.000Z"),
+    }).search({
       keywords: ["x"],
       language: "en",
       country: "gb",
