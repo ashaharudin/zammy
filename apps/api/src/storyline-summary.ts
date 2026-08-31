@@ -1,7 +1,7 @@
 import type { SummaryMember, SummaryQuarter } from "@zammy/storage";
 
 /**
- * The prompts and the contract for the historical preserve (ADR-0022,
+ * The prompts and the contract for the historical preserve (ADR-0023,
  * docs/STORYLINE-SUMMARIES.md) — the pure half, mirroring `storyline-label.ts`.
  *
  * A summary is ONE SENTENCE about what happened in a span of a storyline's

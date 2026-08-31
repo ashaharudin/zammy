@@ -11,7 +11,7 @@ import {
 } from "./storyline-summary.js";
 
 /**
- * The summariser's contract (ADR-0022), against the recorded response shapes.
+ * The summariser's contract (ADR-0023), against the recorded response shapes.
  *
  * The interesting half is `validateSummary`, and specifically what it must NOT
  * reject: a one-sentence answer naming a country is the common case, and a

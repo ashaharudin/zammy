@@ -12,7 +12,7 @@ import { createConfiguredDb, createSummarizer } from "./wiring.js";
 /**
  * `pnpm summaries:storylines [--storyline=UUID] [--from=YYYY-MM-DD]
  * [--to=YYYY-MM-DD] [--max-summaries=N] [--rate=N] [--dry-run] [--show]` — the
- * operator half of the historical preserve (ADR-0022,
+ * operator half of the historical preserve (ADR-0023,
  * docs/STORYLINE-SUMMARIES.md).
  *
  * The nightly pass covers `SUMMARY_WINDOW_DAYS` and no more, which leaves two

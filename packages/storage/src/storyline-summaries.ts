@@ -3,7 +3,7 @@ import type { Database, SummarySegment } from "./database.js";
 
 /**
  * The reads and the one write behind the historical preserve (migration 0024,
- * ADR-0022, docs/STORYLINE-SUMMARIES.md).
+ * ADR-0023, docs/STORYLINE-SUMMARIES.md).
  *
  * Everything time-shaped in here is UTC and says so. `storyline_days.day_key`
  * is an APP_TIMEZONE day and this module deliberately does not read it: the

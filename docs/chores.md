@@ -90,7 +90,7 @@ previous step just changed:
    nothing, so the row describes the archive the night *leaves* rather than the one it found.
 
 **`summaries`** runs [`runSummaryChore`](../apps/api/src/chores.ts) — the historical preserve
-(ADR-0022): one sentence per qualifying storyline-day and per populated six-hour UTC segment of it,
+(ADR-0023): one sentence per qualifying storyline-day and per populated six-hour UTC segment of it,
 kept for ever and exempt from retention. It is the only thing here that writes rows nothing can
 rebuild, which is why it is the only thing here retention must never reach. It runs an hour after
 the storyline night rather than inside it, because that pass is already the expensive one and the two

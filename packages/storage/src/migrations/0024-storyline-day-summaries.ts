@@ -2,7 +2,7 @@ import { sql, type Kysely } from "kysely";
 
 /**
  * The historical preserve: one sentence per storyline-day, and one per populated
- * 6-hour UTC segment of it (docs/STORYLINE-SUMMARIES.md, ADR-0022).
+ * 6-hour UTC segment of it (docs/STORYLINE-SUMMARIES.md, ADR-0023).
  *
  * Every other derived table in this schema is rebuildable from `articles` —
  * `story_token_days` is pruned nightly, `storyline_days` is recomputed by

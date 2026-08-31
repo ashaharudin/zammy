@@ -35,7 +35,7 @@ import { labelWords } from "./storyline-label-merge.js";
 
 const NOW = new Date("2026-08-14T03:00:00.000Z");
 
-/** No generator: the summary pass writes nothing and spends nothing (ADR-0022). */
+/** No generator: the summary pass writes nothing and spends nothing (ADR-0023). */
 const SUMMARIZER: Omit<SummarizerDeps, "db"> = {
   generator: null,
   modelId: null,
@@ -661,7 +661,7 @@ describe("the graph shape on the nightly report", () => {
 
 
 /**
- * The summary pass's own decisions (ADR-0022) — which is a question about the
+ * The summary pass's own decisions (ADR-0023) — which is a question about the
  * WINDOW and the flag, not about what a sentence says. `storyline-summary-service.test.ts`
  * owns the writing.
  */

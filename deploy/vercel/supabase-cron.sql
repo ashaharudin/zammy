@@ -151,7 +151,7 @@ select cron.schedule(
   $$ select public.zammy_cron_post('/api/chores?pass=storylines') $$
 );
 
--- The historical preserve (ADR-0022): one sentence per storyline-day and per
+-- The historical preserve (ADR-0023): one sentence per storyline-day and per
 -- populated 6-hour UTC segment of it, for the days that clear the volume bar.
 -- An hour after the storyline pass, and for a reason that is not just tidiness:
 -- both spend the same model key, and the 04:00 pass is the one that has been

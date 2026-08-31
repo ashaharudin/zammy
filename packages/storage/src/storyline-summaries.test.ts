@@ -16,7 +16,7 @@ import {
 import { createTestDatabase, type TestDatabase } from "./test-support.js";
 
 /**
- * The storage half of the historical preserve (ADR-0022, migration 0024).
+ * The storage half of the historical preserve (ADR-0023, migration 0024).
  *
  * Real Postgres, and here the reason is not incidental: everything under test is
  * SQL that a fake would fake wrong — a UTC hour extracted from a timestamptz,

@@ -736,7 +736,7 @@ export async function runStorylineGraphChore(deps: ChoreDeps): Promise<Storyline
 }
 
 /**
- * The nightly summary pass — the historical preserve (ADR-0022,
+ * The nightly summary pass — the historical preserve (ADR-0023,
  * docs/STORYLINE-SUMMARIES.md).
  *
  * Its own pass on its own schedule (`0 5 * * *`), not a step of the storyline
@@ -774,7 +774,7 @@ export async function runSummaryChore(
   if (deps.summariesEnabled !== true) {
     deps.log.info(
       {},
-      "summary pass is off (SUMMARIES_ENABLED=false) — nothing written (ADR-0022)",
+      "summary pass is off (SUMMARIES_ENABLED=false) — nothing written (ADR-0023)",
     );
     return {
       enabled: false,
@@ -840,7 +840,7 @@ export async function runSummaryChore(
   deps.log.info(
     { ...tally, from: from.toISOString(), windowDays: deps.summaryGate.windowDays },
     tally.stoppedBy === "exhausted"
-      ? "storyline summary pass — the historical preserve (ADR-0022)"
+      ? "storyline summary pass — the historical preserve (ADR-0023)"
       : // Its own message for the same reason the label pass has one: the
         // difference between "there was nothing to do" and "we ran out of room"
         // is the whole reading of the line.
@@ -905,7 +905,7 @@ export interface StorylinePassDeps extends ChoreDeps {
    */
   lateCandidatesChangedOnly?: boolean;
   /**
-   * The summariser (ADR-0022). Required for the same reason `labeler` is: with
+   * The summariser (ADR-0023). Required for the same reason `labeler` is: with
    * no key the object still exists and only its `generator` is null, and "no
    * summariser at all" is not a state the pass can be in.
    */

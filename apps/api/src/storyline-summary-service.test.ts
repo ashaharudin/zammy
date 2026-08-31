@@ -12,7 +12,7 @@ import {
 } from "./storyline-summary-service.js";
 
 /**
- * The historical preserve's behaviour (ADR-0022): what gets written, what gets
+ * The historical preserve's behaviour (ADR-0023): what gets written, what gets
  * rewritten, and — the half that is easy to get wrong — what does NOT.
  *
  * Real Postgres and a stub model. The model is stubbed because what is under

@@ -24,7 +24,7 @@ import {
 } from "./storyline-summary.js";
 
 /**
- * The summariser's service half (ADR-0022): read the day, ask the model once per
+ * The summariser's service half (ADR-0023): read the day, ask the model once per
  * populated quarter, then once more over those sentences, and write what comes
  * back. `storyline-label-service.ts` is the shape this follows, and the one
  * place it deliberately diverges is failure — a label falls back to the bigram
@@ -504,7 +504,7 @@ async function ask(
     // identical — a sentence cut off mid-word — and the line could not say
     // which clause of the contract failed: a 300-character answer and a
     // two-sentence one are indistinguishable from their first 120 characters.
-    // The prompt is expected to iterate on live output (ADR-0022), and these
+    // The prompt is expected to iterate on live output (ADR-0023), and these
     // are the only evidence of which way to iterate, so the whole rejected
     // answer goes in the line.
     deps.logger?.warn(

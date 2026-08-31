@@ -35,7 +35,7 @@ import type { SummarizerDeps } from "./storyline-summary-service.js";
 /** Everything a labelling call needs except the database handle. */
 export type Labeler = Omit<LabelerDeps, "db">;
 
-/** The same, for the historical preserve (ADR-0022). */
+/** The same, for the historical preserve (ADR-0023). */
 export type Summarizer = Omit<SummarizerDeps, "db">;
 
 /**
@@ -244,7 +244,7 @@ export function createModelPacer(config: Config): ModelPacer {
 }
 
 /**
- * The summariser (ADR-0022). No key is a supported configuration, exactly as it
+ * The summariser (ADR-0023). No key is a supported configuration, exactly as it
  * is for the labeler — but the consequence differs and is worth stating: the
  * labeler degrades to the bigram extractor, and this one simply writes nothing.
  * Prose has no deterministic fallback.
