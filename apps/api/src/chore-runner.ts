@@ -43,7 +43,7 @@ import {
  * §3.3 promised "all seven": the six individual chores plus `storylines`. There
  * are nine here — `runStorylineGraphChore` was added after that was written, for
  * the percolation alarm's nightly series (VERCEL-PHASE-0-FINDINGS §2.7), and
- * `summaries` is the historical preserve (ADR-0022). The promise was that
+ * `summaries` is the historical preserve (ADR-0023). The promise was that
  * anything the night does can be re-run on its own from a curl instead of an
  * SSH, and that is what this list is.
  *

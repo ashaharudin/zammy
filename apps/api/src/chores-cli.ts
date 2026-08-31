@@ -68,7 +68,7 @@ if (named.length !== 1 || (!wantsStatus && !isChorePass(command ?? ""))) {
   console.error("                   REINDEX CONCURRENTLY sweep");
   console.error("  storylines       dormancy, bridge sweep, labels, label merge, graph shape");
   console.error("  summaries        the historical preserve: one sentence per storyline-day");
-  console.error("                   and per populated 6-hour UTC segment of it (ADR-0022)");
+  console.error("                   and per populated 6-hour UTC segment of it (ADR-0023)");
   console.error("");
   console.error("  Any single step of the storyline pass is also addressable on its own, for");
   console.error("  a re-run that must not drag the whole night with it:");

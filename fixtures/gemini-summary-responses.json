@@ -1,7 +1,7 @@
 {
   "_comment": [
     "generateContent response payloads for the storyline summariser's tests",
-    "(ADR-0022). The tests must never reach the live API, so these stand in for",
+    "(ADR-0023). The tests must never reach the live API, so these stand in for",
     "it.",
     "",
     "PROVENANCE, stated plainly because it differs from",

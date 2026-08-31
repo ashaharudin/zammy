@@ -69,7 +69,7 @@ const log: ServiceLogger = {
 export const SCHEDULE_PASSES: Record<string, ChorePass> = {
   "0 3 * * *": "retention",
   "0 4 * * *": "storylines",
-  // The preserve, an hour after the storyline night (ADR-0022). Its own
+  // The preserve, an hour after the storyline night (ADR-0023). Its own
   // schedule rather than a step of the 04:00 pass: that one is already the
   // expensive one and they spend the same model key.
   "0 5 * * *": "summaries",

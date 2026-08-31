@@ -429,7 +429,7 @@ export type SummarySegment = "night" | "morning" | "afternoon" | "evening" | "da
 
 /**
  * One preserved sentence about a storyline's day, or about one quarter of it
- * (migration 0024, ADR-0022).
+ * (migration 0024, ADR-0023).
  *
  * The one table here that retention must never reach, and the one with no
  * foreign key to `storylines`: the migration has both arguments. What matters

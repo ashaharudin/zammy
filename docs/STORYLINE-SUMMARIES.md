@@ -2,7 +2,7 @@
 
 The historical preserve: one sentence per storyline-day, and one per populated
 six-hour UTC segment of it, written once and kept for ever. The decision is
-[ADR-0022](adr/0022-a-days-coverage-is-preserved-as-a-sentence.md); the source of
+[ADR-0023](adr/0023-a-days-coverage-is-preserved-as-a-sentence.md); the source of
 truth is [the migration](../packages/storage/src/migrations/0024-storyline-day-summaries.ts)
 (what a row is), [storyline-summaries.ts](../packages/storage/src/storyline-summaries.ts)
 (the reads), [storyline-summary.ts](../apps/api/src/storyline-summary.ts) (the

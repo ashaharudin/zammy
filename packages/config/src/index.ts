@@ -684,7 +684,7 @@ const EnvSchema = z
      */
     STORYLINE_LABEL_MERGE_MAX_COMPONENT: z.coerce.number().int().min(2).default(25),
 
-    // --- storyline day summaries (ADR-0022, docs/STORYLINE-SUMMARIES.md) ---
+    // --- storyline day summaries (ADR-0023, docs/STORYLINE-SUMMARIES.md) ---
     /**
      * The historical preserve, OFF on merge.
      *

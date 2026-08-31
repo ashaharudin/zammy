@@ -739,7 +739,7 @@ describe("the Gemini client's rate limiter", () => {
 });
 
 /**
- * A pacer shared by two clients (ADR-0022).
+ * A pacer shared by two clients (ADR-0023).
  *
  * The reason this exists at all: the per-minute ceiling belongs to the KEY, and
  * `SUMMARY_MODEL` made "one process, one model" false. Two clients each counting
