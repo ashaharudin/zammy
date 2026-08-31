@@ -27,6 +27,7 @@
     "measure:storyline-coherence": "pnpm --filter @zammy/api measure:storyline-coherence",
     "measure:deepening-yield": "pnpm --filter @zammy/api measure:deepening-yield",
     "dissolve:storyline-piles": "pnpm --filter @zammy/api dissolve:storyline-piles",
+    "summaries:storylines": "pnpm --filter @zammy/api summaries:storylines",
     "infra:up": "docker compose up -d postgres redis",
     "infra:down": "docker compose down",
     "infra:reset": "docker compose down -v"

@@ -64,6 +64,7 @@ function unavailable(reason = "http 429") {
     generate: async (_request: GenerateRequest): Promise<GenerateResult> => ({
       ok: false,
       reason,
+      failure: "unreachable",
     }),
   };
 }

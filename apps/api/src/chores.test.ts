@@ -15,9 +15,12 @@ import {
   runStorylineGraphChore,
   runStorylineLabelChore,
   runStorylinePass,
+  runSummaryChore,
   type ChoreDeps,
+  type StorylinePassDeps,
 } from "./chores.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
+import type { SummarizerDeps } from "./storyline-summary-service.js";
 import { labelWords } from "./storyline-label-merge.js";
 
 /**
@@ -31,6 +34,18 @@ import { labelWords } from "./storyline-label-merge.js";
  */
 
 const NOW = new Date("2026-08-14T03:00:00.000Z");
+
+/** No generator: the summary pass writes nothing and spends nothing (ADR-0022). */
+const SUMMARIZER: Omit<SummarizerDeps, "db"> = {
+  generator: null,
+  modelId: null,
+  sampleSize: 8,
+  maxAttempts: 3,
+  settlingDays: 3,
+  recomputeDelta: 4,
+  cliffDays: 8,
+};
+const SUMMARY_GATE = { windowDays: 8, minArticlesExclusive: 4, minGroups: 2 };
 const TZ = { timeZone: "UTC" };
 
 let harness: TestHarness;
@@ -48,7 +63,8 @@ afterAll(async () => {
 beforeEach(async () => {
   await sql`
     truncate storylines, storyline_groups, storyline_days, storyline_bridges,
-             story_token_days, story_corpus_days, articles cascade
+             storyline_day_summaries, story_token_days, story_corpus_days,
+             articles cascade
   `.execute(db);
 });
 
@@ -463,6 +479,11 @@ describe("the late-candidate sweep is gated out of the nightly pass", () => {
     // call, which is what these two tests want — the sweep is the subject.
     labeler: { generator: null, sampleSize: 10, driftFactor: 2, now: () => NOW },
     rules: { graceDays: 14, maxComponent: 25 },
+    // The summary pass is not what these tests are about, and `runStorylinePass`
+    // does not run it — it is its own pass on its own schedule. These are here
+    // because `StorylinePassDeps` is one type for every pass.
+    summarizer: SUMMARIZER,
+    summaryGate: SUMMARY_GATE,
   };
 
   async function seedCorpus(day: string): Promise<void> {
@@ -545,6 +566,11 @@ describe("the graph shape on the nightly report", () => {
     linker: LINKER,
     labeler: { generator: null, sampleSize: 10, driftFactor: 2, now: () => NOW },
     rules: { graceDays: 14, maxComponent: 25 },
+    // The summary pass is not what these tests are about, and `runStorylinePass`
+    // does not run it — it is its own pass on its own schedule. These are here
+    // because `StorylinePassDeps` is one type for every pass.
+    summarizer: SUMMARIZER,
+    summaryGate: SUMMARY_GATE,
   };
 
   async function seedCorpus(day: string): Promise<void> {
@@ -630,5 +656,128 @@ describe("the graph shape on the nightly report", () => {
     expect(line?.obj).toEqual({ graph });
     // Recorded, never warned: nothing here should raise the pass's log level.
     expect(graph.largestArc).toBe(2);
+  });
+});
+
+
+/**
+ * The summary pass's own decisions (ADR-0022) — which is a question about the
+ * WINDOW and the flag, not about what a sentence says. `storyline-summary-service.test.ts`
+ * owns the writing.
+ */
+describe("the summary chore", () => {
+  /** Every prompt the pass sent, so "did it look at that day" is answerable. */
+  function recordingSummarizer(): Omit<SummarizerDeps, "db"> & { prompts: string[] } {
+    const prompts: string[] = [];
+    return {
+      ...SUMMARIZER,
+      modelId: "gemma-test",
+      generator: {
+        async generate({ prompt }: { prompt: string }) {
+          prompts.push(prompt);
+          return { ok: true as const, text: "Something happened." };
+        },
+      },
+      prompts,
+    };
+  }
+
+  const passDeps = (
+    summarizer: Omit<SummarizerDeps, "db">,
+    over: Partial<StorylinePassDeps> = {},
+  ): StorylinePassDeps =>
+    ({
+      ...deps(),
+      summarizer,
+      summaryGate: SUMMARY_GATE,
+      summaryRatePerMinute: 0,
+      linker: {} as StorylinePassDeps["linker"],
+      labeler: { generator: null, sampleSize: 10, driftFactor: 2 },
+      rules: { graceDays: 14, maxComponent: 25 },
+      ...over,
+    }) as StorylinePassDeps;
+
+  /** A qualifying day: six articles from two groups, at the hour given. */
+  async function qualifyingDay(day: string, hour: string): Promise<void> {
+    const a = await group(`${day}T${hour}`);
+    const b = await group(`${day}T${hour}`);
+    for (let i = 0; i < 2; i += 1) {
+      const extraA = await group(`${day}T${hour}`);
+      const extraB = await group(`${day}T${hour}`);
+      await sql`update articles set group_id = ${a} where id = ${extraA}`.execute(db);
+      await sql`update articles set group_id = ${b} where id = ${extraB}`.execute(db);
+    }
+    const born = await createProvisionalStoryline(db, { groupId: a, ...TZ });
+    await attachGroup(db, { storylineId: born.id, groupId: b, ...TZ });
+    await promoteStoryline(db, { storylineId: born.id });
+  }
+
+  it("writes nothing, and says so, while the flag is off", async () => {
+    await qualifyingDay("2026-08-13", "09:00:00.000Z");
+    const summarizer = recordingSummarizer();
+
+    const report = await runSummaryChore(passDeps(summarizer));
+
+    expect(report.enabled).toBe(false);
+    expect(report).toMatchObject({ days: 0, written: 0, model: 0 });
+    expect(summarizer.prompts).toEqual([]);
+    // "It ran and wrote nothing" must be distinguishable from "it never ran" —
+    // the same reason the late-candidate sweep reports a `skipped` tally.
+    const rows = await sql`select 1 from storyline_day_summaries`.execute(db);
+    expect(rows.rows).toEqual([]);
+  });
+
+  it("summarises the day that closed, and NOT the day still running", async () => {
+    // NOW is 2026-08-14T03:00 UTC — inside today's `night` quarter. Summarising
+    // today would write a night sentence over three of its six hours and then
+    // freeze it, because tomorrow's recompute needs five new articles in the
+    // three hours that remain.
+    await qualifyingDay("2026-08-13", "09:00:00.000Z");
+    await qualifyingDay("2026-08-14", "01:00:00.000Z");
+    const summarizer = recordingSummarizer();
+
+    const report = await runSummaryChore(
+      passDeps(summarizer, { summariesEnabled: true }),
+    );
+
+    expect(report.days).toBe(1);
+    expect(summarizer.prompts.some((prompt) => prompt.includes("2026-08-13"))).toBe(true);
+    expect(summarizer.prompts.some((prompt) => prompt.includes("2026-08-14"))).toBe(false);
+  });
+
+  it("looks back exactly as far as its window and no further", async () => {
+    await qualifyingDay("2026-08-13", "09:00:00.000Z");
+    // 2026-03-02 is months outside an 8-day window: the backfill CLI's business,
+    // not the nightly pass's.
+    await qualifyingDay("2026-03-02", "09:00:00.000Z");
+    const summarizer = recordingSummarizer();
+
+    const report = await runSummaryChore(
+      passDeps(summarizer, { summariesEnabled: true }),
+    );
+
+    expect(report.days).toBe(1);
+    expect(summarizer.prompts.some((prompt) => prompt.includes("2026-03-02"))).toBe(false);
+  });
+
+  it("warns rather than refuses when APP_TIMEZONE is not UTC", async () => {
+    // The summaries stay internally consistent — they are keyed on UTC days
+    // unconditionally — but their day_key stops naming the same 24 hours as
+    // `storyline_days.day_key`, which is a surprise worth one line in the log.
+    const warnings: string[] = [];
+    await runSummaryChore(
+      passDeps(recordingSummarizer(), {
+        summariesEnabled: true,
+        config: {
+          retentionDays: 400,
+          storyDfWindowDays: 14,
+          storylineDormancyDays: 90,
+          timeZone: "America/Vancouver",
+        },
+        log: { info: () => {}, warn: (_obj, msg) => warnings.push(msg) },
+      }),
+    );
+
+    expect(warnings.some((line) => line.includes("UTC days regardless"))).toBe(true);
   });
 });

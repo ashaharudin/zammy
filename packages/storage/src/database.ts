@@ -416,6 +416,51 @@ export interface StorylineFormationRefusalsTable {
 }
 
 /**
+ * Which 6-hour UTC quarter a summary covers, or `day` for the whole-day
+ * sentence. Mirrored by `storyline_day_summaries_segment_check` in migration
+ * 0024 — the constraint makes a typo a failed insert, this type makes it a
+ * compile error one layer earlier.
+ *
+ * The quarters are even and UTC (night 00-06, morning 06-12, afternoon 12-18,
+ * evening 18-24), which is what keeps a segment inside its own day: a "night"
+ * spanning midnight would belong half to yesterday.
+ */
+export type SummarySegment = "night" | "morning" | "afternoon" | "evening" | "day";
+
+/**
+ * One preserved sentence about a storyline's day, or about one quarter of it
+ * (migration 0024, ADR-0022).
+ *
+ * The one table here that retention must never reach, and the one with no
+ * foreign key to `storylines`: the migration has both arguments. What matters
+ * to a reader of this type is that every field is written from what was true at
+ * generation time and none of it is re-derived on read — `label` in particular
+ * is the label the sentence was generated under, not the label the arc carries
+ * now.
+ */
+export interface StorylineDaySummariesTable {
+  /** Soft pointer, deliberately unconstrained: a merge leaves this on the id it
+   * was written for, and `storylines.merged_into` resolves it. */
+  storyline_id: string;
+  /** YYYY-MM-DD, always UTC — unlike `storyline_days.day_key`, which is APP_TIMEZONE. */
+  day_key: string;
+  segment: SummarySegment;
+  /** Null means the model was asked and refused; no row at all means no articles. */
+  summary: string | null;
+  /** Articles this sentence was generated over — the recompute trigger's input. */
+  article_count: number;
+  /** The storyline's label AS IT READ at generation time. Labels drift. */
+  label: string | null;
+  /** The model id, or null when no model was configured. */
+  model_id: string | null;
+  attempts: Generated<number>;
+  /** False on a day summarized without segments — see the migration's note on
+   * the Google News pubDate cliff. */
+  segmented: Generated<boolean>;
+  generated_at: DefaultedTimestamp;
+}
+
+/**
  * One run of one nightly pass (migration 0018): the durable answer to "did last
  * night's chores run?", which a 202-and-`waitUntil` route plus one hour of log
  * retention cannot otherwise give (VERCEL-ALL-IN-SCOPE §3.3).
@@ -459,6 +504,7 @@ export interface Database {
   story_corpus_days: StoryCorpusDaysTable;
   storyline_bridges: StorylineBridgesTable;
   storyline_formation_refusals: StorylineFormationRefusalsTable;
+  storyline_day_summaries: StorylineDaySummariesTable;
   chore_runs: ChoreRunsTable;
 }
 

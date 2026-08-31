@@ -2,13 +2,14 @@ import type { Config } from "@zammy/config";
 import type { StorylinePassDeps } from "./chores.js";
 import { createDb, databaseSsl, type Database } from "@zammy/storage";
 import type { Kysely } from "kysely";
-import { createGeminiClient } from "./gemini.js";
+import { createGeminiClient, createPacer, type ModelPacer } from "./gemini.js";
 import { BullMqIngestQueue } from "./ingest-queue-bullmq.js";
 import { VercelIngestQueue, type QueueLogger } from "./ingest-queue-vercel.js";
 import type { IngestQueue } from "./ingest-queue.js";
 import type { LabelerDeps } from "./storyline-label-service.js";
 import type { LabelMergeRules } from "./storyline-label-merge.js";
 import type { LinkerConfig } from "./storyline-linker.js";
+import type { SummarizerDeps } from "./storyline-summary-service.js";
 
 /**
  * The runtime objects built from `Config` by more than one entrypoint.
@@ -33,6 +34,9 @@ import type { LinkerConfig } from "./storyline-linker.js";
 
 /** Everything a labelling call needs except the database handle. */
 export type Labeler = Omit<LabelerDeps, "db">;
+
+/** The same, for the historical preserve (ADR-0022). */
+export type Summarizer = Omit<SummarizerDeps, "db">;
 
 /**
  * The database handle for every entrypoint that builds one from `Config` — the
@@ -171,7 +175,15 @@ export function createLabelMergeRules(config: Config): LabelMergeRules {
  * by the 429 cooldown rather than by the window (STORYLINE-LABELS, "The pacer's
  * scope"). The chore runner's lever for staying under it is `--label-rate`.
  */
-export function createLabeler(config: Config, logger?: Labeler["logger"]): Labeler {
+export function createLabeler(
+  config: Config,
+  logger?: Labeler["logger"],
+  /**
+   * A pacer to share with the summariser. Absent, the client builds its own,
+   * which is correct for every caller that has only one model on the key.
+   */
+  pacer?: ModelPacer,
+): Labeler {
   return {
     generator: config.GEMINI_API_KEY
       ? createGeminiClient({
@@ -182,10 +194,102 @@ export function createLabeler(config: Config, logger?: Labeler["logger"]): Label
           timeoutMs: config.GEMINI_TIMEOUT_MS,
           maxRequestsPerMinute: config.GEMINI_MAX_RPM,
           maxRateWaitMs: config.GEMINI_MAX_RATE_WAIT_MS,
+          ...(pacer ? { pacer } : {}),
         })
       : null,
     sampleSize: config.STORYLINE_LABEL_SAMPLE,
     driftFactor: config.STORYLINE_LABEL_DRIFT_FACTOR,
+    logger,
+  };
+}
+
+/**
+ * One pacer for one KEY, to be shared by every client pointed at it.
+ *
+ * This exists because `SUMMARY_MODEL` made "one process, one model" false. The
+ * per-minute ceiling belongs to the key and not to the model id, so two clients
+ * each counting their own window admit up to 2x it — the same overshoot two
+ * PROCESSES on one key produce, except this one would be inside a single
+ * process and therefore entirely preventable. `createGeminiClient` still builds
+ * its own when nobody hands it one, which is what every single-model caller
+ * (the server, the operator CLIs) wants.
+ */
+/**
+ * Does the summariser count against the labeler's window?
+ *
+ * Yes while they are on one key, which is the default and the case the shared
+ * pacer exists for. **No the moment `SUMMARY_API_KEY` is set** — that knob's
+ * whole purpose is that the two lanes stop competing, so handing the second key
+ * the first key's window would be the opposite of what was asked for, and would
+ * halve a rate limit somebody paid for.
+ *
+ * A predicate rather than an inline `?:` because it is the one branch here with
+ * a wrong answer that is invisible at runtime: both spellings produce a working
+ * client, and the difference only shows up as a rate nobody is watching.
+ */
+export function summarySharesLabelerPacer(config: Config): boolean {
+  // Unset, empty — or set to the SAME credential, which is the natural
+  // "be explicit" move and the obvious thing to do when uncommenting the line
+  // in `.env.example`. What decides this is which KEY is being spent, not which
+  // variable it was read from; two pacers on one key is the 2x overshoot the
+  // shared pacer exists to prevent.
+  return !config.SUMMARY_API_KEY || config.SUMMARY_API_KEY === config.GEMINI_API_KEY;
+}
+
+export function createModelPacer(config: Config): ModelPacer {
+  return createPacer({
+    maxRequestsPerMinute: config.GEMINI_MAX_RPM,
+    maxRateWaitMs: config.GEMINI_MAX_RATE_WAIT_MS,
+  });
+}
+
+/**
+ * The summariser (ADR-0022). No key is a supported configuration, exactly as it
+ * is for the labeler — but the consequence differs and is worth stating: the
+ * labeler degrades to the bigram extractor, and this one simply writes nothing.
+ * Prose has no deterministic fallback.
+ *
+ * **`pacer` is honoured only while the summariser is on the labeler's key.**
+ * Set `SUMMARY_API_KEY` and the whole point is that the two lanes stop
+ * competing, so sharing the labeler's window would be the opposite of what was
+ * asked for — a second key gets its own pacer.
+ */
+export function createSummarizer(
+  config: Config,
+  logger?: Summarizer["logger"],
+  pacer?: ModelPacer,
+): Summarizer {
+  // `||`, so an empty string falls through to the labeler's key the way an
+  // absent variable does — config already normalizes it, and this is the line
+  // that would be wrong if that ever regressed.
+  const apiKey = config.SUMMARY_API_KEY || config.GEMINI_API_KEY;
+  const shared = summarySharesLabelerPacer(config) ? pacer : undefined;
+  return {
+    generator: apiKey
+      ? createGeminiClient({
+          apiKey,
+          model: config.SUMMARY_MODEL,
+          baseUrl: config.GEMINI_BASE_URL,
+          thinkingLevel: config.SUMMARY_THINKING_LEVEL,
+          timeoutMs: config.GEMINI_TIMEOUT_MS,
+          // The ceiling and the queue cap belong to whichever pacer ends up
+          // governing this client, so they are passed ONLY when it builds its
+          // own — a shared pacer already has its own copy of both, and passing
+          // them alongside one would read as if they still applied.
+          ...(shared
+            ? { pacer: shared }
+            : {
+                maxRequestsPerMinute: config.GEMINI_MAX_RPM,
+                maxRateWaitMs: config.GEMINI_MAX_RATE_WAIT_MS,
+              }),
+        })
+      : null,
+    modelId: apiKey ? config.SUMMARY_MODEL : null,
+    sampleSize: config.SUMMARY_SEGMENT_SAMPLE,
+    maxAttempts: config.SUMMARY_MAX_ATTEMPTS,
+    settlingDays: config.SUMMARY_SETTLING_DAYS,
+    recomputeDelta: config.SUMMARY_RECOMPUTE_DELTA,
+    cliffDays: config.SUMMARY_CLIFF_DAYS,
     logger,
   };
 }
@@ -210,6 +314,7 @@ export function choreDepsFromConfig(
   config: Config,
   log: StorylinePassDeps["log"],
 ): StorylinePassDeps {
+  const pacer = createModelPacer(config);
   return {
     // `session: true` and `max: 4`: the pass lock is session-scoped, so it must
     // not go through a transaction-mode pooler (`chore-runner.ts` has why), and
@@ -225,7 +330,10 @@ export function choreDepsFromConfig(
     now: () => new Date(),
     log,
     linker: createLinkerConfig(config),
-    labeler: createLabeler(config, log),
+    // ONE pacer, handed to both clients: the ceiling is the key's, and the
+    // labeler and the summariser are two models on one key (`createModelPacer`).
+    labeler: createLabeler(config, log, pacer),
+    summarizer: createSummarizer(config, log, pacer),
     rules: createLabelMergeRules(config),
     // Defaults to the configured ceiling, so the pass paces itself rather than
     // piling into the client's pacer and waiting there.
@@ -240,5 +348,16 @@ export function choreDepsFromConfig(
     labelBudgetMs: config.CHORE_LABEL_BUDGET_MS,
     lateCandidateSweep: config.STORYLINE_LATE_CANDIDATE_SWEEP,
     lateCandidatesChangedOnly: config.STORYLINE_LATE_CANDIDATE_CHANGED_ONLY,
+    summariesEnabled: config.SUMMARIES_ENABLED,
+    summaryGate: {
+      windowDays: config.SUMMARY_WINDOW_DAYS,
+      minArticlesExclusive: config.SUMMARY_MIN_ARTICLES_PER_DAY,
+      minGroups: config.SUMMARY_MIN_GROUPS,
+    },
+    maxSummaries: config.SUMMARY_MAX_PER_RUN,
+    summaryBudgetMs: config.SUMMARY_BUDGET_MS,
+    // The same reasoning as `labelRatePerMinute`: pace the PASS as well as the
+    // client, so it spaces itself instead of piling into the pacer's queue.
+    summaryRatePerMinute: config.GEMINI_MAX_RPM,
   };
 }

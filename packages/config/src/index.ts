@@ -683,6 +683,173 @@ const EnvSchema = z
      * magnitude to spare, and still refuses a swallow.
      */
     STORYLINE_LABEL_MERGE_MAX_COMPONENT: z.coerce.number().int().min(2).default(25),
+
+    // --- storyline day summaries (ADR-0022, docs/STORYLINE-SUMMARIES.md) ---
+    /**
+     * The historical preserve, OFF on merge.
+     *
+     * The same posture ADR-0011's linker shipped with, and for the same reason:
+     * this is the second thing in the system that spends model quota per call,
+     * on a key the labeler is already pacing itself against, so the code merges
+     * and deploys before it starts spending. Turning it on is a deliberate act
+     * with a night's cost attached, not a default somebody inherits.
+     */
+    // An enum, not a truthiness test, for the reason `GROUPING_ENABLED` gives:
+    // `SUMMARIES_ENABLED=ture` must refuse to boot rather than quietly meaning
+    // "false" and leaving a preserve nobody notices is empty.
+    SUMMARIES_ENABLED: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+    /**
+     * The model that writes the sentences. Defaults to the labeler's, which is
+     * not the same as BEING the labeler's: the knob exists so the two can
+     * diverge — one names a story in three words, the other writes prose about
+     * it, and those are different asks that may want different models.
+     *
+     * **A different model id is not a different rate limit.** The ceiling
+     * belongs to the KEY, so the summariser's client shares the labeler's pacer
+     * (`wiring.createModelPacer`); pointing this at another model without that
+     * sharing would silently double the rate through one key, which is exactly
+     * the contention that collaterally bigram-fell-back 37 organic promotions
+     * during a paced relabel campaign.
+     */
+    SUMMARY_MODEL: NonEmpty.default("gemma-4-26b-a4b-it"),
+    /**
+     * Paired with `SUMMARY_MODEL`, exactly as `GEMINI_THINKING_LEVEL` is paired
+     * with `GEMINI_MODEL` — the families spell this differently and reject each
+     * other's values, and gemma is unusable without `minimal`. Change one, check
+     * the other.
+     */
+    SUMMARY_THINKING_LEVEL: z.string().trim().default("minimal"),
+    /**
+     * The key the summariser calls on. Unset — the default — it uses
+     * `GEMINI_API_KEY` and shares that key's pacer with the labeler.
+     *
+     * Set to a SECOND key, the two lanes stop competing: summaries can no longer
+     * starve live labelling into bigram fallbacks, at the cost of a second
+     * credential to rotate. The knob exists now, unset, so splitting the lanes
+     * later is an environment change rather than a code change — and so that the
+     * shared-pacer behaviour above is a decision this file records rather than
+     * an accident of there being one key.
+     */
+    // `|| undefined`, not a bare `.optional()`: an env var that is PRESENT and
+    // EMPTY — which is exactly what `.env.example` ships and what a dashboard's
+    // blank field sends — parses as `""`, and `SUMMARY_API_KEY ?? GEMINI_API_KEY`
+    // does not fall through an empty string. Without this, copying the example
+    // file and filling in `GEMINI_API_KEY` gives a working labeler and a
+    // summariser with no model at all, silently.
+    SUMMARY_API_KEY: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => value || undefined),
+    /**
+     * Days after a UTC day closes during which its sentences may still be
+     * rewritten. Past this the day is frozen, which is what makes it a preserve.
+     *
+     * 3, because a day's article set is not settled when the day ends: the
+     * linker attaches late groups, the bridge sweep re-parents, and the nightly
+     * pass runs five hours after midnight. Frozen-on-first-write would enshrine
+     * whatever the first five hours caught, which for a story breaking at 23:00
+     * UTC is close to nothing. Unbounded revision is the other failure: every
+     * night would re-read all of history looking for changes.
+     */
+    SUMMARY_SETTLING_DAYS: z.coerce.number().int().min(0).max(30).default(3),
+    /**
+     * Articles a span must GAIN, inside the window above, before it is worth a
+     * model call to rewrite its sentence. Strictly greater than: 4 means five
+     * new articles trigger a rewrite.
+     *
+     * Without it the window alone would rewrite a day for a single late
+     * aggregator copy — three extra calls for a sentence that would come back
+     * the same.
+     */
+    SUMMARY_RECOMPUTE_DELTA: z.coerce.number().int().min(0).default(4),
+    /**
+     * Articles a UTC day must exceed, across a storyline's member groups, before
+     * that day is preserved at all. Strictly greater than: 4 means five.
+     *
+     * Paired with `SUMMARY_MIN_GROUPS` below, and the pairing is the point — see
+     * that knob.
+     */
+    SUMMARY_MIN_ARTICLES_PER_DAY: z.coerce.number().int().min(1).default(4),
+    /**
+     * Distinct member GROUPS the same day must have, alongside the article count
+     * above. Both bars, ANDed.
+     *
+     * They are not the same test and the difference is the common case in this
+     * corpus: one wire story syndicated six times is six articles in ONE group.
+     * It clears a volume bar and is not a day's coverage — it is one telling,
+     * repeated, and five sentences describing it would be five ways of saying
+     * the same headline. 2 is the lowest bar that means "more than one telling".
+     */
+    SUMMARY_MIN_GROUPS: z.coerce.number().int().min(1).default(2),
+    /** Articles per quarter that reach the prompt. The labeler's sample, minus
+     * two: a quarter is a sixth of a day, so its coverage is narrower than a
+     * whole storyline's and eight of it is already the long tail. */
+    SUMMARY_SEGMENT_SAMPLE: z.coerce.number().int().min(1).max(40).default(8),
+    /**
+     * Asks one span gets before it is retired.
+     *
+     * Prose has no deterministic fallback — a sentence assembled from tokens
+     * would be worse than silence — so a refusal is a row with a null summary
+     * and this counter, which is what makes "the model would not answer for the
+     * Big Bend afternoon of the 14th" a queryable fact rather than an absence
+     * indistinguishable from "no articles that afternoon".
+     */
+    SUMMARY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
+    /**
+     * Days after which an article's published TIME is no longer trustworthy, so
+     * a day is summarised whole rather than by its quarters.
+     *
+     * 8, from the measured Google News behaviour: beyond roughly eight days the
+     * feed drops the pubDate time and 89.4% of those rows come back stamped
+     * midnight US Pacific — which is 07:00 or 08:00 UTC, so nearly every one of
+     * them lands in the "morning" quarter. Four sentences off that would be
+     * four sentences about a bucket boundary. The day row's `segmented` column
+     * records which kind of day it was.
+     */
+    SUMMARY_CLIFF_DAYS: z.coerce.number().int().min(1).max(365).default(8),
+    /**
+     * How far back one nightly summary pass looks for qualifying days.
+     *
+     * 8, deliberately equal to `SUMMARY_CLIFF_DAYS`: the nightly pass covers
+     * exactly the span over which quarters are still honest, and everything
+     * older is the backfill CLI's business (day sentences only). It is wider
+     * than `SUMMARY_SETTLING_DAYS` on purpose — the window governs which days
+     * are still open to REVISION, this governs which are still looked at, and a
+     * slow story that only crosses the article bar on its fourth day still needs
+     * to be seen.
+     */
+    SUMMARY_WINDOW_DAYS: z.coerce.number().int().min(1).max(90).default(8),
+    /**
+     * Model calls one nightly summary pass may spend. A day costs between 1 and
+     * 5 of them, so this is not a count of days.
+     *
+     * **It is a SPEND bound, and `SUMMARY_BUDGET_MS` is the clock bound — the
+     * same split `CHORE_MAX_LABELS` and `CHORE_LABEL_BUDGET_MS` make, and the
+     * same warning applies: do not read this number as a duration.** At 30 rpm
+     * the pass's own spacing is 2 s per call, so 120 calls is 240 s of *sleeping
+     * alone*, before a single model answer — which means the budget below is
+     * what actually stops a healthy night, somewhere around 30-40 calls. 120
+     * stays anyway, exactly as 50 stayed for labels: pinning it to today's
+     * latency would bake a pathology into a deployment parameter and throttle a
+     * fast night later.
+     *
+     * What a bounded night costs is bounded too, and deliberately so: the walk
+     * is OLDEST-day-first, so the ceiling is spent on the days closest to
+     * falling out of `SUMMARY_WINDOW_DAYS`, and what it defers is the newest
+     * day — which is still there tomorrow.
+     */
+    SUMMARY_MAX_PER_RUN: z.coerce.number().int().min(1).max(100_000).default(120),
+    /**
+     * Wall-clock ceiling for one summary pass, in ms — the bound that matches
+     * what the platform enforces, exactly as `CHORE_LABEL_BUDGET_MS` is for the
+     * label pass. 240 s against `api/chores.ts`'s 300 s `maxDuration`, leaving
+     * room for the two `chore_runs` writes.
+     */
+    SUMMARY_BUDGET_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(240_000),
     /**
      * How many live storylines must share one label before the ingest tail runs
      * the label-agreement merge for that label, without waiting for the nightly
@@ -1329,6 +1496,7 @@ export function redactConfig(config: Config): Record<string, unknown> {
     CURRENTS_API_KEY,
     GNEWS_API_KEY,
     GEMINI_API_KEY,
+    SUMMARY_API_KEY,
     CRON_SECRET,
     DATABASE_URL,
     DATABASE_SESSION_URL,
@@ -1341,6 +1509,9 @@ export function redactConfig(config: Config): Record<string, unknown> {
     CURRENTS_API_KEY: CURRENTS_API_KEY ? "[redacted]" : null,
     GNEWS_API_KEY: GNEWS_API_KEY ? "[redacted]" : null,
     GEMINI_API_KEY: GEMINI_API_KEY ? "[redacted]" : null,
+    // Usually unset — the summariser falls back to GEMINI_API_KEY — but when it
+    // is set it is a second credential and redacts like the first.
+    SUMMARY_API_KEY: SUMMARY_API_KEY ? "[redacted]" : null,
     // A bearer token is a password: it authenticates the one route that can
     // spend quota unprompted.
     CRON_SECRET: CRON_SECRET ? "[redacted]" : null,

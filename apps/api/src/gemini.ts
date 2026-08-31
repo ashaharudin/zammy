@@ -90,6 +90,43 @@ export interface GeminiOptions {
   fetch?: FetchLike;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  /**
+   * A pacer to SHARE rather than one of this client's own.
+   *
+   * The ceiling belongs to the KEY, not to the model id, so two clients pointed
+   * at two models on one key must count against one window — otherwise adding a
+   * second model to the deployment silently doubles the rate through it, which
+   * is the mistake `SUMMARY_MODEL` would otherwise be. When this is set,
+   * `maxRequestsPerMinute` and `maxRateWaitMs` are the shared pacer's, not
+   * this client's, and a 429 either client earns holds BOTH back.
+   *
+   * Absent, the client builds its own from those two options — which is what
+   * every caller with one model does, and what every existing test does.
+   */
+  pacer?: ModelPacer;
+}
+
+/**
+ * The rate limiter, as an object two clients can hold.
+ *
+ * It is the pacer and nothing else: `admit` returns the reason to give up or
+ * null to proceed, and `noteRetryAfter` is how a 429 on any client using it
+ * holds every other one back. Extracted from `createGeminiClient`'s closure for
+ * exactly one reason — a second model on the same key (see `pacer` above).
+ */
+export interface ModelPacer {
+  admit(signal: AbortSignal | undefined): Promise<string | null>;
+  /** A 429 said "not before this instant". Absolute, in the client's clock. */
+  noteRetryAfter(until: number): void;
+}
+
+export interface PacerOptions {
+  /** The provider's per-minute ceiling, in requests. 0 disables the pacer. */
+  maxRequestsPerMinute?: number;
+  /** How long a call may sit in the queue before giving up on the model. */
+  maxRateWaitMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
 }
 
 export interface GenerateRequest {
@@ -130,9 +167,35 @@ export interface GenerateRequest {
  * taxonomy of failures here would be a taxonomy nobody branches on. The reason
  * survives as a string for the log line and the CLI's report.
  */
+/**
+ * WHY a call produced no text, in the one distinction a caller can act on.
+ *
+ * The `reason` string is for a log line and has never been anything else — it is
+ * prose, it changes when a message is reworded, and nothing may branch on it.
+ * This is what a caller branches on, and there are exactly two cases because
+ * there are exactly two answers:
+ *
+ *  - `unreachable` — we never got the model's opinion. A timeout, a network
+ *    fault, a 429, a 5xx, a 4xx (our request is wrong), a body we could not
+ *    parse, or the local pacer declining to queue us. **Says nothing about the
+ *    prompt**, so asking again later is the right move and holding it against
+ *    the subject would be holding an outage against it.
+ *  - `answered` — the model responded and the response carries no usable text.
+ *    A safety block, a candidate that spent its whole budget thinking, an empty
+ *    one. **Says something about the prompt**, and asking the same thing again
+ *    tends to get the same nothing.
+ *
+ * The labeler ignores this — every failure takes the same bigram fallback, which
+ * is the whole reason `GenerateResult` had no taxonomy for four months. The
+ * summariser cannot: it has no fallback, so it counts refusals against a span
+ * and retires it after three, and collapsing the two would let one afternoon of
+ * quota errors retire a span the model never read.
+ */
+export type GenerateFailure = "unreachable" | "answered";
+
 export type GenerateResult =
   | { ok: true; text: string }
-  | { ok: false; reason: string };
+  | { ok: false; reason: string; failure: GenerateFailure };
 
 /** What the labeler needs from a model. Two implementations satisfy it. */
 export interface TextGenerator {
@@ -226,23 +289,23 @@ function parseRetryAfter(headers: Headers, now: number): number | null {
   return Number.isNaN(at) ? null : Math.max(0, at - now);
 }
 
-export function createGeminiClient(options: GeminiOptions): TextGenerator {
+/**
+ * Build a pacer.
+ *
+ * One of these per KEY, not per client: `createGeminiClient` makes its own when
+ * a caller has one model, and `wiring.ts` builds one and hands it to both the
+ * labeler's client and the summariser's, because the ceiling they share is the
+ * key's. Its scope is still one PROCESS, which is the most it can promise — two
+ * processes on one key are two windows, caught by the 429 cooldown rather than
+ * by either window (STORYLINE-LABELS, "The pacer's scope").
+ */
+export function createPacer(options: PacerOptions = {}): ModelPacer {
   const {
-    apiKey,
-    model,
-    baseUrl,
-    thinkingLevel = "",
-    timeoutMs = 8_000,
-    maxRetries = 2,
-    backoffBaseMs = 250,
     maxRequestsPerMinute = 30,
     maxRateWaitMs = 120_000,
-    fetch: fetchImpl = globalThis.fetch,
-    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
     now = Date.now,
   } = options;
-
-  const url = `${baseUrl.replace(/\/+$/, "")}/models/${encodeURIComponent(model)}:generateContent`;
 
   /**
    * When each recent request was — or WILL BE — sent, oldest first. A sliding
@@ -347,6 +410,40 @@ export function createGeminiClient(options: GeminiOptions): TextGenerator {
   }
 
   return {
+    admit,
+    noteRetryAfter(until: number): void {
+      // `Math.max`, never assignment: two clients on one pacer can each earn a
+      // 429, and the later, shorter answer must not shorten the earlier, longer
+      // hold the other one is already sitting out.
+      cooldownUntil = Math.max(cooldownUntil, until);
+    },
+  };
+}
+
+export function createGeminiClient(options: GeminiOptions): TextGenerator {
+  const {
+    apiKey,
+    model,
+    baseUrl,
+    thinkingLevel = "",
+    timeoutMs = 8_000,
+    maxRetries = 2,
+    backoffBaseMs = 250,
+    maxRequestsPerMinute = 30,
+    maxRateWaitMs = 120_000,
+    fetch: fetchImpl = globalThis.fetch,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now = Date.now,
+  } = options;
+
+  const url = `${baseUrl.replace(/\/+$/, "")}/models/${encodeURIComponent(model)}:generateContent`;
+
+  // The client's own, unless a caller shares one — see `GeminiOptions.pacer`.
+  const pacer =
+    options.pacer ??
+    createPacer({ maxRequestsPerMinute, maxRateWaitMs, sleep, now });
+
+  return {
     async generate(request: GenerateRequest): Promise<GenerateResult> {
       let lastReason = "no attempt made";
 
@@ -357,12 +454,18 @@ export function createGeminiClient(options: GeminiOptions): TextGenerator {
         // the same ceiling, and a client that paced only first attempts would
         // send 3x the limit on the exact day the API is unhappy enough to make
         // every call retry.
-        const refusal = await admit(request.signal);
+        const refusal = await pacer.admit(request.signal);
         if (refusal) {
           // On a retry the first failure is still the story; the pacer only
           // explains why there was no second ask. A log line that said only
           // "rate limited locally" would hide the 503 that started it.
-          return { ok: false, reason: attempt === 0 ? refusal : `${lastReason} (${refusal})` };
+          return {
+            ok: false,
+            reason: attempt === 0 ? refusal : `${lastReason} (${refusal})`,
+            // The pacer refused to queue us, or the caller aborted: no request
+            // was made at all.
+            failure: "unreachable",
+          };
         }
 
         const timeout = AbortSignal.timeout(timeoutMs);
@@ -392,7 +495,9 @@ export function createGeminiClient(options: GeminiOptions): TextGenerator {
         } catch (error) {
           // The caller's own abort is final; ours is a timeout worth retrying
           // once, since the fallback is waiting either way.
-          if (request.signal?.aborted) return { ok: false, reason: "aborted" };
+          if (request.signal?.aborted) {
+            return { ok: false, reason: "aborted", failure: "unreachable" };
+          }
           lastReason = `network: ${(error as Error).message}`;
           continue;
         }
@@ -405,35 +510,57 @@ export function createGeminiClient(options: GeminiOptions): TextGenerator {
             // client back for as long as the API asked, not just this call:
             // the other waiters are about to make the same mistake.
             const after = parseRetryAfter(response.headers, now());
-            if (after !== null) cooldownUntil = Math.max(cooldownUntil, now() + after);
+            if (after !== null) pacer.noteRetryAfter(now() + after);
             continue;
           }
           // 5xx is worth a second ask; everything else is our bug and asking
           // again spends money to be told the same thing.
           if (response.status >= 500) continue;
-          return { ok: false, reason: lastReason };
+          // A 4xx that is not a 429: our request is wrong (a bad model id, a
+          // dead key). Not the model's opinion of the prompt, so it is
+          // `unreachable` — which also means it fails loudly and repeatedly
+          // rather than quietly retiring the subjects it was asked about.
+          return { ok: false, reason: lastReason, failure: "unreachable" };
         }
 
         let parsed;
         try {
           parsed = GenerateContentResponse.safeParse(await response.json());
         } catch (error) {
-          return { ok: false, reason: `unreadable body: ${(error as Error).message}` };
+          return {
+            ok: false,
+            reason: `unreadable body: ${(error as Error).message}`,
+            failure: "unreachable",
+          };
         }
-        if (!parsed.success) return { ok: false, reason: "unexpected response shape" };
+        // A shape change upstream is OUR problem to fix, not a verdict on the
+        // prompt — see `answerText` for a model that changed shape under a
+        // pinned id — so it must not count against whatever was asked about.
+        if (!parsed.success) {
+          return { ok: false, reason: "unexpected response shape", failure: "unreachable" };
+        }
 
         const blocked = parsed.data.promptFeedback?.blockReason;
-        if (blocked) return { ok: false, reason: `blocked: ${blocked}` };
+        // The model looked at the prompt and declined it. Asking again gets the
+        // same answer, which is exactly what `answered` means.
+        if (blocked) return { ok: false, reason: `blocked: ${blocked}`, failure: "answered" };
 
         const candidate = parsed.data.candidates?.[0];
         const answer = answerText(candidate?.content?.parts);
         if (answer !== null && "text" in answer) return { ok: true, text: answer.text };
         const finish = candidate?.finishReason;
         const what = answer === null ? "empty" : "thoughts only";
-        return { ok: false, reason: finish ? `${what} (${finish})` : `${what} response` };
+        // A candidate that carried no answer — all thinking, or empty. The
+        // model responded; it just responded with nothing usable.
+        return {
+          ok: false,
+          reason: finish ? `${what} (${finish})` : `${what} response`,
+          failure: "answered",
+        };
       }
 
-      return { ok: false, reason: lastReason };
+      // Retries exhausted against 429s, 5xx or network faults.
+      return { ok: false, reason: lastReason, failure: "unreachable" };
     },
   };
 }

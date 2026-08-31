@@ -46,7 +46,8 @@
     "measure:storylines-v2": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-sweep-cli.js",
     "measure:storyline-coherence": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-coherence-cli.js",
     "dissolve:storyline-piles": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-dissolve-cli.js",
-    "measure:deepening-yield": "tsc -b && node --env-file-if-exists=../../.env dist/deepening-yield-cli.js"
+    "measure:deepening-yield": "tsc -b && node --env-file-if-exists=../../.env dist/deepening-yield-cli.js",
+    "summaries:storylines": "tsc -b && node --env-file-if-exists=../../.env dist/storyline-summary-cli.js"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

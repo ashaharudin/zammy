@@ -93,6 +93,7 @@ begin
   if path not in (
     '/api/chores?pass=retention',
     '/api/chores?pass=storylines',
+    '/api/chores?pass=summaries',
     '/api/keepalive',
     '/api/drain'
   ) then
@@ -150,6 +151,23 @@ select cron.schedule(
   $$ select public.zammy_cron_post('/api/chores?pass=storylines') $$
 );
 
+-- The historical preserve (ADR-0022): one sentence per storyline-day and per
+-- populated 6-hour UTC segment of it, for the days that clear the volume bar.
+-- An hour after the storyline pass, and for a reason that is not just tidiness:
+-- both spend the same model key, and the 04:00 pass is the one that has been
+-- killed at maxDuration before. Its own schedule means a slow label night costs
+-- labels rather than costing labels AND a day of history.
+--
+-- It writes nothing at all until SUMMARIES_ENABLED=true. Scheduling it while it
+-- is off is deliberate: the job exists, records a chore_runs row every night,
+-- and starts working the moment the flag flips — rather than being the step
+-- somebody forgets to add afterwards.
+select cron.schedule(
+  'zammy-chores-summaries',
+  '0 5 * * *',
+  $$ select public.zammy_cron_post('/api/chores?pass=summaries') $$
+);
+
 -- The pause guard. Its OWN job, and that is the point: Supabase does not promise
 -- that pg_cron's internal activity prevents the 7-day free-tier pause — it
 -- defines inactivity as insufficient USER database activity and prescribes
@@ -197,6 +215,7 @@ select cron.schedule(
 -- 5. Removing them.
 -- ─────────────────────────────────────────────────────────────────────────────
 -- select cron.unschedule('zammy-chores-retention');
+-- select cron.unschedule('zammy-chores-summaries');
 -- select cron.unschedule('zammy-chores-storylines');
 -- select cron.unschedule('zammy-keepalive');
 -- select cron.unschedule('zammy-ingest-drain');

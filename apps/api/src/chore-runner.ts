@@ -15,6 +15,7 @@ import {
   runStorylineGraphChore,
   runStorylineLabelChore,
   runStorylinePass,
+  runSummaryChore,
   type StorylinePassDeps,
 } from "./chores.js";
 
@@ -40,18 +41,20 @@ import {
  * spell it.
  *
  * §3.3 promised "all seven": the six individual chores plus `storylines`. There
- * are eight here because `runStorylineGraphChore` was added after that was
- * written — the percolation alarm needed a nightly series
- * (VERCEL-PHASE-0-FINDINGS §2.7). The promise was that anything the night does
- * can be re-run on its own from a curl instead of an SSH, and that is what this
- * list is.
+ * are nine here — `runStorylineGraphChore` was added after that was written, for
+ * the percolation alarm's nightly series (VERCEL-PHASE-0-FINDINGS §2.7), and
+ * `summaries` is the historical preserve (ADR-0022). The promise was that
+ * anything the night does can be re-run on its own from a curl instead of an
+ * SSH, and that is what this list is.
  *
- * The two composites come first because they are what a scheduler points at; the
- * rest are the on-demand halves of them.
+ * The three a scheduler points at come first — `retention`, `storylines` and
+ * `summaries`, in the order of the clock (03:00, 04:00, 05:00 UTC). The rest are
+ * the on-demand halves of the composite second one.
  */
 export const CHORE_PASSES = [
   "retention",
   "storylines",
+  "summaries",
   "dormancy",
   "bridges",
   "late-candidates",
@@ -67,7 +70,7 @@ export function isChorePass(value: string): value is ChorePass {
 }
 
 /**
- * Session-scoped advisory lock keys — **two domains, not one per pass**.
+ * Session-scoped advisory lock keys — **three domains, not one per pass**.
  *
  * These are the exact keys `chores-cli.ts` has always used, and that is the
  * point: the CLI and the route must contend, or "re-run just the label pass from
@@ -77,7 +80,9 @@ export function isChorePass(value: string): value is ChorePass {
  * A key per *pass* would have been the obvious shape and is wrong for the same
  * reason: `storylines` CONTAINS `labels`, so passes in one family overlap by
  * construction and a per-pass key would let them run concurrently. One domain
- * per family is the coarsest lock that is still honest about what conflicts.
+ * per family is the coarsest lock that is still honest about what conflicts —
+ * and `summaries` is a family of one because it conflicts with neither of the
+ * others on any table (see its key below).
  *
  * Deliberately adjacent to, and never equal to, the migrator's 7226461501 — a
  * chore that took the migration lock would be a deploy hanging behind a label
@@ -86,6 +91,23 @@ export function isChorePass(value: string): value is ChorePass {
 export const CHORE_LOCK_KEYS = {
   retention: 7_226_461_502,
   storylines: 7_226_461_503,
+  /**
+   * A THIRD domain, and the trade is worth stating because sharing the
+   * storyline lock was the other option.
+   *
+   * The summary pass writes only `storyline_day_summaries` and reads `articles`
+   * and `storylines`, so it conflicts with the storyline night on no table at
+   * all. What it does share is the model KEY — so a summary pass overlapping a
+   * long label pass puts two pacers on one key, which the 429 cooldown catches
+   * rather than the window (`gemini.ts`).
+   *
+   * Sharing the lock would have prevented that overlap by making the summary
+   * pass SKIP whenever the label pass ran long. That is the wrong trade for a
+   * preserve: a night of history would be lost to a slow label pass, recorded as
+   * a `skipped` row that reads like the mechanism working. Deferring the cost to
+   * the cooldown is recoverable; a skipped night that nobody re-runs is not.
+   */
+  summaries: 7_226_461_504,
 } as const;
 
 /**
@@ -99,6 +121,7 @@ export const CHORE_LOCK_KEYS = {
 export function choreLockKey(pass: ChorePass): number | null {
   if (pass === "graph") return null;
   if (pass === "retention") return CHORE_LOCK_KEYS.retention;
+  if (pass === "summaries") return CHORE_LOCK_KEYS.summaries;
   return CHORE_LOCK_KEYS.storylines;
 }
 
@@ -123,6 +146,7 @@ const PASS_RUNNERS: Record<ChorePass, (deps: StorylinePassDeps) => Promise<unkno
         : {}),
     }),
   labels: (deps) => runStorylineLabelChore(deps),
+  summaries: (deps) => runSummaryChore(deps),
   "label-merge": (deps) => runLabelMergeChore(deps),
   graph: (deps) => runStorylineGraphChore(deps),
 };
@@ -226,13 +250,19 @@ export async function runChorePass(
  * `pg_TRY_advisory_lock`, not `pg_advisory_lock`: a second run must skip, not
  * queue behind the first and then start the same night's work an hour late.
  *
+ * Exported for `storyline-summary-cli.ts`, which is not a pass and still has to
+ * contend with one: it writes the same rows the `summaries` pass writes, and the
+ * losing side of that race can overwrite a sentence with a refusal it decided on
+ * from a stale read. Every other operator CLI here writes rows a later pass can
+ * rebuild; that one does not.
+ *
  * Session-scoped, on a PINNED connection — through a transaction-mode pooler a
  * session lock is taken on one backend and looked for on another, so
  * `pg_try_advisory_lock` returns true every time and both schedulers run the
  * night. That is why every caller of this builds its handle with
  * `session: true` (§4.1, `wiring.createConfiguredDb`).
  */
-async function withPassLock(
+export async function withPassLock(
   db: Kysely<Database>,
   key: number,
   run: () => Promise<void>,
@@ -312,8 +342,9 @@ async function closeRun(
 /**
  * Model calls this run spent, for the `chore_runs` column.
  *
- * **It is the LABEL pass's count and not a full audit**, which is worth stating
- * because the number looks like one. The bridge sweep, the late-candidate sweep
+ * **It is the LABEL or SUMMARY pass's own count and not a full audit**, which is
+ * worth stating because the number looks like one. The bridge sweep, the
+ * late-candidate sweep
  * and the label-agreement merge each re-label the survivors of what they change,
  * and none of their reports counts those calls — the report shapes are about
  * merges and attachments, and widening them to carry a call count is a change to
@@ -322,13 +353,13 @@ async function closeRun(
  * trend is the label pass.
  */
 function modelCallsFrom(pass: ChorePass, report: unknown): number | undefined {
-  const labels =
-    pass === "labels"
+  const spender =
+    pass === "labels" || pass === "summaries"
       ? (report as { model?: unknown } | undefined)
       : pass === "storylines"
         ? (report as { labels?: { model?: unknown } } | undefined)?.labels
         : undefined;
-  const model = labels?.model;
+  const model = spender?.model;
   return typeof model === "number" ? model : undefined;
 }
 

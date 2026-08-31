@@ -69,11 +69,16 @@ const log: ServiceLogger = {
 export const SCHEDULE_PASSES: Record<string, ChorePass> = {
   "0 3 * * *": "retention",
   "0 4 * * *": "storylines",
+  // The preserve, an hour after the storyline night (ADR-0022). Its own
+  // schedule rather than a step of the 04:00 pass: that one is already the
+  // expensive one and they spend the same model key.
+  "0 5 * * *": "summaries",
 };
 
 /** Per-request overrides of the configured defaults. */
 export interface ChoreOverrides {
   maxLabels?: number;
+  maxSummaries?: number;
   lateCandidatesChangedOnly?: boolean;
 }
 
@@ -108,6 +113,12 @@ export function parseChoreRequest(
   // rather than refused; the configured default is never a wrong answer.
   const maxLabels = Number(url.searchParams.get("max-labels"));
   if (Number.isInteger(maxLabels) && maxLabels > 0) overrides.maxLabels = maxLabels;
+  // Its twin for the summary pass. A count of MODEL CALLS, not of days — a day
+  // costs between one and five of them.
+  const maxSummaries = Number(url.searchParams.get("max-summaries"));
+  if (Number.isInteger(maxSummaries) && maxSummaries > 0) {
+    overrides.maxSummaries = maxSummaries;
+  }
   // `--changed-only` / `--full`. Only the late-candidate sweep reads it.
   const changedOnly = url.searchParams.get("changed-only");
   if (changedOnly === "true" || changedOnly === "1") {
