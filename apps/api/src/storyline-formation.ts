@@ -11,7 +11,7 @@ import {
 import type { TextGenerator } from "./gemini.js";
 import { buildCoherencePrompt, readCoherenceReply } from "./storyline-coherence.js";
 import { labelWords } from "./storyline-label-merge.js";
-import { fallbackLabel, selectLabelMembers } from "./storyline-label.js";
+import { fallbackLabel, modelLabelSource, selectLabelMembers } from "./storyline-label.js";
 import type { LinkOutcome } from "./storyline-linker.js";
 
 /**
@@ -194,7 +194,7 @@ async function performFormation(
     labelWords: label === null ? [] : labelWords(label),
     labelAt: named?.at ?? (deps.now ?? (() => new Date()))(),
     labelGroupCount: groupCount,
-    labelSource: named ? (deps.modelId ?? "model") : label === null ? null : "bigram",
+    labelSource: named ? modelLabelSource(deps.modelId) : label === null ? null : "bigram",
   });
 
   return { kind: "formed", storylineId, labelled: named !== null };

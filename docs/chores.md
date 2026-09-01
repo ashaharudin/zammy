@@ -3,9 +3,12 @@
 The scheduled background work: what runs, what it depends on, and why the ingest drain sits beside
 it rather than inside it. Source of truth is [chores.ts](../apps/api/src/chores.ts) (what a pass
 does), [chore-runner.ts](../apps/api/src/chore-runner.ts) (the lock and the record),
-[chore-route.ts](../apps/api/src/chore-route.ts) and [chores-cli.ts](../apps/api/src/chores-cli.ts)
-(the two entrypoints), and [drain.ts](../apps/api/src/drain.ts); this page is the map, not a second
-copy of the reasoning in those files.
+[chore-route.ts](../apps/api/src/chore-route.ts) and
+[chores-command.ts](../apps/api/src/chores-command.ts) (the two entrypoints — the latter behind the
+two-line [chores-cli.ts](../apps/api/src/chores-cli.ts), which
+[operator-command.ts](../apps/api/src/operator-command.ts) explains), and
+[drain.ts](../apps/api/src/drain.ts); this page is the map, not a second copy of the reasoning in
+those files.
 
 ## Two things on a schedule, and they have nothing in common
 
@@ -168,7 +171,13 @@ Vercel half of the system and lie by omission about the other half — and they 
 
 ```bash
 pnpm chores status --pass=storylines --limit=5
+pnpm chores --help                       # every pass, and every flag
 ```
+
+`--help` is `operator-command.ts`'s, and so is the exit-code vocabulary the scheduler reads — `0`
+ran or skipped, `1` failed, `64` usage, `78` configuration. Those four were this command's first and
+the other eleven operator commands were brought up to them, so a flag this command does not have is
+now refused rather than ignored.
 
 ## The pause guard — `POST /api/keepalive`
 
