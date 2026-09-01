@@ -74,6 +74,9 @@ const deps = (overrides: Partial<FormationDeps> = {}): FormationDeps => ({
   generator: null,
   modelId: "gemini-test",
   sampleSize: 10,
+  // Unread on this path — a formation names under the `promotion` trigger — but
+  // the deps are the labeler's own, not a subset of them (`FormationDeps`).
+  driftFactor: 2,
   timeZone: ZONE,
   now: () => NOW,
   ...overrides,

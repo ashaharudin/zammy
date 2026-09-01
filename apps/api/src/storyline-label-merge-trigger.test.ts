@@ -8,7 +8,7 @@ import {
 import { createTestHarness, type TestHarness } from "./test-support.js";
 import { mergeCollidingLabels } from "./storyline-label-merge-trigger.js";
 import { labelKey, labelWords } from "./storyline-label-merge.js";
-import type { LabelOutcome } from "./storyline-label-service.js";
+import type { LabelOutcome } from "./storyline-naming.js";
 import type { TextGenerator } from "./gemini.js";
 
 /**

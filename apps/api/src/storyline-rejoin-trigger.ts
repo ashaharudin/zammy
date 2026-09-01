@@ -30,7 +30,7 @@ import { linkGroup, type LinkOutcome, type LinkerConfig } from "./storyline-link
  *
  * Never throws, and never for one group's sake either. It runs on the tail
  * `groupCreatedArticles` starts and drops (`void tail`), alongside labels that
- * cost ~8s each — the contract `storyline-label-service.ts` states, for the
+ * cost ~8s each — the contract `storyline-naming.ts` states, for the
  * reason it states it: a dropped promise that rejects is an unhandled rejection
  * on a path no reader is waiting on.
  */

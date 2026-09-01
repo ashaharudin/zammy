@@ -24,7 +24,7 @@ import { validateLabel, type LabelMember } from "./storyline-label.js";
  * ## Why it is free
  *
  * A promotion already makes exactly one model call — the promotion label
- * (`storyline-label-service.ts`). A model shown two unrelated articles and
+ * (`storyline-naming.ts`). A model shown two unrelated articles and
  * ordered to name their shared story either invents a name or writes a
  * sentence, and `validateLabel` refuses it; the storyline then keeps a bigram
  * label and stands. That refusal is the verdict, arriving as a formatting

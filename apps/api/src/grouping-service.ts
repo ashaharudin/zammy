@@ -23,7 +23,8 @@ import {
   type LinkableGroup,
   type LinkerConfig,
 } from "./storyline-linker.js";
-import { labelLinkedStorylines, type LabelerDeps } from "./storyline-label-service.js";
+import { labelLinkedStorylines } from "./storyline-label-service.js";
+import type { LabelerDeps } from "./storyline-naming.js";
 import { mergeCollidingLabels } from "./storyline-label-merge-trigger.js";
 import { reofferJoinedGroups } from "./storyline-rejoin-trigger.js";
 import type { LabelMergeRules } from "./storyline-label-merge.js";

@@ -6,7 +6,7 @@ import { createGeminiClient, createPacer, type ModelPacer } from "./gemini.js";
 import { BullMqIngestQueue } from "./ingest-queue-bullmq.js";
 import { VercelIngestQueue, type QueueLogger } from "./ingest-queue-vercel.js";
 import type { IngestQueue } from "./ingest-queue.js";
-import type { LabelerDeps } from "./storyline-label-service.js";
+import type { LabelerDeps } from "./storyline-naming.js";
 import type { LabelMergeRules } from "./storyline-label-merge.js";
 import type { LinkerConfig } from "./storyline-linker.js";
 import type { SummarizerDeps } from "./storyline-summary-service.js";
@@ -209,7 +209,7 @@ export interface LabelerOverrides {
  * scope"). The chore runner's lever for staying under it is `--label-rate`.
  *
  * **`modelId` is set here**, and it is the field this function used to leave
- * out. `storyline-label-service.ts` falls back to the literal string `"model"`
+ * out. `storyline-naming.ts` falls back to the literal string `"model"`
  * without it, so the server path, the chore path and `pnpm label:storylines`
  * all stamped `label_source = 'model'` while `backfill:storylines --relabel`
  * computed its "already current" target as the real model id — and re-spent

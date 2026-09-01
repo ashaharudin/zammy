@@ -2,13 +2,12 @@ import type { Kysely } from "kysely";
 import {
   mergeStorylines,
   readLabelMergeCandidates,
-  readStoryline,
   readStorylineCoverageText,
   type Database,
 } from "@zammy/storage";
 import { singular } from "./grouping.js";
 import { properNounEvidence } from "./headline-tokens.js";
-import { labelStoryline, type LabelerDeps } from "./storyline-label-service.js";
+import { nameStoryline, type LabelerDeps } from "./storyline-naming.js";
 import {
   labelWords,
   planLabelMerge,
@@ -188,13 +187,13 @@ export async function mergeAgreeingLabels(
     // names nightly and a null or stale label renders.
     if (deps.labeler) {
       try {
-        const storyline = await readStoryline(deps.db, winnerId);
-        if (storyline && storyline.mergedInto === null) {
-          await labelStoryline(
-            { db: deps.db, ...deps.labeler },
-            { storyline, trigger: "merge" },
-          );
-        }
+        // A survivor that has itself been merged away by a later plan in this
+        // same pass is skipped inside `nameStoryline` — an alias is not a
+        // storyline, and that guard belongs with the write it guards.
+        await nameStoryline(
+          { db: deps.db, ...deps.labeler },
+          { storylineId: winnerId, trigger: "merge" },
+        );
       } catch (error) {
         deps.log?.warn(
           { err: error, storylineId: winnerId },

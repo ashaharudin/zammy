@@ -223,7 +223,7 @@ describe("mayRefuseFormation", () => {
   });
 
   it("never acts on drift, which is exactly where the 43% was measured", () => {
-    // `labelStoryline` fires on drift at every doubling of membership. Wiring
+    // `nameStoryline` fires on drift at every doubling of membership. Wiring
     // the verdict there unscoped is the implementation that dissolves mature
     // arcs, so the guard rejects it even at a group count that looks like a
     // formation.

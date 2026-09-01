@@ -5,13 +5,11 @@ import {
   readStorylineLabelInput,
   readSoleGroup,
   recordFormationRefusal,
-  setStorylineLabel,
   type Database,
 } from "@zammy/storage";
-import type { TextGenerator } from "./gemini.js";
 import { buildCoherencePrompt, readCoherenceReply } from "./storyline-coherence.js";
-import { labelWords } from "./storyline-label-merge.js";
-import { fallbackLabel, modelLabelSource, selectLabelMembers } from "./storyline-label.js";
+import { selectLabelMembers } from "./storyline-label.js";
+import { nameStoryline, type LabelerDeps, type ModelAnswer } from "./storyline-naming.js";
 import type { LinkOutcome } from "./storyline-linker.js";
 
 /**
@@ -25,8 +23,8 @@ import type { LinkOutcome } from "./storyline-linker.js";
  * | verdict | action |
  * | --- | --- |
  * | a refusal — the "NOT ONE STORY" sentinel, or a paraphrase of it | record a refusal; the groups stay apart |
- * | a usable name | perform the merge, promote, and write that name |
- * | anything else | perform the merge, promote, and fall back to bigrams |
+ * | a usable name | perform the merge, promote, and hand that name to the writer |
+ * | anything else | perform the merge, promote, and hand over "already asked, nothing usable" |
  *
  * The third row is the load-bearing one. An unavailable, slow, out-of-quota or
  * contract-breaking model produces exactly the pre-gate outcome — the archive's
@@ -42,6 +40,11 @@ import type { LinkOutcome } from "./storyline-linker.js";
  * volume: `pendingFormation` is only ever set where the winner was a
  * provisional-of-one.
  *
+ * The writing is somebody else's job — `storyline-naming.ts`, the one writer of
+ * the label columns. This path only carries the answer over, and that is what
+ * keeps the one call one: an answer handed in says "already asked", which is a
+ * different thing from saying nothing and being asked again.
+ *
  * ## Where it runs
  *
  * Off the latency path, in the same started-and-not-awaited tail that already
@@ -53,19 +56,22 @@ import type { LinkOutcome } from "./storyline-linker.js";
  * again.
  */
 
-export interface FormationDeps {
-  db: Kysely<Database>;
-  /** Null with no `GEMINI_API_KEY` — every formation then proceeds ungated. */
-  generator: TextGenerator | null;
-  /** How a model-produced label is recorded; the configured model id. */
-  modelId?: string;
-  sampleSize: number;
+/**
+ * The labeler's own deps, plus the calendar.
+ *
+ * Not a hand-picked subset of them: a formation that goes ahead is named
+ * through `storyline-naming.ts` like every other naming, so this path needs
+ * exactly what that module needs. `driftFactor` rides along unread — the
+ * trigger here is always `promotion`, which `needsLabel` answers without it —
+ * and that is the price of one deps object instead of two that can disagree.
+ */
+export interface FormationDeps extends LabelerDeps {
+  /**
+   * The calendar day slots are bucketed by. Performing the merge the linker
+   * withheld recomputes them, which is why a caller that cannot name a zone
+   * must not resolve formations at all.
+   */
   timeZone: string;
-  now?: () => Date;
-  logger?: {
-    warn(fields: Record<string, unknown>, message: string): void;
-    debug?(fields: Record<string, unknown>, message: string): void;
-  };
 }
 
 export type FormationResult =
@@ -99,7 +105,10 @@ export async function resolveFormation(
     // It grew (or emptied) since the linker looked. Growing means this is now a
     // join to a real arc, which `mayRefuseFormation` excludes on measured
     // grounds, so it proceeds without a verdict.
-    return performFormation(deps, pending, null);
+    return performFormation(deps, pending, {
+      label: null,
+      reason: "no verdict sought — no longer a formation",
+    });
   }
   if (sole !== partnerGroupId) {
     // The identity now wears a different group — a group merge moved underneath
@@ -127,7 +136,9 @@ export async function resolveFormation(
 
   const sample = selectLabelMembers(coverage, deps.sampleSize);
 
-  if (!deps.generator) return performFormation(deps, pending, null);
+  if (!deps.generator) {
+    return performFormation(deps, pending, { label: null, reason: "no generator configured" });
+  }
 
   const result = await deps.generator.generate({ prompt: buildCoherencePrompt(sample) });
   const reply = readCoherenceReply(result.ok ? result.text : null, sample);
@@ -149,25 +160,34 @@ export async function resolveFormation(
       { winnerId, groupId, reason: reply.reason },
       "coherence gate got no usable verdict; forming the storyline ungated",
     );
-    return performFormation(deps, pending, null);
+    return performFormation(deps, pending, { label: null, reason: reply.reason });
   }
 
   return performFormation(deps, pending, { label: reply.label, at: now() });
 }
 
 /**
- * Perform the merge the linker withheld, and promote.
+ * Perform the merge the linker withheld, promote, and hand the naming over.
  *
  * This is the fresh path's tail, moved: absorbing the arriving group's birth
  * storyline into the winner by merge-with-alias, so a UUID already in a reader's
- * URL keeps resolving. `named` writes the label from the same reply that
- * permitted the formation; null falls back to the bigram extractor, which is what
- * a promotion without a usable model has always produced.
+ * URL keeps resolving. What it does NOT do any more is write the label itself.
+ * A promotion is a promotion whoever caused it, so the name is written by the
+ * one writer of the label columns (`storyline-naming.ts`) under the trigger it
+ * really is.
+ *
+ * `answer` is what keeps that free. The gate's model call already produced
+ * both the permission and the name (ADR-0011's amendment: "one model call, two
+ * answers"), so it is passed through rather than re-earned — and when the gate
+ * got nothing usable, passing the reason through says "already asked" rather
+ * than "not yet asked", which is what stops one call becoming two. The naming
+ * module then falls back to the bigram extractor exactly as an ungated
+ * promotion always has.
  */
 async function performFormation(
   deps: FormationDeps,
   pending: NonNullable<LinkOutcome["pendingFormation"]>,
-  named: { label: string; at: Date } | null,
+  answer: ModelAnswer,
 ): Promise<FormationResult> {
   const own = await ownStorylineOf(deps.db, pending.groupId);
   if (own === null) return { kind: "moot", reason: "arriving group has no storyline" };
@@ -181,23 +201,9 @@ async function performFormation(
 
   await promoteStoryline(deps.db, { storylineId });
 
-  const { groupCount, members } = await readStorylineLabelInput(deps.db, {
-    storylineId,
-    limit: deps.sampleSize,
-  });
-  const label = named?.label ?? fallbackLabel(selectLabelMembers(members, deps.sampleSize));
-  await setStorylineLabel(deps.db, {
-    storylineId,
-    label,
-    // See the same field in `storyline-label-service.ts`: one fold, written
-    // beside the label it folds.
-    labelWords: label === null ? [] : labelWords(label),
-    labelAt: named?.at ?? (deps.now ?? (() => new Date()))(),
-    labelGroupCount: groupCount,
-    labelSource: named ? modelLabelSource(deps.modelId) : label === null ? null : "bigram",
-  });
+  await nameStoryline(deps, { storylineId, trigger: "promotion", asked: answer });
 
-  return { kind: "formed", storylineId, labelled: named !== null };
+  return { kind: "formed", storylineId, labelled: answer.label !== null };
 }
 
 /**

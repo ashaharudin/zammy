@@ -16,7 +16,8 @@ import {
 import { storyDfDay } from "./story-df.js";
 import { labelPass, type LabelPassTally } from "./storyline-backfill.js";
 import { readChangedSetBatch } from "./storyline-changed-set.js";
-import { labelLinkedStorylines, type LabelerDeps } from "./storyline-label-service.js";
+import { labelLinkedStorylines } from "./storyline-label-service.js";
+import type { LabelerDeps } from "./storyline-naming.js";
 import {
   summaryPass,
   type SummarizerDeps,

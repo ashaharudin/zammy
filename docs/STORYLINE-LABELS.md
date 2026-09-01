@@ -110,6 +110,18 @@ is stamped even when the label comes out null; otherwise a storyline nobody can
 name is re-asked on every pass for ever, turning a storyline-volume cost into
 an unbounded one.
 
+**One exception, and it is not one: empty coverage.** A storyline whose member
+articles have been retained away has nothing to show a model and nothing for the
+extractor to read, so naming it returns before the model is reached and writes
+*nothing at all* — no label, no baseline. The baseline records a JUDGEMENT
+("asked, and no name came back"), and there is none to record here; stamping one
+would hold the row nameless until its membership doubled, on a verdict nobody
+gave. It costs one cheap read per pass and never a model call, so the unbounded
+mode the paragraph above rules out is not in reach. The whole write, this branch
+included, lives in `storyline-naming.ts`, which is the only caller of
+`setStorylineLabel` — a rule the label columns need, because the two writers it
+replaced had already answered this question differently.
+
 ## Choosing the model, measured
 
 Three findings, none of which survived contact with a guess:
