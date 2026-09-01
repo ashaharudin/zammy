@@ -24,6 +24,13 @@ import { hexToBytea, type Database, type StorylineStatus } from "./database.js";
  * read made, and for the same reason: a global headline could surface an
  * article that never matched what the user searched and hide the matching one
  * under "related" (§14.3).
+ *
+ * That scoping is **clause 1 of the representative rule** — "among the members
+ * that matched that search" (CONTEXT.md). The other three clauses are code in
+ * `@zammy/representative`; this one is a join and stays here, so the two halves
+ * meet at a contract rather than in a shared function: whatever this read
+ * returns as a slot's members is exactly what may be promoted to its headline.
+ * Widening the join widens the headline, silently and everywhere.
  */
 
 /** One storyline-day: what the reader pages over. */

@@ -31,7 +31,7 @@ import {
 } from "./page-cache.js";
 import type { Metrics } from "./metrics.js";
 import type { IngestQueue } from "./ingest-queue.js";
-import { chooseRepresentative } from "./source-authority.js";
+import { chooseHeading } from "@zammy/representative";
 import { labelWords } from "./storyline-label-merge.js";
 
 /**
@@ -317,16 +317,17 @@ async function planAndRead(
 /**
  * A stored storyline → the slot the browser renders (§14.3, ADR-0009).
  *
- * The slot's LEAD GROUP is its most-syndicated group — the story itself,
- * rather than an angle piece that happens to cite a tier-1 domain — and the
- * headline is chosen from the lead group's members that matched this search,
- * per topic and per read: a slot-wide choice could surface an article that
- * never matched the user's keywords and hide the matching one under
- * "related". The split the disclosure renders falls out of the same
- * structure: lead-group members are the same story syndicated (`related`),
- * every other group's members are the day's wider coverage (`coverage`).
- * The slot's position is not chosen here and never changes with the
- * headline: `published` is the storyline's (§7.3).
+ * Which member holds the headline is NOT decided here, and the reason is that
+ * it is not decided here alone: the rail cuts this slot again in the browser
+ * and heads each part of the reader's day by the same rule. It lives in
+ * `@zammy/representative`, whole, and this function is one of its two callers.
+ * What it owes the rule is clause 1 — `slot.members` are the members that
+ * matched THIS search, per topic and per read, because a slot-wide choice could
+ * surface an article the user's keywords never found and hide the matching one
+ * under "related" (`packages/storage/src/storyline-timeline.ts`, step 2).
+ *
+ * The slot's position is not chosen here and never changes with the headline:
+ * `published` is the storyline's (§7.3).
  *
  * The group ids are no longer SPENT here. They ride on to the browser on every
  * article (`Article.groupId`), because the rail cuts a slot again — into the
@@ -339,27 +340,19 @@ function toEntry(slot: {
   published: string;
   members: Article[];
 }): TimelineEntry {
-  const byGroup = new Map<string, Article[]>();
-  for (const member of slot.members) {
-    const list = byGroup.get(member.groupId);
-    if (list) list.push(member);
-    else byGroup.set(member.groupId, [member]);
-  }
-
-  // Largest group leads; ties break earliest-published then lowest id, so a
-  // replayed read reaches the same slot (§7.4's replay discipline, again).
-  let lead: { groupId: string; members: Article[] } | null = null;
-  for (const [groupId, members] of byGroup) {
-    if (!lead || leadBeats({ groupId, members }, lead)) lead = { groupId, members };
-  }
-  const leadMembers = lead?.members ?? [];
-
-  const article = chooseRepresentative(leadMembers);
-  // Flattened, and each member still names its group in `groupId` — the split
-  // above is a READING of the members, not a re-shaping of them, so the wire
-  // keeps the one order the disclosure renders in while the rail can still
-  // recover which of these are one piece.
-  const moreCoverage = slot.members.filter((member) => member.groupId !== lead?.groupId);
+  // Clauses 2 and 3 of the representative rule, whole and named
+  // (`@zammy/representative`). `within` is left at its default: a slot takes
+  // §14.3's own rule — largest group leads, source authority picks inside it,
+  // ties breaking earliest-published then lowest id so a replayed read reaches
+  // the same slot (§7.4's replay discipline, again). The rail applies the SAME
+  // function to a card it cuts out of a later part of the reader's day, which
+  // is what makes the two agreeing a test rather than two doc comments.
+  //
+  // `coverage` comes back flattened, and each member still names its group in
+  // `groupId` — the split is a READING of the members, not a re-shaping of
+  // them, so the wire keeps the one order the disclosure renders in while the
+  // rail can still recover which of these are one piece.
+  const { representative, related, coverage } = chooseHeading(slot.members);
 
   return {
     storylineId: slot.id,
@@ -368,9 +361,9 @@ function toEntry(slot: {
     // This is what the UI shows as "updated", the same treatment ADR-0002
     // gives an article whose later sightings do not move it.
     updatedAt: slot.members[0]?.published ?? slot.published,
-    article,
-    related: leadMembers.filter((member) => member.id !== article.id),
-    moreCoverage,
+    article: representative,
+    related,
+    moreCoverage: coverage,
     // The old model has no storyline to describe: its slots are day-bounded
     // storylines with no identity a reader could open. `toStorylineEntry` fills
     // this in when the flag is on.
@@ -472,10 +465,8 @@ const SURFACED_STORYLINE_LIMIT = 8;
 /**
  * A storyline-DAY → the slot the browser renders (ADR-0011).
  *
- * Deliberately the same shape and the same choices as `toEntry` above: the lead
- * group is the slot's most-syndicated, the headline is chosen from it by source
- * authority among the members that matched this search, and the split the
- * disclosure renders falls out of group membership. What changes is only which
+ * Deliberately the same shape and the same choices as `toEntry` above, by
+ * calling it: one representative rule, applied once. What changes is only which
  * members are in the slot — one storyline's coverage on ONE day, rather than a
  * day-bounded storyline's whole membership — and the storyline metadata riding
  * alongside it.
@@ -500,24 +491,3 @@ function toStorylineEntry(slot: StorylineSlot): TimelineEntry {
   };
 }
 
-function leadBeats(
-  candidate: { groupId: string; members: Article[] },
-  incumbent: { groupId: string; members: Article[] },
-): boolean {
-  if (candidate.members.length !== incumbent.members.length) {
-    return candidate.members.length > incumbent.members.length;
-  }
-  const byTime =
-    earliest(candidate.members) - earliest(incumbent.members);
-  if (byTime !== 0) return byTime < 0;
-  return BigInt(candidate.groupId) < BigInt(incumbent.groupId);
-}
-
-function earliest(members: readonly Article[]): number {
-  let min = Number.POSITIVE_INFINITY;
-  for (const member of members) {
-    const t = Date.parse(member.published);
-    if (t < min) min = t;
-  }
-  return min;
-}

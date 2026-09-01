@@ -1,0 +1,28 @@
+{
+  "name": "@zammy/representative",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "//dependencies": "Deliberately none. The rule is arithmetic over four fields, so the package that owns an EDITORIAL stance (ADR-0004) needs neither the wire contract nor zod to state it — which is what lets the browser and the API share it without either dragging the other's dependencies along.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.5",
+    "@types/node": "^22.10.0"
+  }
+}

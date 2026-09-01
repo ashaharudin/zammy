@@ -19,6 +19,13 @@
  * from another. The membership test is the only thing that has to be
  * defensible, so keep it that coarse — an outlet you would have to argue for
  * is an outlet that belongs in tier 2.
+ *
+ * **It used to live in `apps/api` and can now reach the browser**, because the
+ * rule it serves is one rule and the rail is the second place that applies it
+ * (`heading.ts`). It may not go in `@zammy/shared`: ADR-0004 reserves that for
+ * the wire contract, and a stance about outlets is not a shape the API sends.
+ * Reviewing the list got neither easier nor harder for moving — it is still a
+ * checked-in constant, which was always the point.
  */
 
 /**

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Article } from "@zammy/shared";
 import { chooseRepresentative, isTier1, TIER_1_SOURCES } from "./source-authority.js";
+import type { Grouped } from "./heading.js";
 
 /**
  * The headline choice inside a group (ARCHITECTURE 14.3): a two-tier
@@ -9,27 +9,28 @@ import { chooseRepresentative, isTier1, TIER_1_SOURCES } from "./source-authorit
  * The list itself is an editorial stance and cannot be unit-tested; what these
  * tests pin is the selection RULE — authority first, then time, then id — and
  * the two signals that must never influence it.
+ *
+ * Moved here with the list from `apps/api` (ADR-0004: the browser needs this
+ * and `shared` may not hold it). The fixture is a `Grouped` rather than an
+ * `Article` because this package deliberately has no dependency on the wire
+ * contract, and `sightingCount` is bolted onto it by hand for the one test that
+ * proves the rule ignores a field its parameter type does not even carry.
  */
 
-function article(overrides: Partial<Article> & { id: string }): Article {
+interface Member extends Grouped {
+  sightingCount: number;
+}
+
+function article(overrides: Partial<Member> & { id: string }): Member {
   return {
     id: overrides.id,
     // These are a GROUP's members by the time they reach `chooseRepresentative`
     // — the caller has already read `groupId` to split them — so one id for all
     // of them is what the real call site passes.
-    groupId: overrides.groupId ?? "group",
-    url: overrides.url ?? `https://example.com/${overrides.id}`,
-    title: overrides.title ?? `story ${overrides.id}`,
-    description: null,
-    author: null,
-    imageUrl: null,
-    language: "en",
-    categories: [],
-    sourceCategories: [],
+    groupId: overrides.groupId ?? "1",
     sourceDomain: overrides.sourceDomain ?? "example.com",
     published: overrides.published ?? "2026-08-11T10:00:00.000Z",
     sightingCount: overrides.sightingCount ?? 1,
-    latestSeen: overrides.latestSeen ?? overrides.published ?? "2026-08-11T10:00:00.000Z",
   };
 }
 

@@ -59,6 +59,7 @@
     "@zammy/google-news-client": "workspace:*",
     "@zammy/news-client": "workspace:*",
     "@zammy/news-providers": "workspace:*",
+    "@zammy/representative": "workspace:*",
     "@zammy/shared": "workspace:*",
     "@zammy/storage": "workspace:*",
     "bullmq": "^6.0.9",

@@ -1,4 +1,11 @@
 import type { Article, TimelineEntry } from "@zammy/shared";
+// The representative rule, whole: which article heads a card, and how the rest
+// of that card's members split behind it. The rail is its second caller — the
+// API's `toEntry` is the first — and calling the same function is what makes
+// "the lead card and the 18:00 card follow one rule" an assertion. Not in
+// `@zammy/shared`, which ADR-0004 reserves for the wire contract: the tier list
+// it carries is an editorial stance, not a shape the API sends.
+import { chooseHeading, LATER_PART_RULE } from "@zammy/representative";
 // The collapse key IS the bucket key: a card's part of the rail and the section
 // the reader collapses are the same division of it, so they share a definition
 // rather than a shape. `dayCollapse` imports only the `Segment` type back, which
@@ -190,14 +197,17 @@ export function timeLabel(iso: string, timeZone: string): string {
  * is a slot in its own right: a headline card with the rest of that part's
  * coverage behind its own disclosure.
  *
- * Which headline: the EARLIEST article the part holds. That is the rule a
- * storyline day already follows — its earliest as the hero — applied one level
- * down. It is no longer the only rule AVAILABLE: the wire now names each
- * article's group (`Article.groupId`), so a part of the day could choose within
- * its heading group by source authority the way §14.3 chooses within a slot's
- * lead. Deliberately not done here — changing which headline a reader sees is
- * its own change with its own review, and burying it under a wire change would
- * hide it. The part the storyline's day BEGINS in keeps the service's choice.
+ * Which headline is not answered here. It is clause 4 of one rule whose other
+ * three clauses the service applies, and it is answered where they are:
+ * `@zammy/representative`, under `LATER_PART_RULE`. That constant says `"part"`
+ * — the EARLIEST article the part holds, which is the rule a storyline day
+ * already follows (its earliest as the hero) applied one level down. `"lead"`
+ * is available and unchosen: the wire names each article's group
+ * (`Article.groupId`), so a part could choose within its lead group by source
+ * authority the way §14.3 chooses within a slot's. Changing which headline a
+ * reader sees is its own change with its own review, so the restructure that
+ * moved the clause deliberately did not make it. The part the storyline's day
+ * BEGINS in keeps the service's choice either way.
  *
  * Promoting a row is safe on the one count §14.3 cares about: a slot's members
  * are already scoped to the topic that asked (`readStorylineTimelinePage` step
@@ -372,7 +382,7 @@ function railSlots(
   const destination = new Map<string, string>();
   const buckets = new Map<string, { day: string; segment: Segment; articles: Article[] }>();
   for (const [groupId, copies] of byGroup) {
-    const anchor = copies[earliestIndex(copies)]!;
+    const anchor = earliestCopy(copies);
     const day = dayKey(anchor.published, timeZone);
     const segment = segmentOf(anchor.published, timeZone);
     const bucket = segmentKey(day, segment);
@@ -409,23 +419,24 @@ function railSlots(
     }),
   ];
   for (const { day, segment, articles } of buckets.values()) {
-    // The earliest headline heads the card, its own copies beside it as the
-    // same story — a heading that says what they are, where "more coverage"
-    // would promise different pieces. The rest is the coverage around it.
-    const headline = articles[earliestIndex(articles)]!;
-    const copies: Article[] = [];
-    const coverage: Article[] = [];
-    for (const article of articles) {
-      if (article === headline) continue;
-      (article.groupId === headline.groupId ? copies : coverage).push(article);
-    }
+    // Clause 4 of the representative rule, applied by the module that owns the
+    // other three (`@zammy/representative`) rather than restated here. Under
+    // `LATER_PART_RULE` — `"part"`, what ships — the earliest article the part
+    // holds heads the card, its own copies beside it as the same story, and the
+    // rest is the coverage around it. Under `"lead"` the part would be headed
+    // the way §14.3 heads a slot. Which of the two is a PRODUCT question with
+    // its own review; the constant is where it gets answered, and the API's
+    // `toEntry` reaches this same function for the lead card.
+    const { representative, related, coverage } = chooseHeading(articles, {
+      within: LATER_PART_RULE,
+    });
     slots.push(
       card(entry, {
         day,
         segment,
-        headline,
-        published: headline.published,
-        related: copies,
+        headline: representative,
+        published: representative.published,
+        related,
         moreCoverage: coverage,
       }),
     );
@@ -498,15 +509,19 @@ function at(slot: RailSlot): number {
 }
 
 /**
- * Where the earliest of `articles` sits — an index, not the article, because
- * the caller has to lift that one entry out of the list and copies of one
- * article can share a timestamp. Ties go to the first, which is the newest-
- * first list's own answer. Never called on an empty list.
+ * The earliest of `articles`. Ties go to the first, which is the newest-first
+ * list's own answer. Never called on an empty list.
+ *
+ * This is the FOLD's placement rule, not the representative rule: it answers
+ * "where did this piece run", which decides the part of the day a whole group
+ * lands in. Which article then heads that part is `@zammy/representative`'s
+ * question and no longer asked here — the two used to share this helper, which
+ * is how one rule's last clause came to live in the browser.
  */
-function earliestIndex(articles: Article[]): number {
-  let earliest = 0;
-  for (const [index, article] of articles.entries()) {
-    if (Date.parse(article.published) < Date.parse(articles[earliest]!.published)) earliest = index;
+function earliestCopy(articles: Article[]): Article {
+  let earliest = articles[0]!;
+  for (const article of articles) {
+    if (Date.parse(article.published) < Date.parse(earliest.published)) earliest = article;
   }
   return earliest;
 }
