@@ -8,13 +8,13 @@ import { upstreamHealthRecord } from "./upstreamHealth.js";
 
 /**
  * The persistent chrome once a topic is open: prompt + query, and underneath a
- * meta row carrying the response's asOf stamp (§8.1) followed by the topic's
- * filter chip — location.
+ * meta row carrying the topic's filter chip — location.
  *
- * The chips replaced a flag icon and a servedFrom/degraded/stale readout. The
- * icon said less than a word does, and the freshness readout was operational
- * detail standing where the reader's own filters belong; degraded state is
- * logged now (see upstreamHealth) rather than shown.
+ * The chips replaced a flag icon, a servedFrom/degraded/stale readout, and the
+ * response's asOf freshness stamp. The icon said less than a word does, the
+ * freshness readout was operational detail standing where the reader's own
+ * filters belong, and the asOf stamp was clock chrome nobody asked for;
+ * degraded state is logged now (see upstreamHealth) rather than shown.
  *
  * Ingest progress is deliberately not here: the timeline owns that state and
  * says it in motion (see IngestBeacon/IngestGhosts).
@@ -163,7 +163,6 @@ export function CommandBar({
           color: "var(--fg-faint)",
         }}
       >
-        {page && <AsOf iso={page.meta.asOf} />}
         {/* The storyline view is not a search, so there is nothing to narrow. */}
         {!view && (
           <FilterChipRow
@@ -173,8 +172,8 @@ export function CommandBar({
           />
         )}
       </div>
-      {/* S8's verdict: surfaced storylines live in the chrome, under the asOf
-          stamp — never in the results, which they are not part of. Suppressed
+      {/* S8's verdict: surfaced storylines live in the chrome, in the meta row
+          — never in the results, which they are not part of. Suppressed
           in the view itself, which is already about one storyline. */}
       {!view && (
         <StorylinePills
@@ -258,20 +257,4 @@ function useUpstreamHealthLog(page: TimelinePage | undefined) {
     lastLogged.current = key;
     console.warn("[zammy]", record);
   }, [page]);
-}
-
-/** The response's asOf freshness stamp: day, date, time, timezone (§8.1). */
-function AsOf({ iso }: { iso: string }) {
-  return (
-    <time dateTime={iso}>
-      {new Intl.DateTimeFormat(undefined, {
-        weekday: "long",
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        timeZoneName: "short",
-      }).format(new Date(iso))}
-    </time>
-  );
 }

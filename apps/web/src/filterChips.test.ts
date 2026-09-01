@@ -4,9 +4,9 @@ import { filterChips } from "./filterChips.js";
 
 /**
  * The command bar's filter chips (§8.1): what the reader's current topic is
- * filtered to, stated in the meta row beside the asOf stamp — location, and
- * only location since ADR-0020 retired the category chip. There is no language
- * chip either: language always defaults to English for now (browserDefaults.ts).
+ * filtered to, stated in the meta row — location, and only location since
+ * ADR-0020 retired the category chip. There is no language chip either:
+ * language always defaults to English for now (browserDefaults.ts).
  *
  * Codes are what travels (§2); names are what a chip's LIST shows. The country
  * chip reads as a place ("Canada") because a bare "CA" says nothing.
