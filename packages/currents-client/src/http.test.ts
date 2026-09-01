@@ -684,9 +684,23 @@ describe("latestNews — the /v2 breadth-sample endpoint (PROBE-FINDINGS 6c)", (
 });
 
 describe("per-call date range ceiling (observed live 2026-08-11)", () => {
+  /**
+   * A fixed clock, because `clampSearchParams` applies the LOOKBACK clamp before
+   * it checks the range, and both windows below are hardcoded.
+   *
+   * Left on the wall clock these tests decay silently and in opposite
+   * directions: once `2026-08-01` falls outside `maxLookbackDays` (30) the clamp
+   * pulls `startDate` forward to "now − 30 days", the 8-day span narrows under
+   * the 7-day ceiling, and the test that asserts a REFUSAL gets a resolved
+   * promise instead. Its sibling below decays the other way. Pinning `now` a day
+   * after the widest window keeps both about the range ceiling they are named
+   * for.
+   */
+  const NOW = () => Date.parse("2026-08-11T00:00:00.000Z");
+
   it("refuses a search wider than maxRangeDays locally — never spends the call", async () => {
     const { fetch, calls } = stubFetch([{ body: okBody(20), headers: quotaHeaders() }]);
-    const client = makeClient({ fetch });
+    const client = makeClient({ fetch, now: NOW });
 
     // Upstream: 400 "date_range: Max range is 7 days". Clamping down instead
     // of throwing would be worse than the error: the planner records coverage
@@ -707,7 +721,7 @@ describe("per-call date range ceiling (observed live 2026-08-11)", () => {
 
   it("allows exactly the ceiling", async () => {
     const { fetch, calls } = stubFetch([{ body: okBody(1), headers: quotaHeaders() }]);
-    const client = makeClient({ fetch });
+    const client = makeClient({ fetch, now: NOW });
 
     await client.search({
       keywords: ["climate"],
