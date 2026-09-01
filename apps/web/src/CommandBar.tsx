@@ -163,14 +163,15 @@ export function CommandBar({
           color: "var(--fg-faint)",
         }}
       >
-        {/* The storyline view is not a search, so there is nothing to narrow. */}
-        {!view && (
-          <FilterChipRow
-            filters={topic}
-            reference={reference}
-            onChange={(filters) => onSearch({ ...topic, ...filters })}
-          />
-        )}
+        {/* The storyline view is not a search, so the location chip here only
+            sets what the reader leaves with — it narrows the search they
+            return to, not this storyline's own coverage. The theme toggle
+            rides along regardless, since it isn't a filter at all. */}
+        <FilterChipRow
+          filters={topic}
+          reference={reference}
+          onChange={(filters) => onSearch({ ...topic, ...filters })}
+        />
       </div>
       {/* S8's verdict: surfaced storylines live in the chrome, in the meta row
           — never in the results, which they are not part of. Suppressed
