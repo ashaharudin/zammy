@@ -59,6 +59,29 @@ describe("pageCacheKey", () => {
       pageCacheKey("f".repeat(64), window, "c", 25),
     );
   });
+
+  it("cannot reach a page the PREVIOUS shape cached", async () => {
+    // What `PAGE_SHAPE_VERSION` is for, tested as a mechanism rather than at a
+    // particular number: cached pages are returned without re-validation, so a
+    // deploy that changes the wire shape and forgets the bump serves the old
+    // shape to a client parsing with the new schema for up to 24 hours.
+    //
+    // The previous version's key is derived from the current one rather than
+    // written out, so this keeps meaning the same thing after the next bump —
+    // and the assertion is over `readCachedPage`, not over the two strings,
+    // because "different key" is only the half of it that is easy to believe.
+    const key = pageCacheKey("f".repeat(64), window, null, 25);
+    const previous = key.replace(/^page:v(\d+):/, (_, v: string) => `page:v${Number(v) - 1}:`);
+    expect(previous).not.toBe(key);
+
+    await writeCachedPage(redis, previous, { items: ["the old shape"] }, 5_000);
+    try {
+      expect(await readCachedPage(redis, previous)).not.toBeNull();
+      expect(await readCachedPage(redis, key)).toBeNull();
+    } finally {
+      await redis.del(previous);
+    }
+  });
 });
 
 describe("read/write round-trip", () => {

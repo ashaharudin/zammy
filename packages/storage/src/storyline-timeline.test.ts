@@ -31,7 +31,7 @@ const TZ = "UTC";
 
 /** Every article on the page, in timeline order. */
 const articlesOn = (page: StorylineTimelinePage) =>
-  page.items.flatMap((slot) => slot.members.map((member) => member.article));
+  page.items.flatMap((slot) => slot.members);
 
 /**
  * Give every group its own provisional storyline — the state the linker leaves
@@ -292,7 +292,7 @@ describe("a storyline's day is one slot in the timeline", () => {
       limit: 25,
       timeZone: TZ,
     });
-    const times = page.items[0]!.members.map((m) => Date.parse(m.article.published));
+    const times = page.items[0]!.members.map((m) => Date.parse(m.published));
     for (let i = 1; i < times.length; i++) {
       expect(times[i]).toBeLessThanOrEqual(times[i - 1]!);
     }
@@ -334,7 +334,7 @@ describe("a storyline's day is one slot in the timeline", () => {
     });
     expect(page.items).toHaveLength(1);
     expect(page.items[0]!.members).toHaveLength(1);
-    expect(page.items[0]!.members[0]!.article.id).toBe(only.id);
+    expect(page.items[0]!.members[0]!.id).toBe(only.id);
   });
 
   it("splits a storyline's coverage across days into one slot each", async () => {

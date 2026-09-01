@@ -23,6 +23,25 @@ export const Article = z.object({
    * natural key would re-key live cursors every time the rule widened (ADR-0002).
    */
   id: z.string().regex(/^\d+$/),
+  /**
+   * The **group** this article belongs to — one story as several outlets ran
+   * it (CONTEXT.md, Group). A decimal string for the same reason `id` is one:
+   * it IS an article id, the seed's.
+   *
+   * Here because the browser needs it, which is ADR-0004's whole test. The rail
+   * cuts a slot into the parts of the day its coverage reached and must not
+   * draw one piece twice when its copies straddle a boundary, so it has to know
+   * which articles are one piece. Sending the members flat and letting the
+   * browser infer that made it infer from exact title equality, which cannot
+   * tell two "Live updates" apart (`apps/web/src/format.ts`, `railSlots`).
+   *
+   * On the article rather than around it: `articles.group_id` is NOT NULL and
+   * self-seeded, so every article is in a group whether or not anyone else ran
+   * the story (migration 0003). Nesting the wire's `moreCoverage` by group
+   * instead would have made the disclosure's rows group-major, where §14.3 has
+   * them newest-first.
+   */
+  groupId: z.string().regex(/^\d+$/),
   url: z.url(),
   title: z.string().min(1),
   description: z.string().nullable(),

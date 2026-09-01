@@ -45,13 +45,17 @@ export function freshnessTier(windowEnd: Date, now: Date): "hot" | "recent" | "h
  *       been quiet since March rather than leaving the reader to wonder (S8's
  *       verdict, ADR-0011's Lifecycle)
  *   8 — `storylinePhrase` removed with the day-bounded model it named (S9)
+ *   9 — every article carries `groupId`: the rail cuts a slot into parts of
+ *       the reader's day and must know which articles are one piece, which it
+ *       had been inferring from exact title equality (ADR-0004's test — the
+ *       browser needs it — and CONTEXT.md's Group)
  *
  * The bump stops a page cached by an older BUILD reaching a client parsing with
  * the new schema. It briefly also had to keep the two MODELS apart, since both
  * wrote shape 5 — the key carried a `model` segment for exactly as long as
  * there were two. Migration 0012 left one, so the segment went with it.
  */
-const PAGE_SHAPE_VERSION = 8;
+const PAGE_SHAPE_VERSION = 9;
 
 /** page:v<shape>:<fingerprint>:<windowHash>:<cursor>:<limit> (§7.1). */
 export function pageCacheKey(

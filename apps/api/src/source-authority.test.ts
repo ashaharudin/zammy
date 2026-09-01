@@ -14,6 +14,10 @@ import { chooseRepresentative, isTier1, TIER_1_SOURCES } from "./source-authorit
 function article(overrides: Partial<Article> & { id: string }): Article {
   return {
     id: overrides.id,
+    // These are a GROUP's members by the time they reach `chooseRepresentative`
+    // — the caller has already read `groupId` to split them — so one id for all
+    // of them is what the real call site passes.
+    groupId: overrides.groupId ?? "group",
     url: overrides.url ?? `https://example.com/${overrides.id}`,
     title: overrides.title ?? `story ${overrides.id}`,
     description: null,

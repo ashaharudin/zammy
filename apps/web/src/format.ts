@@ -192,10 +192,12 @@ export function timeLabel(iso: string, timeZone: string): string {
  *
  * Which headline: the EARLIEST article the part holds. That is the rule a
  * storyline day already follows — its earliest as the hero — applied one level
- * down, and it is the only rule available here, since the wire carries
- * `moreCoverage` as a flat list with the group structure §14.3 chooses a
- * representative within already spent. The part the storyline's day BEGINS in
- * keeps the service's own choice.
+ * down. It is no longer the only rule AVAILABLE: the wire now names each
+ * article's group (`Article.groupId`), so a part of the day could choose within
+ * its heading group by source authority the way §14.3 chooses within a slot's
+ * lead. Deliberately not done here — changing which headline a reader sees is
+ * its own change with its own review, and burying it under a wire change would
+ * hide it. The part the storyline's day BEGINS in keeps the service's choice.
  *
  * Promoting a row is safe on the one count §14.3 cares about: a slot's members
  * are already scoped to the topic that asked (`readStorylineTimelinePage` step
@@ -210,6 +212,7 @@ export function timeLabel(iso: string, timeZone: string): string {
  * is separate enough to stand in a part of the day of its own. It arrives
  * flattened, though, so a promoted headline can have copies of its own among
  * the rows beside it; those become the new card's `related`, not its coverage.
+ * Which of them are copies is `groupId`, not a guess at it.
  *
  * A slot's coverage is filed by the article's OWN day as well as its own part
  * of the day. A storyline's day is bounded in `APP_TIMEZONE`, which is never
@@ -329,13 +332,18 @@ export function groupByDay(items: TimelineEntry[], now: Date, timeZone: string):
  * move" exists to prevent. So copies are folded first, and a headline goes
  * wherever its EARLIEST copy ran, the rest of them with it.
  *
- * Exact title is the fold, the signal `collapseCopies` already folds rows by:
- * near-identical wire variants stay separate, which is honest about what the
- * outlets printed. It is a weaker signal than the group ids, which are spent
- * upstream — a title reducing to fewer than two content tokens ("The Latest",
- * "Live updates") can never group at all, so two genuinely different pieces can
- * share one — but two cards under one headline are indistinguishable to a
- * reader whatever produced them, so folding is right either way.
+ * The GROUP is the fold: `groupId` says which articles are one piece, which is
+ * the same fact §14.3 read to choose the slot's lead, now carried through
+ * rather than respent. It used to be reconstructed from exact title equality,
+ * a strictly weaker signal — a title reducing to fewer than two content tokens
+ * ("The Latest", "Live updates") can never group at all, so two genuinely
+ * different pieces shared one and the rail drew them as a single card. Under
+ * group identity they are two cards, which is what they are.
+ *
+ * The flat wire order is what fills the lists, untouched. `moreCoverage`
+ * arrives newest-first ACROSS groups and that is the order the disclosure
+ * renders in, so the fold decides where an article goes and never in what
+ * order it sits once there.
  */
 function railSlots(
   entry: TimelineEntry,
@@ -345,70 +353,60 @@ function railSlots(
   const leadSegment = segmentOf(entry.published, timeZone);
   const lead = segmentKey(leadDay, leadSegment);
 
-  // Where each HEADLINE goes: the lead card's own copies, the lead's bucket, or
-  // a bucket of its own. Buckets are keyed by day AND part, because a slot can
-  // reach the same part of two days — an `APP_TIMEZONE` day is 24 hours
-  // wherever it starts.
-  const byTitle = new Map<string, Article[]>();
+  // Where each PIECE goes: the lead's bucket, or a bucket of its own. Buckets
+  // are keyed by day AND part, because a slot can reach the same part of two
+  // days — an `APP_TIMEZONE` day is 24 hours wherever it starts.
+  //
+  // There is no third destination any more. A copy of the representative's own
+  // story cannot BE here: the service builds `moreCoverage` from the non-lead
+  // groups (`apps/api/src/timeline-read.ts`, `toEntry`), so everything in it is
+  // a different piece by the same reckoning that chose the representative. The
+  // branch that used to divert one by its title was catching the title fold's
+  // own false merges.
+  const byGroup = new Map<string, Article[]>();
   for (const article of entry.moreCoverage) {
-    const copies = byTitle.get(article.title);
+    const copies = byGroup.get(article.groupId);
     if (copies) copies.push(article);
-    else byTitle.set(article.title, [article]);
+    else byGroup.set(article.groupId, [article]);
   }
   const destination = new Map<string, string>();
   const buckets = new Map<string, { day: string; segment: Segment; articles: Article[] }>();
-  for (const [title, copies] of byTitle) {
-    // A copy of the representative's OWN story, however far from it the wire
-    // put it: the lead card's "same story", never a second headline card.
-    if (title === entry.article.title) {
-      destination.set(title, SAME_STORY);
-      continue;
-    }
+  for (const [groupId, copies] of byGroup) {
     const anchor = copies[earliestIndex(copies)]!;
     const day = dayKey(anchor.published, timeZone);
     const segment = segmentOf(anchor.published, timeZone);
     const bucket = segmentKey(day, segment);
-    destination.set(title, bucket);
+    destination.set(groupId, bucket);
     if (bucket !== lead && !buckets.has(bucket)) buckets.set(bucket, { day, segment, articles: [] });
   }
 
   // Filled in the order the wire sent, so every list stays newest first (§14.3)
   // rather than headline-major.
   const here: Article[] = [];
-  const sameStory: Article[] = [];
   for (const article of entry.moreCoverage) {
-    const bucket = destination.get(article.title)!;
-    if (bucket === SAME_STORY) sameStory.push(article);
-    else if (bucket === lead) here.push(article);
+    const bucket = destination.get(article.groupId)!;
+    if (bucket === lead) here.push(article);
     else buckets.get(bucket)!.articles.push(article);
   }
 
-  const related = [...entry.related, ...sameStory];
-  const slots: { day: string; segment: Segment; slot: RailSlot }[] = [
-    {
+  const slots = [
+    // The lead keeps its POSITION — `entry.published`, §7.3's keyset axis — and
+    // the rail's order has to be the one the API paged by. It is also that
+    // day's earliest across the whole storyline while members are per-topic
+    // (`readStorylineTimelinePage`), so on a keyword search it can predate
+    // every article this reader can see, and the part of the day it files the
+    // lead under is then a part holding nothing else. That predates this cut
+    // and is §14.3's own trade; what the cut must not do is move a slot's
+    // coverage away and leave the position's card claiming rows it no longer
+    // has.
+    card(entry, {
       day: leadDay,
       segment: leadSegment,
-      slot: {
-        ...entry,
-        key: slotKey(entry, leadDay, leadSegment, entry.article),
-        related,
-        moreCoverage: here,
-        // Recomputed rather than taken from the wire, where `updatedAt` is the
-        // newest member of the WHOLE slot: a card must not stamp itself updated
-        // from coverage now drawn elsewhere on the rail.
-        //
-        // `published` is left alone — it is the slot's POSITION (§7.3's keyset
-        // axis), and the rail's order has to be the one the API paged by. It is
-        // also that day's earliest across the whole storyline while members are
-        // per-topic (`readStorylineTimelinePage`), so on a keyword search it can
-        // predate every article this reader can see, and the part of the day it
-        // files the lead under is then a part holding nothing else. That
-        // predates this cut and is §14.3's own trade; what the cut must not do
-        // is move a slot's coverage away and leave the position's card claiming
-        // rows it no longer has.
-        updatedAt: latestPublished([entry.article, ...related, ...here], entry.published),
-      },
-    },
+      headline: entry.article,
+      published: entry.published,
+      related: entry.related,
+      moreCoverage: here,
+    }),
   ];
   for (const { day, segment, articles } of buckets.values()) {
     // The earliest headline heads the card, its own copies beside it as the
@@ -419,27 +417,64 @@ function railSlots(
     const coverage: Article[] = [];
     for (const article of articles) {
       if (article === headline) continue;
-      (article.title === headline.title ? copies : coverage).push(article);
+      (article.groupId === headline.groupId ? copies : coverage).push(article);
     }
-    slots.push({
-      day,
-      segment,
-      slot: {
-        ...entry,
-        key: slotKey(entry, day, segment, headline),
-        article: headline,
+    slots.push(
+      card(entry, {
+        day,
+        segment,
+        headline,
         published: headline.published,
-        updatedAt: latestPublished(articles, headline.published),
         related: copies,
         moreCoverage: coverage,
-      },
-    });
+      }),
+    );
   }
   return slots;
 }
 
-/** Not a bucket: a headline that belongs to the lead card's own same story. */
-const SAME_STORY = "same story";
+/**
+ * One card of a cut slot: a `RailSlot` and where on the rail it goes.
+ *
+ * A function rather than two object literals because of `updatedAt`, which is
+ * the one field neither the entry nor the caller can supply. It is NOT the
+ * wire's, which is the newest member of the WHOLE slot: a card must not stamp
+ * itself updated from coverage now drawn elsewhere on the rail. So it is read
+ * off what this card actually holds, floored at the card's own position — one
+ * definition, applied to the lead and to every part of the day promoted out of
+ * it alike, where two literals were two chances to disagree.
+ */
+function card(
+  entry: TimelineEntry,
+  // Named, not positional: `related` and `moreCoverage` are two `Article[]`
+  // that render under different headings, and swapping them at a call site
+  // would file every follow-up as a copy without failing a type.
+  at: {
+    day: string;
+    segment: Segment;
+    headline: Article;
+    published: string;
+    related: Article[];
+    moreCoverage: Article[];
+  },
+): { day: string; segment: Segment; slot: RailSlot } {
+  return {
+    day: at.day,
+    segment: at.segment,
+    slot: {
+      ...entry,
+      key: slotKey(entry, at.day, at.segment, at.headline),
+      article: at.headline,
+      published: at.published,
+      related: at.related,
+      moreCoverage: at.moreCoverage,
+      updatedAt: latestPublished(
+        [at.headline, ...at.related, ...at.moreCoverage],
+        at.published,
+      ),
+    },
+  };
+}
 
 /**
  * A card's React identity. The headline is part of it: an article arriving for

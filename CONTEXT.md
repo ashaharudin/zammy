@@ -52,7 +52,10 @@ The article whose headline a timeline slot shows. Chosen per topic from the slot
 largest the storyline shows that day — among the members that matched that search, by source
 authority; never by how often upstream re-emitted it. It heads the part of the day the slot's own
 time falls in; a card the rail cut out of a LATER part is headed by the earliest article that part
-holds, the wire carrying no group structure below the slot to choose within.
+holds. That was once forced — the wire carried no group structure below the slot to choose within —
+and is now a deliberate hold: every article names its group (`Article.groupId`), so source authority
+could pick within the part's heading group the way it picks within a slot's lead. Changing which
+headline a reader sees is its own change, and it has not been made.
 _Avoid_: primary, canonical, best, winner
 
 **Seed**:

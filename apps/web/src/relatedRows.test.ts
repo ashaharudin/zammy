@@ -14,6 +14,10 @@ import { collapseCopies, outletLinks } from "./relatedRows.js";
 
 const article = (id: string, overrides: Partial<Article> = {}): Article => ({
   id,
+  // A group of one, the state every article is born in (migration 0003).
+  // Override it to put two articles in one piece: these rows fold by title
+  // WITHIN a group, so the default keeps every fixture article distinct.
+  groupId: id,
   url: `https://example.com/${id}`,
   title: `story ${id}`,
   description: null,
@@ -31,7 +35,10 @@ const article = (id: string, overrides: Partial<Article> = {}): Article => ({
 
 describe("collapseCopies", () => {
   it("folds word-identical titles into one row carrying every copy", () => {
-    const wire = { title: "The Latest: markets rally" };
+    // One piece as two outlets ran it — same group, same words, two URLs. That
+    // is what CONTEXT.md's Group entry describes, and it is the shape this fold
+    // exists for.
+    const wire = { title: "The Latest: markets rally", groupId: "7" };
     const a = article("1", wire);
     const b = article("2", wire);
     const other = article("3");
@@ -43,6 +50,21 @@ describe("collapseCopies", () => {
     expect(rows[0]?.article).toBe(a);
     expect(rows[0]?.copies).toEqual([a, b]);
     expect(rows[1]?.copies).toEqual([other]);
+  });
+
+  it("keeps two different pieces that share a headline apart", () => {
+    // The residue of the title-only fold, one level below the rail's cut. A
+    // bucket holds every group whose anchor landed in the same part of the day,
+    // so two unrelated pieces can collide on a low-token headline — and a single
+    // row would claim they were one piece. `groupId` is on the wire now, so this
+    // is answerable rather than a known weakness of the signal.
+    const rows = collapseCopies([
+      article("1", { title: "Live updates", groupId: "10" }),
+      article("2", { title: "Live updates", groupId: "20" }),
+    ]);
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.copies.length)).toEqual([1, 1]);
   });
 
   it("keeps near-identical wire variants as separate rows", () => {

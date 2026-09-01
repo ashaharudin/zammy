@@ -26,12 +26,6 @@ import { hexToBytea, type Database, type StorylineStatus } from "./database.js";
  * under "related" (§14.3).
  */
 
-/** One member of a slot, with the group it belongs to. */
-export interface StorylineSlotMember {
-  article: Article;
-  groupId: string;
-}
-
 /** One storyline-day: what the reader pages over. */
 export interface StorylineSlot {
   storylineId: string;
@@ -39,8 +33,15 @@ export interface StorylineSlot {
   dayKey: string;
   /** That day's earliest article across the storyline: the keyset axis. */
   published: string;
-  /** Members this topic can see, newest first. Never empty. */
-  members: StorylineSlotMember[];
+  /**
+   * Members this topic can see, newest first. Never empty.
+   *
+   * Plain articles, because the group each belongs to now rides on the article
+   * itself (`Article.groupId`). The wrapper that used to carry it alongside
+   * held the same bigint twice, and two copies of one fact are two chances to
+   * read the stale one.
+   */
+  members: Article[];
   label: string | null;
   status: StorylineStatus;
   /** The storyline's whole span, for the label-collision disambiguator. */
@@ -140,9 +141,9 @@ export async function readStorylineTimelinePage(
     order by a.published desc, a.id desc
   `.execute(db);
 
-  const bySlot = new Map<string, StorylineSlotMember[]>();
+  const bySlot = new Map<string, Article[]>();
   for (const row of members) {
-    const member = { article: toArticle(row), groupId: String(row.group_id) };
+    const member = toArticle(row);
     const list = bySlot.get(row.slot_key);
     if (list) list.push(member);
     else bySlot.set(row.slot_key, [member]);
@@ -321,6 +322,7 @@ export async function findSurfacedStorylines(
 function toArticle(row: Record<string, unknown>): Article {
   return Article.parse({
     id: String(row.id),
+    groupId: String(row.group_id),
     url: row.url,
     title: row.title,
     description: row.description,
