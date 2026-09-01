@@ -87,9 +87,35 @@ describe("buildApp", () => {
     // Distinctive keywords so this run cannot hit a previous run's page cache
     // (fingerprints are deterministic by design, and Redis outlives the test).
     const q = encodeURIComponent(`climate ${randomUUID().slice(0, 8)}`);
+
+    /**
+     * The window is RELATIVE to now, because this is the ONE suite that runs
+     * the real wiring, and the real wiring's clock is `() => new Date()`
+     * (`wiring.ts:379`). Nothing here can pin it.
+     *
+     * A hardcoded `2026-08-01 → 2026-08-06` was therefore measured against a
+     * horizon that moves: `subtractCoverage` clamps the requested window to
+     * `planHorizon(now, 30)` before diffing, so once the window sank entirely
+     * below `now − 30d` it clamped to empty, nothing was planned, nothing was
+     * fetched, and `topic.coverage` came back null — a wiring test failing on
+     * the calendar rather than on the wiring. It had four days left when this
+     * was written: `planHorizon` reaches the window's `to` — 2026-08-06, plus
+     * 30 days, less the 15-minute plan slack — at 2026-09-04T23:45Z.
+     *
+     * 6 → 1 days back is wrong in no direction at once: well inside the 30-day
+     * lookback so nothing clamps, and a 5-day span well under the 7-day
+     * per-call range ceiling so nothing slices. The dates are not load-bearing
+     * beyond that — the random second keyword matches nothing in the fixture
+     * corpus whatever window it is asked over, which is what makes an empty,
+     * fully-covered timeline the assertion below.
+     */
+    const DAY_MS = 86_400_000;
+    const now = Date.now();
+    const from = new Date(now - 6 * DAY_MS).toISOString();
+    const to = new Date(now - 1 * DAY_MS).toISOString();
     const response = await built.app.inject({
       method: "GET",
-      url: `/api/v1/timeline?q=${q}&from=2026-08-01T00:00:00Z&to=2026-08-06T00:00:00Z`,
+      url: `/api/v1/timeline?q=${q}&from=${from}&to=${to}`,
     });
 
     expect(response.statusCode).toBe(200);

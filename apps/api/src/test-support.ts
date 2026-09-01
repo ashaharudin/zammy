@@ -187,11 +187,27 @@ export async function createTestHarness(
 
   const store = new FixtureStore(FIXTURES_DIR);
   await store.load();
-  const fixtureClient = new FixtureCurrentsClient(store, FIXTURE_LIMITS, {
-    dailyLimit: 1000,
-    burstLimit: 60,
-  });
   const clock = createTestClock(now);
+  const fixtureClient = new FixtureCurrentsClient(
+    store,
+    FIXTURE_LIMITS,
+    { dailyLimit: 1000, burstLimit: 60 },
+    // **The harness clock reaches the client too, not just `deps.now()`.**
+    //
+    // The client clamps to `maxLookbackDays` before it touches the store, so a
+    // client left on the wall clock silently narrows every window the fixtures
+    // are dated over as those dates age — while the planner above it, reading
+    // the pinned clock, plans and records the FULL span. The two disagree, and
+    // the disagreement is invisible: the fetch just returns less. On 2026-09-01
+    // it turned the truncation cases into completions, because a corpus of 180
+    // came back as 98 and the fifth page was short.
+    //
+    // A test that pins `now` is asking for one world at one instant, and this
+    // is the other half of granting that. Passing the same clock is also what
+    // makes the fixture path match live, where `HttpCurrentsClient` has always
+    // clamped against `this.transport.now()`.
+    { now: () => clock.now().getTime() },
+  );
   const counting = new CountingClient(fixtureClient, clock);
 
   const redis = new Redis(REDIS_URL);
