@@ -38,6 +38,36 @@ export interface LabelDecision {
 }
 
 /**
+ * What `label_source` records for a model-produced label.
+ *
+ * Provenance, not a category: `bigram` and a model id are both answers to
+ * "would a relabel against the currently-configured model change this". Which
+ * is why the value has a READER as well as three writers —
+ * `backfillStorylines`'s `--relabel` resume compares the stored string against
+ * the model it is about to spend on, and treats a difference as "not done yet".
+ *
+ * A function, and exported, because the writers and that reader disagreeing is
+ * not a hypothetical: `wiring.createLabeler` did not set `modelId`, so the
+ * server, the chore and `pnpm label:storylines` all wrote the literal `"model"`
+ * while the resume looked for `gemma-3-27b-it` — and a relabel campaign
+ * re-bought every row it had already paid for. One expression, one place.
+ *
+ * The `"model"` fallback survives the fix rather than becoming dead code. It is
+ * unreachable from any configured path now (every one crosses `createLabeler`,
+ * which sets `modelId` whenever there is a key, and `operator-command.test.ts`
+ * pins that over the whole set of commands), but `modelId` is optional on
+ * `LabelerDeps` and hand-built deps — tests, and anything that grows one later
+ * — can still omit it. For those the honest answer is "a model named this, and
+ * we cannot say which": writing `null` instead would read as never labelled,
+ * and dropping the fallback would put `undefined` in the column. What made the
+ * old literal a bug was not the string, it was that two files chose it
+ * separately.
+ */
+export function modelLabelSource(modelId: string | undefined): string {
+  return modelId ?? "model";
+}
+
+/**
  * Does this storyline need a label right now?
  *
  * Promotion and merge are events the caller observed, so they are answered by

@@ -26,10 +26,21 @@ import type { SummarizerDeps } from "./storyline-summary-service.js";
  *     pacing. The pacing matters most: the ceiling being paced is on the KEY
  *     both processes share (STORYLINE-LABELS, "The rate limit").
  *
- * Neither is exported for the operator CLIs to use. `regroup` disables the
- * linker outright and `backfill:storylines` deliberately differs (no coherence
- * gate, its own `--label-rate`), so their divergence is a decision each one
- * documents — not the accidental kind this module exists to prevent.
+ * `createLinkerConfig` is not exported for the operator CLIs to use: `regroup`
+ * disables the linker outright and `backfill:storylines` deliberately differs
+ * (no coherence gate, its own `--label-rate`), so their divergence is a
+ * decision each one documents — not the accidental kind this module exists to
+ * prevent.
+ *
+ * `createLabeler` **is** what the CLIs use, as of the operator-command
+ * refactor, and that is the same argument rather than an exception to it. Five
+ * of them hand-rolled a Gemini client and the pacing drifted exactly as this
+ * header predicts it would: `merge:storyline-labels` omitted
+ * `maxRequestsPerMinute` altogether and took `gemini.ts`'s literal 30 rpm
+ * against a deployment configured for 15 — 2x the ceiling on the shared key,
+ * from a line that looked complete. What those five legitimately differ on is
+ * one or two fields with a reason attached, so they pass `LabelerOverrides`
+ * and the reason stays beside the field. See `operator-command.ts`.
  */
 
 /** Everything a labelling call needs except the database handle. */
@@ -164,6 +175,28 @@ export function createLabelMergeRules(config: Config): LabelMergeRules {
 }
 
 /**
+ * The two or three client fields ONE operator command legitimately sets
+ * differently, each with its reason written beside it at the call site.
+ *
+ * Deliberately narrow. Everything absent from this type — the key, the base
+ * URL, the thinking level, the timeout, the sample size, the drift factor — is
+ * not a per-command decision, and the whole point of routing the CLIs through
+ * `createLabeler` is that they cannot quietly make it one.
+ */
+export interface LabelerOverrides {
+  /**
+   * A sibling model, for the measurement CLI that continues on another model's
+   * quota once one is spent. It also becomes `modelId`, because what
+   * `label_source` must record is the model that was actually called.
+   */
+  model?: string;
+  /** A rate below the configured ceiling. Above it buys nothing: see below. */
+  maxRequestsPerMinute?: number;
+  /** How long a call will sit in the pacer's queue before giving up. */
+  maxRateWaitMs?: number;
+}
+
+/**
  * The labeler (ADR-0011's Labels). No key is a supported configuration and not a
  * degraded one: the generator is null, the bigram extractor becomes the only
  * path, and it renders.
@@ -174,6 +207,15 @@ export function createLabelMergeRules(config: Config): LabelMergeRules {
  * admitting `GEMINI_MAX_RPM` is up to 2x the ceiling on the shared key, caught
  * by the 429 cooldown rather than by the window (STORYLINE-LABELS, "The pacer's
  * scope"). The chore runner's lever for staying under it is `--label-rate`.
+ *
+ * **`modelId` is set here**, and it is the field this function used to leave
+ * out. `storyline-label-service.ts` falls back to the literal string `"model"`
+ * without it, so the server path, the chore path and `pnpm label:storylines`
+ * all stamped `label_source = 'model'` while `backfill:storylines --relabel`
+ * computed its "already current" target as the real model id — and re-spent
+ * model quota on every row that was already current. The two now cannot
+ * disagree: `modelLabelSource` in `storyline-label.ts` is the one place the
+ * value is decided, and this is the one place the id comes from.
  */
 export function createLabeler(
   config: Config,
@@ -183,20 +225,27 @@ export function createLabeler(
    * which is correct for every caller that has only one model on the key.
    */
   pacer?: ModelPacer,
+  /** One command's documented divergence — see `LabelerOverrides`. */
+  overrides: LabelerOverrides = {},
 ): Labeler {
+  const model = overrides.model ?? config.GEMINI_MODEL;
   return {
     generator: config.GEMINI_API_KEY
       ? createGeminiClient({
           apiKey: config.GEMINI_API_KEY,
-          model: config.GEMINI_MODEL,
+          model,
           baseUrl: config.GEMINI_BASE_URL,
           thinkingLevel: config.GEMINI_THINKING_LEVEL,
           timeoutMs: config.GEMINI_TIMEOUT_MS,
-          maxRequestsPerMinute: config.GEMINI_MAX_RPM,
-          maxRateWaitMs: config.GEMINI_MAX_RATE_WAIT_MS,
+          maxRequestsPerMinute: overrides.maxRequestsPerMinute ?? config.GEMINI_MAX_RPM,
+          maxRateWaitMs: overrides.maxRateWaitMs ?? config.GEMINI_MAX_RATE_WAIT_MS,
           ...(pacer ? { pacer } : {}),
         })
       : null,
+    // No key, no call, no model id: a row must not claim provenance from a
+    // model that was never asked. `setStorylineLabel` records `bigram` or null
+    // on that path, which is the truth.
+    ...(config.GEMINI_API_KEY ? { modelId: model } : {}),
     sampleSize: config.STORYLINE_LABEL_SAMPLE,
     driftFactor: config.STORYLINE_LABEL_DRIFT_FACTOR,
     logger,

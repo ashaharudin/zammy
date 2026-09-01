@@ -10,6 +10,7 @@ import type { TextGenerator } from "./gemini.js";
 import {
   buildLabelPrompt,
   fallbackLabel,
+  modelLabelSource,
   needsLabel,
   selectLabelMembers,
   validateLabel,
@@ -153,8 +154,12 @@ export interface LabelerDeps {
   /**
    * How a model-produced label is recorded — the configured model id. Stored on
    * the row so a relabel campaign can ask "is this label from the model I have
-   * now", which is what makes such a campaign resumable. Defaults to the
-   * unhelpful-but-honest `"model"` when a caller does not say.
+   * now", which is what makes such a campaign resumable.
+   *
+   * `wiring.createLabeler` always sets it when there is a key, and every
+   * configured path crosses `createLabeler`, so the `"model"` default is
+   * unreachable in production and belongs to deps built by hand
+   * (`modelLabelSource` says why it stays).
    */
   modelId?: string;
   sampleSize: number;
@@ -257,10 +262,10 @@ export async function labelStoryline(
     labelWords: label === null ? [] : labelWords(label),
     labelAt: now(),
     labelGroupCount: groupCount,
-    // Provenance, not a category: `bigram` and a model id are both answers to
-    // "would a relabel against the currently-configured model change this".
+    // Provenance, decided in one place for the writers and the `--relabel`
+    // resume that reads them back (`modelLabelSource`).
     labelSource:
-      source === "model" ? (deps.modelId ?? "model") : source === "bigram" ? "bigram" : null,
+      source === "model" ? modelLabelSource(deps.modelId) : source === "bigram" ? "bigram" : null,
   });
 
   return { storylineId: storyline.id, label, source, trigger, modelFailure, groupCount };

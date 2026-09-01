@@ -14,7 +14,7 @@ import {
 import { readTrailingCorpus } from "./story-df.js";
 import { linkGroup, type LinkerDeps } from "./storyline-linker.js";
 import { labelStoryline, type LabelerDeps } from "./storyline-label-service.js";
-import { needsLabel } from "./storyline-label.js";
+import { modelLabelSource, needsLabel } from "./storyline-label.js";
 
 /**
  * The full-history backfill (ADR-0011's Rollout, S5): replay the linker over
@@ -451,7 +451,7 @@ export async function labelPass(
 
   const forcing = options.relabel === true || options.relabelAll === true;
   /** The model whose labels count as already-done for this campaign. */
-  const target = labeler.generator ? (labeler.modelId ?? "model") : "bigram";
+  const target = labeler.generator ? modelLabelSource(labeler.modelId) : "bigram";
 
   const shouldLabel = (storyline: {
     labelAt: Date | null;
