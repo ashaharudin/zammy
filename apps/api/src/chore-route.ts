@@ -146,6 +146,17 @@ async function bootFromEnvironment(): Promise<StorylinePassDeps> {
       maxLabels: config.CHORE_MAX_LABELS,
       labelBudgetMs: config.CHORE_LABEL_BUDGET_MS,
       lateCandidateSweep: config.STORYLINE_LATE_CANDIDATE_SWEEP,
+      // The two flags that decide whether a pass DOES anything belong on the
+      // one line that says what this deployment is configured to do. Without
+      // `summariesEnabled` here, "is the preserve on in production?" had no
+      // answer short of a redeploy and a dig through `configuration loaded` —
+      // and the honest answer that time was "the flag is on and nothing has
+      // ever called the pass", which this line would not have caught either.
+      // What it does catch is the other half: a flag that never reached the
+      // running function because the variable was added after the deployment.
+      summariesEnabled: config.SUMMARIES_ENABLED,
+      summaryBudgetMs: config.SUMMARY_BUDGET_MS,
+      maxSummaries: config.SUMMARY_MAX_PER_RUN,
     },
     "chore route booted",
   );

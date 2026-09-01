@@ -5,6 +5,32 @@
 -- idempotent: `cron.schedule` upserts by job name, so re-running it after a
 -- deployment URL changes is the supported way to update the jobs.
 --
+-- ── NOTHING APPLIES THIS FILE FOR YOU ────────────────────────────────────────
+--
+-- Not CI, not the deploy. `.github/workflows/ci.yml` runs `pnpm db:migrate` and
+-- the regroup repair against production and touches pg_cron in no way at all.
+-- **Editing this file changes nothing anywhere until a person pastes it into
+-- the SQL editor.**
+--
+-- Which is worth its own heading because it has already cost a night. The
+-- summaries pass below was added here, merged, and its feature flag turned on
+-- in production — and it never ran once, because the job was in this file and
+-- not in `cron.job`. Adding or changing a schedule is therefore TWO steps, and
+-- the second one is manual:
+--
+--   1. edit this file, and
+--   2. re-run the whole thing against every environment.
+--
+-- Re-running the whole thing, not just the new statement, because section 2's
+-- function carries a FIXED ALLOWLIST of paths: a new job whose path this
+-- deployment's `zammy_cron_post` has not learned raises rather than fires, and
+-- the failure surfaces in `cron.job_run_details` as a SQL error nobody is
+-- watching.
+--
+-- `select jobname, schedule, active from cron.job order by jobname;` is how you
+-- check what a deployment actually has, and it is worth running after any change
+-- here.
+--
 -- ── Why Supabase Cron and not Vercel Cron ────────────────────────────────────
 --
 -- Minute precision. Hobby's Vercel cron fires once a day within a ±59-minute
@@ -158,13 +184,48 @@ select cron.schedule(
 -- killed at maxDuration before. Its own schedule means a slow label night costs
 -- labels rather than costing labels AND a day of history.
 --
--- It writes nothing at all until SUMMARIES_ENABLED=true. Scheduling it while it
--- is off is deliberate: the job exists, records a chore_runs row every night,
--- and starts working the moment the flag flips — rather than being the step
--- somebody forgets to add afterwards.
+-- It writes nothing at all until SUMMARIES_ENABLED=true, so scheduling it while
+-- the flag is off costs three reads a night and records a `chore_runs` row
+-- saying it ran and did nothing — which beats being the step somebody forgets.
+-- **But the job only exists in an environment this file has been re-run
+-- against**; the header says why that sentence needs saying.
+--
+-- ── THREE firings, and the arithmetic that says so ───────────────────────────
+--
+-- MEASURED against production on 2026-08-31. The 8-day window holds 246
+-- qualifying storyline-days costing 957 model calls, and roughly 120 of those
+-- calls arrive with each new day of coverage.
+--
+-- One firing cannot spend 120. `SUMMARY_BUDGET_MS` is 240 s and a call costs
+-- about 5 s — 2 s of the pass's own pacing at `GEMINI_MAX_RPM` 30, plus ~3 s of
+-- model latency — so a single run manages about 48 before it stops on `budget`,
+-- and the other ~70 calls' worth of days age out of the window unwritten. That
+-- is roughly 60% of production's history quietly not preserved.
+--
+-- The budget cannot absorb the difference: `api/chores.ts` is killed at
+-- Vercel's 300 s `maxDuration`, which is what the 240 s is sized under. So the
+-- schedule absorbs it instead. Three firings is ~144 calls a night against ~120
+-- of inflow, with the remainder chipping at the standing backlog.
+--
+-- Overlap is safe and the extra runs are nearly free: the pass takes an
+-- advisory lock (a second run skips), and one that finds every span current
+-- makes no model call at all — `decideSpan` re-reads the rows and skips.
+--
+-- If `chore_runs.report` stops saying `stoppedBy: budget` on the later firings,
+-- the schedule is ahead of the work and one of them can go.
 select cron.schedule(
   'zammy-chores-summaries',
   '0 5 * * *',
+  $$ select public.zammy_cron_post('/api/chores?pass=summaries') $$
+);
+select cron.schedule(
+  'zammy-chores-summaries-2',
+  '0 6 * * *',
+  $$ select public.zammy_cron_post('/api/chores?pass=summaries') $$
+);
+select cron.schedule(
+  'zammy-chores-summaries-3',
+  '0 7 * * *',
   $$ select public.zammy_cron_post('/api/chores?pass=summaries') $$
 );
 
@@ -216,6 +277,8 @@ select cron.schedule(
 -- ─────────────────────────────────────────────────────────────────────────────
 -- select cron.unschedule('zammy-chores-retention');
 -- select cron.unschedule('zammy-chores-summaries');
+-- select cron.unschedule('zammy-chores-summaries-2');
+-- select cron.unschedule('zammy-chores-summaries-3');
 -- select cron.unschedule('zammy-chores-storylines');
 -- select cron.unschedule('zammy-keepalive');
 -- select cron.unschedule('zammy-ingest-drain');
