@@ -262,7 +262,7 @@ export function TrendingCloud({
             a cloud that failed to draw. */}
         <span>
           {data !== undefined && !warming && storylines.length === 0
-            ? "no storylines have moved in this language yet"
+            ? "no storylines yet"
             : ""}
         </span>
         {storylines.length > 0 && (

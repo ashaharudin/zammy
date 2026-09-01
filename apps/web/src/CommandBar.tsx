@@ -135,7 +135,7 @@ export function CommandBar({
         <input
           value={q}
           onChange={(event) => setQ(event.target.value)}
-          placeholder={view ? "search to leave this storyline" : "keywords (all terms must match)"}
+          placeholder={view ? "search to leave this storyline" : "search..."}
           aria-label="Search topics"
           style={{
             flex: 1,
