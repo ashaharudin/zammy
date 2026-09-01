@@ -820,7 +820,9 @@ LIMIT $6;
 -- Step 2: their members, per (storyline, day), for THIS topic only —
 -- storylines are global, membership is not, and the representative is chosen
 -- from what actually matched (§14.3). Each member carries its group_id, which
--- is what splits the slot's disclosure into "same story" and "more coverage".
+-- is what splits the slot's disclosure into "same story" and "more coverage" —
+-- and which now travels on to the browser (`Article.groupId`), because the rail
+-- cuts the slot again and needs the same fact (§8.1).
 SELECT a.*, sg.storyline_id || '|' || to_char(...) AS slot_key
 FROM articles a
 JOIN storyline_groups sg ON sg.group_id = a.group_id
@@ -979,18 +981,20 @@ keywords in, timeline out.
   them: a storyline's coverage of one day lands hours apart, so each part of the day the slot reaches gets its
   own card — the slot's own position keeps the service's representative, and elsewhere the earliest article
   that part holds heads it, with the rest of that part's coverage behind its own disclosure. That is the rule
-  a storyline day already follows (its earliest as the hero) applied one level down, and the wire carries no
-  group structure below the slot to apply a better one; it is safe on §14.3's count because a slot's members
-  are already scoped to the topic that asked, so a promoted row is never a headline the reader's keywords did
-  not find. What gets placed is a HEADLINE, not an article: `moreCoverage` arrives as every non-lead group's
-  members flattened, so one piece that four outlets ran arrives as four articles hours apart, and placing each
-  on its own would draw the same headline twice — once per part of the day a copy landed in. So copies fold
-  first, told apart by an identical headline (the fold `collapseCopies` already uses), a headline goes where
-  its EARLIEST copy ran with the rest of them beside it as "same story", and a copy of the representative's
-  own story goes to the lead card however far from it the wire put it. Exact title is weaker than the group
-  ids it stands in for — a title reducing to fewer than two content tokens ("The Latest") never groups at all,
-  so two different pieces can share one — but two cards under one headline are indistinguishable to a reader
-  whatever produced them. Same-story copies never move: syndication is near-simultaneous, so cutting a copy
+  a storyline day already follows (its earliest as the hero) applied one level down. It is no longer the only
+  rule available — every article on the wire now names its group, so a part of the day could choose within its
+  heading group by source authority the way §14.3 chooses within a slot's lead — and it is held deliberately:
+  changing which headline a reader sees is its own change with its own review. It is safe on §14.3's count
+  because a slot's members are already scoped to the topic that asked, so a promoted row is never a headline
+  the reader's keywords did not find. What gets placed is a HEADLINE, not an article: `moreCoverage` arrives as
+  every non-lead group's members flattened, so one piece that four outlets ran arrives as four articles hours
+  apart, and placing each on its own would draw the same headline twice — once per part of the day a copy
+  landed in. So copies fold first, told apart by their `group_id`: a headline goes where its EARLIEST copy ran
+  with the rest of them beside it as "same story". The fold used to be exact title equality, which is strictly
+  weaker — a title reducing to fewer than two content tokens ("The Latest") never groups at all, so two
+  different pieces shared one and the rail drew them as a single card, and a copy of the representative's own
+  story could arrive among the non-lead groups and needed diverting back by hand. Under group identity neither
+  case arises. Same-story copies never move: syndication is near-simultaneous, so cutting a copy
   off its headline would scatter one story down the rail to say nothing. Coverage is filed by its own DAY as
   well as its own part of the day, and that half earns its keep the most: a storyline's day is bounded in
   `APP_TIMEZONE` — UTC in every environment — so for a reader west of it half a slot's coverage belongs to the

@@ -18,8 +18,15 @@ import { dayLabel, groupByDay, hasLaterCoverage, segmentOf } from "./format.js";
 const VANCOUVER = "America/Vancouver";
 const TOKYO = "Asia/Tokyo";
 
-const article = (id: string, published: string): Article => ({
+/**
+ * One article, alone in its own group by default — the state every article is
+ * born in, since `articles.group_id` self-seeds (migration 0003). Pass
+ * `groupId` to put two of them in one group: that is what "several outlets ran
+ * one piece" looks like on the wire, and it is the fold the rail's cut uses.
+ */
+const article = (id: string, published: string, groupId = id): Article => ({
   id,
+  groupId,
   url: `https://example.com/${id}`,
   title: `story ${id}`,
   description: null,
@@ -52,7 +59,10 @@ const entry = (
       (latest, at) => (Date.parse(at) > Date.parse(latest) ? at : latest),
     ),
     article: article(id, headlinePublished),
-    related,
+    // `related` IS the lead group — the service builds it from the lead's other
+    // members — so the fixtures say so rather than leaving each copy in a group
+    // of its own, which is a slot the wire cannot produce.
+    related: related.map((copy) => ({ ...copy, groupId: id })),
     moreCoverage,
     storyline: null,
   };
@@ -331,12 +341,16 @@ describe("groupByDay", () => {
     // one piece. Promote the first and the other two belong under "same story",
     // where the soft cap treats them as the syndication they are — not under
     // "more coverage", which promises different pieces.
+    //
+    // One group, two outlets, and their headlines differ by a word — which is
+    // what syndication actually looks like, and what the old title fold could
+    // not see.
     const days = groupByDay(
       [
         entry("1", "2026-08-11T14:00:00.000Z", "2026-08-11T14:00:00.000Z", {
           moreCoverage: [
-            { ...article("wire-b", "2026-08-11T20:31:00.000Z"), title: "one wire, two outlets" },
-            { ...article("wire-a", "2026-08-11T20:30:00.000Z"), title: "one wire, two outlets" },
+            { ...article("wire-b", "2026-08-11T20:31:00.000Z", "wire"), title: "Two outlets" },
+            { ...article("wire-a", "2026-08-11T20:30:00.000Z", "wire"), title: "One wire" },
             article("other", "2026-08-11T21:00:00.000Z"),
           ],
         }),
@@ -351,41 +365,88 @@ describe("groupByDay", () => {
     expect(afternoon?.items[0]?.moreCoverage.map((a) => a.id)).toEqual(["other"]);
   });
 
-  it("never draws one headline twice, wherever the wire put its copies", () => {
-    // The trap the headline fold exists for: a copy of the REPRESENTATIVE's own
-    // story arrives in `moreCoverage` (a group of one cannot hold it — a title
-    // reducing to fewer than two content tokens never groups at all), hours
-    // after it. Placed on its own it would head a second card, two parts of the
-    // day above the first, under the same headline and the same gutter label.
+  it("never draws one headline twice, wherever the wire scattered its copies", () => {
+    // The invariant the fold exists for (CONTEXT.md, Segment: "one piece's
+    // copies stay together and no headline is drawn twice"). A GROUP is one
+    // piece, and one piece takes ONE card however far apart the outlets ran it:
+    // here three copies across an afternoon and an evening, which placed
+    // separately would draw the same story twice on the rail under the same
+    // gutter label.
+    //
+    // The copies carry three DIFFERENT headlines, which is what syndication
+    // looks like — each outlet writes its own. That is why this pins the rule
+    // now and could not before: the fold used to be exact title equality, so
+    // the only version of this case it could pass was one where every copy had
+    // been printed word for word.
     const days = groupByDay(
       [
         entry("1", "2026-08-11T15:00:00.000Z", "2026-08-11T15:00:00.000Z", {
-          moreCoverage: [{ ...article("copy", "2026-08-11T21:00:00.000Z"), title: "story 1" }],
+          moreCoverage: [
+            article("late-copy", "2026-08-12T05:00:00.000Z", "wire"), // 22:00 — Evening
+            article("mid-copy", "2026-08-12T02:00:00.000Z", "wire"), // 19:00 — Evening
+            article("first-copy", "2026-08-11T20:00:00.000Z", "wire"), // 13:00 — Afternoon
+          ],
         }),
       ],
       now,
       VANCOUVER,
     );
 
-    // One card, and the copy is its same story — not a card of its own.
-    expect(partsOf(days)).toEqual(["Morning"]);
-    expect(days[0]?.segments[0]?.items[0]?.related.map((a) => a.id)).toEqual(["copy"]);
-    expect(days[0]?.segments[0]?.items[0]?.moreCoverage).toEqual([]);
-    // And the card stamps the copy, which is the reach it still has.
-    expect(days[0]?.segments[0]?.items[0]?.updatedAt).toBe("2026-08-11T21:00:00.000Z");
+    // Two cards, not three: the lead, and the piece — drawn where it FIRST ran,
+    // with the two later copies beside it as the same story.
+    expect(partsOf(days)).toEqual(["Afternoon", "Morning"]);
+    const piece = days[0]?.segments[0]?.items;
+    expect(piece).toHaveLength(1);
+    expect(piece?.[0]?.article.id).toBe("first-copy");
+    expect(piece?.[0]?.related.map((a) => a.id)).toEqual(["late-copy", "mid-copy"]);
+    expect(piece?.[0]?.moreCoverage).toEqual([]);
+    // And it stamps the last of them, which is the reach it still has.
+    expect(piece?.[0]?.updatedAt).toBe("2026-08-12T05:00:00.000Z");
+  });
+
+  it("keeps two different pieces that share a headline apart", () => {
+    // The false merge exact title could not avoid, and the reason the group id
+    // is on the wire at all. A headline reducing to fewer than two content
+    // tokens — "Live updates", "The Latest" — can never group, so two genuinely
+    // different pieces carrying one are two groups and the service says so.
+    // Folded by title they became a single card headed by whichever ran first,
+    // with the other piece's coverage filed under a story it has nothing to do
+    // with; the reader had no way to tell.
+    const days = groupByDay(
+      [
+        entry("1", "2026-08-11T14:00:00.000Z", "2026-08-11T14:00:00.000Z", {
+          moreCoverage: [
+            { ...article("evening", "2026-08-12T02:00:00.000Z"), title: "Live updates" }, // 19:00
+            { ...article("afternoon", "2026-08-11T20:00:00.000Z"), title: "Live updates" }, // 13:00
+          ],
+        }),
+      ],
+      now,
+      VANCOUVER,
+    );
+
+    // Three cards where the fold drew two. Each piece heads the part of the day
+    // it ran in, and neither is the other's copy.
+    expect(partsOf(days)).toEqual(["Evening", "Afternoon", "Morning"]);
+    const [evening, afternoon] = days[0]!.segments;
+    expect(evening?.items[0]?.article.id).toBe("evening");
+    expect(evening?.items[0]?.related).toEqual([]);
+    expect(afternoon?.items[0]?.article.id).toBe("afternoon");
+    expect(afternoon?.items[0]?.related).toEqual([]);
   });
 
   it("puts a headline where its earliest copy ran, and its later copies with it", () => {
     // Same trap one level down: two copies of one follow-up, one in each part of
     // the day. A headline goes where it first ran, and its copies go with it —
-    // otherwise the afternoon and the evening each draw a card called the same
-    // thing.
+    // otherwise the afternoon and the evening each draw the same follow-up.
+    // Two outlets, two headlines, one `groupId`: what holds them together is
+    // the group, not the words.
     const days = groupByDay(
       [
         entry("1", "2026-08-11T14:00:00.000Z", "2026-08-11T14:00:00.000Z", {
           moreCoverage: [
-            { ...article("evening-copy", "2026-08-12T02:00:00.000Z"), title: "one follow-up" },
-            { ...article("afternoon-copy", "2026-08-11T20:00:00.000Z"), title: "one follow-up" },
+            article("evening-copy", "2026-08-12T02:00:00.000Z", "follow-up"),
+            article("afternoon-copy", "2026-08-11T20:00:00.000Z", "follow-up"),
           ],
         }),
       ],

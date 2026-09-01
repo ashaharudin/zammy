@@ -14,6 +14,9 @@ import { collapseCopies, outletLinks } from "./relatedRows.js";
 
 const article = (id: string, overrides: Partial<Article> = {}): Article => ({
   id,
+  // A group of one, the state every article is born in (migration 0003). These
+  // rows fold by TITLE, deliberately: see `collapseCopies`.
+  groupId: id,
   url: `https://example.com/${id}`,
   title: `story ${id}`,
   description: null,

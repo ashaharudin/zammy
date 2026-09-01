@@ -15,6 +15,14 @@ import type { Article } from "@zammy/shared";
  * Every folded article stays in `copies`: the row renders each outlet as a
  * link to that outlet's own copy, and the disclosure's "+N more" tally counts
  * articles, not rows.
+ *
+ * Still by TITLE, now that `Article.groupId` is on the wire and the rail's cut
+ * folds by it (`format.ts`, `railSlots`). The two folds answer different
+ * questions: the cut asks "is this one piece", where a group id is the whole
+ * truth, and a row asks "did these outlets print the same words", where it is
+ * not — one group is one piece under several outlets' own headlines, and
+ * folding it into a single row would hide every variant but the first behind a
+ * title none of the others ran.
  */
 export function collapseCopies(articles: Article[]): { article: Article; copies: Article[] }[] {
   const rows: { article: Article; copies: Article[] }[] = [];

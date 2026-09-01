@@ -4,6 +4,7 @@ import {
   cursorGeneration,
   decodeCursor,
   encodeCursor,
+  type Article,
   type Cursor,
   type SurfacedStoryline,
   type TimelineEntry,
@@ -13,7 +14,6 @@ import {
   readCoverage,
   readStorylineArticleCount,
   readStorylineTimelinePage,
-  type StorylineSlotMember,
   resolveStoryline,
   upsertTopic,
   type Database,
@@ -327,13 +327,19 @@ async function planAndRead(
  * every other group's members are the day's wider coverage (`coverage`).
  * The slot's position is not chosen here and never changes with the
  * headline: `published` is the storyline's (§7.3).
+ *
+ * The group ids are no longer SPENT here. They ride on to the browser on every
+ * article (`Article.groupId`), because the rail cuts a slot again — into the
+ * parts of the reader's day — and needs the same "these are one piece" fact
+ * this function reads. It used to reconstruct it from exact title equality,
+ * which folds two unrelated "Live updates" into one card.
  */
 function toEntry(slot: {
   id: string;
   published: string;
-  members: StorylineSlotMember[];
+  members: Article[];
 }): TimelineEntry {
-  const byGroup = new Map<string, StorylineSlotMember[]>();
+  const byGroup = new Map<string, Article[]>();
   for (const member of slot.members) {
     const list = byGroup.get(member.groupId);
     if (list) list.push(member);
@@ -342,16 +348,18 @@ function toEntry(slot: {
 
   // Largest group leads; ties break earliest-published then lowest id, so a
   // replayed read reaches the same slot (§7.4's replay discipline, again).
-  let lead: { groupId: string; members: StorylineSlotMember[] } | null = null;
+  let lead: { groupId: string; members: Article[] } | null = null;
   for (const [groupId, members] of byGroup) {
     if (!lead || leadBeats({ groupId, members }, lead)) lead = { groupId, members };
   }
   const leadMembers = lead?.members ?? [];
 
-  const article = chooseRepresentative(leadMembers.map((member) => member.article));
-  const moreCoverage = slot.members
-    .filter((member) => member.groupId !== lead?.groupId)
-    .map((member) => member.article);
+  const article = chooseRepresentative(leadMembers);
+  // Flattened, and each member still names its group in `groupId` — the split
+  // above is a READING of the members, not a re-shaping of them, so the wire
+  // keeps the one order the disclosure renders in while the rail can still
+  // recover which of these are one piece.
+  const moreCoverage = slot.members.filter((member) => member.groupId !== lead?.groupId);
 
   return {
     storylineId: slot.id,
@@ -359,11 +367,9 @@ function toEntry(slot: {
     // Members are newest first, so the head is the slot's latest coverage.
     // This is what the UI shows as "updated", the same treatment ADR-0002
     // gives an article whose later sightings do not move it.
-    updatedAt: slot.members[0]?.article.published ?? slot.published,
+    updatedAt: slot.members[0]?.published ?? slot.published,
     article,
-    related: leadMembers
-      .map((member) => member.article)
-      .filter((member) => member.id !== article.id),
+    related: leadMembers.filter((member) => member.id !== article.id),
     moreCoverage,
     // The old model has no storyline to describe: its slots are day-bounded
     // storylines with no identity a reader could open. `toStorylineEntry` fills
@@ -495,8 +501,8 @@ function toStorylineEntry(slot: StorylineSlot): TimelineEntry {
 }
 
 function leadBeats(
-  candidate: { groupId: string; members: StorylineSlotMember[] },
-  incumbent: { groupId: string; members: StorylineSlotMember[] },
+  candidate: { groupId: string; members: Article[] },
+  incumbent: { groupId: string; members: Article[] },
 ): boolean {
   if (candidate.members.length !== incumbent.members.length) {
     return candidate.members.length > incumbent.members.length;
@@ -507,10 +513,10 @@ function leadBeats(
   return BigInt(candidate.groupId) < BigInt(incumbent.groupId);
 }
 
-function earliest(members: readonly StorylineSlotMember[]): number {
+function earliest(members: readonly Article[]): number {
   let min = Number.POSITIVE_INFINITY;
   for (const member of members) {
-    const t = Date.parse(member.article.published);
+    const t = Date.parse(member.published);
     if (t < min) min = t;
   }
   return min;

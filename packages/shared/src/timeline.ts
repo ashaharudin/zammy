@@ -189,7 +189,14 @@ export const TimelineEntry = z.object({
    * pattern ADR-0002 already uses for an article's earliest sighting.
    */
   published: z.iso.datetime(),
-  /** The newest member's published. Equals `published` for a slot of one. */
+  /**
+   * The newest member's published. Equals `published` for a slot of one.
+   *
+   * The SLOT's, over every member. A renderer that cuts a slot into smaller
+   * cards — the rail does, by part of the reader's day — must stamp each card
+   * from what that card still holds instead, or a card promises coverage drawn
+   * elsewhere on the rail (`apps/web/src/format.ts`, `railSlots`).
+   */
   updatedAt: z.iso.datetime(),
   /**
    * The headline: any tier-1 source in the slot's LEAD group — its
@@ -197,12 +204,24 @@ export const TimelineEntry = z.object({
    * it is always an article that matched this search.
    */
   article: Article,
-  /** Same story, other outlets: the lead group's other members, newest first. */
+  /**
+   * Same story, other outlets: the lead group's other members, newest first.
+   * Every one of them carries `article.groupId`, so "these are one piece" is
+   * something the reader of this contract can check rather than infer.
+   */
   related: z.array(Article),
-  /** Same storyline, different pieces: every other group's members, newest
+  /**
+   * Same storyline, different pieces: every other group's members, newest
    * first. `moreCoverage`, not `coverage` — that word is taken (CONTEXT.md:
    * the fetched time spans), and one word with two meanings is the confusion
-   * the language doc exists to prevent. */
+   * the language doc exists to prevent.
+   *
+   * FLAT and newest-first across groups, with each member naming its group in
+   * `groupId`. Flat because this is also the order the disclosure renders in;
+   * grouped because a renderer that re-cuts the slot has to keep one piece's
+   * copies together, and title equality — the only signal a flat list used to
+   * offer — folds two unrelated "Live updates" into one.
+   */
   moreCoverage: z.array(Article),
   /** Non-null exactly when this slot's storyline has been promoted. */
   storyline: StorylineRef.nullable(),
