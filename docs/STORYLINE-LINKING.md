@@ -550,7 +550,7 @@ reaction, analysis and adjacent players, and the prompt's disqualifier list
 of exactly the breadth a mature arc earns — precision at formation bought with
 recall on long arcs. A **load-bearing constraint on the wiring, not a reason to
 abandon the gate**, which only ever needed the two-group moment. But
-`labelStoryline` fires on `promotion`, `merge` AND `drift`, and drift fires on
+`nameStoryline` fires on `promotion`, `merge` AND `drift`, and drift fires on
 every doubling of membership — wired there unscoped, the verdict would reach
 mature arcs and dissolve 43% of them. **It may be consulted only where the
 storyline is not yet real.**
@@ -572,7 +572,11 @@ formation, and suppressing it would blind the K-bridge merge.
 `resolveFormation` (`storyline-formation.ts`) runs in the tail that already
 labels — off the latency path, started and not awaited — and spends **no extra
 model call**: the promotion label was already one call, and a model that can
-name the story has thereby said it is one.
+name the story has thereby said it is one. It does not write the label itself
+either. The verdict's name is handed to `storyline-naming.ts`, the one writer of
+the label columns, which is also how "the model has already been asked" is said
+out loud — a formation that got no usable verdict falls back to bigrams there
+rather than buying a second call.
 
 | verdict | what happens |
 | --- | --- |

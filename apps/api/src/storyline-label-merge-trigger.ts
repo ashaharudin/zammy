@@ -6,7 +6,7 @@ import {
 } from "@zammy/storage";
 import { labelKey, type LabelMergeRules } from "./storyline-label-merge.js";
 import { mergeAgreeingLabels } from "./storyline-label-merge-service.js";
-import type { LabelerDeps, LabelOutcome } from "./storyline-label-service.js";
+import type { LabelerDeps, LabelOutcome } from "./storyline-naming.js";
 
 /**
  * The label-agreement merge, fired by the collision instead of by the clock.

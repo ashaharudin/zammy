@@ -1,7 +1,7 @@
 import { readLabelCandidates } from "@zammy/storage";
 import type { CommandSpec } from "./operator-command.js";
 import { needsLabel } from "./storyline-label.js";
-import { labelStoryline, type LabelOutcome } from "./storyline-label-service.js";
+import { nameStoryline, type LabelOutcome } from "./storyline-naming.js";
 
 /**
  * `pnpm label:storylines [--limit=N] [--dry-run]` — the labeler's
@@ -61,9 +61,9 @@ export const spec: CommandSpec = {
           console.log(`  would label ${storyline.id} (${storyline.groupCount} groups)`);
           continue;
         }
-        const outcome = await labelStoryline(
+        const outcome = await nameStoryline(
           { db, ...labeler },
-          { storyline, trigger: "drift" },
+          { storylineId: storyline.id, trigger: "drift" },
         );
         outcomes.push(outcome);
         console.log(

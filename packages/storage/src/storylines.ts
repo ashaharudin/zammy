@@ -246,6 +246,12 @@ export async function markDormantStorylines(
  * when membership has doubled since it was written — so it is stamped by the
  * caller, which is the thing that knows whether this was a real generation or a
  * fallback (ADR-0011, Labels).
+ *
+ * Five fields that mean nothing apart, and exactly one caller in `apps/api`:
+ * `storyline-naming.ts`. That is a rule rather than an observation — two callers
+ * is how the label columns previously drifted apart on the invariant
+ * `labelGroupCount` states below — so a second one is a change to be argued for,
+ * not a convenience.
  */
 export async function setStorylineLabel(
   db: Kysely<Database>,
@@ -265,6 +271,13 @@ export async function setStorylineLabel(
      * Member groups this label describes — the drift baseline. Stamped even
      * when the label came out null: a storyline the model refused to name is
      * not owed another attempt until its coverage has doubled either.
+     *
+     * A REFUSAL, note, and not merely an absence. A storyline whose member
+     * articles have been retained away has no coverage for anyone to judge, so
+     * the naming module does not reach this function at all for one rather than
+     * stamping a baseline on a verdict nobody gave — see the empty-coverage case
+     * in `storyline-naming.ts`, which is where the two former writers of these
+     * columns disagreed.
      */
     labelGroupCount: number;
     /**

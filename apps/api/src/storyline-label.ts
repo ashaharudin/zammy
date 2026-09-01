@@ -8,8 +8,14 @@ import { foldDiacritics, trimWordPunctuation } from "./headline-tokens.js";
  *
  * Everything in this file is pure: which members the model is shown, what it is
  * asked, whether what came back may be used, and what to fall back to. The call
- * itself and the write live in `storyline-label-service.ts`, so the judgement
- * can be tested against recorded responses without a network or a database.
+ * itself and the write live in `storyline-naming.ts`, so the judgement can be
+ * tested against recorded responses without a network or a database.
+ *
+ * These stay separately callable and separately tested (ADR-0011: "the decision
+ * functions stay pure and swappable"). What the naming module changed is that
+ * they now have ONE caller between them on the write path, not that they became
+ * private to it — `storyline-coherence.ts` reuses `validateLabel`, and the
+ * operator commands still ask `needsLabel` before spending a call.
  *
  * The bar is "a proper noun plus what happened, readable at a glance" — "Fort
  * Hood Crash", "Trump Iran War". ADR-0011 accepted an external model for
@@ -42,9 +48,14 @@ export interface LabelDecision {
  *
  * Provenance, not a category: `bigram` and a model id are both answers to
  * "would a relabel against the currently-configured model change this". Which
- * is why the value has a READER as well as three writers —
+ * is why the value has a READER as well as a writer —
  * `backfillStorylines`'s `--relabel` resume compares the stored string against
  * the model it is about to spend on, and treats a difference as "not done yet".
+ *
+ * The writers were three when this was written and are now one, since the label
+ * columns got a single writer (`storyline-naming.ts`); the resume is the second
+ * caller, and it is a reader computing what to compare against. Both still go
+ * through this function, which is the point.
  *
  * A function, and exported, because the writers and that reader disagreeing is
  * not a hypothetical: `wiring.createLabeler` did not set `modelId`, so the

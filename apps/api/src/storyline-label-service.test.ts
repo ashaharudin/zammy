@@ -8,11 +8,8 @@ import {
   readStoryline,
 } from "@zammy/storage";
 import { createGeminiClient, type GenerateRequest, type GenerateResult } from "./gemini.js";
-import {
-  labelLinkedStorylines,
-  labelStoryline,
-  type LabelerDeps,
-} from "./storyline-label-service.js";
+import { labelLinkedStorylines } from "./storyline-label-service.js";
+import { nameStoryline, type LabelerDeps } from "./storyline-naming.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
 
 /**
@@ -26,6 +23,13 @@ import { createTestHarness, type TestHarness } from "./test-support.js";
  * The generator is the only stub, and it is stubbed at the HTTP boundary
  * wherever the point is the client's behaviour, so the recorded payloads are
  * exercised rather than described.
+ *
+ * End to end means through both halves: the tail this file is named for decides
+ * WHICH storylines a batch names and under which trigger, and `nameStoryline`
+ * (`storyline-naming.ts`) does the naming. Kept together because every case
+ * below is about the pair — what the model's answer does to a real row.
+ * `storyline-naming.test.ts` holds the cases about the WRITE itself, which are
+ * the ones that must hold identically from the coherence gate's door too.
  */
 
 const RESPONSES = JSON.parse(
@@ -202,8 +206,8 @@ describe("the labeler", () => {
       // is empty, so the join proposes only drift, and the drift baseline
       // (membership has not doubled) answers without a model call.
       const id = await fortHood();
-      await labelStoryline(deps({ generator: saying("Fort Hood Crash") }), {
-        storyline: await load(id),
+      await nameStoryline(deps({ generator: saying("Fort Hood Crash") }), {
+        storylineId: id,
         trigger: "promotion",
       });
 
@@ -286,8 +290,8 @@ describe("the labeler", () => {
     const id = await fortHood();
     const { generator, prompts } = recorded(RESPONSES.ok);
 
-    const outcome = await labelStoryline(deps({ generator }), {
-      storyline: await load(id),
+    const outcome = await nameStoryline(deps({ generator }), {
+      storylineId: id,
       trigger: "promotion",
     });
 
@@ -325,8 +329,8 @@ describe("the labeler", () => {
     }
 
     const { generator, prompts } = recorded(RESPONSES.ok);
-    await labelStoryline(deps({ generator }), {
-      storyline: await load(id),
+    await nameStoryline(deps({ generator }), {
+      storylineId: id,
       trigger: "promotion",
     });
 
@@ -335,14 +339,14 @@ describe("the labeler", () => {
 
   it("relabels on a merge, whatever the membership did", async () => {
     const id = await fortHood();
-    await labelStoryline(deps({ generator: saying("Fort Hood Crash") }), {
-      storyline: await load(id),
+    await nameStoryline(deps({ generator: saying("Fort Hood Crash") }), {
+      storylineId: id,
       trigger: "promotion",
     });
 
-    const outcome = await labelStoryline(
+    const outcome = await nameStoryline(
       deps({ generator: saying("Fort Hood Investigation") }),
-      { storyline: await load(id), trigger: "merge" },
+      { storylineId: id, trigger: "merge" },
     );
 
     expect(outcome).toMatchObject({ label: "Fort Hood Investigation", source: "model" });
@@ -350,8 +354,8 @@ describe("the labeler", () => {
 
   it("holds a label on drift until membership has doubled, then refreshes it", async () => {
     const id = await fortHood();
-    await labelStoryline(deps({ generator: saying("Fort Hood Crash") }), {
-      storyline: await load(id),
+    await nameStoryline(deps({ generator: saying("Fort Hood Crash") }), {
+      storylineId: id,
       trigger: "promotion",
     });
 
@@ -362,8 +366,8 @@ describe("the labeler", () => {
       published: "2026-03-03T09:00:00.000Z",
     });
     await attachGroup(harness.deps.db, { storylineId: id, groupId: third, timeZone: ZONE });
-    const held = await labelStoryline(deps({ generator: saying("Something Else Entirely") }), {
-      storyline: await load(id),
+    const held = await nameStoryline(deps({ generator: saying("Something Else Entirely") }), {
+      storylineId: id,
       trigger: "drift",
     });
     expect(held.source).toBe("skipped");
@@ -377,9 +381,9 @@ describe("the labeler", () => {
       published: "2026-03-04T09:00:00.000Z",
     });
     await attachGroup(harness.deps.db, { storylineId: id, groupId: fourth, timeZone: ZONE });
-    const drifted = await labelStoryline(
+    const drifted = await nameStoryline(
       deps({ generator: saying("Fort Hood Inquiry") }),
-      { storyline: await load(id), trigger: "drift" },
+      { storylineId: id, trigger: "drift" },
     );
 
     expect(drifted).toMatchObject({ label: "Fort Hood Inquiry", source: "model" });
@@ -391,8 +395,8 @@ describe("the labeler", () => {
       const id = await fortHood();
       const { generator } = recorded(RESPONSES.overloaded, 503);
 
-      const outcome = await labelStoryline(deps({ generator }), {
-        storyline: await load(id),
+      const outcome = await nameStoryline(deps({ generator }), {
+        storylineId: id,
         trigger: "promotion",
       });
 
@@ -405,8 +409,8 @@ describe("the labeler", () => {
       const id = await fortHood();
       const { generator } = recorded(RESPONSES.chatty);
 
-      const outcome = await labelStoryline(deps({ generator }), {
-        storyline: await load(id),
+      const outcome = await nameStoryline(deps({ generator }), {
+        storylineId: id,
         trigger: "promotion",
       });
 
@@ -420,8 +424,8 @@ describe("the labeler", () => {
       const id = await fortHood();
       const { generator } = recorded(RESPONSES.invented);
 
-      const outcome = await labelStoryline(deps({ generator }), {
-        storyline: await load(id),
+      const outcome = await nameStoryline(deps({ generator }), {
+        storylineId: id,
         trigger: "promotion",
       });
 
@@ -434,8 +438,8 @@ describe("the labeler", () => {
       // optional, and a repo checkout with no key must still produce labels.
       const id = await fortHood();
 
-      const outcome = await labelStoryline(deps({ generator: null }), {
-        storyline: await load(id),
+      const outcome = await nameStoryline(deps({ generator: null }), {
+        storylineId: id,
         trigger: "promotion",
       });
 
@@ -466,16 +470,16 @@ describe("the labeler", () => {
       });
       await promoteStoryline(harness.deps.db, { storylineId: storyline.id });
 
-      const outcome = await labelStoryline(deps({ generator: null }), {
-        storyline: await load(storyline.id),
+      const outcome = await nameStoryline(deps({ generator: null }), {
+        storylineId: storyline.id,
         trigger: "promotion",
       });
 
       expect(outcome).toMatchObject({ label: null, source: "none" });
       expect(await load(storyline.id)).toMatchObject({ label: null, labelGroupCount: 2 });
       // And the next drift check leaves it alone until coverage doubles.
-      const next = await labelStoryline(deps({ generator: null }), {
-        storyline: await load(storyline.id),
+      const next = await nameStoryline(deps({ generator: null }), {
+        storylineId: storyline.id,
         trigger: "drift",
       });
       expect(next.source).toBe("skipped");

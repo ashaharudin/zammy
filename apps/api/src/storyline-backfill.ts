@@ -13,7 +13,7 @@ import {
 } from "@zammy/storage";
 import { readTrailingCorpus } from "./story-df.js";
 import { linkGroup, type LinkerDeps } from "./storyline-linker.js";
-import { labelStoryline, type LabelerDeps } from "./storyline-label-service.js";
+import { nameStoryline, type LabelerDeps } from "./storyline-naming.js";
 import { modelLabelSource, needsLabel } from "./storyline-label.js";
 
 /**
@@ -514,9 +514,9 @@ export async function labelPass(
       if (attempted > 0 && spacingMs > 0) await sleep(spacingMs);
       attempted += 1;
 
-      const outcome = await labelStoryline(
+      const outcome = await nameStoryline(
         { db, ...labeler },
-        { storyline, trigger: forcing ? "promotion" : "drift" },
+        { storylineId: storyline.id, trigger: forcing ? "promotion" : "drift" },
       );
       if (outcome.source === "model") tally.model += 1;
       else if (outcome.source === "bigram") tally.bigram += 1;

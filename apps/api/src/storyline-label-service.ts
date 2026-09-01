@@ -1,44 +1,24 @@
 import type { Kysely } from "kysely";
-import {
-  readStoryline,
-  readStorylineLabelInput,
-  setStorylineLabel,
-  type Database,
-  type Storyline,
-} from "@zammy/storage";
-import type { TextGenerator } from "./gemini.js";
-import {
-  buildLabelPrompt,
-  fallbackLabel,
-  modelLabelSource,
-  needsLabel,
-  selectLabelMembers,
-  validateLabel,
-  type LabelTrigger,
-} from "./storyline-label.js";
-import { labelWords } from "./storyline-label-merge.js";
+import type { Database } from "@zammy/storage";
+import type { LabelTrigger } from "./storyline-label.js";
+import { nameStoryline, type LabelerDeps, type LabelOutcome } from "./storyline-naming.js";
 import type { LinkOutcome } from "./storyline-linker.js";
 import { resolvePendingFormations, type FormationDeps } from "./storyline-formation.js";
 
 /**
- * The labeler's service half (ADR-0011): read the members, ask the model, check
- * the answer, fall back, write.
+ * WHEN a storyline is named — the live tail, and nothing else (ADR-0011).
  *
- * Where it fires is the other half of the design, and all three of ADR-0011's
- * moments now have a caller. `promotion` and `merge` are events the caller has
- * just written, and they arrive here through `labelLinkedStorylines` below — the
- * tail the ingest path starts and does not wait for. `drift` is a question
- * asked of the row rather than an event, so it belongs to a pass over
- * candidates: the nightly chore, and the operator's `pnpm label:storylines`.
+ * What a name is and how it is written moved to `storyline-naming.ts`, which is
+ * the one writer of the label columns. What is left here is the other half of
+ * the design: which of a batch's link outcomes deserve a name, under which
+ * trigger, and how much a batch is allowed to spend finding out.
  *
- * Two properties hold at every exit:
- *
- *  - **it never throws for a model reason.** An unavailable, slow, refusing or
- *    contract-breaking Gemini produces a `source: "bigram"` or a null label, and
- *    the caller's promotion stands either way. A storyline with no label renders.
- *  - **it always stamps the drift baseline**, including when the label came out
- *    null. Otherwise an unnameable storyline is re-asked on every pass forever,
- *    which turns a storyline-volume cost into an unbounded one.
+ * All three of ADR-0011's moments have a caller. `promotion` and `merge` are
+ * events the caller has just written, and they arrive through
+ * `labelLinkedStorylines` below — the tail the ingest path starts and does not
+ * wait for. `drift` is a question asked of the row rather than an event, so it
+ * belongs to a pass over candidates: the nightly chore, and the operator's
+ * `pnpm label:storylines`.
  */
 
 /**
@@ -97,14 +77,15 @@ export async function labelLinkedStorylines(
   // storyline that turned out not to exist or spend a second call on one that
   // does.
   if (deps.formations !== undefined) {
+    // The labeler ENTIRE, plus the calendar. A resolution now names the
+    // storyline it forms through the same module this tail names with, so the
+    // deps it needs are the same deps — spelling out a subset here is how the
+    // two paths drifted in the first place (`wiring.ts`'s header, one layer
+    // down).
     const formationDeps: FormationDeps = {
+      ...deps.labeler,
       db: deps.db,
-      generator: deps.labeler.generator,
-      modelId: deps.labeler.modelId,
-      sampleSize: deps.labeler.sampleSize,
       timeZone: deps.formations.timeZone,
-      now: deps.labeler.now,
-      logger: deps.labeler.logger,
     };
     await resolvePendingFormations(formationDeps, outcomes);
   }
@@ -130,12 +111,13 @@ export async function labelLinkedStorylines(
   const labelled: LabelOutcome[] = [];
   for (const [storylineId, trigger] of triggers) {
     try {
-      const storyline = await readStoryline(deps.db, storylineId);
-      // Gone or merged away since the batch: whatever absorbed it will be
-      // labelled under its own outcome.
-      if (!storyline || storyline.mergedInto !== null) continue;
+      // Whether the storyline is still there to name — gone, or merged away
+      // since the batch — is `nameStoryline`'s question now, along with every
+      // other precondition of the write. What comes back for one of those is a
+      // `skipped` outcome, which the collision trigger reading this array
+      // already ignores (it counts model labels only).
       labelled.push(
-        await labelStoryline({ db: deps.db, ...deps.labeler }, { storyline, trigger }),
+        await nameStoryline({ db: deps.db, ...deps.labeler }, { storylineId, trigger }),
       );
     } catch (error) {
       deps.log?.warn(
@@ -145,128 +127,4 @@ export async function labelLinkedStorylines(
     }
   }
   return labelled;
-}
-
-export interface LabelerDeps {
-  db: Kysely<Database>;
-  /** Null with no `GEMINI_API_KEY`: the fallback path becomes the only path. */
-  generator: TextGenerator | null;
-  /**
-   * How a model-produced label is recorded — the configured model id. Stored on
-   * the row so a relabel campaign can ask "is this label from the model I have
-   * now", which is what makes such a campaign resumable.
-   *
-   * `wiring.createLabeler` always sets it when there is a key, and every
-   * configured path crosses `createLabeler`, so the `"model"` default is
-   * unreachable in production and belongs to deps built by hand
-   * (`modelLabelSource` says why it stays).
-   */
-  modelId?: string;
-  sampleSize: number;
-  driftFactor: number;
-  now?: () => Date;
-  logger?: {
-    warn(fields: Record<string, unknown>, message: string): void;
-    debug?(fields: Record<string, unknown>, message: string): void;
-  };
-}
-
-export interface LabelOutcome {
-  storylineId: string;
-  label: string | null;
-  /** How the label was produced, or why there is none. */
-  source: "model" | "bigram" | "none" | "skipped";
-  trigger: LabelTrigger;
-  /** Set when the model was asked and did not deliver a usable label. */
-  modelFailure?: string;
-  groupCount: number;
-}
-
-/**
- * Label one storyline. `trigger` is `promotion` or `merge` when the caller has
- * just made one of those true, and `drift` when it is only asking.
- */
-export async function labelStoryline(
-  deps: LabelerDeps,
-  input: {
-    storyline: Pick<Storyline, "id" | "labelAt" | "labelGroupCount">;
-    trigger: LabelTrigger;
-  },
-): Promise<LabelOutcome> {
-  const now = deps.now ?? (() => new Date());
-  const { storyline, trigger } = input;
-
-  const { groupCount, members } = await readStorylineLabelInput(deps.db, {
-    storylineId: storyline.id,
-    limit: deps.sampleSize,
-  });
-
-  if (
-    !needsLabel(storyline, { groupCount, trigger, driftFactor: deps.driftFactor })
-  ) {
-    return { storylineId: storyline.id, label: null, source: "skipped", trigger, groupCount };
-  }
-
-  // A storyline with no member articles has nothing to name — and nothing to
-  // fall back to either. Stamping the baseline would be wrong here, because
-  // this is a transient state (a group whose articles were retained away),
-  // not a storyline the labeler has judged.
-  if (members.length === 0) {
-    return { storylineId: storyline.id, label: null, source: "none", trigger, groupCount };
-  }
-
-  const sample = selectLabelMembers(members, deps.sampleSize);
-
-  let label: string | null = null;
-  let source: LabelOutcome["source"] = "none";
-  let modelFailure: string | undefined;
-
-  if (deps.generator) {
-    const result = await deps.generator.generate({ prompt: buildLabelPrompt(sample) });
-    if (result.ok) {
-      const validated = validateLabel(result.text, sample);
-      if (validated) {
-        label = validated;
-        source = "model";
-      } else {
-        // The raw text is kept in the log line on purpose: the prompt is
-        // expected to iterate on live output (ADR-0011), and the labels it
-        // gets REFUSED are the only evidence of which way to iterate.
-        modelFailure = `contract: ${result.text.slice(0, 80)}`;
-      }
-    } else {
-      modelFailure = result.reason;
-    }
-  } else {
-    modelFailure = "no generator configured";
-  }
-
-  if (label === null) {
-    const fallback = fallbackLabel(sample);
-    if (fallback) {
-      label = fallback;
-      source = "bigram";
-    }
-    deps.logger?.warn(
-      { storylineId: storyline.id, trigger, reason: modelFailure, fallback },
-      "storyline label fell back to the bigram extractor",
-    );
-  }
-
-  await setStorylineLabel(deps.db, {
-    storylineId: storyline.id,
-    label,
-    // The label's own words, folded once here so `label_words` and
-    // `profile_tokens` hold one spelling of a word between them (ADR-0011, as
-    // amended). Null label, no words — there is nothing to surface it by.
-    labelWords: label === null ? [] : labelWords(label),
-    labelAt: now(),
-    labelGroupCount: groupCount,
-    // Provenance, decided in one place for the writers and the `--relabel`
-    // resume that reads them back (`modelLabelSource`).
-    labelSource:
-      source === "model" ? modelLabelSource(deps.modelId) : source === "bigram" ? "bigram" : null,
-  });
-
-  return { storylineId: storyline.id, label, source, trigger, modelFailure, groupCount };
 }
