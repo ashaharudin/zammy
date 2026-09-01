@@ -444,10 +444,16 @@ function Rail({
                   // unsegmented day is one undivided run of cards, and a
                   // section around it would announce a division that the rail
                   // deliberately does not draw.
-                  <Wrapper key={key} {...(segmented ? { "aria-label": part.segment } : {})}>
+                  <Wrapper
+                    key={key}
+                    {...(segmented
+                      ? { "aria-label": `${part.segment}${day.dateSuffix ? `, ${day.dateSuffix}` : ""}` }
+                      : {})}
+                  >
                     {segmented && (
                       <SegmentDivider
                         segment={part.segment}
+                        dateSuffix={day.dateSuffix}
                         count={part.items.length}
                         collapsed={partCollapsed}
                         onToggle={() => setCollapsed((sections) => toggle(sections, key))}
@@ -706,11 +712,13 @@ function Wrapper({ children, ...rest }: { children: React.ReactNode; "aria-label
 
 function SegmentDivider({
   segment,
+  dateSuffix,
   count,
   collapsed,
   onToggle,
 }: {
   segment: Segment;
+  dateSuffix: string | null;
   count: number;
   collapsed: boolean;
   onToggle: () => void;
@@ -735,6 +743,13 @@ function SegmentDivider({
         }}
       >
         {segment}
+        {/*
+          Beyond Today/Yesterday, a segment is one of many identically-named
+          ones down the rail — the day heading above it is the only thing
+          disambiguating "Morning" from any other day's — so it carries its
+          own date, uppercased like the rest of the heading.
+        */}
+        {dateSuffix && <span style={{ opacity: 0.7 }}>, {dateSuffix}</span>}
         {/* The count only where the cards it counts are hidden. */}
         {collapsed && <span style={{ opacity: 0.7 }}> · {count}</span>}
       </button>

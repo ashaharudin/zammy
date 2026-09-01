@@ -230,6 +230,24 @@ describe("groupByDay", () => {
     expect(after[0]?.key).toBe("2026-08-11");
   });
 
+  it("gives a segment heading no date suffix on Today or Yesterday, and an abbreviated one beyond that", () => {
+    const days = groupByDay(
+      [
+        entry("1", "2026-08-12T14:00:00.000Z"), // Today
+        entry("2", "2026-08-11T14:00:00.000Z"), // Yesterday
+        entry("3", "2026-08-09T14:00:00.000Z"), // Three days back
+      ],
+      now,
+      VANCOUVER,
+    );
+
+    expect(days.map((day) => [day.day, day.dateSuffix])).toEqual([
+      ["Today", null],
+      ["Yesterday", null],
+      [expect.any(String), "Aug 9"],
+    ]);
+  });
+
   it("identifies a day by the reader's calendar, not the UTC one", () => {
     // 23:00 on the 11th in Vancouver is already the 12th in UTC. Keying on
     // the UTC date would split one rail day in two.

@@ -161,6 +161,16 @@ function labelFor(key: string, iso: string, todayKey: string, timeZone: string):
   });
 }
 
+/**
+ * `labelFor`'s date branch alone, for segment headings — which carry no
+ * weekday and stay silent on Today/Yesterday, where the day heading above
+ * them already says so.
+ */
+function dateSuffixFor(key: string, iso: string, todayKey: string, timeZone: string): string | null {
+  if (daysBetween(todayKey, key) <= 1) return null;
+  return new Date(iso).toLocaleDateString(undefined, { timeZone, month: "short", day: "numeric" });
+}
+
 export function timeLabel(iso: string, timeZone: string): string {
   return new Date(iso).toLocaleTimeString(undefined, {
     timeZone,
@@ -236,6 +246,13 @@ export interface DayGroup {
   key: string;
   /** What the divider reads: "Today", "Yesterday", or a formatted date. */
   day: string;
+  /**
+   * The abbreviated date a segment heading appends beyond Today/Yesterday
+   * ("MORNING, Aug 21") — null on those two, where the day heading above the
+   * segments already carries the answer and repeating it on every segment
+   * would be noise.
+   */
+  dateSuffix: string | null;
   segments: { segment: Segment; items: RailSlot[] }[];
 }
 
@@ -292,6 +309,7 @@ export function groupByDay(items: TimelineEntry[], now: Date, timeZone: string):
       .map(([key, group]) => ({
         key,
         day: labelFor(key, group.at, todayKey, timeZone),
+        dateSuffix: dateSuffixFor(key, group.at, todayKey, timeZone),
         segments: SEGMENTS_DESC.flatMap((segment) => {
           const part = group.parts.get(segment);
           return part ? [{ segment, items: [...part].sort((a, b) => at(b) - at(a)) }] : [];
