@@ -79,7 +79,7 @@ export const CLOUD_QUERY_TERMS = 2;
  * MOVED. Containment used to hold by construction — every emitted term came out
  * of `profile_tokens`, so `findSurfacedStorylines` could not fail to match. A
  * surface term is by definition not in that column. It holds now because
- * `timeline-service.ts` re-folds every keyword before the containment test, and
+ * `timeline-read.ts` re-folds every keyword before the containment test, and
  * re-folding a surface always recovers the fold it came from. That is a real
  * dependency on another module, not a happy accident: drop that fold, or add a
  * caller of `findSurfacedStorylines` that passes raw keywords, and the pill

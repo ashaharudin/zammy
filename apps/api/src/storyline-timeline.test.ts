@@ -17,8 +17,8 @@ import {
 } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
 import { groupCreatedArticles } from "./grouping-service.js";
-import { readStorylineView, readTimeline } from "./timeline-service.js";
-import { createTestHarness, type TestHarness } from "./test-support.js";
+import { readStorylineView, readTimeline } from "./timeline-read.js";
+import { createReadHarness, type ReadTestHarness } from "./test-support.js";
 import { labelWords } from "./storyline-label-merge.js";
 import { backfillLabelWords } from "./label-words-backfill.js";
 
@@ -39,7 +39,7 @@ const WINDOW = {
 const TZ = { timeZone: "UTC" };
 
 /** The shipped grouping config with the linker disabled. */
-function linkerOff(_now: Date): TestHarness["deps"]["config"]["grouping"] {
+function linkerOff(_now: Date): ReadTestHarness["deps"]["config"]["grouping"] {
   return {
     enabled: true,
     threshold: 0.5,
@@ -63,8 +63,8 @@ function linkerOff(_now: Date): TestHarness["deps"]["config"]["grouping"] {
   };
 }
 
-let harness: TestHarness;
-let db: TestHarness["deps"]["db"];
+let harness: ReadTestHarness;
+let db: ReadTestHarness["deps"]["db"];
 
 beforeAll(async () => {
   // The LINKER off: this suite builds storyline membership by hand, because
@@ -72,7 +72,7 @@ beforeAll(async () => {
   // one whose expected page can be written down. With the linker on it would
   // also seed its own provisional storyline per group, and every slot would
   // arrive twice — once from each.
-  harness = await createTestHarness({ grouping: linkerOff(NOW) }, NOW);
+  harness = await createReadHarness({ grouping: linkerOff(NOW) }, NOW);
   db = harness.deps.db;
 });
 
@@ -426,6 +426,28 @@ describe("cursor totality under the new keyset", () => {
 });
 
 describe("the storyline view", () => {
+  it("needs a database, a clock and a time zone — and nothing else", async () => {
+    // Newly assertable, and worth asserting once at runtime rather than only in
+    // the types: until the `timeline-service` split this read took the whole
+    // planner bag, and the claim that it touched none of it was a claim in a
+    // comment. Here the object handed in HAS nothing else — no client, no queue,
+    // no labeler, no grouping threshold — so a future edit that reaches for one
+    // fails here instead of quietly widening what opening a storyline costs.
+    await seed([
+      sighting({ domain: "a.example", title: "Hurricane Fausto nears Hawaii", published: MONDAY }),
+      sighting({ domain: "b.example", title: "Fausto weakens over Hawaii", published: TUESDAY }),
+    ]);
+    const storyline = await storylineOf(await groupIds(), "Hurricane Fausto");
+
+    const view = await readStorylineView(
+      { db, now: () => NOW, config: { grouping: { timeZone: "UTC" } } },
+      { storylineId: storyline, limit: 25 },
+    );
+
+    expect(view!.items).toHaveLength(2);
+    expect(view!.storylines[0]).toMatchObject({ id: storyline, label: "Hurricane Fausto" });
+  });
+
   it("serves one storyline's slots by UUID, with no keywords", async () => {
     await seed([
       sighting({ domain: "a.example", title: "Hurricane Fausto nears Hawaii", published: MONDAY }),

@@ -2,7 +2,7 @@ import { writeFileSync, appendFileSync, readFileSync, existsSync } from "node:fs
 import { sql } from "kysely";
 import { buildServices, type Services } from "./server.js";
 import { UsageError, type Args, type CommandSpec } from "./operator-command.js";
-import { processDeepenJob } from "./timeline-service.js";
+import { processDeepenJob } from "./storyline-deepening.js";
 import { deepeningQuery } from "./cloud-query.js";
 import { canonicalKeywords, fingerprintOf } from "./canonical.js";
 import { readStorylineLanguage } from "@zammy/storage";

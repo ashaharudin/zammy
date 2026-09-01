@@ -13,16 +13,30 @@ import { hexToBytea, readCoverage, recordCoverage, upsertTopic } from "@zammy/st
 import type { CanonicalQuery } from "./canonical.js";
 import { planHorizon, subtractCoverage } from "./coverage-gaps.js";
 import { refreshLockKey, tryAcquire } from "./single-flight.js";
-import { processSegmentJob, readTimeline } from "./timeline-service.js";
+import { processSegmentJob } from "./coverage-fill.js";
+import { readTimeline } from "./timeline-read.js";
 import { storyTokens } from "./storyline.js";
 import { CountingClient, createTestHarness, type TestHarness } from "./test-support.js";
 
 /**
- * The query planner (ARCHITECTURE 6.3): how a page gets filled. Offline
- * throughout — the fixture client replays the recorded payloads, including the
- * 100-result truncation the subdivision logic exists for. The two §12 race
- * tests live here: a reader must never block on the ingest lock, and
- * `hasMore` / `ingest.state` must answer their different questions.
+ * COVERAGE FILL (ARCHITECTURE 6.3): how a gap gets fetched and what is recorded
+ * as covered afterwards. Offline throughout — the fixture client replays the
+ * recorded payloads, including the 100-result truncation the subdivision logic
+ * exists for. The two §12 race tests live here: a reader must never block on the
+ * ingest lock, and `hasMore` / `ingest.state` must answer their different
+ * questions.
+ *
+ * These moved with the code rather than being written for it, and the move is
+ * the evidence for where the seam was: this file was already, in its entirety,
+ * about fill, quota, truncation and the deadline. Nothing in it turns on
+ * `toEntry`, the lead-group choice or the storyline view — those are
+ * `storyline-timeline.test.ts`, and they now run against a harness that cannot
+ * fetch at all.
+ *
+ * Most cases still enter through `readTimeline`, deliberately: what the fill
+ * does is only observable through the response `meta` it feeds and the coverage
+ * rows it leaves, and asserting on both together is what catches a fill that
+ * fetched correctly and reported wrongly.
  */
 
 const NOW = new Date("2026-08-10T12:00:00.000Z");

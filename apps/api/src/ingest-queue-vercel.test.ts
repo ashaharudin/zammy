@@ -313,7 +313,7 @@ describe("VercelIngestQueue", () => {
     // publishing at all. `STALE_PENDING_MS` prunes on READ, so a window that
     // expires before the platform has finished retrying makes `pendingCount`
     // return 0 for work that is still owed — and a 0 is what lets
-    // `timeline-service`'s cache gate write an unfinished page as `complete`,
+    // `timeline-read`'s cache gate write an unfinished page as `complete`,
     // for up to 24 h on the historical freshness tier. At 300 s against a 305 s
     // second delivery that is exactly what happened.
     //
@@ -353,7 +353,7 @@ describe("VercelIngestQueue", () => {
     // best-effort wrapper, deliberately), the `ZADD` is refused by a one-command
     // Redis blip and swallowed, Redis is fine again by the time anything counts
     // — so `pendingCount` would answer a truthful-looking 0 for work that is
-    // genuinely owed. `timeline-service` reads that as `complete` and its cache
+    // genuinely owed. `timeline-read` reads that as `complete` and its cache
     // gate writes a page missing the segment this job is about to fetch, for up
     // to 24 h on the historical tier, with nothing in `degraded` to explain it.
     //
@@ -523,7 +523,7 @@ describe("VercelIngestQueue", () => {
     //
     // This used to assert `pendingCount === 0` here, and that was the hazard
     // written down as an expectation: the enqueue's publish had succeeded, so a
-    // 0 claimed a settled topic for work genuinely owed, and `timeline-service`
+    // 0 claimed a settled topic for work genuinely owed, and `timeline-read`
     // caches a `complete` page. Fail-open belongs to reads; a lost WRITE is
     // compensated instead (see the lost-ledger-write tests above).
     const warnings: string[] = [];

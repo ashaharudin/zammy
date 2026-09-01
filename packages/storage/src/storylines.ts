@@ -1103,7 +1103,7 @@ export async function readStorylineDays(
  * A retrieval candidate: the facts the linker's decision reads, nothing else.
  *
  * `status` is deliberately NOT here, though the column exists and matters
- * elsewhere (`timeline-service` renders the dormant pill from it, and
+ * elsewhere (`timeline-read` renders the dormant pill from it, and
  * `mergeStorylines` reads a loser's before the merge erases it). The linker's
  * decision never reads it: `barFor` derives dormancy from `lastCoverageMs` at
  * decision time, so the column could only disagree with the bar. It was

@@ -11,7 +11,11 @@ import { createNewsClient } from "@zammy/news-providers";
 import { createGoogleNewsClient, PROVIDER as GOOGLE_NEWS_PROVIDER } from "@zammy/google-news-client";
 import { createDb, databaseSsl } from "@zammy/storage";
 import { registerHealthRoutes } from "./health.js";
-import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
+import {
+  registerQueryRoutes,
+  registerTrendingRoute,
+  type QueryRouteDeps,
+} from "./routes.js";
 import type { IngestHandler, IngestQueue } from "./ingest-queue.js";
 import {
   createIngestQueue,
@@ -21,11 +25,8 @@ import {
 } from "./wiring.js";
 import { Metrics, registerMetricsRoute } from "./metrics.js";
 import { createQuotaGovernors } from "./quota-redis.js";
-import {
-  processDeepenJob,
-  processSegmentJob,
-  type TimelineDeps,
-} from "./timeline-service.js";
+import { processSegmentJob } from "./coverage-fill.js";
+import { processDeepenJob } from "./storyline-deepening.js";
 import { processSampleJob, type TrendingDeps } from "./trending-service.js";
 
 /**
@@ -91,7 +92,7 @@ export interface BuildAppOptions {
    * on every `docker compose down`).
    *
    * A serverless request instance must pass `false`. It still constructs the
-   * `IngestQueue` — the read path enqueues (timeline-service, trending-service)
+   * `IngestQueue` — the read path enqueues (coverage-fill, trending-service)
    * and the trending locks are scoped by the queue's `name` — but a worker in a
    * function that suspends between requests would poll from a frozen instance
    * and hold jobs it may never be woken to finish (VERCEL-ALL-IN-SCOPE §3.1).
@@ -130,7 +131,12 @@ export interface Services {
   currents: CurrentsClient;
   queue: IngestQueue;
   metrics: Metrics;
-  deps: TimelineDeps;
+  /**
+   * The one object the four planner modules are all driven from. `QueryRouteDeps`
+   * because the HTTP surface reaches the widest set of them; the queue consumer
+   * hands the same object to a subset (`ingestDispatch`).
+   */
+  deps: QueryRouteDeps;
   trendingDeps: TrendingDeps;
   close: () => Promise<void>;
 }
@@ -279,7 +285,14 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
     // both. See `wiring.ts` for what that costs on a shared key.
     const labeler = createLabeler(config, log);
 
-    const deps: TimelineDeps = {
+    // `satisfies` rather than an annotation, and the difference is load-bearing
+    // downstream. Each planner module declares the narrow slice of the client
+    // and the queue it may touch, so `QueryRouteDeps` is narrow too — annotating
+    // would erase the fact that what this process actually holds is a whole
+    // `CurrentsClient` and a whole `IngestQueue`, and `trendingDeps` below
+    // (which needs `latestNews` and `enqueueSample`) is built by spreading this.
+    // Checked against the contract, carried at its real width.
+    const deps = {
       db,
       redis,
       currents,
@@ -317,7 +330,7 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
       },
       now: () => new Date(),
       log,
-    };
+    } satisfies QueryRouteDeps;
     const trendingDeps: TrendingDeps = {
       ...deps,
       trending: {

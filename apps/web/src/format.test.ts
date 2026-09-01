@@ -46,7 +46,7 @@ const entry = (
     storylineId: id,
     published,
     // What the service sends: the newest member of the WHOLE slot, coverage
-    // included (timeline-service.toEntry). Several cases below turn on the rail
+    // included (timeline-read.toEntry). Several cases below turn on the rail
     // narrowing that to what a card still holds.
     updatedAt: [headlinePublished, ...[...related, ...moreCoverage].map((a) => a.published)].reduce(
       (latest, at) => (Date.parse(at) > Date.parse(latest) ? at : latest),

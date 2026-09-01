@@ -39,7 +39,7 @@ import { hexToBytea, type Database } from "./database.js";
  *
  *   1. `recordCoverage` takes the provider instead of assuming it (below);
  *   2. `readCoverage` takes it and filters on it;
- *   3. every caller in `apps/api` — `timeline-service.ts` plans and records,
+ *   3. every caller in `apps/api` — `coverage-fill.ts` plans and records,
  *      `routes.ts` reports — decides WHICH provider's coverage it is asking
  *      about. This is the planner question ADR-0019 raises and not a mechanical
  *      substitution: each provider is planned against its own limits and its own

@@ -1,5 +1,6 @@
 import type { Redis } from "ioredis";
 import type { SightingPlane } from "@zammy/storage";
+import type { Span } from "./coverage-gaps.js";
 
 /**
  * The deferred-ingestion queue (ARCHITECTURE 9.1). Every job here traces back
@@ -60,6 +61,35 @@ export interface SegmentJob {
    * quota spend until the first one landed.
    */
   kind?: "topup";
+}
+
+/**
+ * A `SegmentJob` from a planned span.
+ *
+ * Beside the payload rather than in any one planner, because three of them mint
+ * these and none owns the shape: §6.3's read fill defers what a deadline cut,
+ * ADR-0017's storyline refresh queues an arc's newest gap, and `onTruncated`
+ * re-enqueues a truncation remainder. Two of the three are in different modules
+ * since the `timeline-service` split, and a constructor living in either would
+ * make the other import a fetcher it never calls.
+ *
+ * The ISO conversion is the whole of it, and it is the reason to have a
+ * constructor at all: `from`/`to` cross a transport as strings, and a planner
+ * that hand-built the object could quietly ship a `Date`.
+ */
+export function segmentJob(
+  fingerprint: string,
+  segment: Span,
+  startPage: number,
+  plane: SightingPlane,
+): SegmentJob {
+  return {
+    fingerprint,
+    from: segment.from.toISOString(),
+    to: segment.to.toISOString(),
+    startPage,
+    plane,
+  };
 }
 
 /**
@@ -335,7 +365,7 @@ export function parseIngestJob(payload: unknown): IngestJob | null {
  * fail-open story would suggest. The prune fired at 300 s with the second
  * delivery still 5 s away, and the web client had stopped polling 240 s earlier
  * (`INGEST_POLL_MAX`, ~60 s), so no spinner was ever cut short. What saw it was
- * `timeline-service`'s cache gate, which writes only a `complete` page: a pruned
+ * `timeline-read`'s cache gate, which writes only a `complete` page: a pruned
  * count reads complete, so an incomplete page was cached as settled — for up to
  * 24 hours on the historical freshness tier.
  *
@@ -360,7 +390,7 @@ export const STALE_PENDING_MS = 15 * 60 * 1000;
  * The transport-independent surface the read path and the consumer share.
  *
  * An interface rather than the class it used to be, because there are now two
- * implementations — but the members are the same ones `timeline-service`,
+ * implementations — but the members are the same ones `timeline-read`, `coverage-fill`,
  * `trending-service` and `server.ts` already used, plus `settle`. `settle` is
  * new and it is new for one reason: BullMQ could clear a pending entry from its
  * own worker events because the worker was in this process, and a push-mode
@@ -475,7 +505,7 @@ export class PendingSet {
    * a topic that reads as perpetually warming. Fifteen rather than five because
    * the window has to outlive the hosted retry budget: a prune that beats a
    * redelivery returns 0 for work that is still owed, and a 0 here is what lets
-   * `timeline-service` cache an unfinished page as settled.
+   * `timeline-read` cache an unfinished page as settled.
    */
   async count(pendingId: string): Promise<number> {
     const key = this.key(pendingId);

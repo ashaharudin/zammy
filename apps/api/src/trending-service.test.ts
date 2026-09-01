@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { processSegmentJob } from "./timeline-service.js";
+import { processSegmentJob } from "./coverage-fill.js";
 import {
   processSampleJob,
   readTrending,

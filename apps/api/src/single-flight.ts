@@ -47,14 +47,16 @@ export async function release(redis: Redis, key: string, token: string): Promise
   }
 }
 
-/** Is anyone currently elected? Feeds meta.ingest.state (§6.1). */
-export async function isHeld(redis: Redis, key: string): Promise<boolean> {
-  try {
-    return (await redis.exists(key)) === 1;
-  } catch {
-    return false;
-  }
-}
+/**
+ * There is no `isHeld` here any more, and the reason is worth a line: it
+ * documented itself as feeding `meta.ingest.state` (§6.1) and had not done so
+ * for some time — that field is `pendingCount` plus the fill's own
+ * `lockLostToPeer`, which is what the acquirer already knows from `tryAcquire`
+ * returning null. Its only callers were its own tests, which now read the key
+ * directly. A "who holds this?" probe is the wrong question for a caller to be
+ * able to ask anyway: the answer is stale the instant it returns, and the
+ * single-flight contract is that you either hold a token or you do not.
+ */
 
 /** Lock key per §7.1: lock:refresh:<fingerprint>:<segment>. */
 export function refreshLockKey(fingerprint: string, segment: { from: Date; to: Date }): string {
