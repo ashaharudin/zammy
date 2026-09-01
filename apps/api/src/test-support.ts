@@ -337,7 +337,6 @@ function refusingQueue(): Pick<IngestQueue, "enqueueSegment" | "pendingCount"> {
  */
 class RefusingCurrentsClient {
   readonly provider = "refusing";
-  readonly coverageProvider = "refusing";
   readonly limits = FIXTURE_LIMITS;
 
   search(): never {
@@ -391,9 +390,6 @@ export async function purgeTopicKeys(redis: Redis, fingerprint: string): Promise
  */
 export class CountingClient implements CurrentsClient {
   readonly provider = "counting";
-  get coverageProvider(): string {
-    return this.inner.coverageProvider;
-  }
   searchCalls = 0;
   /** Quota priority of each search call, in order (§9.4). */
   priorities: Array<CallOpts["priority"]> = [];

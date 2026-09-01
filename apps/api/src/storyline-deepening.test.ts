@@ -5,6 +5,7 @@ import {
   deriveAltKey,
   deriveDedupKey,
   emptyStats,
+  soleContributor,
   type NewsClient,
   type SearchParams,
   type QuotaView,
@@ -111,7 +112,6 @@ function sighting(input: {
  */
 class StubDeepeningClient implements NewsClient {
   readonly provider = DEEPENING_PROVIDER;
-  readonly coverageProvider = DEEPENING_PROVIDER;
   readonly limits = {
     maxPageSize: 100,
     maxRetrievableResults: 100,
@@ -134,6 +134,9 @@ class StubDeepeningClient implements NewsClient {
       // The adapter's own rule: 100 items means the cap truncated the window,
       // and there is no page 2 to ask for.
       isLastPage: rawCount < 100,
+      // Its own, which for a single-provider client is the whole list — and it
+      // is what the planner reads to decide whether this arc's span is covered.
+      completeness: soleContributor(DEEPENING_PROVIDER, rawCount < 100),
       pageSize: 100,
       normalization: { ...emptyStats(), received: rawCount, kept: this.next.length },
       quota: null,

@@ -7,7 +7,7 @@ import {
   type TrendingDeps,
 } from "./trending-service.js";
 import { deriveAltKey, deriveDedupKey } from "@zammy/currents-client";
-import { emptyStats, type SearchResult } from "@zammy/news-client";
+import { emptyStats, soleContributor, type SearchResult } from "@zammy/news-client";
 import {
   attachGroup,
   createProvisionalStoryline,
@@ -697,6 +697,7 @@ describe("the sample waits for the names it started (§10.1)", () => {
         requestedAt: NOW,
         rawCount: 1,
         isLastPage: served >= PAGES.length,
+        completeness: soleContributor("currents", served >= PAGES.length),
         pageSize: 20,
         normalization: { ...emptyStats(), received: 1, kept: 1 },
         quota: null,

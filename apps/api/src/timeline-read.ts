@@ -21,6 +21,7 @@ import {
 } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
 import { fillWindowForRead, type CoverageFillDeps } from "./coverage-fill.js";
+import { PLANNED_COVERAGE_PROVIDER } from "./coverage-gaps.js";
 import {
   freshnessTier,
   freshnessTtlMs,
@@ -259,7 +260,7 @@ async function planAndRead(
   // Re-read only where the fill could have moved it, which is exactly where it
   // found gaps to plan. Last of the four reads, as it has always been.
   const coverageNow = fill.plannedGaps
-    ? await readCoverage(deps.db, query.fingerprint)
+    ? await readCoverage(deps.db, query.fingerprint, PLANNED_COVERAGE_PROVIDER)
     : fill.coverageBefore;
   const first = coverageNow[0];
   const last = coverageNow.at(-1);

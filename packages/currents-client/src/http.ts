@@ -3,6 +3,7 @@ import {
   NewsInvalidQueryError,
   NewsSchemaError,
   clampSearchParams,
+  soleContributor,
   tagProvider,
   type CallOpts,
   type CircuitBreakerOptions,
@@ -85,7 +86,6 @@ export interface HttpCurrentsClientOptions {
 
 export class HttpCurrentsClient implements CurrentsClient {
   readonly provider = PROVIDER;
-  readonly coverageProvider = PROVIDER;
   readonly limits: ClientLimits;
   private readonly baseUrl: string;
   private readonly apiKey: string;
@@ -256,6 +256,7 @@ export class HttpCurrentsClient implements CurrentsClient {
 
     const raw = parsed.news ?? [];
     const { sightings, stats } = normalizeSightings(raw);
+    const lastPage = raw.length < pageSize;
 
     if (stats.received !== stats.kept) {
       // The drop rate is a real metric (ARCHITECTURE 12): a rise means upstream
@@ -272,7 +273,8 @@ export class HttpCurrentsClient implements CurrentsClient {
       rawCount: raw.length,
       // Deliberately the RAW count: a normalization drop must never masquerade as
       // the end of a topic's history.
-      isLastPage: raw.length < pageSize,
+      isLastPage: lastPage,
+      completeness: soleContributor(PROVIDER, lastPage),
       pageSize,
       normalization: stats,
       quota: response.quota,

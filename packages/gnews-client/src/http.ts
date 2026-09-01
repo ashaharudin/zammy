@@ -1,6 +1,7 @@
 import {
   HttpTransport,
   clampSearchParams,
+  soleContributor,
   tagProvider,
   type CallOpts,
   type CircuitBreakerOptions,
@@ -63,7 +64,6 @@ export interface HttpGnewsClientOptions {
 
 export class HttpGnewsClient implements GnewsClient {
   readonly provider = PROVIDER;
-  readonly coverageProvider = PROVIDER;
   readonly limits: ClientLimits;
   private readonly baseUrl: string;
   private readonly apiKey: string;
@@ -183,6 +183,8 @@ export class HttpGnewsClient implements GnewsClient {
     const raw = parsed.articles ?? [];
     const { sightings, stats } = normalizeSightings(raw);
 
+    const lastPage = isLastPage(raw.length, pageSize, pageNumber, parsed.totalArticles);
+
     if (stats.received !== stats.kept) {
       // The drop rate is a real metric (ARCHITECTURE 12): a rise means upstream
       // changed a field shape, and the timeline quietly thins until someone notices.
@@ -198,7 +200,8 @@ export class HttpGnewsClient implements GnewsClient {
       // Deliberately the RAW count: a normalization drop must never masquerade as
       // the end of a topic's history.
       rawCount: raw.length,
-      isLastPage: isLastPage(raw.length, pageSize, pageNumber, parsed.totalArticles),
+      isLastPage: lastPage,
+      completeness: soleContributor(PROVIDER, lastPage),
       pageSize,
       normalization: stats,
       // No headers to read; the governor's local count is the whole picture

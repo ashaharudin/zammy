@@ -16,11 +16,12 @@ story. Two providers reporting one URL is two sightings of one article, not a du
 _Avoid_: emission, raw article, row
 
 **Provider**:
-An upstream news API we fetch from — Currents, and optionally GNews. Providers are not equals: one
-is **coverage-bearing** and alone decides when a time window has been fully fetched; any other is
-best-effort breadth whose absence is never recorded as coverage (ADR-0012). Distinct from
-**source**, the outlet that published an article: one provider reports many sources, and two
-providers report many of the same.
+An upstream news API we fetch from — Currents, and optionally GNews. No provider is privileged: each
+records only the spans it actually walked, so "has this window been fetched?" is a question per
+provider and has no combined answer (ADR-0019, superseding ADR-0012's ranking). Which provider's
+answer a fetch is planned against is a separate choice the planner makes, and today it is Currents'.
+Distinct from **source**, the outlet that published an article: one provider reports many sources,
+and two providers report many of the same.
 _Avoid_: upstream (as a countable noun), API, feed, source
 
 **Article**:
@@ -94,8 +95,10 @@ excluding any time window — so the same search always finds the same topic.
 _Avoid_: hash, key, topic id
 
 **Coverage**:
-The time spans for which a topic's articles have actually been fetched — what separates "nothing was
-published then" from "we never asked".
+The time spans for which a subject's articles have actually been fetched BY ONE PROVIDER — what
+separates "nothing was published then" from "we never asked". Always
+`(subject, provider, span)`: the subject is a topic or a storyline, and no provider's coverage says
+anything about another's.
 _Avoid_: history, range, window
 
 **Segment**:

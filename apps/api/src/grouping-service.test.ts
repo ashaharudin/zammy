@@ -8,6 +8,7 @@ import { readTrailingCorpus } from "./story-df.js";
 import type { LinkerConfig } from "./storyline-linker.js";
 import { readTimeline } from "./timeline-read.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
+import { PLANNED_COVERAGE_PROVIDER } from "./coverage-gaps.js";
 
 /**
  * Article grouping end to end (ARCHITECTURE 14.3): syndicated coverage in,
@@ -145,7 +146,7 @@ async function seed(config: Partial<TestHarness["deps"]["config"]> = {}) {
     },
     ingested.createdArticles,
   );
-  await recordCoverage(harness.deps.db, fingerprint, WINDOW);
+  await recordCoverage(harness.deps.db, fingerprint, PLANNED_COVERAGE_PROVIDER, WINDOW);
 
   return query;
 }
@@ -348,7 +349,7 @@ describe("two poles of one story, healed by a bridge (ADR-0009)", () => {
         ingested.createdArticles,
       );
     }
-    await recordCoverage(harness.deps.db, fingerprint, WINDOW);
+    await recordCoverage(harness.deps.db, fingerprint, PLANNED_COVERAGE_PROVIDER, WINDOW);
 
     const result = await readTimeline(
       harness.deps,
@@ -420,7 +421,7 @@ describe("an article that arrived before its story's coverage", () => {
       );
     }
 
-    await recordCoverage(harness.deps.db, fingerprint, WINDOW);
+    await recordCoverage(harness.deps.db, fingerprint, PLANNED_COVERAGE_PROVIDER, WINDOW);
     return {
       fingerprint,
       keywords: ["harper"],

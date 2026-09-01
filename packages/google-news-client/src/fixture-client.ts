@@ -2,6 +2,7 @@ import {
   NewsInvalidQueryError,
   UnmeteredQuotaGovernor,
   clampSearchParams,
+  soleContributor,
   tagProvider,
   type CallOpts,
   type ClientLimits,
@@ -33,7 +34,6 @@ import type { GoogleNewsClient } from "./client.js";
  */
 export class FixtureGoogleNewsClient implements GoogleNewsClient {
   readonly provider = PROVIDER;
-  readonly coverageProvider = PROVIDER;
   private readonly governor: UnmeteredQuotaGovernor;
 
   constructor(
@@ -68,6 +68,7 @@ export class FixtureGoogleNewsClient implements GoogleNewsClient {
       requestedAt: new Date(),
       rawCount: raw.length,
       isLastPage: isLastPage(raw.length),
+      completeness: soleContributor(PROVIDER, isLastPage(raw.length)),
       pageSize: ITEMS_PER_QUERY,
       normalization: stats,
       // No call was made, so there is no observation to report — and unlike

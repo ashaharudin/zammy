@@ -57,8 +57,8 @@ export function registerHealthRoutes(app: FastifyInstance, deps: HealthDeps): vo
         burstRemaining: quota.burstRemaining,
         resetAt: quota.resetAt?.toISOString() ?? null,
         observed: quota.observed !== null,
-        // The top-level numbers stay the coverage-bearing provider's, so this
-        // field keeps meaning what it always did. `providers` is additive: a
+        // The top-level numbers stay the primary's, so this field keeps
+        // meaning what it always did. `providers` is additive: a
         // supplement running out narrows breadth rather than stopping the
         // timeline, and folding its much smaller budget into the headline would
         // make a healthy system look exhausted every afternoon.

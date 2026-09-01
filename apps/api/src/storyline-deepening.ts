@@ -427,15 +427,23 @@ export async function processDeepenJob(
 
     // Coverage LAST, and only on a clean end of results.
     //
-    // `isLastPage` on this provider means `rawCount < 100`, which is the honest
-    // "there was nothing further in this window" — a FULL page means the 100-cap
-    // truncated it, and there is no page 2 to ask for. So a truncated span
-    // records nothing and the next click re-plans the same gap. That is a
+    // Read off THIS provider's own `completeness` entry rather than the
+    // top-level `isLastPage`, which is the shared paging plan's terminator and
+    // says nothing about who walked what. Today the two agree — this is a
+    // single-provider client, so its entry is the only one — and asking the
+    // right question costs a lookup, while the day a fan-out arrives here the
+    // top-level answer would silently be someone else's.
+    //
+    // End of results on this provider means `rawCount < 100`, which is the
+    // honest "there was nothing further in this window" — a FULL page means the
+    // 100-cap truncated it, and there is no page 2 to ask for. So a truncated
+    // span records nothing and the next click re-plans the same gap. That is a
     // deliberate difference from `onTruncated`, which advances a frontier and
     // enqueues the remainder: doing that here would need subdivision, and
     // subdivision without a reader asking for it is the crawl frontier G7 has
     // to argue for on its own.
-    if (result.isLastPage) {
+    const walked = result.completeness.find((page) => page.provider === deepening.provider);
+    if (walked?.isLastPage) {
       await recordStorylineCoverage(deps.db, storylineId, deepening.provider, span);
     } else {
       deps.metrics?.truncatedSegment();
