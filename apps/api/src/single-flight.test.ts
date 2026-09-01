@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { Redis } from "ioredis";
-import { isHeld, release, tryAcquire } from "./single-flight.js";
+import { release, tryAcquire } from "./single-flight.js";
 
 /**
  * The single-flight election (ARCHITECTURE 6.3): N concurrent users searching a
@@ -25,7 +25,7 @@ describe("tryAcquire / release", () => {
 
     expect(winner).not.toBeNull();
     expect(loser).toBeNull();
-    expect(await isHeld(redis, k)).toBe(true);
+    expect((await redis.exists(k)) === 1).toBe(true);
   });
 
   it("release frees the lock for the next acquirer", async () => {
@@ -33,7 +33,7 @@ describe("tryAcquire / release", () => {
     const token = (await tryAcquire(redis, k, 5_000))!;
     await release(redis, k, token);
 
-    expect(await isHeld(redis, k)).toBe(false);
+    expect((await redis.exists(k)) === 1).toBe(false);
     expect(await tryAcquire(redis, k, 5_000)).not.toBeNull();
   });
 
@@ -48,7 +48,7 @@ describe("tryAcquire / release", () => {
 
     await release(redis, k, staleToken);
 
-    expect(await isHeld(redis, k)).toBe(true);
+    expect((await redis.exists(k)) === 1).toBe(true);
     await release(redis, k, current);
   });
 

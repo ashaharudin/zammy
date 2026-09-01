@@ -6,16 +6,24 @@ import {
   TrendingQuery,
 } from "@zammy/shared";
 import { countTopicArticles, readCoverage, readTopic } from "@zammy/storage";
-import { repairedLanguages, repairedRegions } from "@zammy/currents-client";
+import {
+  repairedLanguages,
+  repairedRegions,
+  type CurrentsClient,
+} from "@zammy/currents-client";
+import type { Redis } from "ioredis";
 import { canonicalize, type ReferenceCodes } from "./canonical.js";
 import {
   InvalidCursorError,
-  queueStorylineDeepening,
-  queueStorylineRefresh,
   readStorylineView,
   readTimeline,
-  type TimelineDeps,
-} from "./timeline-service.js";
+  type TimelineSearchDeps,
+} from "./timeline-read.js";
+import { queueStorylineRefresh, type StorylineRefreshDeps } from "./storyline-refresh.js";
+import {
+  queueStorylineDeepening,
+  type StorylineDeepeningDeps,
+} from "./storyline-deepening.js";
 import { readTrending, type TrendingDeps } from "./trending-service.js";
 
 /**
@@ -24,8 +32,28 @@ import { readTrending, type TrendingDeps } from "./trending-service.js";
  * typed in @zammy/shared; everything with judgment lives in the planner.
  */
 
+/**
+ * What the query routes reach, as the INTERSECTION of the planner modules they
+ * delegate to rather than as a bag of its own.
+ *
+ * A process serving HTTP has one pool, one Redis, one queue and one client
+ * behind all four planners, so it hands the same object to each of them — but
+ * the type says which modules these routes can call, and each module still
+ * states its own dependency list. Nothing can be added here without adding it
+ * to a planner that needs it.
+ *
+ * The last member is the routes' own: `/available/*` is served from here and
+ * from nowhere else, so it is the only place `availableLanguages` is reachable.
+ */
+export type QueryRouteDeps = TimelineSearchDeps &
+  StorylineRefreshDeps &
+  StorylineDeepeningDeps & {
+    redis: Redis;
+    currents: Pick<CurrentsClient, "availableLanguages" | "availableRegions">;
+  };
+
 export interface QueryRouteOptions {
-  deps: TimelineDeps;
+  deps: QueryRouteDeps;
   defaultLanguage: string;
 }
 
@@ -130,10 +158,15 @@ export async function registerQueryRoutes(
     }
 
     try {
+      // No `storyline` is passed on, and none is dropped: the only request that
+      // carries one with a search box is impossible — `isStorylineView` above
+      // takes every UUID that arrives without keywords, and `TimelineQuery`
+      // rejects the rest. `ReadRequest` last had a field for it under ADR-0010's
+      // seed, which ADR-0011 replaced with the view; the line that kept passing
+      // it went with the split.
       const result = await readTimeline(deps, canonical.query, {
         limit: parsed.data.limit,
         ...(parsed.data.cursor ? { cursorString: parsed.data.cursor } : {}),
-        ...(parsed.data.storyline ? { seedStorylineId: parsed.data.storyline } : {}),
       });
       return await reply.send(result);
     } catch (error) {
@@ -360,7 +393,7 @@ export function registerTrendingRoute(
  * what turns three quota tokens a day into zero on the hot path; in fixture
  * mode it simply mirrors the recorded bodies.
  */
-async function loadReference(deps: TimelineDeps): Promise<ReferenceData> {
+async function loadReference(deps: QueryRouteDeps): Promise<ReferenceData> {
   const reference = await fetchReference(deps);
   // Names are repaired on the way OUT, not on the way into the cache, and that
   // is the point: `ref:*` holds upstream's body for a day, so repairing before
@@ -397,7 +430,7 @@ async function loadReference(deps: TimelineDeps): Promise<ReferenceData> {
  * configured default is used. Same answer the route already gives a language the
  * table does not list, reached without asking anyone.
  */
-async function cachedReference(deps: TimelineDeps): Promise<ReferenceData | null> {
+async function cachedReference(deps: QueryRouteDeps): Promise<ReferenceData | null> {
   try {
     const [languages, regions] = await deps.redis.mget("ref:languages", "ref:regions");
     if (languages && regions) {
@@ -412,7 +445,7 @@ async function cachedReference(deps: TimelineDeps): Promise<ReferenceData | null
   return null;
 }
 
-async function fetchReference(deps: TimelineDeps): Promise<ReferenceData> {
+async function fetchReference(deps: QueryRouteDeps): Promise<ReferenceData> {
   const keys = ["ref:languages", "ref:regions"] as const;
   const cached = await cachedReference(deps);
   if (cached) return cached;

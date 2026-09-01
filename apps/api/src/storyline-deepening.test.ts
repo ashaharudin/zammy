@@ -26,7 +26,7 @@ import { WINDOW_SNAP_MS } from "./canonical.js";
 import { groupCreatedArticles } from "./grouping-service.js";
 import { ingestJobId } from "./ingest-queue.js";
 import { labelWords } from "./storyline-label-merge.js";
-import { processDeepenJob, queueStorylineDeepening } from "./timeline-service.js";
+import { processDeepenJob, queueStorylineDeepening } from "./storyline-deepening.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
 
 /**

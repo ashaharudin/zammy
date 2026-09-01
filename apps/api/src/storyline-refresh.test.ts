@@ -17,7 +17,7 @@ import { canonicalize, WINDOW_SNAP_MS, type CanonicalizeResult } from "./canonic
 import { groupCreatedArticles } from "./grouping-service.js";
 import { ingestJobId } from "./ingest-queue.js";
 import { labelWords } from "./storyline-label-merge.js";
-import { queueStorylineRefresh } from "./timeline-service.js";
+import { queueStorylineRefresh } from "./storyline-refresh.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
 
 /**

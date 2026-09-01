@@ -1,11 +1,23 @@
+import type { Kysely } from "kysely";
+import type { Redis } from "ioredis";
 import { TRENDING_LIMIT_MAX, type TrendingResponse } from "@zammy/shared";
-import { ingestSightings, readTrendingStorylines, upsertTopic } from "@zammy/storage";
+import type { CurrentsClient } from "@zammy/currents-client";
+import {
+  ingestSightings,
+  readTrendingStorylines,
+  upsertTopic,
+  type Database,
+} from "@zammy/storage";
 import { fingerprintOf } from "./canonical.js";
 import { cloudQuery } from "./cloud-query.js";
-import { groupCreatedArticles, groupingDepsFor } from "./grouping-service.js";
-import { samplePendingId, type SampleJob } from "./ingest-queue.js";
+import {
+  groupCreatedArticles,
+  groupingDepsFor,
+  type GroupingDeps,
+} from "./grouping-service.js";
+import { samplePendingId, type IngestQueue, type SampleJob } from "./ingest-queue.js";
+import type { Metrics } from "./metrics.js";
 import { readCachedPage, writeCachedPage } from "./page-cache.js";
-import type { TimelineDeps } from "./timeline-service.js";
 
 /**
  * The landing-page cloud (ARCHITECTURE 10). Same posture as every other read
@@ -47,7 +59,30 @@ export interface TrendingConfig {
   halfLifeHours: number;
 }
 
-export interface TrendingDeps extends TimelineDeps {
+/**
+ * What the cloud needs, stated rather than inherited.
+ *
+ * It used to read `extends TimelineDeps`, which handed the landing page a
+ * deepening provider, a segment queue and every knob the §6.3 planner owns —
+ * none of which a cloud read or a breadth sample can reach. The list below is
+ * the whole of it, and the two narrowings are the ones that were actually
+ * wrong: `latestNews` is the only upstream call on this path (§10.1), and the
+ * sample is the only thing that may publish, one job per language.
+ *
+ * `config.grouping` rather than a bag: the sample is a write path into
+ * `articles` like any other, so it owes grouping the same call the timeline
+ * fill makes, judged at the same bar (`wiring.ts`).
+ */
+export interface TrendingDeps {
+  db: Kysely<Database>;
+  redis: Redis;
+  currents: Pick<CurrentsClient, "latestNews">;
+  queue: Pick<IngestQueue, "name" | "enqueueSample" | "pendingCount">;
+  config: { grouping: GroupingDeps["config"] };
+  now: () => Date;
+  labeler?: GroupingDeps["labeler"];
+  metrics?: Metrics;
+  log?: { warn: (obj: object, msg: string) => void };
   trending: TrendingConfig;
 }
 

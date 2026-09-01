@@ -242,7 +242,7 @@ export class VercelIngestQueue implements IngestQueue {
    * best-effort and is swallowed (`ledger`). A Redis blip lasting one command
    * therefore leaves work genuinely owed with nothing recording it — and the
    * damage is not the missing spinner, it is that `pendingCount` then returns a
-   * clean 0 from a HEALTHY Redis, `timeline-service` reads `complete`, and its
+   * clean 0 from a HEALTHY Redis, `timeline-read` reads `complete`, and its
    * cache gate writes a page missing the segment this job is about to fetch.
    * Up to 24 h on the historical freshness tier, with nothing in `degraded` to
    * say why. The blip is over long before the page is cached, so there is no
@@ -251,7 +251,7 @@ export class VercelIngestQueue implements IngestQueue {
    * In-memory, which is exactly as durable as it can be: the reason we are here
    * is that the durable store refused a write. What makes that worth having
    * anyway is that the read which caches is USUALLY the read which enqueued —
-   * `timeline-service` plans gaps, enqueues, counts and caches in one request —
+   * the read path plans gaps, enqueues, counts and caches in one request —
    * so the instance holding this map is the instance about to make the mistake.
    *
    * What it cannot cover: another instance serving that read. Nothing local can,
@@ -391,7 +391,7 @@ export class VercelIngestQueue implements IngestQueue {
    * What it costs is `meta.ingest` under-reporting: a swallowed `count` returns
    * 0, so a topic with work outstanding reads `complete`. What that does NOT do
    * is cut a poll loop short — `INGEST_POLL_MAX` stops the client after ~60 s
-   * whatever we report. What it reaches is `timeline-service`'s cache gate,
+   * whatever we report. What it reaches is `timeline-read`'s cache gate,
    * which writes only a `complete` page, and the two failures land differently
    * there:
    *

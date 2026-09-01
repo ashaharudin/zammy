@@ -385,7 +385,7 @@ export async function groupCreatedArticles(
     // the whole chain safe.
     //
     // What the tail costs a READER is not nothing, and it is not latency: the
-    // ingest response caches on `state === "complete"` (`timeline-service.ts`),
+    // ingest response caches on `state === "complete"` (`timeline-read.ts`),
     // so anything that lands here is invisible to `meta.ingest` for the TTL.
     // Measured precedent, `trending-service.ts`: 61 labels landed in the ~3
     // minutes after a cloud of 3 was cached. A retroactive attach is the mildest

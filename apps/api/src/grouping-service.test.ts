@@ -6,7 +6,7 @@ import type { CanonicalQuery } from "./canonical.js";
 import { groupCreatedArticles } from "./grouping-service.js";
 import { readTrailingCorpus } from "./story-df.js";
 import type { LinkerConfig } from "./storyline-linker.js";
-import { readTimeline } from "./timeline-service.js";
+import { readTimeline } from "./timeline-read.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
 
 /**
@@ -19,7 +19,7 @@ import { createTestHarness, type TestHarness } from "./test-support.js";
  * exactly the case grouping must leave alone. There is no captured payload of
  * one story across several outlets, so the alternative to constructing one is
  * not testing the feature. The fixture-backed guarantee that matters is the
- * other direction, and `timeline-service.test.ts` still asserts it: 42 distinct
+ * other direction, and `coverage-fill.test.ts` still asserts it: 42 distinct
  * articles stay 42 slots with grouping on.
  */
 

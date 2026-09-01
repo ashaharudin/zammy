@@ -14,7 +14,10 @@ import { createDb, migrateToLatest } from "@zammy/storage";
 import { BullMqIngestQueue } from "./ingest-queue-bullmq.js";
 import type { IngestQueue } from "./ingest-queue.js";
 import { Metrics } from "./metrics.js";
-import type { TimelineDeps } from "./timeline-service.js";
+import type { CoverageFillDeps } from "./coverage-fill.js";
+import type { StorylineDeepeningDeps } from "./storyline-deepening.js";
+import type { StorylineRefreshDeps } from "./storyline-refresh.js";
+import type { TimelineSearchDeps } from "./timeline-read.js";
 
 /**
  * Integration harness for the query service: a real ephemeral Postgres, the
@@ -29,8 +32,37 @@ const PG_ADMIN_URL =
 const REDIS_URL = process.env.TEST_REDIS_URL ?? "redis://localhost:6379";
 const FIXTURES_DIR = new URL("../../../fixtures/", import.meta.url).pathname;
 
+/**
+ * Everything the four planner modules take, as one object — the shape a server
+ * process builds and therefore the honest thing to hand an integration test.
+ *
+ * Written as the INTERSECTION rather than as a list of its own, so a module that
+ * grows a dependency cannot be satisfied here by accident: adding a field to one
+ * of the four is what makes the harness owe it. `deepening` is mutable and
+ * optional because `storyline-deepening.test.ts` installs its stub on a built
+ * harness and one case deletes it again.
+ */
+export type HarnessDeps = TimelineSearchDeps &
+  CoverageFillDeps &
+  StorylineRefreshDeps &
+  StorylineDeepeningDeps & {
+    /**
+     * The client and the queue at the width the harness actually holds them,
+     * widening the narrow views the four modules declare.
+     *
+     * Deliberate, and the same move `buildServices` makes with `satisfies`: a
+     * test spreads `harness.deps` into a `TrendingDeps` (which wants
+     * `latestNews` and `enqueueSample`) or a route options bag (which wants
+     * `availableLanguages`), and a spread of the intersection alone would have
+     * lost both. The modules' own narrowing is unaffected — it is enforced at
+     * their signatures, which is where it belongs.
+     */
+    currents: CountingClient;
+    queue: IngestQueue;
+  };
+
 export interface TestHarness {
-  deps: TimelineDeps;
+  deps: HarnessDeps;
   counting: CountingClient;
   redis: Redis;
   queue: IngestQueue;
@@ -63,10 +95,26 @@ export function createTestClock(fixed?: Date): TestClock {
   };
 }
 
-export async function createTestHarness(
-  configOverrides: Partial<TimelineDeps["config"]> = {},
-  now?: Date,
-): Promise<TestHarness> {
+/** The client's real limits, which the PLANNER reads whether or not it fetches. */
+const FIXTURE_LIMITS = {
+  maxPageSize: 20,
+  maxRetrievableResults: 100,
+  maxLookbackDays: 30,
+  maxRangeDays: 7,
+} as const;
+
+/**
+ * A migrated ephemeral database, and the drop that ends it.
+ *
+ * Shared by both harnesses because it is the one expensive thing they agree
+ * about, and because the DROP is the half that is easy to get subtly wrong —
+ * `WITH (FORCE)` is what stops a lingering backend turning teardown into the
+ * 57P01 race.
+ */
+async function createEphemeralDb(): Promise<{
+  db: ReturnType<typeof createDb>;
+  drop: () => Promise<void>;
+}> {
   const dbName = `zammy_api_test_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
   const admin = new pg.Pool({ connectionString: PG_ADMIN_URL, max: 1 });
   try {
@@ -80,13 +128,69 @@ export async function createTestHarness(
   const db = createDb(dbUrl.toString());
   await migrateToLatest(db);
 
+  return {
+    db,
+    drop: async () => {
+      const cleanup = new pg.Pool({ connectionString: PG_ADMIN_URL, max: 1 });
+      try {
+        await cleanup.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
+      } finally {
+        await cleanup.end();
+      }
+    },
+  };
+}
+
+/**
+ * Grouping and storylines ON, as they ship (§14.3, ADR-0011) — a planner test
+ * that passes only with the feature disabled has not tested the planner. The
+ * linker's rules are the measured defaults (docs/STORYLINE-LINKING.md).
+ *
+ * A function rather than a constant so no test can mutate the next test's
+ * config through a shared nested object.
+ */
+function shippedGroupingConfig(): HarnessDeps["config"]["grouping"] {
+  return {
+    enabled: true,
+    threshold: 0.5,
+    timeZone: "UTC",
+    linker: {
+      enabled: true,
+      rules: {
+        anchorMaxShare: 0.002,
+        anchorDfFloor: 10,
+        massThreshold: 20,
+        dormancyDays: 90,
+        dormantStrictness: 1.5,
+      },
+      mergeBridges: 2,
+      // Off by default: the gate needs a model, and a test that wants it
+      // says so (see storyline-linker.test.ts).
+      coherenceGate: false,
+      // The shipped default. A test that wants the narrowed retrieval says
+      // so, the same way it would say so about the gate.
+      narrowRetrieval: false,
+      // Likewise unbounded, the shipped default: `bridgePairs` takes the
+      // full cross-product. A test that wants the bound says so.
+      maxBridgingQualifiers: undefined,
+      storyDf: { windowDays: 14, timeZone: "UTC" },
+      timeZone: "UTC",
+    },
+  };
+}
+
+export async function createTestHarness(
+  configOverrides: Partial<HarnessDeps["config"]> = {},
+  now?: Date,
+): Promise<TestHarness> {
+  const { db, drop } = await createEphemeralDb();
+
   const store = new FixtureStore(FIXTURES_DIR);
   await store.load();
-  const fixtureClient = new FixtureCurrentsClient(
-    store,
-    { maxPageSize: 20, maxRetrievableResults: 100, maxLookbackDays: 30, maxRangeDays: 7 },
-    { dailyLimit: 1000, burstLimit: 60 },
-  );
+  const fixtureClient = new FixtureCurrentsClient(store, FIXTURE_LIMITS, {
+    dailyLimit: 1000,
+    burstLimit: 60,
+  });
   const clock = createTestClock(now);
   const counting = new CountingClient(fixtureClient, clock);
 
@@ -96,7 +200,7 @@ export async function createTestHarness(
   });
 
   const metrics = new Metrics({ quota: () => counting.quota() });
-  const deps: TimelineDeps = {
+  const deps: HarnessDeps = {
     db,
     redis,
     currents: counting,
@@ -110,37 +214,7 @@ export async function createTestHarness(
       // Non-binding by default: the recorded fixture is denser than a real
       // topic, and only the §9.4 tests are ABOUT the cap.
       perTopicDailyCallCap: 10_000,
-      // Grouping and storylines ON, as they ship (§14.3, ADR-0011) — a
-      // planner test that passes only with the feature disabled has not
-      // tested the planner. The linker's rules are the measured defaults
-      // (docs/STORYLINE-LINKING.md).
-      grouping: {
-        enabled: true,
-        threshold: 0.5,
-        timeZone: "UTC",
-        linker: {
-          enabled: true,
-          rules: {
-            anchorMaxShare: 0.002,
-            anchorDfFloor: 10,
-            massThreshold: 20,
-            dormancyDays: 90,
-            dormantStrictness: 1.5,
-          },
-          mergeBridges: 2,
-          // Off by default: the gate needs a model, and a test that wants it
-          // says so (see storyline-linker.test.ts).
-          coherenceGate: false,
-          // The shipped default. A test that wants the narrowed retrieval says
-          // so, the same way it would say so about the gate.
-          narrowRetrieval: false,
-          // Likewise unbounded, the shipped default: `bridgePairs` takes the
-          // full cross-product. A test that wants the bound says so.
-          maxBridgingQualifiers: undefined,
-          storyDf: { windowDays: 14, timeZone: "UTC" },
-          timeZone: "UTC",
-        },
-      },
+      grouping: shippedGroupingConfig(),
       ...configOverrides,
     },
     now: () => clock.now(),
@@ -158,14 +232,126 @@ export async function createTestHarness(
       await queue.close();
       await redis.quit();
       await db.destroy();
-      const cleanup = new pg.Pool({ connectionString: PG_ADMIN_URL, max: 1 });
-      try {
-        await cleanup.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
-      } finally {
-        await cleanup.end();
-      }
+      await drop();
     },
   };
+}
+
+/**
+ * The READ-path harness: a real database, the real Redis, and an upstream and a
+ * queue that REFUSE.
+ *
+ * Reading a timeline may fetch — §6.3 says so, and `readTimeline`'s deps say so
+ * — but the read path's own behaviour is what happens over a window whose
+ * coverage is already recorded: which slot leads, which member heads it, how a
+ * cursor pages, what a storyline view returns. Those tests used to be handed the
+ * full planner harness, which meant loading the fixture corpus off disk and
+ * standing up a BullMQ queue for every one of them.
+ *
+ * Neither is built here, and the refusals are the point rather than a saving. A
+ * read test that accidentally leaves a gap in its window no longer replays a
+ * fixture and quietly asserts about a page that upstream half-wrote; it throws.
+ * "This read fetched nothing" stops being a claim and becomes the harness.
+ *
+ * `readStorylineView` needs none of it and takes `StorylineViewDeps` — three
+ * fields — which is the other half of what the split bought.
+ */
+export interface ReadTestHarness {
+  /**
+   * `TimelineSearchDeps` and not `HarnessDeps`: the narrow pair the read path
+   * declares is exactly what a refusing client and a refusing queue can
+   * satisfy, and it is the type-level statement that this harness cannot drive
+   * the refresh planner or the deepening plane.
+   */
+  deps: TimelineSearchDeps;
+  redis: Redis;
+  clock: TestClock;
+  teardown: () => Promise<void>;
+}
+
+export async function createReadHarness(
+  configOverrides: Partial<CoverageFillDeps["config"]> = {},
+  now?: Date,
+): Promise<ReadTestHarness> {
+  const { db, drop } = await createEphemeralDb();
+  const clock = createTestClock(now);
+  const redis = new Redis(REDIS_URL);
+
+  const deps: TimelineSearchDeps = {
+    db,
+    redis,
+    currents: new RefusingCurrentsClient(),
+    queue: refusingQueue(),
+    config: {
+      // Present because the type wants them and unreachable because nothing
+      // here fetches. A read test that makes one of these matter has stopped
+      // being a read test.
+      syncFillDeadlineMs: 1200,
+      maxSyncUpstreamCalls: 5,
+      lookbackDays: 30,
+      minSegmentMs: 60 * 60 * 1000,
+      perTopicDailyCallCap: 10_000,
+      grouping: shippedGroupingConfig(),
+      ...configOverrides,
+    },
+    now: () => clock.now(),
+  };
+
+  return {
+    deps,
+    redis,
+    clock,
+    teardown: async () => {
+      await redis.quit();
+      await db.destroy();
+      await drop();
+    },
+  };
+}
+
+/**
+ * The two queue members the read path declares: one that throws, one that
+ * answers honestly.
+ *
+ * `readTimeline` always asks for `pendingCount`, because
+ * `meta.ingest.pendingJobs` is part of every response, and a harness with no
+ * queue behind it has nothing outstanding by construction.
+ */
+function refusingQueue(): Pick<IngestQueue, "enqueueSegment" | "pendingCount"> {
+  return {
+    enqueueSegment: (): never => {
+      throw new Error(
+        "read harness: the read path enqueued a segment; seed coverage, or use createTestHarness",
+      );
+    },
+    pendingCount: async () => 0,
+  };
+}
+
+/**
+ * The upstream client a read-path test holds: one that cannot answer.
+ *
+ * `limits` are real, because the PLANNER reads them with or without a fetch —
+ * gap slicing is done against `maxRangeDays` (§2's 7-day ceiling) before
+ * anything decides whether to call. Everything else throws.
+ */
+class RefusingCurrentsClient {
+  readonly provider = "refusing";
+  readonly coverageProvider = "refusing";
+  readonly limits = FIXTURE_LIMITS;
+
+  search(): never {
+    throw new Error(
+      "read harness: the read path reached upstream; seed coverage, or use createTestHarness",
+    );
+  }
+  latestNews(): never {
+    throw new Error("read harness: the read path reached upstream");
+  }
+  quota(): never {
+    throw new Error("read harness: no quota to report");
+  }
+  async close(): Promise<void> {}
 }
 
 /**

@@ -303,7 +303,7 @@ wrong twice.
 **The consequence was not an early-stopping poll loop.** That is what the code comments said, and
 `INGEST_POLL_MAX` disproves it: the web client polls 40 times at 1.5 s and gives up after ~60 s —
 240 s before the prune could ever fire. No spinner was ever cut short. What saw the premature prune
-was [`timeline-service`](../apps/api/src/timeline-service.ts)'s cache gate, which writes only a
+was [`timeline-read`](../apps/api/src/timeline-read.ts)'s cache gate, which writes only a
 `complete` page. A pruned count reads `complete`, so an incomplete page was **written to the cache as
 settled — for up to 24 hours on the historical freshness tier**, and the retry's fill stayed
 invisible until it expired.

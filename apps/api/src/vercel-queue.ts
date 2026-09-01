@@ -138,7 +138,7 @@ export function createMessageHandler(
         // and `meta.ingest` keeps reporting the job the queue still intends to
         // deliver. It was five minutes until 2026-08-25, which pruned the entry
         // with attempt 2 only 5 s away — and a topic that then read `complete`
-        // is a topic `timeline-service` caches mid-fill.
+        // is a topic `timeline-read` caches mid-fill.
         throw error;
       }
       // Out of attempts. Settle first: a job nobody will attempt again is not
