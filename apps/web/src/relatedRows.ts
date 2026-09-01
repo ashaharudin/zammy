@@ -16,21 +16,30 @@ import type { Article } from "@zammy/shared";
  * link to that outlet's own copy, and the disclosure's "+N more" tally counts
  * articles, not rows.
  *
- * Still by TITLE, now that `Article.groupId` is on the wire and the rail's cut
- * folds by it (`format.ts`, `railSlots`). The two folds answer different
- * questions: the cut asks "is this one piece", where a group id is the whole
- * truth, and a row asks "did these outlets print the same words", where it is
- * not — one group is one piece under several outlets' own headlines, and
- * folding it into a single row would hide every variant but the first behind a
- * title none of the others ran.
+ * By title WITHIN a piece, which is the narrower of the two folds `Article.groupId`
+ * now makes possible. The cut asks "is this one piece" and a group id is the whole
+ * truth of it (`format.ts`, `railSlots`); a row asks "did these outlets print the
+ * same words", which a group id is NOT the truth of — one group is one piece under
+ * several outlets' own headlines, so folding a whole group into one row would hide
+ * every variant but the first behind a title none of the others ran.
+ *
+ * Neither signal alone is right, and title alone was wrong in the direction this
+ * whole change exists to fix: a bucket holds every group whose anchor landed in the
+ * same part of the day, so two genuinely different pieces colliding on a low-token
+ * headline ("The Latest", "Live updates") folded into one row that claimed they were
+ * one piece. Group first, then title, keeps variants visible and distinct pieces
+ * apart.
  */
 export function collapseCopies(articles: Article[]): { article: Article; copies: Article[] }[] {
   const rows: { article: Article; copies: Article[] }[] = [];
-  const byTitle = new Map<string, number>();
+  // `groupId` is a decimal string, so the first colon is unambiguously the
+  // separator however the title is punctuated.
+  const byPiece = new Map<string, number>();
   for (const article of articles) {
-    const index = byTitle.get(article.title);
+    const key = `${article.groupId}:${article.title}`;
+    const index = byPiece.get(key);
     if (index === undefined) {
-      byTitle.set(article.title, rows.length);
+      byPiece.set(key, rows.length);
       rows.push({ article, copies: [article] });
     } else {
       rows[index]!.copies.push(article);
