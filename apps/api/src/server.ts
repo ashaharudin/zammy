@@ -219,7 +219,7 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
       log.info(
         { mode: config.GNEWS_MODE, dailyLimit: config.GNEWS_DAILY_CALL_LIMIT },
         "GNEWS_ENABLED — fanning out to a second provider as best-effort breadth; " +
-          "Currents remains coverage-bearing",
+          "it records its own coverage, and the planner still plans against Currents'",
       );
     }
 

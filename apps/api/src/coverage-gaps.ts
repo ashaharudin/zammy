@@ -1,7 +1,9 @@
 /**
  * Coverage-gap math (ARCHITECTURE 6.3 step 3): requested window minus covered
- * ranges, clamped to what upstream can actually answer. Pure — the repository
- * supplies the covered spans, the caller supplies the clock.
+ * ranges, clamped to what upstream can actually answer. The functions are pure —
+ * the repository supplies the covered spans, the caller supplies the clock — and
+ * the two constants are the planner's own policy: how much slack a plan leaves
+ * the fetcher, and WHOSE coverage it is a plan against.
  */
 
 /** Half-open interval [from, to), matching the tstzrange rows it is diffed against. */
@@ -9,6 +11,36 @@ export interface Span {
   from: Date;
   to: Date;
 }
+
+/**
+ * The provider whose `topic_coverage` rows the topic plane plans and reports
+ * against.
+ *
+ * Coverage is `(subject, provider, span)` and no provider is privileged
+ * (ADR-0019), so "which spans are covered" has one answer per provider. Someone
+ * still has to pick which answer drives a fetch, and this is that pick: a
+ * **planner policy**, living with the planner. It is deliberately not a property
+ * of a client (`NewsClient` used to carry a `coverageProvider` and no longer
+ * does — a provider cannot grant itself this), and deliberately not a constant
+ * inside `@zammy/storage`, which must no more learn a provider's name than
+ * `@zammy/news-client` may.
+ *
+ * **`'currents'` is a statement about today's policy, and holding it here is the
+ * point of this constant.** Other providers now record their own spans
+ * truthfully — `fillSegment` writes a row for every contributor that walked the
+ * segment to its end — and the planner still subtracts only these. So a second
+ * provider's coverage becoming load-bearing is a change to this line and to the
+ * arithmetic around it, with no data to backfill first: the rows will already be
+ * there and already be true.
+ *
+ * That change is NOT free and is not smuggled in here. ADR-0019's shape is one
+ * plan per provider — "two providers can each hold an open gap over the same
+ * span and both get asked", with more upstream calls as the accepted cost — and
+ * on Free tiers that is a quota decision that wants measuring before it is
+ * made. Reading one provider's coverage is what keeps the planned gap set, and
+ * therefore the spend, exactly what it was.
+ */
+export const PLANNED_COVERAGE_PROVIDER = "currents";
 
 /**
  * How far inside the lookback horizon the PLAN starts, so a segment is still

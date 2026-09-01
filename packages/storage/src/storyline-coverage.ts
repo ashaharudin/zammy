@@ -19,18 +19,16 @@ import type { Database } from "./database.js";
  * fetched" is cheaper to guarantee when the wrong table is unreachable than when
  * it is one argument away.
  *
- * ## Provider-scoped in both directions, unlike `coverage.ts`
+ * ## Provider-scoped in both directions, as `coverage.ts` now is too
  *
- * `readCoverage` is still provider-blind, because Currents is the only caller
- * wired to write topic coverage today and a blind read of a single-writer table
- * is exact. Nothing like that holds here, and nothing should: ADR-0019 retires
- * the single-answer form of "is this span covered", so "what is covered for this
- * arc" is not a question and "what is covered for this arc, BY THIS PROVIDER"
- * is. A blind read would let one provider's fetches suppress another's fills —
- * over-coverage, the unrecoverable direction.
+ * ADR-0019 retires the single-answer form of "is this span covered", so "what is
+ * covered for this arc" is not a question and "what is covered for this arc, BY
+ * THIS PROVIDER" is. A blind read would let one provider's fetches suppress
+ * another's fills — over-coverage, the unrecoverable direction. This module was
+ * written that way from the start, and `coverage.ts` has since been brought to
+ * the same shape, so the two now differ only in their subject.
  *
- * Nothing reads or writes this table yet. G5 points the storyline refresh at it;
- * this phase lands the schema and the primitives and stops there.
+ * `storyline-deepening.ts` writes here; nothing plans against the reads yet.
  */
 
 /**

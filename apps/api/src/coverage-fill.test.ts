@@ -17,6 +17,7 @@ import { processSegmentJob } from "./coverage-fill.js";
 import { readTimeline } from "./timeline-read.js";
 import { storyTokens } from "./storyline.js";
 import { CountingClient, createTestHarness, type TestHarness } from "./test-support.js";
+import { PLANNED_COVERAGE_PROVIDER } from "./coverage-gaps.js";
 
 /**
  * COVERAGE FILL (ARCHITECTURE 6.3): how a gap gets fetched and what is recorded
@@ -77,6 +78,10 @@ const broadQuery = (): CanonicalQuery => ({
   window: { ...WINDOW },
 });
 
+/** Spans as comparable strings, for asserting two providers walked the same one. */
+const iso = (spans: Array<{ from: Date; to: Date }>) =>
+  spans.map((s) => `${s.from.toISOString()}/${s.to.toISOString()}`);
+
 let harness: TestHarness;
 
 afterEach(async () => {
@@ -106,7 +111,11 @@ describe("cold search — the synchronous fill", () => {
 
     // Coverage now spans the whole clamped window: the next reader must not
     // re-ask (§7.2).
-    const covered = await readCoverage(harness.deps.db, climateQuery().fingerprint);
+    const covered = await readCoverage(
+      harness.deps.db,
+      climateQuery().fingerprint,
+      PLANNED_COVERAGE_PROVIDER,
+    );
     const gaps = subtractCoverage(WINDOW, covered, { now: NOW, lookbackDays: 30 });
     expect(gaps).toEqual([]);
   });
@@ -148,7 +157,11 @@ describe("truncation — a full final page means hidden history, not success", (
     expect(result.meta.ingest.state).toBe("in_progress");
     expect(result.meta.ingest.pendingJobs).toBe(1);
 
-    const covered = await readCoverage(harness.deps.db, broadQuery().fingerprint);
+    const covered = await readCoverage(
+      harness.deps.db,
+      broadQuery().fingerprint,
+      PLANNED_COVERAGE_PROVIDER,
+    );
     expect(covered.length).toBe(1);
     expect(covered[0]!.to.getTime()).toBeGreaterThanOrEqual(WINDOW.to.getTime());
     expect(covered[0]!.from.getTime()).toBeGreaterThan(WINDOW.from.getTime());
@@ -164,11 +177,11 @@ describe("truncation — a full final page means hidden history, not success", (
   }, 30_000);
 
   it("ignores a supplement's older sightings when recording the frontier", async () => {
-    // ADR-0012: coverage is a claim about what the coverage-bearing provider
-    // fetched. A supplement that is sparser in the window reaches OLDER than
-    // the primary's 100-cap frontier on the same pages; folding its sightings
-    // into `oldestSeen` would record coverage over a span the primary never
-    // fetched, permanently hiding every primary article there.
+    // A coverage row is a claim about what ITS OWN provider fetched (ADR-0019).
+    // A supplement that is sparser in the window reaches OLDER than the planned
+    // provider's 100-cap frontier on the same pages; folding its sightings into
+    // `oldestSeen` would record, under the planned provider's name, a span it
+    // never fetched — permanently hiding every article of its there.
     harness = await createTestHarness({ syncFillDeadlineMs: 10_000 }, NOW);
 
     // Far older than any frontier five primary pages can reach, yet inside the
@@ -211,11 +224,101 @@ describe("truncation — a full final page means hidden history, not success", (
 
     // The frontier must come from the primary's own sightings: coverage may
     // not begin at the supplement's older story.
-    const covered = await readCoverage(deps.db, broadQuery().fingerprint);
+    const covered = await readCoverage(
+      deps.db,
+      broadQuery().fingerprint,
+      PLANNED_COVERAGE_PROVIDER,
+    );
     expect(covered.length).toBe(1);
     expect(covered[0]!.from.getTime()).toBeGreaterThan(
       new Date(supplementPublished).getTime() + 1,
     );
+    // Five fetches and five grouping batches against a real Postgres, as the
+    // siblings above: the ASSERTIONS are load-independent, the runtime is not,
+    // and this one had been sitting a few hundred ms under the default.
+  }, 30_000);
+
+  it("records the supplement's OWN span without moving the planned gaps", async () => {
+    // The point of the whole per-provider shape (ADR-0019): a provider that
+    // walked this segment to its own end gets a row saying so, and the planner
+    // — which subtracts `PLANNED_COVERAGE_PROVIDER`'s rows and nobody else's —
+    // plans exactly the gaps it planned before. Which is what makes counting a
+    // second provider's coverage later a change to that constant rather than a
+    // backfill of history nobody kept.
+    harness = await createTestHarness({}, NOW);
+
+    class ContributingClient extends CountingClient {
+      override async search(params: SearchParams, opts?: CallOpts): Promise<SearchResult> {
+        const page = await super.search(params, opts);
+        return {
+          ...page,
+          completeness: [...page.completeness, { provider: "gnews", isLastPage: true }],
+        };
+      }
+    }
+    const deps = {
+      ...harness.deps,
+      currents: new ContributingClient(harness.counting, harness.clock),
+    };
+
+    await readTimeline(deps, climateQuery(), { limit: 25 });
+
+    const planned = await readCoverage(
+      deps.db,
+      climateQuery().fingerprint,
+      PLANNED_COVERAGE_PROVIDER,
+    );
+    expect(subtractCoverage(WINDOW, planned, { now: NOW, lookbackDays: 30 })).toEqual([]);
+
+    const supplement = await readCoverage(deps.db, climateQuery().fingerprint, "gnews");
+    expect(iso(supplement)).toEqual(iso(planned));
+  });
+
+  it("records nothing for a provider that missed a page of the walk", async () => {
+    // A provider absent from a page saw none of what that page held, so
+    // end-of-results on a LATER page is evidence about the tail and not the
+    // head. Recording it would be over-coverage: a span claimed and never
+    // fetched, which no error reports and no retry repairs (ADR-0001). Keeping
+    // its gap is under-coverage, which the next fill repairs.
+    harness = await createTestHarness({}, NOW);
+
+    class LateJoiningClient extends CountingClient {
+      override async search(params: SearchParams, opts?: CallOpts): Promise<SearchResult> {
+        const page = await super.search(params, opts);
+        const pageNumber = params.pageNumber ?? 1;
+        // Two pages, and the supplement only answers the second. Scripted here
+        // rather than fetched, because the fixture's own "climate" walk is a
+        // single short page and the rule under test needs a walk with a head
+        // the supplement can miss.
+        return {
+          ...page,
+          isLastPage: pageNumber > 1,
+          completeness:
+            pageNumber > 1
+              ? [
+                  { provider: PLANNED_COVERAGE_PROVIDER, isLastPage: true },
+                  { provider: "gnews", isLastPage: true },
+                ]
+              : [{ provider: PLANNED_COVERAGE_PROVIDER, isLastPage: false }],
+        };
+      }
+    }
+    const deps = {
+      ...harness.deps,
+      currents: new LateJoiningClient(harness.counting, harness.clock),
+    };
+
+    await readTimeline(deps, climateQuery(), { limit: 25 });
+
+    // The planned provider walked both pages, so its claim stands.
+    const planned = await readCoverage(
+      deps.db,
+      climateQuery().fingerprint,
+      PLANNED_COVERAGE_PROVIDER,
+    );
+    expect(subtractCoverage(WINDOW, planned, { now: NOW, lookbackDays: 30 })).toEqual([]);
+
+    expect(await readCoverage(deps.db, climateQuery().fingerprint, "gnews")).toEqual([]);
   });
 
   it("the consumer walks the frontier to full coverage without refetching", async () => {
@@ -237,7 +340,11 @@ describe("truncation — a full final page means hidden history, not success", (
       { timeout: 20_000, interval: 250 },
     );
 
-    const covered = await readCoverage(harness.deps.db, broadQuery().fingerprint);
+    const covered = await readCoverage(
+      harness.deps.db,
+      broadQuery().fingerprint,
+      PLANNED_COVERAGE_PROVIDER,
+    );
     const gaps = subtractCoverage(WINDOW, covered, { now: NOW, lookbackDays: 30 });
     expect(gaps).toEqual([]);
 
@@ -393,7 +500,7 @@ describe("refresh-on-read (§6.4) — freshness is repaired by the next reader",
       country: null,
       category: null,
     });
-    await recordCoverage(harness.deps.db, query.fingerprint, {
+    await recordCoverage(harness.deps.db, query.fingerprint, PLANNED_COVERAGE_PROVIDER, {
       from: WINDOW.from,
       to: new Date(NOW.getTime() - 30_000),
     });
@@ -443,7 +550,11 @@ describe("refresh-on-read (§6.4) — freshness is repaired by the next reader",
     const repaired = await readTimeline(harness.deps, live, { limit: 25 });
     expect(repaired.meta.stale).toBe(false);
     expect(repaired.meta.ingest.state).toBe("complete");
-    const covered = await readCoverage(harness.deps.db, live.fingerprint);
+    const covered = await readCoverage(
+      harness.deps.db,
+      live.fingerprint,
+      PLANNED_COVERAGE_PROVIDER,
+    );
     expect(covered.at(-1)?.to.getTime()).toBeGreaterThanOrEqual(NOW.getTime());
   }, 30_000);
 
@@ -554,7 +665,11 @@ describe("per-topic daily cap (§9.4) — one curious user cannot drain the pool
     // same wall), and no coverage claim — the gap stays visibly unfetched so
     // tomorrow's reader repairs it (§7.2).
     expect(harness.counting.searchCalls).toBe(1);
-    const covered = await readCoverage(harness.deps.db, climateFingerprint);
+    const covered = await readCoverage(
+      harness.deps.db,
+      climateFingerprint,
+      PLANNED_COVERAGE_PROVIDER,
+    );
     expect(covered.at(-1)?.to.getTime()).toBeLessThanOrEqual(WINDOW.to.getTime());
   });
 });
@@ -640,7 +755,11 @@ describe("the 7-day per-call range ceiling (observed live 2026-08-11)", () => {
 
     // Empty slices record coverage too (§11: "we asked" ≠ "nothing there"),
     // so the whole clamped window ends up covered.
-    const covered = await readCoverage(harness.deps.db, wide.fingerprint);
+    const covered = await readCoverage(
+      harness.deps.db,
+      wide.fingerprint,
+      PLANNED_COVERAGE_PROVIDER,
+    );
     const gaps = subtractCoverage(wide.window, covered, { now: NOW, lookbackDays: 30 });
     expect(gaps).toEqual([]);
   });
@@ -667,7 +786,11 @@ describe("the 7-day per-call range ceiling (observed live 2026-08-11)", () => {
     for (const range of harness.counting.ranges) {
       expect(range).toBeLessThanOrEqual(7 * DAY);
     }
-    const covered = await readCoverage(harness.deps.db, climateFingerprint);
+    const covered = await readCoverage(
+      harness.deps.db,
+      climateFingerprint,
+      PLANNED_COVERAGE_PROVIDER,
+    );
     expect(covered[0]?.from.toISOString()).toBe("2026-07-25T00:00:00.000Z");
     expect(covered.at(-1)?.to.getTime()).toBeGreaterThanOrEqual(NOW.getTime());
   });
@@ -682,7 +805,7 @@ describe("the 7-day per-call range ceiling (observed live 2026-08-11)", () => {
       country: null,
       category: null,
     });
-    await recordCoverage(harness.deps.db, live.fingerprint, {
+    await recordCoverage(harness.deps.db, live.fingerprint, PLANNED_COVERAGE_PROVIDER, {
       from: new Date("2026-07-20T00:00:00.000Z"),
       to: new Date("2026-07-25T00:00:00.000Z"),
     });
@@ -738,7 +861,11 @@ describe("the lookback edge moves while a job waits in the queue", () => {
       expect(from.getTime()).toBeGreaterThanOrEqual(horizon.getTime());
     }
     // ...and nothing below it was claimed as covered.
-    const covered = await readCoverage(harness.deps.db, climateFingerprint);
+    const covered = await readCoverage(
+      harness.deps.db,
+      climateFingerprint,
+      PLANNED_COVERAGE_PROVIDER,
+    );
     expect(covered).not.toHaveLength(0);
     expect(covered[0]!.from.getTime()).toBeGreaterThanOrEqual(horizon.getTime());
   });
@@ -766,7 +893,11 @@ describe("the lookback edge moves while a job waits in the queue", () => {
     });
 
     expect(harness.counting.ranges).toHaveLength(0);
-    expect(await readCoverage(harness.deps.db, climateFingerprint)).toEqual([]);
+    expect(await readCoverage(
+      harness.deps.db,
+      climateFingerprint,
+      PLANNED_COVERAGE_PROVIDER)).toEqual([],
+    );
   });
 });
 

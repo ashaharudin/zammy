@@ -9,7 +9,7 @@ import {
 } from "@zammy/storage";
 import { WINDOW_SNAP_MS, type CanonicalizeResult } from "./canonical.js";
 import { storylineKeywords } from "./cloud-query.js";
-import { subtractCoverage } from "./coverage-gaps.js";
+import { PLANNED_COVERAGE_PROVIDER, subtractCoverage } from "./coverage-gaps.js";
 import { freshnessTtlMs } from "./page-cache.js";
 import type { Metrics } from "./metrics.js";
 import { segmentJob, type IngestQueue, type SegmentJob } from "./ingest-queue.js";
@@ -203,7 +203,7 @@ export async function queueStorylineRefresh(
   });
 
   const maxSpanMs = deps.currents.limits.maxRangeDays * 86_400_000;
-  const covered = await readCoverage(deps.db, query.fingerprint);
+  const covered = await readCoverage(deps.db, query.fingerprint, PLANNED_COVERAGE_PROVIDER);
 
   const settled = {
     storylineId,

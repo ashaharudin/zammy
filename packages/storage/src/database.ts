@@ -203,10 +203,8 @@ export interface TopicArticlesTable {
  * provider privileged, each recording only what it actually walked — and it says
  * plainly that "is this span covered" therefore stops having a single answer.
  *
- * The read path has not caught up with that and does not need to yet: Currents
- * is the only caller wired to write here today, so every row is `'currents'` and
- * a provider-blind read is exact. `coverage.ts` carries the argument, and names
- * G5 as when it stops holding.
+ * Both sides of `coverage.ts` are scoped to the provider accordingly. Which
+ * provider a caller asks about is the planner's decision, not this table's.
  */
 export interface TopicCoverageTable {
   fingerprint: Buffer;
@@ -216,9 +214,9 @@ export interface TopicCoverageTable {
    * here, not a designation.
    *
    * ADR-0019's shape: each provider's spans are separable, so no provider can
-   * claim what another fetched. Note that `readCoverage` deliberately does NOT
-   * filter on it yet — see `coverage.ts` for why, and for the four things that
-   * change together in G5.
+   * claim what another fetched. `readCoverage` and `recordCoverage` both filter
+   * on it — a read that did not would union two providers' spans back into the
+   * single answer ADR-0019 says this question no longer has.
    */
   provider: Generated<string>;
   /** tstzrange, as its text representation. */

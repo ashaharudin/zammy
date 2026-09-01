@@ -14,7 +14,13 @@ import {
   type SightingPlane,
 } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
-import { planHorizon, sliceSpan, subtractCoverage, type Span } from "./coverage-gaps.js";
+import {
+  PLANNED_COVERAGE_PROVIDER,
+  planHorizon,
+  sliceSpan,
+  subtractCoverage,
+  type Span,
+} from "./coverage-gaps.js";
 import { freshnessTtlMs } from "./page-cache.js";
 import type { Metrics } from "./metrics.js";
 import { refreshLockKey, release, tryAcquire } from "./single-flight.js";
@@ -48,6 +54,10 @@ import {
  *   - `onTruncated` — records the frontier and hands the remainder back as a
  *     job; it never fetches.
  *
+ * Coverage is `(subject, provider, span)` (ADR-0019), so every write here names
+ * a provider. Which one is not this module's call — `PLANNED_COVERAGE_PROVIDER`
+ * in `coverage-gaps.ts` holds the planner's policy, and this module asks it.
+ *
  * Two §12 invariants also run through this file: the single-flight lock
  * deduplicates UPSTREAM CALLS and never queues READERS, and the store's
  * `hasMore` (more in our store) stays independent of `meta.ingest.state` (more
@@ -65,7 +75,7 @@ export interface CoverageFillDeps {
    * should be able to reach for it. Same argument the deepening plane's
    * `NewsClient` narrowing makes one module over.
    */
-  currents: Pick<CurrentsClient, "search" | "limits" | "coverageProvider">;
+  currents: Pick<CurrentsClient, "search" | "limits">;
   /**
    * Only `enqueueSegment`: a fill defers pages and truncation remainders and
    * nothing else. It cannot start a breadth sample or a deepening fetch, and it
@@ -161,7 +171,7 @@ export async function fillWindowForRead(
   // ceiling arrives as several slices, fails the single-gap sliver test
   // below, and takes the sync fill — 16 idle days is missing history, not
   // staleness.
-  const covered = await readCoverage(deps.db, query.fingerprint);
+  const covered = await readCoverage(deps.db, query.fingerprint, PLANNED_COVERAGE_PROVIDER);
   const gaps = subtractCoverage(query.window, covered, {
     now,
     lookbackDays: deps.config.lookbackDays,
@@ -411,8 +421,8 @@ interface FillBudget {
 type FillOutcome =
   | { kind: "completed"; callsMade: number }
   | { kind: "deferred"; resumePage: number; callsMade: number }
-  /** `oldestSeen`: the frontier the fetched pages reached, over the
-   * coverage-bearing provider's sightings alone (ADR-0012) — null when
+  /** `oldestSeen`: the frontier the fetched pages reached, over the sightings
+   * of the provider this walk is planned against alone — null when
    * normalization dropped everything that provider sent. */
   | { kind: "truncated"; callsMade: number; oldestSeen: Date | null }
   /** §9.4: the topic's daily cap is spent. Stop deepening; resume tomorrow. */
@@ -443,6 +453,18 @@ async function fillSegment(
   const maxPages = Math.floor(maxRetrievableResults / maxPageSize);
   let callsMade = 0;
   let oldestSeen: Date | null = null;
+  /**
+   * How many of this walk's pages each provider actually answered. A provider
+   * may claim the segment only if that equals every page — compared against
+   * `callsMade`, which is the same number.
+   *
+   * A coverage row is a claim that ITS provider walked the span (ADR-0019), so
+   * the walk has to know who was present for all of it. A supplement that sits
+   * out page 2 and returns end-of-results on page 3 saw the tail and not the
+   * head; recording it would be over-coverage, which nothing ever repairs.
+   * Leaving it out leaves it a gap, which the next fill does repair.
+   */
+  const pagesAnswered = new Map<string, number>();
 
   for (let pageNumber = startPage; pageNumber <= maxPages; pageNumber += 1) {
     // The floor of one call is unconditional: the first synchronous call is
@@ -513,19 +535,44 @@ async function fillSegment(
     // so a reader waiting on this fill cannot be failed by it.
     await groupCreatedArticles(groupingDepsFor(deps), ingested.createdArticles);
 
-    // Coverage-bearing sightings only (ADR-0012). The composite merges in
-    // supplement sightings, and a supplement that is sparser in this window
-    // reaches OLDER than the primary's 100-cap frontier — folding one in would
-    // move `oldestSeen` back and record coverage over a span the coverage-
-    // bearing provider never fetched, permanently hiding its articles there.
+    // The frontier is per provider, so it is measured over the sightings of the
+    // one this walk is planned against. The composite merges every
+    // contributor's sightings into one list, and a supplement that is sparser
+    // in this window reaches OLDER than the 100-cap frontier on the same pages
+    // — folding one in would move `oldestSeen` back and record, under the
+    // planned provider's name, a span it never fetched.
     for (const sighting of result.sightings) {
-      if (sighting.provider !== deps.currents.coverageProvider) continue;
+      if (sighting.provider !== PLANNED_COVERAGE_PROVIDER) continue;
       const published = new Date(sighting.published);
       if (oldestSeen === null || published < oldestSeen) oldestSeen = published;
     }
 
+    for (const page of result.completeness) {
+      pagesAnswered.set(page.provider, (pagesAnswered.get(page.provider) ?? 0) + 1);
+    }
+
     if (result.isLastPage) {
-      await recordCoverage(deps.db, query.fingerprint, segment);
+      // One row per provider that walked this segment to ITS OWN end. The
+      // planned provider's row is the one the planner subtracts; the others are
+      // recorded because they are true, and because the row being there already
+      // is what makes counting a second provider's coverage a change to
+      // `PLANNED_COVERAGE_PROVIDER` rather than a backfill of history nobody
+      // kept (ADR-0019, and see that constant for why counting it is a separate,
+      // measurable decision).
+      //
+      // `isLastPage` — the shared plan's terminator — decides when this loop
+      // stops. It does not decide who may claim the span; `completeness` does,
+      // per provider, and a provider absent from it claims nothing.
+      for (const page of result.completeness) {
+        if (!page.isLastPage || pagesAnswered.get(page.provider) !== callsMade) continue;
+        // A resumed walk can only speak for the pages IT made. The planned
+        // provider is exempt, and that is a fact rather than a privilege: the
+        // resume plan came from its coverage rows, so the pages before the
+        // resume point were fetched for this segment against its gap. Anyone
+        // else may have joined partway, and a coverage row cannot be partial.
+        if (startPage !== 1 && page.provider !== PLANNED_COVERAGE_PROVIDER) continue;
+        await recordCoverage(deps.db, query.fingerprint, page.provider, segment);
+      }
       return { kind: "completed", callsMade };
     }
   }
@@ -549,6 +596,12 @@ async function fillSegment(
  * Halving survives only as the fallback for a frontier that cannot advance
  * (a timestamp pileup), depth-limited at the floor as before.
  *
+ * Both rows this writes are the planned provider's alone, unlike the clean
+ * end-of-results path above which records one per contributor. A frontier is
+ * measured over one provider's sightings and a subdivision floor is reached by
+ * one provider's page cap; neither is evidence about anyone else's walk, and
+ * "no provider can claim what another fetched" (ADR-0019) cuts both ways.
+ *
  * Returns the remainders rather than enqueuing them, because the two callers
  * differ on when they may be published: the read path holds them until it knows
  * the topic is neither degraded nor capped, and the consumer publishes each one
@@ -571,14 +624,17 @@ async function onTruncated(
   if (oldestSeen !== null) {
     const boundary = new Date(oldestSeen.getTime() + 1);
     if (boundary.getTime() > segment.from.getTime() && boundary.getTime() < segment.to.getTime()) {
-      await recordCoverage(deps.db, fingerprint, { from: boundary, to: segment.to });
+      await recordCoverage(deps.db, fingerprint, PLANNED_COVERAGE_PROVIDER, {
+        from: boundary,
+        to: segment.to,
+      });
       return [segmentJob(fingerprint, { from: segment.from, to: boundary }, 1, plane)];
     }
   }
 
   const length = segment.to.getTime() - segment.from.getTime();
   if (length <= deps.config.minSegmentMs) {
-    await recordCoverage(deps.db, fingerprint, segment);
+    await recordCoverage(deps.db, fingerprint, PLANNED_COVERAGE_PROVIDER, segment);
     deps.log?.warn(
       { fingerprint, from: segment.from, to: segment.to },
       "segment truncated at minimum subdivision; accepting partial history",

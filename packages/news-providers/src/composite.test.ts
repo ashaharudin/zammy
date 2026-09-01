@@ -4,6 +4,7 @@ import {
   NewsQuotaError,
   NewsUpstreamError,
   emptyStats,
+  soleContributor,
   type CallOpts,
   type ClientLimits,
   type QuotaSnapshot,
@@ -19,8 +20,8 @@ import { CompositeNewsClient, narrowestLimits } from "./composite.js";
 /**
  * The composite's job is to add breadth without costing correctness, and the two
  * are in genuine tension. Most of what follows guards the same invariant from
- * different angles: a supplement must never be able to end a walk, forge
- * coverage, or fail a call the coverage-bearing provider answered.
+ * different angles: a supplement must never be able to end the shared walk,
+ * claim a span it did not fetch, or fail a call the primary answered.
  */
 
 const CURRENTS_LIMITS: ClientLimits = {
@@ -58,21 +59,28 @@ function sighting(provider: string, path: string): Sighting {
   };
 }
 
-function result(overrides: Partial<SearchResult> = {}): SearchResult {
+function result(overrides: Partial<SearchResult> = {}, provider = "currents"): SearchResult {
   const stats = emptyStats();
   stats.received = 1;
   stats.kept = 1;
-  return {
+  const merged: SearchResult = {
     sightings: [sighting("currents", "a")],
     requestedAt: new Date("2026-08-17T00:00:00.000Z"),
     rawCount: 1,
     isLastPage: false,
+    completeness: [],
     pageSize: 10,
     normalization: stats,
     quota: null,
     adjustments: [],
     ...overrides,
   };
+  // What every non-composite client reports: itself, and its own answer.
+  // Derived from `isLastPage` unless a case scripts it, so a case that sets one
+  // and forgets the other cannot exist.
+  return overrides.completeness
+    ? merged
+    : { ...merged, completeness: soleContributor(provider, merged.isLastPage) };
 }
 
 const QUOTA: QuotaView = {
@@ -101,8 +109,8 @@ function fakeGnews(overrides: Partial<GnewsClient> = {}): GnewsClient {
   return {
     provider: "gnews",
     limits: GNEWS_LIMITS,
-    search: vi.fn(async () => result({ sightings: [sighting("gnews", "b")] })),
-    topHeadlines: vi.fn(async () => result({ sightings: [sighting("gnews", "b")] })),
+    search: vi.fn(async () => result({ sightings: [sighting("gnews", "b")] }, "gnews")),
+    topHeadlines: vi.fn(async () => result({ sightings: [sighting("gnews", "b")] }, "gnews")),
     quota: vi.fn(async () => ({ ...QUOTA, dailyRemaining: 42 })),
     close: vi.fn(async () => {}),
     ...overrides,
@@ -182,18 +190,55 @@ describe("fanning out and merging", () => {
   });
 });
 
-describe("a supplement can never end a walk or forge coverage", () => {
-  it("takes isLastPage from the coverage-bearing provider alone", async () => {
-    // The invariant this class exists to protect. The caller writes a
-    // topic_coverage row when isLastPage is true; letting a supplement vote
-    // would claim coverage over days it never looked at, permanently and
-    // silently (ADR-0001).
+describe("a supplement can never end the shared walk or claim another's span", () => {
+  it("takes isLastPage — the shared plan's terminator — from the primary alone", async () => {
+    // One fan-out, one `pageNumber`, one loop, so exactly one provider can end
+    // it. Letting a supplement vote would stop the primary's walk mid-window
+    // (ADR-0019: providers stop sharing a plan, and until they do this is whose
+    // plan it is).
     const composite = new CompositeNewsClient(
       fakeCurrents({ search: vi.fn(async () => result({ isLastPage: false })) }),
-      [fakeGnews({ search: vi.fn(async () => result({ isLastPage: true })) })],
+      [fakeGnews({ search: vi.fn(async () => result({ isLastPage: true }, "gnews")) })],
     );
 
     expect((await composite.search({ keywords: ["x"] })).isLastPage).toBe(false);
+  });
+
+  it("reports each provider's own completeness rather than resolving one answer", async () => {
+    // The facts, unranked (ADR-0019). A caller writing a coverage row picks the
+    // provider it is writing for and reads that provider's entry; nothing here
+    // decides for it, and the primary saying "not finished" does not overwrite
+    // the supplement's honest "I am".
+    const composite = new CompositeNewsClient(
+      fakeCurrents({ search: vi.fn(async () => result({ isLastPage: false })) }),
+      [fakeGnews({ search: vi.fn(async () => result({ isLastPage: true }, "gnews")) })],
+    );
+
+    expect((await composite.search({ keywords: ["x"] })).completeness).toEqual([
+      { provider: "currents", isLastPage: false },
+      { provider: "gnews", isLastPage: true },
+    ]);
+  });
+
+  it("leaves a provider that sat the call out ABSENT from completeness", async () => {
+    // Absence is the claim, and it is why a caller cannot mistake a sit-out for
+    // a walk: a supplement out of budget has no entry at all, so there is
+    // nothing for a coverage write to key off. `isLastPage: false` would have
+    // been a statement about a window it never looked at.
+    const composite = new CompositeNewsClient(
+      fakeCurrents({ search: vi.fn(async () => result({ isLastPage: true })) }),
+      [
+        fakeGnews({
+          search: vi.fn(async () => {
+            throw new NewsQuotaError("daily quota exhausted", null, true);
+          }),
+        }),
+      ],
+    );
+
+    expect((await composite.search({ keywords: ["x"] })).completeness).toEqual([
+      { provider: "currents", isLastPage: true },
+    ]);
   });
 
   it("does not let an exhausted supplement end a walk either", async () => {
@@ -295,7 +340,7 @@ describe("a supplement's trouble is absorbed, never hidden", () => {
   });
 });
 
-describe("the coverage-bearing provider's failures are not absorbed", () => {
+describe("the primary's failures are not absorbed", () => {
   it("propagates them, exactly as before the fan-out existed", async () => {
     // A cold topic has nothing to fall back on, so this failure is the caller's
     // to render (ARCHITECTURE 11). Swallowing it would turn an outage into an
@@ -368,7 +413,7 @@ describe("latest news — the §10.1 breadth sample", () => {
 });
 
 describe("reference lists and quota reporting", () => {
-  it("takes reference lists from the coverage-bearing provider", async () => {
+  it("takes reference lists from the primary", async () => {
     // They define what a topic can be; a supplement either serves such a topic
     // or sits it out.
     const composite = new CompositeNewsClient(fakeCurrents(), [fakeGnews()]);

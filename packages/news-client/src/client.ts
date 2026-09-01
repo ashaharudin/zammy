@@ -39,6 +39,29 @@ export interface CallOpts {
   timeoutMs?: number;
 }
 
+/**
+ * One contributing provider's account of its OWN walk of the window asked about.
+ *
+ * Coverage is `(subject, provider, span)` and no provider is privileged
+ * (ADR-0019), so "was this window finished?" has one answer per provider and no
+ * combined one. This is that answer, reported as a fact rather than resolved
+ * into a ranking: a caller writing a coverage row picks the provider it is
+ * writing for and reads that provider's entry, and a provider that is absent
+ * from the list said nothing this call and may not be recorded as having
+ * covered anything.
+ */
+export interface ProviderCompleteness {
+  /** The provider that answered. Matches the `provider` on its own sightings. */
+  provider: string;
+  /**
+   * That provider's clean end-of-results signal for the window asked about —
+   * "there is nothing further for ME to fetch here", normally its own raw count
+   * coming in under the page size. This is what a coverage row may be written
+   * on, and it is per provider because a coverage row is.
+   */
+  isLastPage: boolean;
+}
+
 export interface SearchResult {
   sightings: Sighting[];
   requestedAt: Date;
@@ -51,14 +74,28 @@ export interface SearchResult {
    */
   rawCount: number;
   /**
-   * Upstream's clean end-of-results signal, normally `rawCount < pageSize`.
+   * Whether the SHARED PAGING PLAN has another page to ask for — "should this
+   * loop call again with `pageNumber + 1`?", nothing more.
    *
-   * Read it as "there is nothing further to fetch for this window", because that
-   * is what the caller records coverage on. The composite therefore takes it from
-   * the coverage-bearing provider alone rather than combining the two — see
-   * `CompositeNewsClient`.
+   * It is not a coverage claim, and reading it as one is the mistake ADR-0012
+   * was written around and ADR-0019 retired: a fan-out sends every provider the
+   * same `pageNumber` and `pageSize`, so exactly one of them can own the loop's
+   * termination, and that one owning it says nothing about what the others
+   * walked. `completeness` is where coverage claims live. ADR-0019's
+   * "providers stop sharing a plan" is what eventually retires this field
+   * along with the shared plan it terminates.
    */
   isLastPage: boolean;
+  /**
+   * Each provider that actually answered, and what it said about its own walk.
+   *
+   * One entry for a single-provider client — itself. One per contributor for
+   * the composite, with a provider that errored, sat the call out or ran out of
+   * budget simply absent (and named in `adjustments`). Absence is the point:
+   * "no entry" is what a provider having no claim over this window looks like,
+   * and it cannot be confused with `isLastPage: false`.
+   */
+  completeness: readonly ProviderCompleteness[];
   /** Page size actually sent, after clamping. Needed to interpret `isLastPage`. */
   pageSize: number;
   normalization: NormalizationStats;
@@ -81,14 +118,6 @@ export interface NewsClient {
   /** Which upstream this client speaks to. `"composite"` when it fans out. */
   readonly provider: string;
   /**
-   * The provider whose fetches back coverage claims (ADR-0012). A single client
-   * is its own; the composite answers with its primary's. Callers recording
-   * coverage from sightings must consider only sightings carrying this name —
-   * a supplement's sightings are breadth, and treating one as the coverage
-   * frontier claims spans the coverage-bearing provider never fetched.
-   */
-  readonly coverageProvider: string;
-  /**
    * The tier limits this client enforces.
    *
    * Exposed so callers cannot page against a different idea of the cap than the
@@ -100,4 +129,19 @@ export interface NewsClient {
   /** Current quota knowledge, for `/readyz` and `meta.degraded`. */
   quota(): Promise<QuotaView>;
   close(): Promise<void>;
+}
+
+/**
+ * The `completeness` of a client that speaks to exactly one provider: itself,
+ * and its own answer.
+ *
+ * A helper rather than an inline literal at each adapter, so a single-provider
+ * adapter cannot report a contributor list that disagrees with its own
+ * `provider`, and so the shape gains a field in one place rather than seven.
+ */
+export function soleContributor(
+  provider: string,
+  isLastPage: boolean,
+): readonly ProviderCompleteness[] {
+  return [{ provider, isLastPage }];
 }

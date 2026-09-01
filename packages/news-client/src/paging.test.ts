@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { collectPages } from "./paging.js";
 import { emptyStats } from "./normalize.js";
-import type { CallOpts, NewsClient, SearchResult } from "./client.js";
+import { soleContributor, type CallOpts, type NewsClient, type SearchResult } from "./client.js";
 import type { SearchParams } from "./search-params.js";
 import type { QuotaView } from "./quota.js";
 
@@ -30,9 +30,6 @@ function scriptedClient(rawCounts: number[], errorAt?: number): NewsClient & {
   const client: NewsClient & { requests: SearchParams[] } = {
     requests,
     provider: "scripted",
-    // Its own coverage provider, as any single (non-composite) client is
-    // (ADR-0012). Paging does not read this; the interface requires it.
-    coverageProvider: "scripted",
     limits,
     async search(params: SearchParams, _opts?: CallOpts): Promise<SearchResult> {
       requests.push(params);
@@ -67,6 +64,10 @@ function scriptedClient(rawCounts: number[], errorAt?: number): NewsClient & {
         requestedAt: new Date(),
         rawCount,
         isLastPage: rawCount < pageSize,
+        // Its own completeness and nobody else's, as any single
+        // (non-composite) client reports (ADR-0019). The pager reads the shared
+        // plan's `isLastPage`, not this; the interface requires it.
+        completeness: soleContributor("scripted", rawCount < pageSize),
         pageSize,
         normalization: stats,
         quota: null,

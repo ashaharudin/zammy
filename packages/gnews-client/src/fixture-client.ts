@@ -1,6 +1,7 @@
 import {
   UnmeteredQuotaGovernor,
   clampSearchParams,
+  soleContributor,
   tagProvider,
   type CallOpts,
   type ClientLimits,
@@ -26,7 +27,6 @@ import type { GnewsClient } from "./client.js";
  */
 export class FixtureGnewsClient implements GnewsClient {
   readonly provider = PROVIDER;
-  readonly coverageProvider = PROVIDER;
   private readonly governor: UnmeteredQuotaGovernor;
 
   constructor(
@@ -59,12 +59,14 @@ export class FixtureGnewsClient implements GnewsClient {
     const pageSize = clamped.pageSize ?? this.limits.maxPageSize;
     const raw = this.store.search(clamped, { maxPageSize: this.limits.maxPageSize });
     const { sightings, stats } = normalizeSightings(raw);
+    const lastPage = raw.length < pageSize;
 
     return {
       sightings,
       requestedAt: new Date(),
       rawCount: raw.length,
-      isLastPage: raw.length < pageSize,
+      isLastPage: lastPage,
+      completeness: soleContributor(PROVIDER, lastPage),
       pageSize,
       normalization: stats,
       // No call was made, so there is no observation to report. Null rather than a
@@ -85,12 +87,14 @@ export class FixtureGnewsClient implements GnewsClient {
     );
     const raw = this.store.topHeadlines(params, { maxPageSize: this.limits.maxPageSize });
     const { sightings, stats } = normalizeSightings(raw);
+    const lastPage = isLastPage(raw.length, pageSize, params.pageNumber ?? 1, null);
 
     return {
       sightings,
       requestedAt: new Date(),
       rawCount: raw.length,
-      isLastPage: isLastPage(raw.length, pageSize, params.pageNumber ?? 1, null),
+      isLastPage: lastPage,
+      completeness: soleContributor(PROVIDER, lastPage),
       pageSize,
       normalization: stats,
       quota: null,

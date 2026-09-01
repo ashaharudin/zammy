@@ -19,6 +19,7 @@ import { ingestJobId } from "./ingest-queue.js";
 import { labelWords } from "./storyline-label-merge.js";
 import { queueStorylineRefresh } from "./storyline-refresh.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
+import { PLANNED_COVERAGE_PROVIDER } from "./coverage-gaps.js";
 
 /**
  * Opening a storyline queues one background top-up of what its own coverage
@@ -319,7 +320,7 @@ describe("how much a click may queue", () => {
 
     // Coverage to 30s ago: a live window's tier is 60s (`freshnessTtlMs`), so
     // the arc is fresh and a second reader's click costs one Redis read.
-    await recordCoverage(db, cold.fingerprint, {
+    await recordCoverage(db, cold.fingerprint, PLANNED_COVERAGE_PROVIDER, {
       from: new Date(NOW.getTime() - 31 * 86_400_000),
       to: new Date(NOW.getTime() - 30_000),
     });
@@ -348,7 +349,7 @@ describe("how much a click may queue", () => {
     const cold = await refresh(storylineId, pastGrid);
     if (cold.status !== "queued") throw new Error(cold.status);
     // What that click's job leaves behind: the newest 7 days, edge 45s old.
-    await recordCoverage(db, cold.fingerprint, {
+    await recordCoverage(db, cold.fingerprint, PLANNED_COVERAGE_PROVIDER, {
       from: new Date(pastGrid.getTime() - 7 * 86_400_000),
       to: new Date(pastGrid.getTime() - 45_000),
     });
@@ -368,7 +369,7 @@ describe("how much a click may queue", () => {
     const storylineId = await seedStoryline();
     const cold = await refresh(storylineId);
     if (cold.status !== "queued") throw new Error(cold.status);
-    await recordCoverage(db, cold.fingerprint, {
+    await recordCoverage(db, cold.fingerprint, PLANNED_COVERAGE_PROVIDER, {
       from: new Date(NOW.getTime() - 47 * 86_400_000),
       to: new Date(NOW.getTime() - 40 * 86_400_000),
     });
@@ -388,11 +389,11 @@ describe("how much a click may queue", () => {
     if (cold.status !== "queued") throw new Error(cold.status);
     // Covered to now, with a hole ten days back. Nothing about the arc is stale;
     // the hole is missing HISTORY, and §9.4 says a click does not buy history.
-    await recordCoverage(db, cold.fingerprint, {
+    await recordCoverage(db, cold.fingerprint, PLANNED_COVERAGE_PROVIDER, {
       from: new Date(NOW.getTime() - 31 * 86_400_000),
       to: new Date(NOW.getTime() - 11 * 86_400_000),
     });
-    await recordCoverage(db, cold.fingerprint, {
+    await recordCoverage(db, cold.fingerprint, PLANNED_COVERAGE_PROVIDER, {
       from: new Date(NOW.getTime() - 9 * 86_400_000),
       to: NOW,
     });
@@ -406,7 +407,7 @@ describe("how much a click may queue", () => {
     const cold = await refresh(storylineId);
     if (cold.status !== "queued") throw new Error(cold.status);
     const coverageUpper = new Date(NOW.getTime() - 5 * 60_000);
-    await recordCoverage(db, cold.fingerprint, {
+    await recordCoverage(db, cold.fingerprint, PLANNED_COVERAGE_PROVIDER, {
       from: new Date(NOW.getTime() - 31 * 86_400_000),
       to: coverageUpper,
     });

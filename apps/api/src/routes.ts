@@ -13,6 +13,7 @@ import {
 } from "@zammy/currents-client";
 import type { Redis } from "ioredis";
 import { canonicalize, type ReferenceCodes } from "./canonical.js";
+import { PLANNED_COVERAGE_PROVIDER } from "./coverage-gaps.js";
 import {
   InvalidCursorError,
   readStorylineView,
@@ -336,7 +337,12 @@ export async function registerQueryRoutes(
 
       const [articleCount, coverage] = await Promise.all([
         countTopicArticles(deps.db, fingerprint),
-        readCoverage(deps.db, fingerprint),
+        // The planner's provider, so an operator reading this route sees the
+        // spans the fetcher actually treats as done. Other providers' rows are
+        // real and are deliberately not summed in here: coverage stopped having
+        // a single answer (ADR-0019), and a union of two providers' spans would
+        // be a number that describes no provider's walk.
+        readCoverage(deps.db, fingerprint, PLANNED_COVERAGE_PROVIDER),
       ]);
       const first = coverage[0];
       const last = coverage.at(-1);

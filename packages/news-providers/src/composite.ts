@@ -6,6 +6,7 @@ import {
   type ClientLimits,
   type ClientLogger,
   type NewsClient,
+  type ProviderCompleteness,
   type QuotaView,
   type SearchParams,
   type SearchResult,
@@ -21,38 +22,43 @@ import type { GnewsClient } from "@zammy/gnews-client";
  * class changes: the Query Service still plans in `SearchParams`, still receives
  * `Sighting[]`, and still never learns which upstream answered.
  *
- * ## Why the two providers are not equals
- *
- * The tempting design — treat both symmetrically, combine their end-of-results
- * signals — quietly breaks the one invariant the timeline is built on.
+ * ## What this reports, and what it deliberately does not decide
  *
  * `topic_coverage` records the spans we have actually fetched, and it is what
  * separates "nothing was published then" from "we never asked" (ADR-0001). The
- * caller writes a coverage row when `isLastPage` comes back true. So if GNews
- * runs out of its 100 daily calls halfway through a window and Currents reports
- * the window finished, a combined signal would record coverage over days GNews
- * never looked at — a permanent, silent gap that no error reports and no retry
- * repairs, because coverage says the work is done.
+ * old failure mode was a combined end-of-results signal: GNews runs out of its
+ * 100 daily calls halfway through a window, Currents reports the window
+ * finished, and one coverage row claims days GNews never looked at — a
+ * permanent, silent gap that no error reports and no retry repairs, because
+ * coverage says the work is done.
  *
- * Per-provider coverage would fix that properly and is the eventual answer. Until
- * the schema carries it, the honest arrangement is an asymmetric one:
+ * ADR-0012 prevented that by ranking the providers — one coverage-bearing, the
+ * rest best-effort breadth that could never end a walk. **ADR-0019 supersedes
+ * that**, and its argument dissolves rather than overrules: coverage is
+ * `(subject, provider, span)`, so each provider records only the spans it
+ * actually walked and a provider that ran out of budget simply still has a gap.
+ * The claim that needed forbidding is now inexpressible, so nothing here needs
+ * to rank anyone.
  *
- *   **Currents is coverage-bearing.** `isLastPage` is its answer alone, and its
- *   failures propagate untouched. Every existing invariant holds exactly as it
- *   did before GNews existed.
+ * What this class does instead is **report facts and resolve nothing**:
+ * `completeness` carries one entry per provider that actually answered, each
+ * saying whether its OWN walk of this window reached the end. A provider that
+ * errored, sat out a query it cannot express, or ran out of budget is simply
+ * absent from that list — which is exactly "it has no claim over this window",
+ * and cannot be mistaken for a claim that it finished. The caller picks the
+ * provider it is recording for.
  *
- *   **GNews is best-effort breadth.** Its articles are merged in when they
- *   arrive; when it errors, sits out a query it cannot express, or runs out of
- *   budget, the call still succeeds with whatever Currents returned. It can
- *   never end a walk early, and it can never manufacture coverage.
+ * The one thing still resolved to a single answer is `isLastPage`, and it is
+ * not a coverage claim: the fan-out sends every provider the same `pageNumber`
+ * and `pageSize`, so this is a **shared paging plan** and exactly one provider
+ * can own its termination — the primary's. ADR-0019's "providers stop sharing a
+ * plan" is what retires that, and it is a planner change, not this one.
  *
- * The cost is stated plainly: GNews coverage is opportunistic, so a GNews-only
- * article inside an already-covered span may never be fetched. The alternative
- * was losing Currents articles to a gap nothing would ever revisit, which is
- * strictly worse.
- *
- * A degraded GNews is therefore not invisible — every sit-out lands in
- * `adjustments`, in a warn log, and in `quotaByProvider()` behind `/readyz`.
+ * A supplement's failures stay non-fatal: the call succeeds with whatever the
+ * others returned, because failing the whole call over a supplement would make
+ * adding a provider a reliability regression. That is a choice about control
+ * flow and never about visibility — every sit-out lands in `adjustments`, in a
+ * warn log, and in `quotaByProvider()` behind `/readyz`.
  */
 
 export interface CompositeOptions {
@@ -70,16 +76,14 @@ interface Contribution {
 export class CompositeNewsClient implements CurrentsClient {
   readonly provider = "composite";
   readonly limits: ClientLimits;
-  /** Coverage claims are the primary's alone, whoever that is (ADR-0012). */
-  get coverageProvider(): string {
-    return this.primary.coverageProvider;
-  }
   private readonly logger: ClientLogger | undefined;
 
   constructor(
     /**
-     * The coverage-bearing provider. Its `isLastPage` is the composite's, and
-     * its failures are the composite's failures.
+     * The provider whose paging plan the fan-out follows: its `isLastPage`
+     * terminates the shared walk, and its failures are the composite's
+     * failures. NOT a coverage rank — every provider's own claim is reported
+     * in `completeness` (ADR-0019).
      */
     private readonly primary: CurrentsClient,
     /** Best-effort supplements. Present order is the order they are reported in. */
@@ -153,9 +157,9 @@ export class CompositeNewsClient implements CurrentsClient {
   }
 
   /**
-   * The coverage-bearing provider's budget, so `/readyz.upstream` and
-   * `meta.degraded` keep the meaning they had before GNews existed: when this
-   * runs out, the timeline stops refreshing. A supplement running out only
+   * The primary's budget, so `/readyz.upstream` and `meta.degraded` keep the
+   * meaning they had before GNews existed: when this runs out, the timeline
+   * stops refreshing. A supplement running out only
    * narrows the breadth, which is why it is reported separately rather than
    * folded in — a 100-call budget would otherwise dominate the headline number
    * and make a healthy system look exhausted every afternoon.
@@ -186,7 +190,8 @@ export class CompositeNewsClient implements CurrentsClient {
   private async callPrimary(
     call: (client: CurrentsClient) => Promise<SearchResult>,
   ): Promise<Contribution> {
-    // No catch: a coverage-bearing failure is the caller's to render
+    // No catch: the fan-out has no plan left when the provider whose plan it
+    // is cannot answer, and that failure is the caller's to render
     // (ARCHITECTURE 11), exactly as it was before the fan-out existed.
     return { provider: this.primary.provider, result: await call(this.primary) };
   }
@@ -216,6 +221,9 @@ export class CompositeNewsClient implements CurrentsClient {
     const normalization = accumulateStats(emptyStats(), base.normalization);
     const adjustments = [...base.adjustments];
     let rawCount = base.rawCount;
+    // Each contributor's own account of its own walk, concatenated rather than
+    // resolved. A single client reports itself, so this is just the union.
+    const completeness: ProviderCompleteness[] = [...base.completeness];
 
     for (const contribution of supplements) {
       if (!contribution.result) {
@@ -224,7 +232,7 @@ export class CompositeNewsClient implements CurrentsClient {
         this.logger?.warn(
           { provider: contribution.provider, operation, err: contribution.error },
           `${contribution.provider} contributed nothing to this ${operation}; ` +
-            "serving the coverage-bearing provider's results alone",
+            "serving the remaining providers' results alone",
         );
         continue;
       }
@@ -235,6 +243,7 @@ export class CompositeNewsClient implements CurrentsClient {
       // fold already collapses both on `dedupKey` (ADR-0002).
       sightings.push(...contribution.result.sightings);
       rawCount += contribution.result.rawCount;
+      completeness.push(...contribution.result.completeness);
       accumulateStats(normalization, contribution.result.normalization);
       for (const adjustment of contribution.result.adjustments) {
         const tagged = `[${contribution.provider}] ${adjustment}`;
@@ -246,9 +255,11 @@ export class CompositeNewsClient implements CurrentsClient {
       sightings,
       requestedAt: base.requestedAt,
       rawCount,
-      // The coverage-bearing provider's answer, alone. See the class comment for
-      // why combining these would forge coverage over days nobody fetched.
+      // The SHARED PAGING PLAN's terminator, which is the primary's alone
+      // because the plan is (same `pageNumber`, same `pageSize`, one loop). Not
+      // a coverage claim — those are per provider, below.
       isLastPage: base.isLastPage,
+      completeness,
       pageSize: base.pageSize,
       normalization,
       // The binding constraint, so a caller reading `quota` to decide whether to

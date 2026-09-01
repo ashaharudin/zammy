@@ -1,6 +1,7 @@
 import {
   HttpTransport,
   clampSearchParams,
+  soleContributor,
   tagProvider,
   type CallOpts,
   type CircuitBreakerOptions,
@@ -72,20 +73,6 @@ export interface HttpGoogleNewsClientOptions {
 
 export class HttpGoogleNewsClient implements GoogleNewsClient {
   readonly provider = PROVIDER;
-  /**
-   * Its own, and only ever its own.
-   *
-   * Under ADR-0019 that is no longer a lesser status: coverage is
-   * `(subject, provider, span)`, no provider is privileged, and each records
-   * only the spans it actually walked. This client's `isLastPage` therefore
-   * ends *this provider's* walk over a window and makes no claim about anyone
-   * else's — which is the whole of what the field means now.
-   *
-   * The one thing that must not be misread is a full page: `rawCount == 100`
-   * says "the cap cut us off, subdivide", never "this span is finished". See
-   * `isLastPage` below.
-   */
-  readonly coverageProvider = PROVIDER;
   readonly limits: ClientLimits;
   private readonly baseUrl: string;
   private readonly userAgent: string;
@@ -194,6 +181,12 @@ export class HttpGoogleNewsClient implements GoogleNewsClient {
       // window would be recorded as covered and never asked about again.
       rawCount: raw.length,
       isLastPage: isLastPage(raw.length),
+      // Its own completeness, and only ever its own — which under ADR-0019 is
+      // not a lesser status but the whole of what the signal means: each
+      // provider records only the spans it actually walked. The one thing that
+      // must not be misread is a full page: `rawCount == 100` says "the cap cut
+      // us off, subdivide", never "this span is finished" (see `isLastPage`).
+      completeness: soleContributor(PROVIDER, isLastPage(raw.length)),
       // The page size that actually applied, which is the wall and not what the
       // caller asked for — there is no page-size parameter to send. Reporting
       // the request instead would make `isLastPage` uninterpretable, since

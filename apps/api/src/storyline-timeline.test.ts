@@ -21,6 +21,7 @@ import { readStorylineView, readTimeline } from "./timeline-read.js";
 import { createReadHarness, type ReadTestHarness } from "./test-support.js";
 import { labelWords } from "./storyline-label-merge.js";
 import { backfillLabelWords } from "./label-words-backfill.js";
+import { PLANNED_COVERAGE_PROVIDER } from "./coverage-gaps.js";
 
 /**
  * The storylines-v2 read path (ADR-0011): the timeline pages over
@@ -140,7 +141,7 @@ async function seed(sightings: Sighting[]): Promise<CanonicalQuery> {
     { db, config: harness.deps.config.grouping },
     ingested.createdArticles,
   );
-  await recordCoverage(db, fingerprint, WINDOW);
+  await recordCoverage(db, fingerprint, PLANNED_COVERAGE_PROVIDER, WINDOW);
   return {
     fingerprint,
     keywords: ["storm"],
@@ -805,7 +806,7 @@ describe("after the cutover", () => {
     // page, which is the honest answer.
     const fingerprint = randomBytes(32).toString("hex");
     await upsertTopic(db, { fingerprint, keywords: ["storm"], language: "en" });
-    await recordCoverage(db, fingerprint, WINDOW);
+    await recordCoverage(db, fingerprint, PLANNED_COVERAGE_PROVIDER, WINDOW);
 
     await expect(
       readTimeline(

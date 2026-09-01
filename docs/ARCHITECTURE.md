@@ -377,34 +377,32 @@ The component is now four packages:
 provider (403: Cloudflare ban vs spent budget), so each adapter owns its `mapErrorResponse`, and
 nothing downstream may branch on a status code. Same for quota: Currents *observed*, GNews *counted*.
 
-**The two providers are not equals**, and the asymmetry is load-bearing. `topic_coverage` is written
-when `isLastPage` comes back true (§6.3); a combined end-of-results signal would let a supplement
-that ran out of budget mid-window contribute to coverage over days nobody fetched — permanent and
-silent, no error, no retry. Therefore:
+**The composite reports facts and ranks nobody.**
+[ADR-0019](adr/0019-a-fetch-carries-its-own-reason-and-its-own-coverage.md) retired ADR-0012's
+provider ranking: coverage is `(subject, provider, span)`, so each provider records only the spans
+it actually walked and the old fear — a combined end-of-results signal claiming days one provider
+never looked at — is no longer expressible. `SearchResult.completeness` therefore carries one entry
+per provider that answered, each saying whether ITS OWN walk of the window reached the end, and a
+provider that errored, sat out or ran dry is simply absent from that list.
 
-- **Currents is coverage-bearing.** `isLastPage` is its answer alone; its failures propagate. Every
-  §6–§8 invariant holds exactly as before GNews existed.
-- **GNews is best-effort breadth.** Its articles merge in when they arrive; its errors, sit-outs and
-  exhaustion never fail a call and never end a walk. Each is reported in `adjustments`, a warn log,
-  and `/readyz.upstream.providers`.
+- **Coverage is written per provider.** `fillSegment` writes one `topic_coverage` row for every
+  contributor that answered every page of the walk and reported end-of-results on the last of them.
+- **A supplement's trouble is absorbed, never hidden.** Its errors, sit-outs and exhaustion never
+  fail a call. Each is reported in `adjustments`, a warn log, and `/readyz.upstream.providers`.
+- **`isLastPage` survives as the SHARED PAGING PLAN's terminator**, and only that. The fan-out sends
+  every provider the same `pageNumber` and `pageSize`, so one of them has to own the loop — the
+  primary's. It is not a coverage claim, and ADR-0019's "providers stop sharing a plan" is what
+  retires it along with the shared plan.
 
-Accepted cost: GNews coverage is opportunistic, so a GNews-only article inside an already-covered
-span may never be fetched. Reasoning: ADR-0012; code: `packages/news-providers/src/composite.ts`.
+Code: `packages/news-providers/src/composite.ts`, `apps/api/src/coverage-fill.ts`.
 
-**Read the two bullets above as a property of THIS PLAN, not of the providers.**
-[ADR-0019](adr/0019-a-fetch-carries-its-own-reason-and-its-own-coverage.md) retired the provider
-ranking: coverage is `(subject, provider, span)`, and each provider records only the spans it
-actually walked. What survives is the arrangement inside the composite's one shared page plan —
-`isLastPage` still comes from the primary, `recordCoverage` still writes `'currents'`, and the
-supplement still cannot end that walk. What no longer follows from it is that Currents is the
-system's coverage-bearer: the deepening plane (§9.1a) plans its own spans against
-`storyline_coverage` and records them under its own provider, and no completion of either stands
-for the other's.
-
-The per-provider coverage this section called "the eventual fix" is therefore half arrived —
-`topic_coverage.provider` and `storyline_coverage` exist (migration 0021) and the deepening plane
-writes them, while the composite's fan-out has not been re-planned per provider and still shares
-one page plan.
+**What the PLANNER does with those rows is a separate, deliberately unchanged decision.**
+`PLANNED_COVERAGE_PROVIDER` in `apps/api/src/coverage-gaps.ts` names the one provider whose rows the
+topic plane subtracts, so the gap set — and the spend — is what it always was. Accepted cost, and it
+is ADR-0012's unchanged: an article only a supplement would have found, inside a span the planned
+provider already covered, may never be fetched. Making a second provider's rows count is a change to
+that constant plus the arithmetic around it, with nothing to backfill, and it wants measuring first
+because ADR-0019's shape is one plan per provider and therefore more upstream calls.
 
 Two consequences worth knowing before a third provider:
 
@@ -1737,14 +1735,16 @@ Vercel plan's Phase 3 instead — see below).
   `x-ratelimit-*` one call later and that is tolerable; GNews sends no headers, so its count would
   stay wrong until a 403 arrives — the exact outcome pre-flight refusal exists to prevent.
   **Enabling GNews requires building the ledger first.**
-- **Per-provider coverage (ADR-0019, which supersedes ADR-0012).** Half paid. Migration 0021 gave
-  `topic_coverage` its `provider` column and added `storyline_coverage` as the second subject, so
-  spans are now *recordable* per provider. The PLANNER half is outstanding: `readCoverage` and the
-  gap arithmetic in `coverage-gaps.ts` still ask "is this span covered" in the single-answer form
-  ADR-0019 retires. That is exact only while Currents is the one caller wired to write topic
-  coverage; `coverage.ts` names the four things that change together, and G5 is when. Until then the
-  cost stands: an article only one provider would have found, inside a span another already covered,
-  may never be fetched.
+- **Per-provider coverage (ADR-0019, which supersedes ADR-0012).** Mostly paid. Migration 0021 gave
+  `topic_coverage` its `provider` column and added `storyline_coverage`; `readCoverage` and
+  `recordCoverage` both take the provider, the composite reports per-provider `completeness` instead
+  of a ranking, and `fillSegment` writes a row for each contributor that actually walked a segment
+  to its end. What is outstanding is deliberately one line: `PLANNED_COVERAGE_PROVIDER`
+  (`coverage-gaps.ts`) still subtracts one provider's rows, because asking each provider about its
+  own gaps means more upstream calls on Free tiers and is a quota decision that wants measuring.
+  Until it is made the cost stands: an article only one provider would have found, inside a span
+  another already covered, may never be fetched. It is now a planner change with no data to
+  backfill — the other providers' rows are already there and already true.
 
 ---
 
