@@ -17,9 +17,9 @@ those files.
 | Entry point | `chores-cli.ts` (Compose) and `api/chores.ts` (Vercel), sharing [chore-runner.ts](../apps/api/src/chore-runner.ts) | `api/drain.ts` → [drain.ts](../apps/api/src/drain.ts) |
 | Touches | Postgres, and Gemini for labels and summaries | **Redis**, and the upstream news API |
 | Exactly-once | Postgres advisory lock, two domains | none needed — see below |
-| Cadence | nightly | as often as every ~5 min, if you want hot topics covered |
+| Cadence | nightly | every 10 min — anything slower and only the genuinely cold topics are covered |
 | Spends money | yes, the label pass and the summary pass | yes, every fill |
-| Built? | yes, both — **not scheduled anywhere yet** | **yes, as a route** |
+| Built? | yes, both, and **on a Supabase Cron schedule** | **yes, as a route**, on the same schedule |
 
 They are on this page together because they are both "work on a timer that no user is waiting for",
 and that is the *only* thing they share. Every dependency, bound and failure mode differs.
@@ -27,9 +27,9 @@ and that is the *only* thing they share. Every dependency, bound and failure mod
 ## The chores
 
 Three passes are what a scheduler points at — `retention` (03:00 UTC), `storylines` (04:00) and
-`summaries` (05:00) — and every step of the composite second one is also addressable on its own, for
-a re-run that must not drag the whole night with it: `dormancy`, `bridges`, `late-candidates`,
-`labels`, `label-merge`, `graph`. Nine names, one
+`summaries` (05:00, and twice more) — and every step of the composite second one is also addressable
+on its own, for a re-run that must not drag the whole night with it: `dormancy`, `bridges`,
+`late-candidates`, `labels`, `label-merge`, `graph`. Nine names, one
 [pass table](../apps/api/src/chore-runner.ts), reached identically as `pnpm chores <name>` and as
 `POST /api/chores?pass=<name>`.
 
@@ -49,9 +49,9 @@ is what makes a laptop run and a scheduled run contend rather than both spending
 takes no lock at all: it is a read, and locking it would make the percolation alarm unreadable during
 exactly the multi-hour pass you would want to read it during.
 
-**`retention`** runs [`runRetentionChore`](../apps/api/src/chores.ts:90). It reports; it does not
-delete. Deletion is a separate deliberate decision (ADR-0001), so the numbers have to be visible long
-before any code acts on them. Two things under the report *do* change, and both are about derived
+**`retention`** runs [`runRetentionChore`](../apps/api/src/chores.ts). It reports; it does not delete.
+Deletion is a separate deliberate decision (ADR-0001), so the numbers have to be visible long before
+any code acts on them. Two things under the report *do* change, and both are about derived
 rows rather than about the corpus: the trailing-corpus prune (`story_token_days` past the linker's
 window), and the `REINDEX TABLE CONCURRENTLY` sweep.
 
@@ -67,30 +67,30 @@ the side effect. Its one tripwire: an interrupted `CONCURRENTLY` rebuild leaves 
 twin that is never read and still maintained on every write. The sweep counts them and warns;
 `reindex.invalidIndexes` should always be empty, and anything in it wants a `DROP INDEX` by hand.
 
-**`storylines`** runs [`runStorylinePass`](../apps/api/src/chores.ts:786), which is six steps
-in a deliberate order, sequential and awaited because from step 2 down each step's input is what the
+**`storylines`** runs [`runStorylinePass`](../apps/api/src/chores.ts), which is six steps in a
+deliberate order, sequential and awaited because from step 2 down each step's input is what the
 previous step just changed:
 
-1. [`runDormancyChore`](../apps/api/src/chores.ts:137) — marks storylines quiet past
+1. [`runDormancyChore`](../apps/api/src/chores.ts) — marks storylines quiet past
    `storylineDormancyDays` (~90, ADR-0011). Reads the same knob the linker's gate reads, so the
    column cannot disagree with the bar.
-2. [`runBridgeSweepChore`](../apps/api/src/chores.ts:434).
-3. [`runLateCandidateChore`](../apps/api/src/chores.ts:194) — **gated off by default.** It is behind
+2. [`runBridgeSweepChore`](../apps/api/src/chores.ts).
+3. [`runLateCandidateChore`](../apps/api/src/chores.ts) — **gated off by default.** It is behind
    `STORYLINE_LATE_CANDIDATE_SWEEP` / `--late-candidates` because correcting a `CANDIDATE_LIMIT`
    bug exposed a runaway in it; with the gate off the whole pass fits the 300 s ceiling with room to
    spare. A skipped sweep still reports a zero tally rather than being absent, because "ran and
    changed nothing" and "did not run" are different facts and a report that conflates them is how a
    flag left off by accident survives a month of clean-looking logs.
-4. [`runStorylineLabelChore`](../apps/api/src/chores.ts:527) — ADR-0011's drift trigger. The one pass
-   that costs money per call, bounded on the clock by `CHORE_LABEL_BUDGET_MS` and on
-   count by `--max-labels` / `CHORE_MAX_LABELS` — at the ~1.4 s a label was measured to
-   cost on 2026-08-28 the budget admits roughly 40–70, so the two bounds bite at about
-   the same place (STORYLINE-LABELS.md) — and paced at `GEMINI_MAX_RPM`.
-5. [`runLabelMergeChore`](../apps/api/src/chores.ts:496) — **last**, because it is the only pass
-   whose input is a label: a storyline named tonight should be a merge candidate tonight. This is
-   what makes the whole thing converge, each night's labels being the next night's candidates.
-6. [`runStorylineGraphChore`](../apps/api/src/chores.ts:652) — reads the graph's shape, changing
-   nothing, so the row describes the archive the night *leaves* rather than the one it found.
+4. [`runStorylineLabelChore`](../apps/api/src/chores.ts) — ADR-0011's drift trigger. The one pass
+   that costs money per call, bounded on the clock by `CHORE_LABEL_BUDGET_MS` and on count by
+   `--max-labels` / `CHORE_MAX_LABELS` — at the ~1.4 s a label was measured to cost on 2026-08-28 the
+   budget admits roughly 40–70, so the two bounds bite at about the same place
+   (STORYLINE-LABELS.md) — and paced at `GEMINI_MAX_RPM`.
+5. [`runLabelMergeChore`](../apps/api/src/chores.ts) — **last**, because it is the only pass whose
+   input is a label: a storyline named tonight should be a merge candidate tonight. This is what
+   makes the whole thing converge, each night's labels being the next night's candidates.
+6. [`runStorylineGraphChore`](../apps/api/src/chores.ts) — reads the graph's shape, changing nothing,
+   so the row describes the archive the night *leaves* rather than the one it found.
 
 **`summaries`** runs [`runSummaryChore`](../apps/api/src/chores.ts) — the historical preserve
 (ADR-0023): one sentence per qualifying storyline-day and per populated six-hour UTC segment of it,
@@ -101,10 +101,11 @@ spend the same model key — its own schedule means a slow label night costs lab
 labels *and* a day of history. Off until `SUMMARIES_ENABLED=true`; the full map is
 [docs/STORYLINE-SUMMARIES.md](STORYLINE-SUMMARIES.md).
 
-**The property worth protecting: no chore touches Redis.** [chores.ts:58](../apps/api/src/chores.ts:58)
-states it outright — the runner needs no cache, no queue, and no `REDIS_URL` that resolves to
-anything — and `ChoreDeps` is `{ db, config, now, log }` with no client to give one. That is what
-makes the chores runnable as a bare one-shot process against nothing but Postgres.
+**The property worth protecting: no chore touches Redis.** The module header on
+[chores.ts](../apps/api/src/chores.ts) states it outright — the runner needs no cache, no queue, and
+no `REDIS_URL` that resolves to anything — and `ChoreDeps` is `{ db, config, now, log }` with no
+client to give one. That is what makes the chores runnable as a bare one-shot process against
+nothing but Postgres.
 
 ## The chores as a route — `POST /api/chores?pass=<name>`
 
@@ -117,10 +118,11 @@ curl -X POST -H "Authorization: Bearer $CRON_SECRET" "$URL/api/chores?pass=label
 ```
 
 **It answers 202 and runs the pass in `waitUntil`.** The scheduler is `pg_net` inside Supabase, which
-is asynchronous with its own timeout — 2 s by default, plausibly shorter than a cold Node boot plus
-TLS. Returning before the work starts is what makes that timeout a question about the *request*
-rather than about the *night*: `maxDuration` (300 s on Hobby) bounds the background half, and the 202
-has only to beat `timeout_milliseconds`, which the cron job sets to 15 s explicitly.
+is asynchronous with its own timeout — short by default, and the default has moved between pg_net
+versions (2 s, then 5 s), either of them plausibly shorter than a cold Node boot plus TLS. Returning
+before the work starts is what makes that timeout a question about the *request* rather than about
+the *night*: `maxDuration` (300 s on Hobby) bounds the background half, and the 202 has only to beat
+`timeout_milliseconds`, which the cron job sets to 15 s explicitly.
 
 The consequence is the thing to internalise: **the response cannot tell you whether the pass worked**,
 because it is sent before the pass starts. Nothing downstream of the 202 reaches the scheduler at all.
@@ -194,8 +196,9 @@ the response cannot tell a paused project from a healthy one. It is authenticate
 with the same fail-closed rule — and the cost is worth being explicit about: **a project with no
 `CRON_SECRET` has no pause guard**.
 
-**Not scheduled yet.** [supabase-cron.sql](../deploy/vercel/supabase-cron.sql) is written and has not
-been run against any Supabase project, so as of now nothing fires any of this on a timer.
+**It has its own job.** [supabase-cron.sql](../deploy/vercel/supabase-cron.sql) schedules
+`zammy-keepalive` at `0 12 * * *`, with a 10 s `timeout_milliseconds` rather than the 15 s the other
+jobs take by default.
 
 ## The ingest drain
 
@@ -259,24 +262,32 @@ retries work.
 
 ## Scheduling both
 
-Supabase Cron (pg_net) is the intended driver for both, at minute precision. Hobby's Vercel cron is
+Supabase Cron (pg_net) is the driver for both, at minute precision. Hobby's Vercel cron is
 once a day ±59 min, which is fine for the chores and useless for the half of the drain's job that
 needs a tighter cadence.
 
-[supabase-cron.sql](../deploy/vercel/supabase-cron.sql) is the whole thing, ready to paste into the
-SQL editor after two placeholders. **It has not been run against any project yet**, so nothing is on
-a timer today.
+[supabase-cron.sql](../deploy/vercel/supabase-cron.sql) is the whole thing: the two extensions, the
+two vault secrets its placeholders stand in for, one `zammy_cron_post` helper whose fixed path
+allowlist is why a new job means editing that function too, and seven `cron.schedule` calls.
+
+**Nothing applies that file for you** — not CI, not the deploy — so adding or changing a schedule is
+two steps and the second one is a person pasting the whole file into the SQL editor of every
+environment. That is not hypothetical: the summaries pass was added there, merged, and its flag
+turned on, and it never ran once, because the job was in the file and not in `cron.job`. `select
+jobname, schedule, active from cron.job order by jobname;` is what a deployment actually has.
 
 | | Schedule | Why |
 |---|---|---|
 | `/api/chores?pass=retention` | `0 3 * * *` | a report, not an action — and the schedule this pass has always run on |
 | `/api/chores?pass=storylines` | `0 4 * * *` | converges night over night; the label pass costs money. An hour after retention, because the prune moves the corpus the linker judges against |
+| `/api/chores?pass=summaries` | `0 5 * * *`, and again at 06:00 and 07:00 | one firing cannot spend the ~120 model calls a new day of coverage costs: `SUMMARY_BUDGET_MS` stops a run at about 48 and cannot be raised past the 300 s ceiling, so the schedule absorbs what the budget cannot. Overlap is safe — the lock makes a second run skip, and a pass that finds every span current makes no call at all |
 | `/api/keepalive` | `0 12 * * *` | daily, not weekly: a guard with one chance a week has no margin for the week it fails |
 | `POST /api/drain` | `*/10 * * * *` | anything slower and only cold topics are ever covered |
 
 Two things that are easy to get wrong and are written into that file. **`timeout_milliseconds` must
-be raised** — pg_net's default is 2000, and a cold 202 is a Node boot plus TLS plus config parsing
-against a ~550 ms platform container floor; a timed-out request is a night that silently did not run.
+be set explicitly** — pg_net's own default is short and has moved between versions, and a cold 202 is
+a Node boot plus TLS plus config parsing against a ~550 ms platform container floor; a timed-out
+request is a night that silently did not run.
 And **pg_cron reads these expressions in the database's timezone**, UTC on Supabase, which is what the
 passes' day bucketing assumes.
 
