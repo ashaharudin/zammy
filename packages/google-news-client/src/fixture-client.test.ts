@@ -30,11 +30,13 @@ import { FIXTURES_DIR } from "./test-support.js";
 /**
  * The real caps, and a deliberately unreachable horizon.
  *
- * `FixtureGoogleNewsClient` clamps against the wall clock and takes no injected
- * one, so a realistic 730 here would quietly start pulling the Feb-2025 window
- * forward in early 2027 and these assertions would fail on a date rather than
- * on a change. What this file is testing is the parsing, the cap and the
- * mapping; the lookback clamp is tested against a pinned clock in http.test.ts.
+ * `FixtureGoogleNewsClient` clamps against the wall clock unless a caller
+ * injects one — it now takes `{ now }`, as the live client always has — and a
+ * realistic 730 here would quietly start pulling the Feb-2025 window forward in
+ * early 2027. Left at an unreachable horizon rather than pinned, because that
+ * needs no clock at all: what this file is testing is the parsing, the cap and
+ * the mapping, and the lookback clamp is tested against a pinned clock in
+ * http.test.ts.
  */
 const limits = {
   maxPageSize: ITEMS_PER_QUERY,

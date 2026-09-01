@@ -36,19 +36,37 @@ export class FixtureGoogleNewsClient implements GoogleNewsClient {
   readonly provider = PROVIDER;
   private readonly governor: UnmeteredQuotaGovernor;
 
+  /**
+   * The clock this client dates its work by, `Date.now` unless a caller says
+   * otherwise — the same option `HttpTransport` and the live client take.
+   *
+   * The lookback clamp below runs before the store is asked, so a wall-clock
+   * read here quietly narrows any window that has aged past the horizon, and
+   * fixtures are dated once while the horizon moves daily. Sibling of the same
+   * injection point on `FixtureCurrentsClient`, where the decay was first paid
+   * for — see that class for the full account.
+   */
+  private readonly now: () => number;
+
   constructor(
     private readonly store: GoogleNewsFixtureStore,
     readonly limits: ClientLimits,
     bounds: { dailyLimit: number; burstLimit: number },
+    options: { now?: () => number } = {},
   ) {
     this.governor = new UnmeteredQuotaGovernor(bounds);
+    this.now = options.now ?? Date.now;
   }
 
   async search(params: SearchParams, _opts: CallOpts = {}): Promise<SearchResult> {
     let clamped: SearchParams;
     let adjustments: string[];
     try {
-      ({ params: clamped, adjustments } = clampSearchParams(params, this.limits));
+      ({ params: clamped, adjustments } = clampSearchParams(
+        params,
+        this.limits,
+        new Date(this.now()),
+      ));
     } catch (error) {
       throw tagProvider(error, PROVIDER);
     }
@@ -65,7 +83,7 @@ export class FixtureGoogleNewsClient implements GoogleNewsClient {
 
     return {
       sightings,
-      requestedAt: new Date(),
+      requestedAt: new Date(this.now()),
       rawCount: raw.length,
       isLastPage: isLastPage(raw.length),
       completeness: soleContributor(PROVIDER, isLastPage(raw.length)),

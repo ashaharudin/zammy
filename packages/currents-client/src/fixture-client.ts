@@ -31,12 +31,38 @@ export class FixtureCurrentsClient implements CurrentsClient {
   readonly provider = PROVIDER;
   private readonly governor: UnmeteredQuotaGovernor;
 
+  /**
+   * The clock this client dates its work by, `Date.now` unless a caller says
+   * otherwise — the same option `HttpTransport` takes, spelled the same way, so
+   * "which clock does the client read" has one answer across both modes.
+   *
+   * It exists because `clampSearchParams` below applies the 30-day LOOKBACK
+   * clamp before the store is ever asked, and reading the WALL clock there made
+   * the whole fixture corpus decay: an offline caller asking for a recorded
+   * window silently got a narrower one the moment that window aged past the
+   * horizon, with a different `startDate` on every page (the clamp is recomputed
+   * per call). That is not a test-only wrinkle — it is fixture mode answering a
+   * question nobody asked — but it is a test that pays for it first, because
+   * fixtures are dated once and the horizon moves every day. It took out
+   * `apps/api`'s truncation cases on 2026-09-01: 180 recorded sightings became
+   * 98, the fifth page came back short, and a walk that must report `truncated`
+   * reported `completed` and recorded coverage over two days it never fetched.
+   *
+   * The live client has always injected this (`new Date(this.transport.now())`
+   * in `http.ts`), which is why the same tests against live mode were fine and
+   * why three prior fixes (#181, #187, a8ba6d9) could only work around it from
+   * the outside. This is the injection point they said was missing.
+   */
+  private readonly now: () => number;
+
   constructor(
     private readonly store: FixtureStore,
     readonly limits: ClientLimits,
     bounds: { dailyLimit: number; burstLimit: number },
+    options: { now?: () => number } = {},
   ) {
     this.governor = new UnmeteredQuotaGovernor(bounds);
+    this.now = options.now ?? Date.now;
   }
 
   async search(params: SearchParams, _opts: CallOpts = {}): Promise<SearchResult> {
@@ -48,7 +74,11 @@ export class FixtureCurrentsClient implements CurrentsClient {
     let clamped: SearchParams;
     let adjustments: string[];
     try {
-      ({ params: clamped, adjustments } = clampSearchParams(params, this.limits));
+      ({ params: clamped, adjustments } = clampSearchParams(
+        params,
+        this.limits,
+        new Date(this.now()),
+      ));
     } catch (error) {
       throw tagProvider(error, PROVIDER);
     }
@@ -60,7 +90,7 @@ export class FixtureCurrentsClient implements CurrentsClient {
 
     return {
       sightings,
-      requestedAt: new Date(),
+      requestedAt: new Date(this.now()),
       rawCount: raw.length,
       isLastPage: lastPage,
       completeness: soleContributor(PROVIDER, lastPage),
@@ -81,7 +111,7 @@ export class FixtureCurrentsClient implements CurrentsClient {
     const lastPage = raw.length < pageSize;
     return {
       sightings,
-      requestedAt: new Date(),
+      requestedAt: new Date(this.now()),
       rawCount: raw.length,
       isLastPage: lastPage,
       completeness: soleContributor(PROVIDER, lastPage),
