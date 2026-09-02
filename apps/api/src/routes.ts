@@ -286,6 +286,22 @@ export async function registerQueryRoutes(
       // for anyone who has not turned the flag on.
       const deepened = await queueStorylineDeepening(deps, { storylineId: id });
 
+      // What each plane's freshness gate decided, as log fields — the two
+      // counters ADR-0015 leaves nowhere else to live. The response body below
+      // says the same thing to the CALLER, which is not the same as being
+      // aggregatable: the ratio ADR-0017 asks for is `queued / (queued + fresh)`
+      // over many opens, and no operator can compute that from one 202.
+      //
+      // Logged here rather than at the planners' own return points because this
+      // is the only place both answers are in hand, and because the pair is the
+      // observation: ADR-0019's whole argument is that the two planes are
+      // planned against different coverage and can DISAGREE on the same click,
+      // so a line carrying one of them invites reading it as both.
+      deps.log?.info?.(
+        { storyline: id, refresh: outcome.status, deepening: deepened.status },
+        "storyline open: what each plane's freshness gate decided (ADR-0017, ADR-0019)",
+      );
+
       // 202 for every outcome that reached the planner, `fresh` included: the
       // request was accepted and what it cost is a fact about coverage, not a
       // different kind of answer. `queued: false` is the honest report of a

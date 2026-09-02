@@ -10,6 +10,8 @@ import {
 } from "@zammy/storage";
 import { fingerprintOf } from "./canonical.js";
 import { cloudQuery } from "./cloud-query.js";
+import { PLANNED_COVERAGE_PROVIDER } from "./coverage-gaps.js";
+import { logIngestOutcome, logUpstreamFetch } from "./observations.js";
 import {
   groupCreatedArticles,
   groupingDepsFor,
@@ -82,7 +84,11 @@ export interface TrendingDeps {
   now: () => Date;
   labeler?: GroupingDeps["labeler"];
   metrics?: Metrics;
-  log?: { warn: (obj: object, msg: string) => void };
+  log?: {
+    warn: (obj: object, msg: string) => void;
+    /** §12's numbers, which since ADR-0015 exist only here (`observations.ts`). */
+    info?: (obj: object, msg: string) => void;
+  };
   trending: TrendingConfig;
 }
 
@@ -300,6 +306,23 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
     // which is exactly why it is worth counting: this is what a plane that
     // times its output looks like.
     deps.metrics?.sightingsStamped(result.sightings);
+    // AND as log fields, which is the half that survives the deployment we
+    // actually run (ADR-0015; `observations.ts` has the whole argument).
+    // Before the ingest so a throwing fold does not lose the observation, and
+    // in the plane's own terms so the three planes read as one series.
+    //
+    // `span: null` is not a gap in the line, it is what this plane is: the
+    // sample asks `latestNews` for whatever upstream is carrying now and names
+    // no range, so a `from`/`to` here would be an invention. The rolling
+    // §10.1 window is a property of the READ, not of this fetch.
+    logUpstreamFetch(deps.log, {
+      plane: "breadth",
+      provider: PLANNED_COVERAGE_PROVIDER,
+      fingerprint,
+      span: null,
+      sightings: result.sightings,
+      normalization: result.normalization,
+    });
     const ingested = await ingestSightings(deps.db, {
       fingerprint,
       sightings: result.sightings,
@@ -317,6 +340,12 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
       ...(deps.log ? { log: deps.log } : {}),
     });
     deps.metrics?.articlesIngested(ingested.articlesCreated);
+    logIngestOutcome(deps.log, {
+      plane: "breadth",
+      provider: PLANNED_COVERAGE_PROVIDER,
+      fingerprint,
+      created: ingested.articlesCreated,
+    });
     // The sample is a write path into `articles` like any other, so it owes
     // grouping the same call the timeline fill makes (§14.3) — and grouping is
     // what runs the linker, so this is also the only thing that puts a sampled

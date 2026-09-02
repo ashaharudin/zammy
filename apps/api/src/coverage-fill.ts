@@ -21,6 +21,11 @@ import {
   subtractCoverage,
   type Span,
 } from "./coverage-gaps.js";
+import {
+  logIngestOutcome,
+  logUpstreamFetch,
+  SEGMENT_TRUNCATED_MESSAGE,
+} from "./observations.js";
 import { freshnessTtlMs } from "./page-cache.js";
 import type { Metrics } from "./metrics.js";
 import { refreshLockKey, release, tryAcquire } from "./single-flight.js";
@@ -517,6 +522,18 @@ async function fillSegment(
     // and a share needs its denominator, so a run with no `date_only` rows here
     // is what "the other providers still time their output" looks like.
     deps.metrics?.sightingsStamped(result.sightings);
+    // AND as log fields, which is the half that survives the deployment we
+    // actually run (ADR-0015; `observations.ts` has the whole argument).
+    // Before the ingest so a throwing fold does not lose the observation, and
+    // in the plane's own terms so the three planes read as one series.
+    logUpstreamFetch(deps.log, {
+      plane,
+      provider: PLANNED_COVERAGE_PROVIDER,
+      fingerprint: query.fingerprint,
+      span: segment,
+      sightings: result.sightings,
+      normalization: result.normalization,
+    });
 
     const ingested = await ingestSightings(deps.db, {
       fingerprint: query.fingerprint,
@@ -528,6 +545,12 @@ async function fillSegment(
       ...(deps.log ? { log: deps.log } : {}),
     });
     deps.metrics?.articlesIngested(ingested.articlesCreated);
+    logIngestOutcome(deps.log, {
+      plane,
+      provider: PLANNED_COVERAGE_PROVIDER,
+      fingerprint: query.fingerprint,
+      created: ingested.articlesCreated,
+    });
 
     // §14.3, immediately after the collapse and only over what this call
     // created: the two are one write path — one deduplicates by URL, the other
@@ -620,6 +643,14 @@ async function onTruncated(
   plane: SightingPlane,
 ): Promise<SegmentJob[]> {
   deps.metrics?.truncatedSegment();
+  // §12's truncated-segment rate, which exists because of a probe finding: a
+  // rise means timelines are silently thinning behind the 100-result cap. On
+  // EVERY truncation, not only at the subdivision floor the `warn` below covers
+  // — the floor is where we give up, and the rate is about how often we start.
+  deps.log?.info?.(
+    { plane, fingerprint, from: segment.from, to: segment.to },
+    SEGMENT_TRUNCATED_MESSAGE,
+  );
 
   if (oldestSeen !== null) {
     const boundary = new Date(oldestSeen.getTime() + 1);

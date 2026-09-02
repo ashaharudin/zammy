@@ -462,3 +462,59 @@ export class CountingClient implements CurrentsClient {
     return this.inner.close();
   }
 }
+
+/**
+ * A logger that keeps what it was told, for the tests that assert on §12's
+ * numbers.
+ *
+ * It exists because ADR-0015 deleted `/metrics`, which is where those tests
+ * used to read them. The counters were a registry an assertion could query
+ * directly; the replacement is a structured log field, so a test that wants the
+ * number has to be handed somewhere for the line to land. That is the whole of
+ * this — it observes, it does not stub: `deps.log` is optional everywhere, and a
+ * test that omits it sees exactly the behaviour it saw before this existed.
+ *
+ * Deliberately NOT wired into `createTestHarness`. A test asserting on a log
+ * line should be visibly the kind of test that does, and the ones that are not
+ * about observability should keep proving the code runs with no logger at all —
+ * which is what the four planner modules' `log?` promises and what a function
+ * entrypoint that hands in only `warn` relies on.
+ */
+export interface CapturedLine {
+  fields: Record<string, unknown>;
+  message: string;
+}
+
+export interface LogCapture {
+  log: {
+    info: (fields: object, message: string) => void;
+    warn: (fields: object, message: string) => void;
+  };
+  /** Every captured `info` line, in the order it was written. */
+  info: CapturedLine[];
+  /** Every captured `warn` line, in the order it was written. */
+  warn: CapturedLine[];
+  /**
+   * The fields of the `info` lines written under one message, in order.
+   *
+   * Messages are matched EXACTLY and callers pass the exported constant rather
+   * than a literal, so a reworded message is a compile-or-nothing change rather
+   * than a test that quietly stops matching — which is the failure this whole
+   * exercise is about.
+   */
+  under: (message: string) => Record<string, unknown>[];
+}
+
+export function captureLog(): LogCapture {
+  const info: CapturedLine[] = [];
+  const warn: CapturedLine[] = [];
+  return {
+    log: {
+      info: (fields, message) => void info.push({ fields: { ...fields }, message }),
+      warn: (fields, message) => void warn.push({ fields: { ...fields }, message }),
+    },
+    info,
+    warn,
+    under: (message) => info.filter((line) => line.message === message).map((line) => line.fields),
+  };
+}

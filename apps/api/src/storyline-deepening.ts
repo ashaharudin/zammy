@@ -14,6 +14,7 @@ import {
 import { canonicalKeywords, fingerprintOf, WINDOW_SNAP_MS } from "./canonical.js";
 import { deepeningQuery } from "./cloud-query.js";
 import { planHorizon, subtractCoverage, type Span } from "./coverage-gaps.js";
+import { logIngestOutcome, logUpstreamFetch } from "./observations.js";
 import { freshnessTtlMs } from "./page-cache.js";
 import type { Metrics } from "./metrics.js";
 import { refreshLockKey, release, tryAcquire } from "./single-flight.js";
@@ -366,33 +367,21 @@ export async function processDeepenJob(
     });
     // How much of what this provider just sent is DATED rather than timed
     // (plan §G6, ADR-0021). Recorded here rather than inside `ingestSightings`
-    // because storage has no metrics and should not grow any, and before the
-    // ingest so a throwing fold does not lose the observation.
-    const dateOnly = result.sightings.filter((s) => s.publishedIsDateOnly === true).length;
+    // because storage has no metrics and should not grow any.
     deps.metrics?.sightingsStamped(result.sightings);
-    // AND as a log field, which is the half that survives the deployment we
-    // actually run. ARCHITECTURE 12 is explicit that `/metrics` is deleted under
-    // the Vercel target — per-process counters mean nothing across ephemeral
-    // instances and nothing scrapes them — and this consumer is its own
-    // function, so the counter above is a Compose-only instrument. ADR-0021
-    // names this observation as the enforcement for a flag nothing can force an
-    // adapter to set, so it has to exist somewhere production can read it.
-    //
-    // Logged on EVERY fetch rather than only when the share is high, because
-    // the alarming direction is the share going to ZERO on an old span: that
-    // means the detector stopped matching, not that the provider improved, and
-    // a line that only fires when the number is large cannot show its absence.
-    deps.log?.info?.(
-      {
-        storylineId,
-        provider: deepening.provider,
-        from: span.from,
-        to: span.to,
-        items: result.sightings.length,
-        dateOnly,
-      },
-      "deepening fetch: how many of these items the provider dated rather than timed",
-    );
+    // AND as log fields, which is the half that survives the deployment we
+    // actually run (ADR-0015). This plane wrote them first and now shares the
+    // shape with the other two: the numbers are ratios ACROSS the planes, so a
+    // line only this one wrote made every one of them wrong by a plane.
+    // `observations.ts` carries the argument and the ordering rule.
+    logUpstreamFetch(deps.log, {
+      plane: "deepening",
+      provider: deepening.provider,
+      storylineId,
+      span,
+      sightings: result.sightings,
+      normalization: result.normalization,
+    });
 
     const ingested = await ingestSightings(deps.db, {
       // The arc's own topic, minted below rather than skipped, and this is the
@@ -417,6 +406,12 @@ export async function processDeepenJob(
       ...(deps.log ? { log: deps.log } : {}),
     });
     deps.metrics?.articlesIngested(ingested.articlesCreated);
+    logIngestOutcome(deps.log, {
+      plane: "deepening",
+      provider: deepening.provider,
+      storylineId,
+      created: ingested.articlesCreated,
+    });
 
     // ATTACHMENT BY PROVENANCE. The seam is `groupCreatedArticles`' intent, and
     // the whole of the rule lives there: seeded groups join this arc, nothing is

@@ -28,7 +28,8 @@ import { groupCreatedArticles } from "./grouping-service.js";
 import { ingestJobId } from "./ingest-queue.js";
 import { labelWords } from "./storyline-label-merge.js";
 import { processDeepenJob, queueStorylineDeepening } from "./storyline-deepening.js";
-import { createTestHarness, type TestHarness } from "./test-support.js";
+import { UPSTREAM_FETCH_MESSAGE } from "./observations.js";
+import { captureLog, createTestHarness, type TestHarness } from "./test-support.js";
 
 /**
  * The deepening plane, end to end (ADR-0019, plan §G5): a click on a storyline
@@ -458,27 +459,29 @@ describe("the stamp-quality counter, which is the only alarm on a silent detecto
       }),
     ];
 
-    // Deltas, not absolutes: the registry is per-harness but this file drives
-    // several fetches through it, so a total would encode test order.
-    const stamped = async (stamp: string): Promise<number> => {
-      const metrics = (await harness.metrics.registry.getMetricsAsJSON()) as Array<{
-        name: string;
-        values: Array<{ value: number; labels: Record<string, string> }>;
-      }>;
-      return (
-        metrics
-          .find((m) => m.name === "zammy_sightings_stamped_total")
-          ?.values.find(
-            (v) => v.labels.provider === DEEPENING_PROVIDER && v.labels.stamp === stamp,
-          )?.value ?? 0
-      );
-    };
-    const before = { dated: await stamped("date_only"), timed: await stamped("clock") };
+    // Read off the LOG rather than a Prometheus registry: ADR-0015 deleted
+    // `/metrics`, and the log field was always the half that survives the
+    // deployment this consumer actually runs in. A capture per test rather than
+    // deltas off a shared registry — the harness is `beforeAll` and this file
+    // drives several fetches through it, so a total would encode test order,
+    // and one capture handed to one call cannot.
+    const capture = captureLog();
 
-    await processDeepenJob(harness.deps, outcome.job);
+    await processDeepenJob({ ...harness.deps, log: capture.log }, outcome.job);
 
-    expect((await stamped("date_only")) - before.dated).toBe(1);
-    expect((await stamped("clock")) - before.timed).toBe(1);
+    const fetches = capture.under(UPSTREAM_FETCH_MESSAGE);
+    expect(fetches).toHaveLength(1);
+    expect(fetches[0]).toMatchObject({
+      plane: "deepening",
+      provider: DEEPENING_PROVIDER,
+      storylineId,
+      // The mapping under test: one of the two items carried the flag, so one is
+      // dated and — `items - dateOnly` — one is timed. Attributed to the
+      // provider that sent it, which is what the counter's label meant.
+      items: 2,
+      dateOnly: 1,
+      dateOnlyProviders: [DEEPENING_PROVIDER],
+    });
   });
 });
 
