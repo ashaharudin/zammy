@@ -7,6 +7,7 @@
  */
 export * from "./database.js";
 export * from "./migrator.js";
+export * from "./fold.js";
 export * from "./ingest.js";
 export * from "./coverage.js";
 export * from "./storyline-coverage.js";

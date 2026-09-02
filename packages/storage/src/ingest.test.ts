@@ -47,6 +47,60 @@ import {
 const CLIMATE_TOPIC = testFingerprint("c11a1e");
 const SECOND_TOPIC = testFingerprint("5ec0d0");
 
+/**
+ * **THREE databases for this file, not one per describe block.**
+ *
+ * Every block below asserts something a real Postgres uniquely does — the
+ * `ON CONFLICT` arithmetic over the recorded payload, a savepoint, a CHECK
+ * constraint, what a column actually holds after an UPDATE — so none of them
+ * moved out. What moved out are the fold's two decisions, which are truth tables
+ * and are now asserted exhaustively and without a database in `fold.test.ts`,
+ * against the SQL they replace in `fold-differential.test.ts`. What is left here
+ * is the end-to-end path, and eight throwaway databases running eight full
+ * migrations was eight prices for one thing.
+ *
+ * The three are separated by what would otherwise interfere, not by topic:
+ *
+ *  - `collapseDb` — the recorded duplication payload, which asserts ABSOLUTE
+ *    row counts (41 articles, 100 sightings) and so cannot share a database with
+ *    anything that mints an article. `upsertTopic` shares it because it writes
+ *    one `topics` row and nothing else.
+ *  - `storylineDb` — the day-slot re-derivation, which installs a trigger on
+ *    `storyline_days` mid-test and asserts over every storyline the database
+ *    holds.
+ *  - `writesDb` — everything else: what the fold WRITES. Blocks sharing it owe
+ *    each other three disjoint spaces, and the cost of getting one wrong is a
+ *    confusing failure rather than a silent pass: **sighting ids** (each block
+ *    takes a hundred, offset below), **URLs** (hence `dedup_key`) and
+ *    **(domain, folded title, UTC day)** (hence `alt_key`, whose partial index
+ *    is unique). Absolute `count(*)` assertions do not belong in these blocks;
+ *    every one of them counts relative to a `before`, or off its own result.
+ */
+let collapseDb: TestDatabase;
+let writesDb: TestDatabase;
+let storylineDb: TestDatabase;
+
+/** A throwaway database at the latest migration. */
+async function migrated(): Promise<TestDatabase> {
+  const harness = await createTestDatabase();
+  await migrateToLatest(harness.db);
+  return harness;
+}
+
+beforeAll(async () => {
+  // In parallel: three migrations serialized is most of what this file spends
+  // before its first assertion.
+  [collapseDb, writesDb, storylineDb] = await Promise.all([
+    migrated(),
+    migrated(),
+    migrated(),
+  ]);
+});
+
+afterAll(async () => {
+  await Promise.all([collapseDb.drop(), writesDb.drop(), storylineDb.drop()]);
+});
+
 describe("the collapse over the recorded duplication payload", () => {
   let harness: TestDatabase;
   let sightings: Sighting[];
@@ -54,8 +108,7 @@ describe("the collapse over the recorded duplication payload", () => {
   let roundupKey: string;
 
   beforeAll(async () => {
-    harness = await createTestDatabase();
-    await migrateToLatest(harness.db);
+    harness = collapseDb;
     sightings = loadClimateSightings();
 
     const byKey = new Map<string, number>();
@@ -69,10 +122,6 @@ describe("the collapse over the recorded duplication payload", () => {
       keywords: ["climate"],
       language: "en",
     });
-  });
-
-  afterAll(async () => {
-    await harness.drop();
   });
 
   it("collapses 100 sightings into 41 articles", async () => {
@@ -272,13 +321,8 @@ describe("the earliest sighting owns the display fields", () => {
   });
 
   beforeAll(async () => {
-    harness = await createTestDatabase();
-    await migrateToLatest(harness.db);
+    harness = writesDb;
     await upsertTopic(harness.db, { fingerprint: TOPIC, keywords: ["story"] });
-  });
-
-  afterAll(async () => {
-    await harness.drop();
   });
 
   it("keeps the earliest emission's headline even when it arrives later", async () => {
@@ -290,8 +334,8 @@ describe("the earliest sighting owns the display fields", () => {
       timeZone: "UTC",
       fingerprint: TOPIC,
       sightings: [
-        emission("00000000-0000-4000-8000-000000000002", "2026-08-04T12:00:00.000Z", "Rewritten headline"),
-        emission("00000000-0000-4000-8000-000000000001", "2026-08-04T08:00:00.000Z", "Original headline"),
+        emission("00000000-0000-4000-8000-000000000102", "2026-08-04T12:00:00.000Z", "Rewritten headline"),
+        emission("00000000-0000-4000-8000-000000000101", "2026-08-04T08:00:00.000Z", "Original headline"),
       ],
     });
 
@@ -314,7 +358,7 @@ describe("the earliest sighting owns the display fields", () => {
       timeZone: "UTC",
       fingerprint: TOPIC,
       sightings: [
-        emission("00000000-0000-4000-8000-000000000003", "2026-08-04T06:00:00.000Z", "First headline of all"),
+        emission("00000000-0000-4000-8000-000000000103", "2026-08-04T06:00:00.000Z", "First headline of all"),
       ],
     });
 
@@ -336,12 +380,7 @@ describe("upsertTopic", () => {
   const TOPIC = testFingerprint("70f1c");
 
   beforeAll(async () => {
-    harness = await createTestDatabase();
-    await migrateToLatest(harness.db);
-  });
-
-  afterAll(async () => {
-    await harness.drop();
+    harness = collapseDb;
   });
 
   it("creates the topic on first sight and counts hits on every one after", async () => {
@@ -452,13 +491,8 @@ describe("a fold re-derives the day slots of the storylines holding the article"
   };
 
   beforeAll(async () => {
-    harness = await createTestDatabase();
-    await migrateToLatest(harness.db);
+    harness = storylineDb;
     await upsertTopic(harness.db, { fingerprint: TOPIC, keywords: ["spill"] });
-  });
-
-  afterAll(async () => {
-    await harness.drop();
   });
 
   it("moves the slot onto the day the fold moved the article to", async () => {
@@ -658,6 +692,14 @@ describe("a fold re-derives the day slots of the storylines holding the article"
  * below is the one that proves why. Every case here is a shape the production
  * archive actually holds: a story filed under two section paths, a headline
  * re-styled between emissions, a source that truncates its own titles.
+ *
+ * **These are the end-to-end cases, not the truth table.** The ordering itself
+ * is `chooseArticle`, and every reachable candidate set is asserted against it
+ * in `fold.test.ts` with no database — 20 archive shapes × 4 probe widths — and
+ * against the SQL it came out of in `fold-differential.test.ts`. What these
+ * tests add is that the verdict is actually APPLIED: the sighting lands on the
+ * row, the keys that are stored are the ones the client derived, and the ones
+ * that must not move do not.
  */
 describe("resolving an article by URL key, then by alt key", () => {
   let harness: TestDatabase;
@@ -676,7 +718,7 @@ describe("resolving an article by URL key, then by alt key", () => {
     const domain = input.domain ?? DOMAIN;
     const published = input.published ?? DAY;
     return {
-      id: `00000000-0000-4000-8000-${String(uuid).padStart(12, "0")}`,
+      id: `00000000-0000-4000-8000-${String(200 + uuid).padStart(12, "0")}`,
       url: input.url,
       provider: "currents",
       providerSightingId: input.url,
@@ -707,13 +749,8 @@ describe("resolving an article by URL key, then by alt key", () => {
   };
 
   beforeAll(async () => {
-    harness = await createTestDatabase();
-    await migrateToLatest(harness.db);
+    harness = writesDb;
     await upsertTopic(harness.db, { fingerprint: TOPIC, keywords: ["ferry"] });
-  });
-
-  afterAll(async () => {
-    await harness.drop();
   });
 
   it("takes the URL match when the URL and the alt key point at different rows", async () => {
@@ -929,6 +966,14 @@ describe("resolving an article by URL key, then by alt key", () => {
  * because it is not a fixed offset, so the LOOKUP widens instead and the fold
  * stays exactly where it is. These assertions are as much about what does NOT
  * move as about what does.
+ *
+ * The precedence among the three keys — own day over a neighbour, and both
+ * neighbours a refusal — is `chooseArticle`, asserted exhaustively and without a
+ * database in `fold.test.ts`, **including the DEGRADED probe these tests cannot
+ * reach**: `altKeyProbe` falls back to the single stored key when its
+ * consistency check fails, so a bare-dated sighting does not always arrive with
+ * three keys. What is asserted here is the half that needs Postgres: which key
+ * gets STORED, and that folding does not chain.
  */
 describe("a bare-dated sighting resolves against the adjacent days", () => {
   let harness: TestDatabase;
@@ -975,13 +1020,8 @@ describe("a bare-dated sighting resolves against the adjacent days", () => {
     });
 
   beforeAll(async () => {
-    harness = await createTestDatabase();
-    await migrateToLatest(harness.db);
+    harness = writesDb;
     await upsertTopic(harness.db, { fingerprint: TOPIC, keywords: ["press"] });
-  });
-
-  afterAll(async () => {
-    await harness.drop();
   });
 
   it("folds onto an article the archive filed on the NEXT day", async () => {
@@ -1210,7 +1250,7 @@ describe("stamping the plane a fetch was made on", () => {
     uuid += 1;
     const url = `https://example.com/plane-${uuid}`;
     return {
-      id: `00000000-0000-4000-8000-${String(uuid).padStart(12, "0")}`,
+      id: `00000000-0000-4000-8000-${String(400 + uuid).padStart(12, "0")}`,
       url,
       provider: "currents",
       providerSightingId: url,
@@ -1230,13 +1270,8 @@ describe("stamping the plane a fetch was made on", () => {
   };
 
   beforeAll(async () => {
-    harness = await createTestDatabase();
-    await migrateToLatest(harness.db);
+    harness = writesDb;
     await upsertTopic(harness.db, { fingerprint: TOPIC, keywords: ["plane"] });
-  });
-
-  afterAll(async () => {
-    await harness.drop();
   });
 
   it("writes the caller's plane onto every sighting in the batch", async () => {
@@ -1317,6 +1352,13 @@ describe("stamping the plane a fetch was made on", () => {
  * The `undefined` cases matter as much as the `true` ones and are asserted
  * beside them: every adapter but Google News sends neither flag, and ADR-0002's
  * handover has to go on working exactly as it did for them.
+ *
+ * **The 2×2 itself is `fieldAuthority`** — asserted without a database in
+ * `fold.test.ts`, and crossed with an earlier/later/equal stamp against every
+ * column the statement writes in `fold-differential.test.ts`. These five tests
+ * are the reader-visible consequences of it, on real rows: a summary and a hero
+ * image that survive, a sighting stored and counted while moving nothing, and a
+ * bare date that is permanent once minted.
  */
 describe("a sighting that warns the fold about its own fields", () => {
   let harness: TestDatabase;
@@ -1333,7 +1375,7 @@ describe("a sighting that warns the fold about its own fields", () => {
   }): Sighting => {
     uuid += 1;
     return {
-      id: `00000000-0000-4000-8000-${String(uuid).padStart(12, "0")}`,
+      id: `00000000-0000-4000-8000-${String(500 + uuid).padStart(12, "0")}`,
       url: input.url,
       provider: input.provider ?? "currents",
       providerSightingId: input.url,
@@ -1385,13 +1427,8 @@ describe("a sighting that warns the fold about its own fields", () => {
       .executeTakeFirstOrThrow();
 
   beforeAll(async () => {
-    harness = await createTestDatabase();
-    await migrateToLatest(harness.db);
+    harness = writesDb;
     await upsertTopic(harness.db, { fingerprint: TOPIC, keywords: ["stamp"] });
-  });
-
-  afterAll(async () => {
-    await harness.drop();
   });
 
   it("hands the display fields to an earlier emission when neither flag is set", async () => {

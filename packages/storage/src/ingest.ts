@@ -1,6 +1,15 @@
-import { sql, type Kysely } from "kysely";
+import { sql, type Kysely, type RawBuilder, type UpdateObject } from "kysely";
 import { altKeyProbe, type Sighting } from "@zammy/news-client";
 import { hexToBytea, type Database, type SightingPlane } from "./database.js";
+import {
+  chooseArticle,
+  fieldAuthority,
+  DISPLAY_HANDOVER_COLUMNS,
+  type ArticleCandidate,
+  type DisplayHandoverColumn,
+  type FieldAuthority,
+  type FoldProbe,
+} from "./fold.js";
 import { lowerGroupPosition } from "./grouping.js";
 import { readGroupStorylines, refreshStorylineDerivations } from "./storylines.js";
 import { markStorylinesLinkDirty } from "./storyline-link-dirty.js";
@@ -12,6 +21,15 @@ import { markStorylinesLinkDirty } from "./storyline-link-dirty.js";
  * responses that a single upstream page cannot have. Every step is an
  * idempotent upsert, so a fetch is safely repeatable and the worker and a user
  * request can race harmlessly.
+ *
+ * **The two DECISIONS this path makes live next door, in `fold.ts`.** Which
+ * candidate row wins, and what an arriving sighting is entitled to hand over,
+ * are rules the ADRs state as truth tables and neither needs a database to
+ * decide — only to fetch the candidates and to apply the result. What stays here
+ * is everything Postgres uniquely does: the `ON CONFLICT (dedup_key)`
+ * arithmetic, the savepoint fencing the alt-key race, the savepoint fencing the
+ * storyline re-derivation, and the retrieval that finds the candidates in the
+ * first place.
  */
 
 export interface TopicInput {
@@ -97,7 +115,8 @@ export interface CreatedArticle {
  *     aggregator's copy hands over no display field — keeping only the
  *     timestamp fold and `provider`, which is a fact about the emission rather
  *     than a rendering of the article. Both are opt-in claims made by the
- *     adapter; every other adapter's path is unchanged;
+ *     adapter; every other adapter's path is unchanged. Which fields that
+ *     leaves is `fieldAuthority`; the statement is `foldSet`;
  *  4. link the article to the topic, per ARTICLE, so one repeatedly-re-emitted
  *     post cannot flood the topic's timeline;
  *  5. and once per batch, re-derive the storylines holding a group whose
@@ -167,20 +186,18 @@ export async function ingestSightings(
     for (const sighting of input.sightings) {
       const dedupKey = hexToBytea(sighting.dedupKey);
       const altKey = sighting.altKey === null ? null : hexToBytea(sighting.altKey);
-      // The key that gets STORED is `altKey`; these are the keys the lookup is
-      // allowed to MATCH, which is the same one key for every sighting but a
-      // bare-dated one (`altKeyProbe`, ADR-0022).
-      const altKeyMatches = altKeyProbe(sighting).map(hexToBytea);
+      // The key that gets STORED is `altKey`; the probe holds the keys the
+      // lookup is allowed to MATCH, which is the same one key for every sighting
+      // but a bare-dated one (`altKeyProbe`, ADR-0022) — and which can DEGRADE
+      // back to the single stored key, so nothing downstream may assume the
+      // widened set.
+      const probe: FoldProbe = {
+        dedupKey: sighting.dedupKey,
+        altKeyMatches: altKeyProbe(sighting),
+      };
       const published = new Date(sighting.published);
 
-      const article = await resolveArticle(
-        trx,
-        sighting,
-        dedupKey,
-        altKey,
-        altKeyMatches,
-        published,
-      );
+      const article = await resolveArticle(trx, sighting, dedupKey, altKey, probe, published);
 
       const inserted = await trx
         .insertInto("sightings")
@@ -202,92 +219,17 @@ export async function ingestSightings(
       if (inserted) {
         result.sightingsInserted += 1;
 
-        // TWO CLAIMS THE ADAPTER MAKES ABOUT ITS OWN SIGHTING (ADR-0021).
-        // Both are absent on every adapter but Google News and on every row
-        // predating them, so `!== true` is the whole of the guard and the
-        // untouched path behaves exactly as it did.
-        //
-        // `movesTheClock` — a date-only sighting is a real observation of a real
-        // article and is stored as one: the `sightings` row above is already
-        // written, carrying its own timestamp, and `sighting_count` still counts
-        // it below. What it may not do is REDEFINE an article somebody else
-        // timed properly. Measured (plan §G6, dev archive 2026-08-29): 116 of
-        // 169 absorbed articles had a 12:09-style timestamp dragged back onto a
-        // 07:00 day boundary, and because that made the arriving sighting the
-        // "earliest emission" it took the url and the title with it. The cloud
-        // reads `published` for window membership and `max(published)` for the
-        // recency decay, so this was also the route by which a plane that feeds
-        // no ranking still moved the board.
-        //
-        // `firstHand` — an aggregator's copy may not hand over what it renders.
-        // Unconditional, and wider than the url on purpose: the aggregator that
-        // exists sends `description`, `author` and `imageUrl` as null and both
-        // category arrays as empty BY CONSTRUCTION, so a handover does not
-        // merely swap a good field for a worse one, it empties five populated
-        // ones. That is a reader-visible loss — a card's summary and hero image
-        // — on the leading-edge regime this plane actually runs in, where the
-        // stamp is honest and `movesTheClock` is therefore no defence at all.
-        const movesTheClock = sighting.publishedIsDateOnly !== true;
-        const firstHand = sighting.isAggregatorCopy !== true;
+        // WHAT THIS SIGHTING IS ENTITLED TO HAND OVER (ADR-0021), read from the
+        // two claims its adapter made about it. The reading is `fold.ts`'s; what
+        // is left here is rendering it into one statement and gating the two
+        // derived values a moved clock invalidates.
+        const authority = fieldAuthority(sighting);
 
-        // Two predicates, neutralized to a constant `false` where the sighting
-        // is not entitled. Expressed this way rather than by building a smaller
-        // SET object so the column list below stays one field per line and keeps
-        // reading as ADR-0002's rule with its exceptions marked, which is what
-        // it is.
-        //
-        // `earlier` is the EMISSION test and `earlierFirstHand` the RECORD test,
-        // and `provider` is deliberately on the first: which upstream reported
-        // the earliest emission is a fact about the emission, not a rendering of
-        // the article, and `articles.provider` is documented as exactly that.
-        const earlier = movesTheClock ? sql`${published} < published` : sql`false`;
-        const earlierFirstHand = firstHand ? earlier : sql`false`;
-
-        // All SET expressions see the OLD row, so every comparison below is
-        // against the article as it stood before this sighting.
+        // All SET expressions see the OLD row, so every comparison inside
+        // `foldSet` is against the article as it stood before this sighting.
         await trx
           .updateTable("articles")
-          .set({
-            // Outside the guard deliberately: the observation happened whatever
-            // its timestamp is worth, and a sighting that may not move the clock
-            // is still a sighting.
-            sighting_count: sql`sighting_count + 1`,
-            published: movesTheClock ? sql`least(published, ${published})` : sql`published`,
-            latest_seen: movesTheClock ? sql`greatest(latest_seen, ${published})` : sql`latest_seen`,
-            url: sql`case when ${earlierFirstHand} then ${sighting.url} else url end`,
-            title: sql`case when ${earlierFirstHand} then ${sighting.title} else title end`,
-            description: sql`case when ${earlierFirstHand} then ${sighting.description} else description end`,
-            author: sql`case when ${earlierFirstHand} then ${sighting.author} else author end`,
-            image_url: sql`case when ${earlierFirstHand} then ${sighting.imageUrl} else image_url end`,
-            language: sql`case when ${earlierFirstHand} then ${sighting.language} else language end`,
-            categories: sql`case when ${earlierFirstHand} then ${sighting.categories}::text[] else categories end`,
-            source_category: sql`case when ${earlierFirstHand} then ${sighting.sourceCategories}::text[] else source_category end`,
-            source_domain: sql`case when ${earlierFirstHand} then ${sighting.sourceDomain} else source_domain end`,
-            // NOT handed over with the display fields — this is the one column
-            // on the EMISSION predicate rather than the first-hand one, and the
-            // asymmetry is deliberate (ADR-0021). `provider` answers "who got
-            // there first", which an aggregator's copy can legitimately be, and
-            // not "whose record is this", which it cannot. So an article can
-            // read `google-news` while every field a reader sees is the
-            // newsroom's. Migration 0013's own note — "who got there first, not
-            // who is authoritative" — is the rule being followed; its OTHER
-            // sentence, that this follows the same rule as every other
-            // denormalized display field, stopped being true here.
-            provider: sql`case when ${earlier} then ${sighting.provider} else provider end`,
-            // `dedup_key` and `alt_key` are deliberately NOT in this list. They
-            // are IDENTITY, minted once by `resolveArticle` and never rewritten,
-            // and the two reasons are independent. Rewriting either would change
-            // an article's identity underneath a live unique index, so a
-            // handover could collide with another row and fail the whole batch.
-            // And identity has to be stable for the fold to work at all: a row
-            // that stopped answering to the key it was found by would be found
-            // again as a new article by the very next sighting of it.
-            //
-            // The visible consequence, and it is intended: once an earlier
-            // sighting under a DIFFERENT url hands over the display fields,
-            // `dedup_key` no longer hashes `url`. The key is the identity this
-            // row was minted with; `url` is what a reader clicks.
-          })
+          .set(foldSet(sighting, published, authority))
           .where("id", "=", article.id)
           .execute();
 
@@ -295,7 +237,9 @@ export async function ingestSightings(
         // position on the §7.3 keyset axis — earlier in time (§14.3). A sighting
         // that was not allowed to move the clock cannot have dragged anything,
         // so `movesTheClock` gates this and the storyline re-derivation below.
-        if (movesTheClock) await lowerGroupPosition(trx, { articleId: article.id, published });
+        if (authority.movesTheClock) {
+          await lowerGroupPosition(trx, { articleId: article.id, published });
+        }
 
         // And the storyline layer above it moves too. A day slot IS its day's
         // earliest member article, so an article that moved earlier can leave
@@ -319,7 +263,11 @@ export async function ingestSightings(
         // What is left is rare. Measured on the dev archive: 334 articles of
         // 31,308 carry more than one sighting at all, and 33 have sightings
         // that straddle a UTC midnight.
-        if (movesTheClock && published < article.published && !createdIds.has(article.id)) {
+        if (
+          authority.movesTheClock &&
+          published < article.published &&
+          !createdIds.has(article.id)
+        ) {
           movedGroups.add(article.group_id);
         }
       }
@@ -469,30 +417,149 @@ export async function ingestSightings(
 }
 
 /**
+ * The one UPDATE the fold performs, rendered from what the sighting is entitled
+ * to hand over (ADR-0002, ADR-0021).
+ *
+ * ## Why this is rendered rather than written out
+ *
+ * The entitlement used to be spent ten times, as one hand-written
+ * `case when ${gate} then ${field} else ${column} end` per column, on the
+ * argument that a column list one field per line reads as ADR-0002's rule with
+ * its exceptions marked. It reads as that once; it has to be VERIFIED ten times,
+ * and nine of the ten differ only in which pair of names they carry. The rule is
+ * one rule, so it is stated once and applied over the list `fold.ts` names.
+ *
+ * `incoming` is what survives of the per-column writing, and it is a mapping
+ * rather than a rule: column ← the sighting field it takes its value from. It is
+ * typed against `DISPLAY_HANDOVER_COLUMNS`, so a column the ADR governs with no
+ * value here is a type error rather than a silently unwritten field.
+ *
+ * ## The two gates, and why `provider` is on the first
+ *
+ * `earlier` is the EMISSION test and `earlierFirstHand` the RECORD test, each
+ * neutralized to a constant `false` where the sighting is not entitled. Both
+ * comparisons read the OLD row, because that is what an UPDATE's SET expressions
+ * see.
+ *
+ * `provider` is deliberately on the emission test: which upstream reported the
+ * earliest emission is a fact about the emission, not a rendering of the
+ * article, and `articles.provider` is documented as exactly that. So an article
+ * can read `google-news` while every field a reader sees is the newsroom's.
+ * Migration 0013's own note — "who got there first, not who is authoritative" —
+ * is the rule being followed; its OTHER sentence, that this follows the same rule
+ * as every other denormalized display field, stopped being true at ADR-0021.
+ *
+ * ## What is NOT in here
+ *
+ * `dedup_key` and `alt_key`. They are IDENTITY, minted once by `insertArticle`
+ * and never rewritten, and the two reasons are independent. Rewriting either
+ * would change an article's identity underneath a live unique index, so a
+ * handover could collide with another row and fail the whole batch. And identity
+ * has to be stable for the fold to work at all: a row that stopped answering to
+ * the key it was found by would be found again as a new article by the very next
+ * sighting of it.
+ *
+ * The visible consequence, and it is intended: once an earlier sighting under a
+ * DIFFERENT url hands over the display fields, `dedup_key` no longer hashes
+ * `url`. The key is the identity this row was minted with; `url` is what a
+ * reader clicks.
+ *
+ * Exported for `fold-differential.test.ts`, which replays the hand-written
+ * version of this statement beside it over the whole entitlement table and
+ * compares every column the two write.
+ */
+export function foldSet(
+  sighting: Sighting,
+  published: Date,
+  authority: FieldAuthority,
+): FoldSet {
+  const earlier = authority.movesTheClock ? sql`${published} < published` : sql`false`;
+  const earlierFirstHand = authority.handsOver === "all" ? earlier : sql`false`;
+
+  const incoming: Record<DisplayHandoverColumn, RawBuilder<unknown>> = {
+    url: sql`${sighting.url}`,
+    title: sql`${sighting.title}`,
+    description: sql`${sighting.description}`,
+    author: sql`${sighting.author}`,
+    image_url: sql`${sighting.imageUrl}`,
+    language: sql`${sighting.language}`,
+    // The two array columns carry their cast, which is the one thing that is not
+    // uniform across the nine: `text[]` parameters need it and `text` ones must
+    // not have it.
+    categories: sql`${sighting.categories}::text[]`,
+    source_category: sql`${sighting.sourceCategories}::text[]`,
+    source_domain: sql`${sighting.sourceDomain}`,
+  };
+
+  // `never` because the loop indexes the column list with a UNION, so one
+  // expression stands for nine columns of five different SQL types and cannot be
+  // told which it is producing. `RawBuilder<never>` is what satisfies all nine at
+  // once, and it is the only type looseness here — the thing worth having is kept
+  // by `incoming` above, a TOTAL `Record` over `DISPLAY_HANDOVER_COLUMNS`, so a
+  // column ADR-0002 governs with no value is a type error rather than a field
+  // that silently stopped folding. That the column→value mapping is the right one
+  // is checked column by column against the hand-written statement in
+  // `fold-differential.test.ts`, and by Postgres on every write.
+  const handedOver = {} as Record<DisplayHandoverColumn, RawBuilder<never>>;
+  for (const column of DISPLAY_HANDOVER_COLUMNS) {
+    handedOver[column] =
+      sql<never>`case when ${earlierFirstHand} then ${incoming[column]} else ${sql.ref(column)} end`;
+  }
+
+  return {
+    ...handedOver,
+    // Outside every guard deliberately: the observation happened whatever its
+    // timestamp is worth, and a sighting that may not move the clock is still a
+    // sighting.
+    sighting_count: sql<number>`sighting_count + 1`,
+    published: authority.movesTheClock
+      ? sql<Date>`least(published, ${published})`
+      : sql<Date>`published`,
+    latest_seen: authority.movesTheClock
+      ? sql<Date>`greatest(latest_seen, ${published})`
+      : sql<Date>`latest_seen`,
+    provider: sql<string>`case when ${earlier} then ${sighting.provider} else provider end`,
+  };
+}
+
+/**
+ * The columns the fold writes: the nine ADR-0002 hands over, plus the three the
+ * ADRs treat apart and the counter that is outside every guard.
+ *
+ * `Required`, so every one of the thirteen has to be present. An UPDATE object is
+ * all-optional by nature, and on this statement an omitted column is not a
+ * smaller write — it is a field that silently stopped folding.
+ */
+export type FoldSet = Required<
+  Pick<
+    UpdateObject<Database, "articles">,
+    DisplayHandoverColumn | "sighting_count" | "published" | "latest_seen" | "provider"
+  >
+>;
+
+/**
  * Find the article this sighting belongs to, or mint one: **URL key → alt key →
  * insert** (ADR-0018).
  *
- * The ordering is the whole design and is not an implementation detail. Titles
- * drift and URLs do not, so a `(domain, title, day)` key consulted FIRST would
- * split an article whose headline was edited between two emissions — a
- * regression URL identity does not have. Consulted SECOND, it can only ever
- * catch a URL that has never been seen before, which is exactly the case URL
- * identity was already failing: 411 rows of the production archive (1.1%) are
- * one story filed under several URLs.
+ * The precedence itself is `chooseArticle` next door; what happens here is the
+ * retrieval it decides over, the insert, and the fence around the insert. The
+ * split is where the seam already was: a candidate set is a question only
+ * Postgres can answer, and which candidate wins is a question it never needed to
+ * be asked.
  *
- * So the URL-keyed majority behaves precisely as it did before this existed, and
- * an article with `altKey === null` — a source-truncated title, no source domain
- * — takes the pre-ADR-0018 path in full.
+ * So the URL-keyed majority behaves precisely as it did before the fallback
+ * existed, and an article with `altKey === null` — a source-truncated title, no
+ * source domain — takes the pre-ADR-0018 path in full.
  *
- * ## Two alt-key arguments, and the difference between them is the point
+ * ## The alt key and the probe, and the difference between them is the point
  *
  * `altKey` is what a NEW article is minted with, and there is exactly one of it.
- * `altKeyMatches` is what the LOOKUP is allowed to match, and for a sighting
- * whose provider sent a bare date instead of a time it holds the adjacent days
- * as well (`altKeyProbe`, ADR-0022). Widening the lookup is not widening the
- * fold: nothing here writes a key it did not derive, so a stored key still means
- * exactly what it meant when the row was minted, and the migration ADR-0018
- * demands for a fold change is not owed for this one.
+ * `probe.altKeyMatches` is what the LOOKUP is allowed to match, and for a
+ * sighting whose provider sent a bare date instead of a time it holds the
+ * adjacent days as well (`altKeyProbe`, ADR-0022). Widening the lookup is not
+ * widening the fold: nothing here writes a key it did not derive, so a stored
+ * key still means exactly what it meant when the row was minted, and the
+ * migration ADR-0018 demands for a fold change is not owed for this one.
  *
  * The two are never independent — `altKeyMatches` is empty exactly when `altKey`
  * is null, and its first element is `altKey` — and they are passed separately
@@ -504,15 +571,17 @@ async function resolveArticle(
   sighting: Sighting,
   dedupKey: Buffer,
   altKey: Buffer | null,
-  altKeyMatches: readonly Buffer[],
+  probe: FoldProbe,
   published: Date,
 ): Promise<ResolvedArticle> {
-  const existing = await findArticle(trx, dedupKey, altKeyMatches);
-  if (existing) return { ...existing, was_created: false };
+  const chosen = chooseArticle(await findArticleCandidates(trx, probe), probe);
+  if (chosen.kind === "match") return resolved(chosen.article);
 
-  // Nothing COMMITTED holds either key. What is left is a concurrent
-  // transaction that holds one and has not committed yet — the worker and a
-  // user request racing, which §7.4 promises is harmless. The URL half of that
+  // `mint` or `refuse`: no COMMITTED row answers the URL key or the own day, so
+  // this sighting gets its own row under its own key either way. What is left is
+  // a concurrent transaction that holds one of those keys and has not committed
+  // yet — the worker and a user request racing, which §7.4 promises is
+  // harmless. The URL half of that
   // race is handled by `ON CONFLICT (dedup_key)` inside the insert, as it always
   // was; the alt-key half cannot be, because `ON CONFLICT` takes ONE arbiter and
   // that one is spoken for. So the insert is fenced, and a lost race is
@@ -552,10 +621,29 @@ async function resolveArticle(
     // The winner committed between our lookup and our insert, so it is visible
     // now. If it somehow is not, the conflict was not the one this fence is for
     // and hiding it would be worse than failing the batch.
-    const winner = await findArticle(trx, dedupKey, altKeyMatches);
-    if (!winner) throw error;
-    return { ...winner, was_created: false };
+    //
+    // `refuse` throws here as `mint` does, and that is unchanged behaviour
+    // rather than a new decision: the lookup this replaces returned one
+    // `undefined` for both. It also provably cannot be reached — a 23505 on
+    // `articles_alt_key_idx` can only be raised by the value that was INSERTED,
+    // which is `altKey`, which is `altKeyProbe`'s first element, so the winner
+    // answers the `own-day` arm and is returned before the refusal is
+    // considered (ADR-0022). `chooseArticle` reports which arm matched precisely
+    // so that claim is checkable rather than merely argued.
+    const winner = chooseArticle(await findArticleCandidates(trx, probe), probe);
+    if (winner.kind !== "match") throw error;
+    return resolved(winner.article);
   }
+}
+
+/** A chosen candidate, as the fold's caller needs it: no keys, and not new. */
+function resolved(article: ArticleCandidate): ResolvedArticle {
+  return {
+    id: article.id,
+    published: article.published,
+    group_id: article.group_id,
+    was_created: false,
+  };
 }
 
 interface ResolvedArticle {
@@ -571,108 +659,73 @@ interface ResolvedArticle {
 }
 
 /**
- * Both keys in one statement, URL first.
+ * Every `articles` row that answers to any key in the probe — both keys in one
+ * statement, and **no decision at all**.
  *
- * `order by (dedup_key = …) desc` is what expresses the precedence: in the rare
- * case where one row matches by URL and a DIFFERENT row matches by alt key — a
- * title that has since drifted onto another article's key — the URL match is
- * taken, and the alt key stays what it has always been, a fallback.
+ * This is the half of ADR-0018's lookup that needs a database: an index probe
+ * over a live archive, which nothing in a test process can fake and nothing
+ * above the storage layer can perform. `chooseArticle` is the other half, and
+ * the precedence that used to live in this statement's `order by` lives there
+ * now.
  *
- * `alt_key = any(…)` never matches a NULL, so no `is not null` guard is needed;
- * the partial index has the same predicate and serves this lookup directly.
+ * `alt_key in (…)` never matches a NULL, so no `is not null` guard is needed;
+ * the partial index migration 0020 builds has the same predicate and serves this
+ * lookup directly. It is one `Bitmap Index Scan` whether the probe holds one key
+ * or three, inside this one statement — measured at 24–25 ms against 41–43 ms
+ * over 5,000 lookups, about 3.5 µs of widening per lookup, and only bare-dated
+ * sightings pay it (ADR-0022).
  *
- * ## Why a SET of alt keys rather than one
+ * ## Why the two keys come back as hex, rather than as booleans
  *
- * `altKeyProbe` hands one key for every sighting but a bare-dated one, which
- * gets its own day plus the two adjacent ones (ADR-0022). So the ordering gains
- * a second tier: a match on the sighting's OWN day beats a match on a neighbour,
- * because the own-day key is the provider's own assertion and a neighbour is
- * this system's allowance for the fact that the assertion is a date and the
- * archive holds a clock reading.
+ * The statement could compute `dedup_key = $1` and `alt_key = $2` itself, and it
+ * used to. Handing over the keys instead is what makes the caller's decision a
+ * decision over DOMAIN VALUES: it classifies each candidate against the probe
+ * rather than being told the answer, so the truth tables ADR-0018 and ADR-0022
+ * state can be exercised — exhaustively, and without a database — against the
+ * same function production runs. Two `encode()`s over at most four rows.
  *
- * ## And why BOTH neighbours matching is a refusal rather than a tie-break
+ * ## Why the `limit` cannot decide anything, which is what let the order go
  *
- * `dedup_key` and `alt_key` are each unique, so a match on the URL key or on the
- * own-day key names exactly one row and there is nothing to break a tie about.
- * The only ambiguous shape is the own day matching NOTHING while both neighbours
- * match different articles. Picking either would fold a Tuesday instalment onto
- * Monday's row and Tuesday's article would never be minted at all — losing an
- * article, which ADR-0002 settles as the worse error against showing a
- * duplicate. So the fallback is refused and the sighting mints its own row under
- * its own day, exactly as it did before the widening existed.
+ * **Four is the most that can match**: the URL key names at most one row
+ * (`articles_dedup_key_idx` is unique), and the probe holds at most three alt
+ * keys naming at most three rows (`articles_alt_key_idx` likewise). No fifth row
+ * is reachable, so the limit is a ceiling rather than a choice — it never
+ * truncates, and a limit that never truncates cannot change which rows come
+ * back however they are ordered. That argument is what makes moving the
+ * precedence out a re-expression rather than a change: the `order by` used to
+ * carry the decision, and now it carries only determinism.
  *
- * **This is a tie-break's replacement, NOT a defence against the recurring-column
- * risk, and it must not be read as one.** The damaging shape for a daily column
- * is one neighbour matching, not two — a column running every day has an
- * instalment on each side only where the archive happens to hold both — and one
- * neighbour matching is exactly the shape all 23 recovered folds have, so it
- * cannot be refused without giving the whole widening back. Counted over the
- * four desk columns ADR-0022 names, of the 40 days where a bare-dated instalment
- * would find no own-day article, this refuses **2 and folds 38**. The exposure is
- * accepted and measured, not closed; see ADR-0022.
- *
- * The refusal costs nothing measured: over the 1,749 bare-date sightings the dev
- * archive holds, the widened set matched articles on more than one day **0
- * times**. It is a guard for a shape that is reachable rather than observed —
- * the same standard `deriveAltKey` applies to a title that folds to nothing.
+ * `id asc` stays for exactly that: a limit over an unordered read is a different
+ * article on different days, and that failure would be silent.
  */
-async function findArticle(
+export async function findArticleCandidates(
   trx: Kysely<Database>,
-  dedupKey: Buffer,
-  altKeyMatches: readonly Buffer[],
-): Promise<{ id: string; published: Date; group_id: string } | undefined> {
-  const [ownDay] = altKeyMatches;
-  // Four, because four is the most that can match: the URL key, the own-day key
-  // and — for a bare-dated sighting — its two neighbours. Every one of those is
-  // unique on its own index, so no fifth row is reachable, and the limit is a
-  // ceiling rather than a choice: the decision below reads at most the two
-  // neighbour rows, and the ordering has already put anything decisive first.
-  const rows = await trx
+  probe: FoldProbe,
+): Promise<ArticleCandidate[]> {
+  const dedupKey = hexToBytea(probe.dedupKey);
+  const altKeyMatches = probe.altKeyMatches.map(hexToBytea);
+
+  return trx
     .selectFrom("articles")
-    .select((eb) => [
+    .select([
       "id",
       "published",
       "group_id",
-      eb("dedup_key", "=", dedupKey).as("by_url"),
-      // `coalesce`, because `alt_key` is nullable and `null = $1` is NULL, not
-      // false — a row that matched by URL and carries no alt key at all would
-      // otherwise come back with a `null` under a `boolean` type, which reads
-      // correctly today only because `by_url` short-circuits ahead of it.
-      ...(ownDay === undefined
-        ? [sql<boolean>`false`.as("by_own_day")]
-        : [sql<boolean>`coalesce(alt_key = ${ownDay}, false)`.as("by_own_day")]),
+      sql<string>`encode(dedup_key, 'hex')`.as("dedupKey"),
+      // Nullable, and it stays nullable: a row identified by URL alone carries
+      // no alt key at all, and `encode(null, 'hex')` is null rather than an
+      // empty string, so a keyless row cannot be mistaken for one keyed on
+      // nothing.
+      sql<string | null>`encode(alt_key, 'hex')`.as("altKey"),
     ])
     .where((eb) =>
-      ownDay === undefined
+      altKeyMatches.length === 0
         ? eb("dedup_key", "=", dedupKey)
-        : eb.or([
-            eb("dedup_key", "=", dedupKey),
-            eb("alt_key", "in", [...altKeyMatches]),
-          ]),
+        : eb.or([eb("dedup_key", "=", dedupKey), eb("alt_key", "in", altKeyMatches)]),
     )
-    .orderBy(sql`(dedup_key = ${dedupKey})`, "desc")
-    .$if(ownDay !== undefined, (qb) =>
-      qb.orderBy(sql`(alt_key = ${ownDay!})`, "desc"),
-    )
-    // A total order, because a `limit` over an unordered tie is a different
-    // article on different days. It decides nothing on its own — every shape
-    // that reaches it is either unique or refused below.
     .orderBy("id", "asc")
     .limit(4)
     .execute();
-
-  const best = rows[0];
-  if (best === undefined) return undefined;
-
-  // A URL or own-day match is unique by index, so the ordering above has
-  // already named the one row. This is also what keeps the insert fence sound:
-  // a lost race raises on the key that was INSERTED, which is always the own-day
-  // key, so the winner is found by that arm and never by a refusable one.
-  if (best.by_url || best.by_own_day) return best;
-
-  // Only neighbours matched. One article is the fold this widening exists for;
-  // two is the recurring-column signature, and the header says why that refuses.
-  return new Set(rows.map((row) => row.id)).size === 1 ? best : undefined;
 }
 
 /**
