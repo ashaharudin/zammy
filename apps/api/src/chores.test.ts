@@ -19,6 +19,7 @@ import {
   type ChoreDeps,
   type StorylinePassDeps,
 } from "./chores.js";
+import { storylineBar } from "./storyline-bar.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
 import type { SummarizerDeps } from "./storyline-summary-service.js";
 import { labelWords } from "./storyline-label-merge.js";
@@ -47,6 +48,19 @@ const SUMMARIZER: Omit<SummarizerDeps, "db"> = {
 };
 const SUMMARY_GATE = { windowDays: 8, minArticlesExclusive: 4, minGroups: 2 };
 const TZ = { timeZone: "UTC" };
+
+/**
+ * The three thresholds every linker-touching block below loosens, and the only
+ * fields any of them diverges from `STORYLINE_BAR` on.
+ *
+ * A corpus of five articles cannot clear a mass floor of 20 — one shared token
+ * of a five-article window is worth ln(5) = 1.6 — so a bar these fixtures could
+ * not reach would test nothing about the sweep. Hoisted because the three
+ * blocks had it three times and must loosen the SAME three fields: they assert
+ * about different passes over one fixture shape, and a block whose bar drifted
+ * from its neighbours' would make those assertions incomparable.
+ */
+const LOOSE_RULES = { anchorMaxShare: 0.5, anchorDfFloor: 4, massThreshold: 1 };
 
 let harness: TestHarness;
 let db: TestHarness["deps"]["db"];
@@ -314,29 +328,13 @@ describe("the nightly label pass", () => {
 
 describe("the nightly late-candidate sweep", () => {
   /**
-   * The thresholds are loosened for a corpus of five articles, as the linker's
-   * own tests loosen theirs: what is under test is which groups the sweep OFFERS
-   * and what one offer does, not the production bar.
+   * The shipped bar with its thresholds loosened for a corpus of five articles,
+   * as the linker's own tests loosen theirs: what is under test is which groups
+   * the sweep OFFERS and what one offer does, not the production bar. Stated as
+   * a divergence so the eleven fields these tests do NOT loosen stay the ones
+   * production runs (`storyline-bar.ts`).
    */
-  const LINKER = {
-    enabled: true,
-    rules: {
-      anchorMaxShare: 0.5,
-      anchorDfFloor: 4,
-      massThreshold: 1,
-      dormancyDays: 90,
-      dormantStrictness: 1.5,
-    },
-    mergeBridges: 2,
-    // Off, which is the pre-gate path these tests have been taking all along:
-    // the field was absent until the tests were type-checked (§12) and read
-    // as falsy. The one test that is ABOUT the gate spreads this and sets true.
-    coherenceGate: false,
-    narrowRetrieval: false,
-    maxBridgingQualifiers: undefined,
-    storyDf: { windowDays: 14, timeZone: "UTC" },
-    timeZone: "UTC",
-  };
+  const LINKER = storylineBar({ rules: LOOSE_RULES });
 
   /** A corpus for the day the coverage is on, so rarity means something. */
   async function seedCorpus(day: string): Promise<void> {
@@ -457,22 +455,7 @@ describe("the late-candidate sweep is gated out of the nightly pass", () => {
    * chaining three unrelated wars. So the pass must default to skipping it, and
    * a skipped night must be distinguishable from a night that found nothing.
    */
-  const LINKER = {
-    enabled: true,
-    rules: {
-      anchorMaxShare: 0.5,
-      anchorDfFloor: 4,
-      massThreshold: 1,
-      dormancyDays: 90,
-      dormantStrictness: 1.5,
-    },
-    mergeBridges: 2,
-    coherenceGate: false,
-    narrowRetrieval: false,
-    maxBridgingQualifiers: undefined,
-    storyDf: { windowDays: 14, timeZone: "UTC" },
-    timeZone: "UTC",
-  };
+  const LINKER = storylineBar({ rules: LOOSE_RULES });
   const PASS = {
     linker: LINKER,
     // No generator: the label pass runs its bigram path and makes no model
@@ -545,22 +528,7 @@ describe("the late-candidate sweep is gated out of the nightly pass", () => {
  * log pipeline can pick one line per night out of.
  */
 describe("the graph shape on the nightly report", () => {
-  const LINKER = {
-    enabled: true,
-    rules: {
-      anchorMaxShare: 0.5,
-      anchorDfFloor: 4,
-      massThreshold: 1,
-      dormancyDays: 90,
-      dormantStrictness: 1.5,
-    },
-    mergeBridges: 2,
-    coherenceGate: false,
-    narrowRetrieval: false,
-    maxBridgingQualifiers: undefined,
-    storyDf: { windowDays: 14, timeZone: "UTC" },
-    timeZone: "UTC",
-  };
+  const LINKER = storylineBar({ rules: LOOSE_RULES });
   // No generator: the label pass takes its bigram path and spends no quota.
   const PASS = {
     linker: LINKER,

@@ -14,6 +14,7 @@ import {
   type LinkCandidate,
   type LinkRules,
 } from "./storyline-link.js";
+import { STORYLINE_BAR } from "./storyline-bar.js";
 
 /**
  * The group→storyline decision (ADR-0011). Pure, so these are the tests that
@@ -21,13 +22,13 @@ import {
  * docs/STORYLINE-LINKING.md records what it said.
  */
 
-const RULES: LinkRules = {
-  anchorMaxShare: 0.002,
-  anchorDfFloor: 10,
-  massThreshold: 20,
-  dormancyDays: 90,
-  dormantStrictness: 1.5,
-};
+/**
+ * The rules half of the shipped bar. These tests pin the RULE at the values
+ * production judges at, so they take them from `STORYLINE_BAR` rather than
+ * restating them — a copy here would be a rule pinned at whatever this file
+ * happened to say.
+ */
+const RULES: LinkRules = STORYLINE_BAR.rules;
 
 /** A 16,000-article fortnight, roughly the dev archive's English window. */
 function corpus(df: Record<string, number>, size = 16_000): Corpus {

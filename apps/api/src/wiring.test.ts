@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "@zammy/config";
-import { createSummarizer, summarySharesLabelerPacer } from "./wiring.js";
+import { STORYLINE_BAR, storylineBar } from "./storyline-bar.js";
+import { createLinkerConfig, createSummarizer, summarySharesLabelerPacer } from "./wiring.js";
 
 /**
  * The wiring decisions that are invisible at runtime.
@@ -117,5 +118,91 @@ describe("createSummarizer", () => {
       maxAttempts: 2,
       sampleSize: 3,
     });
+  });
+});
+
+describe("the bar a group is judged at", () => {
+  /**
+   * The bar a TEST asserts against is the bar production ships.
+   *
+   * This is the assertion the fourteen-field copies made impossible. Every one
+   * of them was written out by hand — `test-support.ts` as a whole second
+   * default, ~18 more across 13 test files, and two operator CLIs — so a test
+   * asserting formation behaviour was asserting against a bar free to drift from
+   * `createLinkerConfig`'s, and nothing in the suite would have gone red on the
+   * day it did. `STORYLINE_BAR` is the only copy now, and this is what holds it
+   * to the environment's defaults.
+   *
+   * `config()` sets no `STORYLINE_*` variable and no key, so every field of the
+   * two objects is comparable: the zod defaults in `packages/config` and the
+   * literals in `storyline-bar.ts` are the last duplication left, and moving a
+   * measured threshold in exactly one of them fails here.
+   */
+  it("agrees with the shipped defaults, field for field", () => {
+    expect(createLinkerConfig(config())).toEqual(storylineBar());
+  });
+
+  it("puts the ENVIRONMENT on the shipped bar, rather than a literal of its own", () => {
+    // Every configured field moved off its default at once, so a variable
+    // dropped from `linkerBarFromEnv` shows up as the shipped value standing
+    // where the operator's should be — the failure a per-field test would only
+    // catch one field at a time.
+    const moved = createLinkerConfig(
+      config({
+        STORYLINE_ANCHOR_MAX_SHARE: "0.007",
+        STORYLINE_ANCHOR_DF_FLOOR: "13",
+        STORYLINE_MASS_THRESHOLD_V2: "17",
+        STORYLINE_DORMANCY_DAYS: "45",
+        STORYLINE_DORMANT_STRICTNESS: "2.5",
+        STORYLINE_MERGE_BRIDGES: "3",
+        STORYLINE_NARROW_RETRIEVAL: "true",
+        STORYLINE_MAX_BRIDGING_QUALIFIERS: "2",
+        STORYLINE_DF_WINDOW_DAYS: "21",
+        APP_TIMEZONE: "America/Edmonton",
+        GEMINI_API_KEY: "a-key",
+      }),
+    );
+    expect(moved).toEqual({
+      enabled: true,
+      rules: {
+        anchorMaxShare: 0.007,
+        anchorDfFloor: 13,
+        massThreshold: 17,
+        dormancyDays: 45,
+        dormantStrictness: 2.5,
+      },
+      mergeBridges: 3,
+      coherenceGate: true,
+      narrowRetrieval: true,
+      maxBridgingQualifiers: 2,
+      storyDf: { windowDays: 21, timeZone: "America/Edmonton" },
+      timeZone: "America/Edmonton",
+    });
+  });
+
+  it("holds the gate to a key, whichever way the flag is set", () => {
+    // `STORYLINE_COHERENCE_GATE` defaults to TRUE, so this is the one field
+    // where `STORYLINE_BAR` and the flag's own default disagree: the bar ships
+    // it off because no key is configured, and there is no verdict to wait for.
+    expect(createLinkerConfig(config()).coherenceGate).toBe(false);
+    expect(createLinkerConfig(config({ STORYLINE_COHERENCE_GATE: "true" })).coherenceGate).toBe(
+      false,
+    );
+    expect(
+      createLinkerConfig(config({ STORYLINE_COHERENCE_GATE: "false", GEMINI_API_KEY: "a-key" }))
+        .coherenceGate,
+    ).toBe(false);
+    expect(createLinkerConfig(config({ GEMINI_API_KEY: "a-key" })).coherenceGate).toBe(true);
+  });
+
+  it("cannot be moved by one caller for the next", () => {
+    // Why `storylineBar` is a function. `STORYLINE_BAR` is ONE object now, so a
+    // caller reaching into a nested field of a bar it was handed would move the
+    // bar for every test in the process — this change's own accident, arriving
+    // from the other direction.
+    const mine = storylineBar();
+    mine.rules.massThreshold = 1;
+    expect(storylineBar().rules.massThreshold).toBe(20);
+    expect(STORYLINE_BAR.rules.massThreshold).toBe(20);
   });
 });

@@ -8,6 +8,7 @@ import { VercelIngestQueue, type QueueLogger } from "./ingest-queue-vercel.js";
 import type { IngestQueue } from "./ingest-queue.js";
 import type { LabelerDeps } from "./storyline-naming.js";
 import type { LabelMergeRules } from "./storyline-label-merge.js";
+import { storylineBar, type StorylineBarOverrides } from "./storyline-bar.js";
 import type { LinkerConfig } from "./storyline-linker.js";
 import type { SummarizerDeps } from "./storyline-summary-service.js";
 
@@ -26,11 +27,21 @@ import type { SummarizerDeps } from "./storyline-summary-service.js";
  *     pacing. The pacing matters most: the ceiling being paced is on the KEY
  *     both processes share (STORYLINE-LABELS, "The rate limit").
  *
- * `createLinkerConfig` is not exported for the operator CLIs to use: `regroup`
- * disables the linker outright and `backfill:storylines` deliberately differs
- * (no coherence gate, its own `--label-rate`), so their divergence is a
- * decision each one documents — not the accidental kind this module exists to
- * prevent.
+ * The bar is now a VALUE and this is only the adapter that reads it from the
+ * environment: `STORYLINE_BAR` in `storyline-bar.ts` holds the measured
+ * defaults, `storylineBar(overrides)` applies a named divergence to them, and
+ * `createLinkerConfig` is `storylineBar(linkerBarFromEnv(config))`. That is
+ * what makes the rule above enforceable rather than merely stated — the leverage
+ * of this module was two callers, while the same fourteen fields were written
+ * out at nineteen sites, `test-support.ts` among them as a whole second default.
+ *
+ * Both operator CLIs go through it too, and that is the same argument rather
+ * than an exception to it: `regroup` disables the linker outright and
+ * `backfill:storylines` deliberately differs (no coherence gate, its own
+ * `--label-rate`), which is a divergence of TWO fields — and each of them
+ * spelled it as a fourteen-field copy, the drift this header predicts. What
+ * they legitimately differ on now sits beside the reason it differs, and the
+ * twelve fields they never differed on follow the live path.
  *
  * `createLabeler` **is** what the CLIs use, as of the operator-command
  * refactor, and that is the same argument rather than an exception to it. Five
@@ -121,14 +132,19 @@ export function maxBridgingQualifiers(config: Config): number | undefined {
 }
 
 /**
- * The linker config the LIVE write path uses, and therefore the one the nightly
- * sweeps must use: they exist to offer the linker what it already declined or
- * never saw, at the bar it would have applied.
+ * `STORYLINE_BAR`'s every env-derived field, as a divergence from it.
+ *
+ * Exported because the two operator CLIs whose divergence this module's header
+ * sanctions still need the CONFIGURED bar to diverge from — `regroup` disables
+ * the linker and `backfill:storylines` drops the coherence gate, and neither is
+ * a licence to also re-declare the twelve fields it does not differ on. That
+ * re-declaration is what both of them used to be.
+ *
+ * Every field of the bar appears here except `enabled`, which is structural
+ * (`STORYLINE_BAR`) rather than configured.
  */
-export function createLinkerConfig(config: Config): LinkerConfig {
+export function linkerBarFromEnv(config: Config): StorylineBarOverrides {
   return {
-    // Structural, not optional: no storylines means no timeline rows.
-    enabled: true,
     rules: {
       anchorMaxShare: config.STORYLINE_ANCHOR_MAX_SHARE,
       anchorDfFloor: config.STORYLINE_ANCHOR_DF_FLOOR,
@@ -153,6 +169,19 @@ export function createLinkerConfig(config: Config): LinkerConfig {
     },
     timeZone: config.APP_TIMEZONE,
   };
+}
+
+/**
+ * The linker config the LIVE write path uses, and therefore the one the nightly
+ * sweeps must use: they exist to offer the linker what it already declined or
+ * never saw, at the bar it would have applied.
+ *
+ * The shipped bar with the environment applied to it, and nothing else — so an
+ * unset variable is the measured default by construction rather than by a
+ * literal here agreeing with one in `storyline-bar.ts`.
+ */
+export function createLinkerConfig(config: Config): LinkerConfig {
+  return storylineBar(linkerBarFromEnv(config));
 }
 
 /**

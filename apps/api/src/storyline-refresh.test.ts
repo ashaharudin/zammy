@@ -17,6 +17,7 @@ import { canonicalize, WINDOW_SNAP_MS, type CanonicalizeResult } from "./canonic
 import { groupCreatedArticles } from "./grouping-service.js";
 import { ingestJobId } from "./ingest-queue.js";
 import { labelWords } from "./storyline-label-merge.js";
+import { storylineBar } from "./storyline-bar.js";
 import { queueStorylineRefresh } from "./storyline-refresh.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
 import { PLANNED_COVERAGE_PROVIDER } from "./coverage-gaps.js";
@@ -53,22 +54,7 @@ function linkerOff(): TestHarness["deps"]["config"]["grouping"] {
     enabled: true,
     threshold: 0.5,
     timeZone: "UTC",
-    linker: {
-      enabled: false,
-      rules: {
-        anchorMaxShare: 0.002,
-        anchorDfFloor: 10,
-        massThreshold: 20,
-        dormancyDays: 90,
-        dormantStrictness: 1.5,
-      },
-      mergeBridges: 2,
-      coherenceGate: false,
-      narrowRetrieval: false,
-      maxBridgingQualifiers: undefined,
-      storyDf: { windowDays: 14, timeZone: "UTC" },
-      timeZone: "UTC",
-    },
+    linker: storylineBar({ enabled: false }),
   };
 }
 

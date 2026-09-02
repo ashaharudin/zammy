@@ -11,6 +11,7 @@ import {
 import type { GenerateRequest, GenerateResult } from "./gemini.js";
 import { resolveFormation, resolvePendingFormations, type FormationDeps } from "./storyline-formation.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
+import { storylineBar } from "./storyline-bar.js";
 import { linkGroup, type LinkerConfig, type LinkOutcome } from "./storyline-linker.js";
 import { labelLinkedStorylines } from "./storyline-label-service.js";
 
@@ -335,22 +336,11 @@ describe("resolvePendingFormations", () => {
 });
 
 describe("the tail actually resolves them (the wiring, not the rule)", () => {
-  const GATED: LinkerConfig = {
-    enabled: true,
-    rules: {
-      anchorMaxShare: 0.002,
-      anchorDfFloor: 10,
-      massThreshold: 20,
-      dormancyDays: 90,
-      dormantStrictness: 1.5,
-    },
-    mergeBridges: 2,
-    coherenceGate: true,
-    narrowRetrieval: false,
-    maxBridgingQualifiers: undefined,
-    storyDf: { windowDays: 14, timeZone: ZONE },
-    timeZone: ZONE,
-  };
+  // The one field this block is ABOUT: `STORYLINE_BAR` ships the gate off
+  // because no key is configured, and production turns it on the moment one is
+  // (`createLinkerConfig`). Everything else is the shipped bar, so what these
+  // tests exercise is the gate and not a bar of their own.
+  const GATED: LinkerConfig = storylineBar({ coherenceGate: true });
 
   /** Two real arrivals through the real linker, gated. */
   async function deferThroughLinker() {

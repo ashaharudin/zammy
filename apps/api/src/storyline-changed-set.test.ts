@@ -13,6 +13,7 @@ import {
 } from "@zammy/storage";
 import { runLateCandidateChore, type ChoreDeps } from "./chores.js";
 import { readChangedSetBatch } from "./storyline-changed-set.js";
+import { storylineBar } from "./storyline-bar.js";
 import type { LinkerConfig } from "./storyline-linker.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
 
@@ -56,22 +57,9 @@ beforeEach(async () => {
  * Loosened for a corpus of a hundred, as `chores.test.ts` loosens its own: what
  * is under test is which groups the filter REACHES, not the production bar.
  */
-const LINKER: LinkerConfig = {
-  enabled: true,
-  rules: {
-    anchorMaxShare: 0.5,
-    anchorDfFloor: 4,
-    massThreshold: 1,
-    dormancyDays: 90,
-    dormantStrictness: 1.5,
-  },
-  mergeBridges: 2,
-  coherenceGate: false,
-  narrowRetrieval: false,
-  maxBridgingQualifiers: undefined,
-  storyDf: { windowDays: 14, timeZone: "UTC" },
-  timeZone: "UTC",
-};
+const LINKER: LinkerConfig = storylineBar({
+  rules: { anchorMaxShare: 0.5, anchorDfFloor: 4, massThreshold: 1 },
+});
 
 const deps = (): ChoreDeps => ({
   db,
@@ -371,10 +359,10 @@ describe("the filter's reach", () => {
     // anchor or the mass floor into SQL would name nothing here and the group
     // would never be re-offered. Measured over 400 real groups, that form
     // reached 38.9% of the forward decision's pairs.
-    const PRODUCTION: LinkerConfig = {
-      ...LINKER,
-      rules: { ...LINKER.rules, anchorMaxShare: 0.002, anchorDfFloor: 10, massThreshold: 20 },
-    };
+    // The shipped bar rather than `LINKER`'s three loosened fields: this is
+    // the one test in the file that is ABOUT the production thresholds, so it
+    // takes them from where production takes them.
+    const PRODUCTION: LinkerConfig = storylineBar();
     const SHARED = ["fausto", "hawaii", "swell", "surf", "genevieve", "kona", "hilo"];
     const OLD_DAY = "2026-08-01";
     const OLD = "2026-08-01T09:00:00.000Z";

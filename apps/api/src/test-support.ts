@@ -14,6 +14,7 @@ import { createDb, migrateToLatest } from "@zammy/storage";
 import { BullMqIngestQueue } from "./ingest-queue-bullmq.js";
 import type { IngestQueue } from "./ingest-queue.js";
 import { Metrics } from "./metrics.js";
+import { storylineBar } from "./storyline-bar.js";
 import type { CoverageFillDeps } from "./coverage-fill.js";
 import type { StorylineDeepeningDeps } from "./storyline-deepening.js";
 import type { StorylineRefreshDeps } from "./storyline-refresh.js";
@@ -143,8 +144,14 @@ async function createEphemeralDb(): Promise<{
 
 /**
  * Grouping and storylines ON, as they ship (§14.3, ADR-0011) — a planner test
- * that passes only with the feature disabled has not tested the planner. The
- * linker's rules are the measured defaults (docs/STORYLINE-LINKING.md).
+ * that passes only with the feature disabled has not tested the planner.
+ *
+ * The linker's bar is `storylineBar()`, which is the bar production runs and no
+ * longer a second copy of it. This function used to re-declare all fourteen
+ * fields, so it was free to drift from `createLinkerConfig` without a test going
+ * red — and a harness test asserting formation behaviour against a drifted bar
+ * is the failure `wiring.ts`'s header is about, arriving through the test suite
+ * instead of through a sweep.
  *
  * A function rather than a constant so no test can mutate the next test's
  * config through a shared nested object.
@@ -154,28 +161,7 @@ function shippedGroupingConfig(): HarnessDeps["config"]["grouping"] {
     enabled: true,
     threshold: 0.5,
     timeZone: "UTC",
-    linker: {
-      enabled: true,
-      rules: {
-        anchorMaxShare: 0.002,
-        anchorDfFloor: 10,
-        massThreshold: 20,
-        dormancyDays: 90,
-        dormantStrictness: 1.5,
-      },
-      mergeBridges: 2,
-      // Off by default: the gate needs a model, and a test that wants it
-      // says so (see storyline-linker.test.ts).
-      coherenceGate: false,
-      // The shipped default. A test that wants the narrowed retrieval says
-      // so, the same way it would say so about the gate.
-      narrowRetrieval: false,
-      // Likewise unbounded, the shipped default: `bridgePairs` takes the
-      // full cross-product. A test that wants the bound says so.
-      maxBridgingQualifiers: undefined,
-      storyDf: { windowDays: 14, timeZone: "UTC" },
-      timeZone: "UTC",
-    },
+    linker: storylineBar(),
   };
 }
 

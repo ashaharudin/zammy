@@ -6,6 +6,7 @@ import {
   type ReplayGroup,
 } from "./storyline-replay.js";
 import type { Corpus, LinkRules } from "./storyline-link.js";
+import { STORYLINE_BAR } from "./storyline-bar.js";
 
 /**
  * The replay harness — the instrument, not the decision.
@@ -19,13 +20,12 @@ import type { Corpus, LinkRules } from "./storyline-link.js";
  * truncated the decision for months (docs/VERCEL-PHASE-0-FINDINGS.md §2.5).
  */
 
-const RULES: LinkRules = {
-  anchorMaxShare: 0.002,
-  anchorDfFloor: 10,
-  massThreshold: 20,
-  dormancyDays: 90,
-  dormantStrictness: 1.5,
-};
+/**
+ * The rules half of the shipped bar — the harness must correspond to the
+ * service at the bar the service runs at, and a copy of the bar here is one
+ * more thing the correspondence could quietly stop holding for.
+ */
+const RULES: LinkRules = STORYLINE_BAR.rules;
 
 const DAY = 86_400_000;
 const START = new Date("2026-08-01T00:00:00Z").getTime();
