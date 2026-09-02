@@ -252,7 +252,11 @@ otherwise does not hold open.
 **Fail-closed auth.** `CRON_SECRET` is optional in config and mandatory at the route: unset disables
 the drain rather than opening it. This is the only surface in the system that spends upstream quota
 without a user having asked, which is also why it is `POST` — a `GET` is the shape a crawler or link
-preview follows by accident.
+preview follows by accident. The check itself is
+[cron-route.ts](../apps/api/src/cron-route.ts)'s, shared with the chores route and the pause guard
+and asserted over all three at once by `cron-routes.test.ts`; it used to be exported from `drain.ts`
+and imported by the other two, which put the guard on every money-spending route inside the module
+about draining a Redis pending set.
 
 **Requires `INGEST_QUEUE_DRIVER=vercel`,** and refuses to boot otherwise. Not for symmetry with the
 consumer: `DRAIN_MIN_AGE_MS` is derived from the *hosted* driver's retry budget, and under BullMQ the

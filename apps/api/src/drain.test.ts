@@ -1,9 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it } from "vitest";
+import type { CronRequest } from "./cron-route.js";
 import {
+  DRAIN_MAX_JOBS,
   DRAIN_MIN_AGE_MS,
   createHandler,
-  isAuthorized,
+  handleDrain,
   runDrain,
   type Drainable,
   type DrainReport,
@@ -243,23 +245,11 @@ describe("runDrain", () => {
   });
 });
 
-describe("isAuthorized", () => {
-  it("refuses everything when no secret is configured", () => {
-    // Fail-CLOSED. This is the only route that spends upstream quota without a
-    // user asking, so an unset secret disables it rather than opening it.
-    expect(isAuthorized("Bearer anything", undefined)).toBe(false);
-    expect(isAuthorized(undefined, undefined)).toBe(false);
-  });
-
-  it("accepts the bearer token and refuses near-misses", () => {
-    expect(isAuthorized("Bearer s3cret", "s3cret")).toBe(true);
-    expect(isAuthorized("Bearer s3cret ", "s3cret")).toBe(false);
-    expect(isAuthorized("Bearer s3crets", "s3cret")).toBe(false);
-    expect(isAuthorized("s3cret", "s3cret")).toBe(false);
-    expect(isAuthorized("Basic s3cret", "s3cret")).toBe(false);
-    expect(isAuthorized(undefined, "s3cret")).toBe(false);
-  });
-});
+// `isAuthorized`'s own tests moved with it to `cron-route.test.ts`, where the
+// function now lives. It was exported from THIS file and imported by the chores
+// route and the pause guard, which is the seam the refactor moved: the bearer
+// check that guards every money-spending route does not belong inside the
+// module about draining a Redis pending set.
 
 describe("createHandler", () => {
   const request = (method: string, authorization?: string): IncomingMessage =>
@@ -361,5 +351,108 @@ describe("createHandler", () => {
 
     expect(seen.status).toBe(405);
     expect(boots).toBe(0);
+  });
+});
+
+/**
+ * The body on its own, which is what `cron-route.ts` made possible: no socket
+ * and no bearer check, so the `?limit=` bound and the 500's `reason` — neither
+ * of which had a test — are reachable with a fake.
+ */
+describe("handleDrain", () => {
+  function context(
+    ready: () => Promise<Drainable>,
+    query = "",
+  ): {
+    context: CronRequest<Drainable>;
+    seen: { status: number | null; body: unknown };
+  } {
+    const seen: { status: number | null; body: unknown } = { status: null, body: null };
+    return {
+      seen,
+      context: {
+        request: { method: "POST", url: `/api/drain${query}`, headers: {} } as IncomingMessage,
+        url: new URL(`http://localhost/api/drain${query}`),
+        ready,
+        json: (status, body) => {
+          seen.status = status;
+          seen.body = body;
+        },
+        logger: silent,
+        defer: () => {
+          throw new Error("the drain's answer is its tally; it must not defer");
+        },
+      },
+    };
+  }
+
+  const outstanding = (count: number): PendingEntry[] =>
+    Array.from({ length: count }, (_unused, index) =>
+      entry(segment(String(index).padStart(64, "0")), DRAIN_MIN_AGE_MS + 1000),
+    );
+
+  it("honours a `?limit=` below the ceiling, and says it truncated", async () => {
+    const h = harness(outstanding(10));
+    const c = context(async () => h.drainable, "?limit=4");
+
+    await handleDrain(c.context);
+
+    expect(c.seen.status).toBe(200);
+    expect(c.seen.body).toMatchObject({ scanned: 10, filled: 4, truncated: true });
+  });
+
+  it("clamps a `?limit=` above the ceiling rather than honouring it", async () => {
+    // `DRAIN_MAX_JOBS` is the bound the 300 s `maxDuration` is sized against,
+    // so a caller asking for a thousand gets fifty. An operator's typo must not
+    // be able to spend an unbounded amount of upstream quota in one request.
+    const h = harness(outstanding(DRAIN_MAX_JOBS + 5));
+    const c = context(async () => h.drainable, "?limit=1000");
+
+    await handleDrain(c.context);
+
+    expect(c.seen.body).toMatchObject({ filled: DRAIN_MAX_JOBS, truncated: true });
+  });
+
+  it("ignores nonsense in `?limit=` and takes the configured ceiling", async () => {
+    const h = harness(outstanding(3));
+    const c = context(async () => h.drainable, "?limit=lots");
+
+    await handleDrain(c.context);
+
+    expect(c.seen.body).toMatchObject({ filled: 3, truncated: false });
+  });
+
+  it("answers 503 when it cannot boot, without claiming a tally", async () => {
+    const c = context(async () => {
+      throw new Error("REDIS_URL is unreachable");
+    });
+
+    await handleDrain(c.context);
+
+    expect(c.seen.status).toBe(503);
+    expect(c.seen.body).toEqual({ status: "unavailable" });
+  });
+
+  it("puts the reason in the 500 body as well as the log", async () => {
+    // On Hobby the log is gone in an hour and `vercel logs` may return nothing
+    // at all, which is how a bare `{"error":"drain failed"}` turned a one-line
+    // diagnosis into an afternoon. Safe to include: every caller that reaches
+    // this body has already presented CRON_SECRET.
+    const c = context(async () => ({
+      listOutstanding: async () => {
+        throw new Error("WRONGTYPE Operation against a key");
+      },
+      settle: async () => {},
+      forget: async () => {},
+      dispatch: async () => {},
+    }));
+
+    await handleDrain(c.context);
+
+    expect(c.seen.status).toBe(500);
+    expect(c.seen.body).toEqual({
+      error: "drain failed",
+      reason: "WRONGTYPE Operation against a key",
+    });
   });
 });

@@ -1,5 +1,5 @@
 import { QueueClient } from "@vercel/queue";
-import { ConfigError, loadConfig } from "@zammy/config";
+import { bootOnce, configOrExplain, jsonLines } from "./cron-route.js";
 import {
   ingestJobId,
   parseIngestJob,
@@ -26,27 +26,19 @@ import { buildServices, ingestDispatch, type ServiceLogger, type Services } from
  *
  *   **This function has no public URL.** Push-mode consumers are reached only
  *   by the platform, so there is no auth code here and none is missing. The
- *   alternative shape, a signed webhook, would have needed some.
+ *   alternative shape, a signed webhook, would have needed some. That is why
+ *   this file takes `bootOnce`, the logger and the `ConfigError` wrapping from
+ *   `cron-route.ts` and not `createCronRoute`: there is no bearer check to
+ *   share, and it is handed `(payload, metadata)` rather than
+ *   `(request, response)` at all. `cron-routes.test.ts` asserts the exemption —
+ *   nothing in `vercel.json` routes a path here — rather than leaving it as
+ *   this paragraph.
  *
  * And one property that is a deliberate difference from `vercel.ts`: this
  * handler must NOT return before its work finishes. The 202-and-`waitUntil`
  * pattern the chores route uses would acknowledge a message whose segment had
  * not been fetched, losing exactly the jobs that take longest.
  */
-
-/**
- * JSON lines to stdout, the shape `chores-cli.ts` logs in and the only shape a
- * platform log collector can do anything with. There is no Fastify instance
- * here to borrow a logger from, and on Hobby these lines survive an hour — the
- * reason `chore_runs` exists on the other route, and the reason this one keeps
- * its own record short and structured.
- */
-const emit = (level: string, fields: object, message: string): string =>
-  JSON.stringify({ level, msg: message, ...fields });
-const log: ServiceLogger = {
-  info: (fields, message) => console.log(emit("info", fields, message)),
-  warn: (fields, message) => console.warn(emit("warn", fields, message)),
-};
 
 /** The half of `Services` a consumer needs. Narrow so it can be faked. */
 export interface Drainable {
@@ -68,7 +60,7 @@ export interface DeliveryMetadata {
  */
 export function createMessageHandler(
   drainable: Drainable,
-  logger: ServiceLogger = log,
+  logger: ServiceLogger = jsonLines,
 ): (payload: unknown, metadata: DeliveryMetadata) => Promise<void> {
   return async (payload, metadata) => {
     const job = parseIngestJob(payload);
@@ -180,13 +172,7 @@ export function createMessageHandler(
  * recovers the work is the next reader re-planning the gap.
  */
 async function bootFromEnvironment(): Promise<Drainable> {
-  let config;
-  try {
-    config = loadConfig();
-  } catch (error) {
-    if (error instanceof ConfigError) console.error(error.message);
-    throw error;
-  }
+  const config = configOrExplain();
   if (config.INGEST_QUEUE_DRIVER !== "vercel") {
     // Refuse rather than drain: this function would settle jobs into a pending
     // registry scoped to the same name but published to by a queue nobody here
@@ -196,7 +182,7 @@ async function bootFromEnvironment(): Promise<Drainable> {
     );
   }
 
-  const services = await buildServices(config, log);
+  const services = await buildServices(config, jsonLines);
   return drainableFrom(services);
 }
 
@@ -271,23 +257,10 @@ export async function drainableFrom(services: Services): Promise<Drainable> {
 }
 
 /**
- * The singleton, in the shape `vercel.ts` established: one boot per warm
- * instance, and a failed boot that does not poison the instance for the rest of
- * its life.
+ * The singleton, in the shape `vercel.ts` established and `cron-route.ts` now
+ * owns: one boot per warm instance, and a failed boot that does not poison the
+ * instance for the rest of its life.
  */
-function bootOnce(boot: () => Promise<Drainable>): () => Promise<Drainable> {
-  let booted: Promise<Drainable> | null = null;
-  return () => {
-    if (booted) return booted;
-    const pending = boot();
-    booted = pending;
-    pending.catch(() => {
-      if (booted === pending) booted = null;
-    });
-    return pending;
-  };
-}
-
 const drainable = bootOnce(bootFromEnvironment);
 
 /**

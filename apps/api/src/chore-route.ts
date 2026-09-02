@@ -1,9 +1,13 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
-import { waitUntil } from "@vercel/functions";
-import { ConfigError, loadConfig } from "@zammy/config";
 import { isChorePass, runChorePass, CHORE_PASSES, type ChorePass } from "./chore-runner.js";
 import type { StorylinePassDeps } from "./chores.js";
-import { isAuthorized } from "./drain.js";
+import {
+  configOrExplain,
+  createCronRoute,
+  jsonLines,
+  secretFromEnvironment,
+  type CronRequest,
+  type CronRouteHandler,
+} from "./cron-route.js";
 import type { ServiceLogger } from "./server.js";
 import { choreDepsFromConfig } from "./wiring.js";
 
@@ -42,14 +46,13 @@ import { choreDepsFromConfig } from "./wiring.js";
  * And no keep-alive. The Supabase free-tier pause guard is its own route on its
  * own schedule (`keepalive.ts`), because "the database stays awake" must not
  * share a failure mode with the most complex nightly job in the system.
+ *
+ * And no auth, no boot-once, no `waitUntil` check: all three are
+ * `cron-route.ts`, shared with the drain and the pause guard. This route is the
+ * only one of the three that declares a `defer`, and `platformDefer` lives in
+ * that module rather than here because it is what a fourth route adopting the
+ * 202 shape would need and would otherwise not find.
  */
-
-const emit = (level: string, fields: object, message: string): string =>
-  JSON.stringify({ level, msg: message, ...fields });
-const log: ServiceLogger = {
-  info: (fields, message) => console.log(emit("info", fields, message)),
-  warn: (fields, message) => console.warn(emit("warn", fields, message)),
-};
 
 /**
  * The nightly schedules, as the header a cron platform stamps a request with.
@@ -131,15 +134,9 @@ export function parseChoreRequest(
 }
 
 async function bootFromEnvironment(): Promise<StorylinePassDeps> {
-  let config;
-  try {
-    config = loadConfig();
-  } catch (error) {
-    if (error instanceof ConfigError) console.error(error.message);
-    throw error;
-  }
-  const deps = choreDepsFromConfig(config, log);
-  log.info(
+  const config = configOrExplain();
+  const deps = choreDepsFromConfig(config, jsonLines);
+  jsonLines.info(
     {
       connection: config.DATABASE_SESSION_URL ? "DATABASE_SESSION_URL" : "DATABASE_URL",
       tls: config.DATABASE_SSL,
@@ -174,7 +171,7 @@ async function bootFromEnvironment(): Promise<StorylinePassDeps> {
     // correct. So this is the loudest thing available instead — and it is a
     // `warn` rather than the boot line's `info` because on Hobby the log is an
     // hour long and the level is the only thing that makes a line findable.
-    log.warn(
+    jsonLines.warn(
       {},
       "DATABASE_SESSION_URL is unset; the pass lock is only real if DATABASE_URL " +
         "is a DIRECT or session-mode connection. Through a transaction pooler every " +
@@ -182,74 +179,6 @@ async function bootFromEnvironment(): Promise<StorylinePassDeps> {
     );
   }
   return deps;
-}
-
-/**
- * The secret alone, read WITHOUT building anything — the same split
- * `drain.ts` makes, for the same reason: `loadConfig` is pure zod over
- * `process.env` and does no I/O, so an unauthenticated request costs nothing
- * rather than costing a connection pool.
- */
-function secretFromEnvironment(): string | undefined {
-  try {
-    return loadConfig().CRON_SECRET;
-  } catch {
-    return undefined;
-  }
-}
-
-function bootOnce(
-  boot: () => Promise<StorylinePassDeps>,
-): () => Promise<StorylinePassDeps> {
-  let booted: Promise<StorylinePassDeps> | null = null;
-  return () => {
-    if (booted) return booted;
-    const pending = boot();
-    booted = pending;
-    pending.catch(() => {
-      if (booted === pending) booted = null;
-    });
-    return pending;
-  };
-}
-
-const booted = bootOnce(bootFromEnvironment);
-
-/**
- * `waitUntil`, plus the check the SDK does not do.
- *
- * `@vercel/functions`' `waitUntil` is `getContext().waitUntil?.(promise)`, and
- * `getContext()` returns `{}` when the platform's request-context global is
- * absent — so **off-platform it is a silent no-op**. Combined with an
- * unconditional 202 that is the worst pairing available: the caller is told the
- * pass was accepted, nothing keeps the instance alive to run it, and the row is
- * either never opened or opened and never closed — indistinguishable from a
- * platform kill.
- *
- * The promise still RUNS (it was started before it got here); what is missing is
- * anything holding the process open for it. So the fix is not to await — that
- * would break the 202 the whole shape exists for — it is to say so loudly, once
- * per invocation, in the only place a log survives.
- *
- * The symbol is read directly because `getContext` is not in the package's
- * public export map. It is the same symbol `waitUntil` itself reads.
- */
-const REQUEST_CONTEXT = Symbol.for("@vercel/request-context");
-
-function platformDefer(logger: ServiceLogger): (promise: Promise<unknown>) => void {
-  return (promise) => {
-    const context = (
-      globalThis as Record<symbol, { get?: () => { waitUntil?: unknown } } | undefined>
-    )[REQUEST_CONTEXT]?.get?.();
-    if (typeof context?.waitUntil !== "function") {
-      logger.warn(
-        {},
-        "no platform request context; background work is unsupervised and may be " +
-          "killed with the response — the 202 does not mean the pass will finish",
-      );
-    }
-    waitUntil(promise);
-  };
 }
 
 export interface ChoreHandlerOptions {
@@ -271,6 +200,100 @@ export interface ChoreHandlerOptions {
 }
 
 /**
+ * The route body: pick the pass, log it, hand the work to `waitUntil`, 202.
+ *
+ * Importable and callable with a fake `CronRequest`, which is the whole point
+ * of the split — the auth, the method check and the socket are
+ * `createCronRoute`'s, and this is the half with the 202 contract in it.
+ */
+export async function handleChorePass(
+  { request, url, ready, json, logger, defer }: CronRequest<StorylinePassDeps>,
+  runPass: typeof runChorePass = runChorePass,
+): Promise<void> {
+  const requested = parseChoreRequest(url, request.headers);
+  if (!requested) {
+    // The one case that answers something other than 202, and it has to: an
+    // unrecognised pass name is a configuration mistake in the scheduler, and
+    // the 202 contract would swallow it forever.
+    json(400, { error: "unknown pass", passes: CHORE_PASSES });
+    return;
+  }
+
+  const schedule = request.headers["x-vercel-cron-schedule"];
+  logger.info(
+    {
+      pass: requested.pass,
+      ...requested.overrides,
+      schedule: typeof schedule === "string" ? schedule : null,
+    },
+    "chore pass accepted",
+  );
+
+  // **The work is deferred, INCLUDING the boot**, so that no I/O happens
+  // before the 202 — which is the number that has to fit inside pg_net's
+  // timeout on a cold instance. Note what this does NOT do: the async IIFE
+  // runs synchronously to its first `await`, and `bootFromEnvironment` is
+  // synchronous until then, so `loadConfig()` and the `pg.Pool` object are
+  // built BEFORE the response goes out. That is fine and deliberate — neither
+  // touches the network, `pg.Pool` connects lazily — but it is why this
+  // comment does not claim the 202 costs nothing but config parsing.
+  //
+  // A boot failure cannot be reported in the response either way: it is a log
+  // line and a missing `chore_runs` row, the same trade every other failure
+  // here makes.
+  defer(
+    (async () => {
+      let deps: StorylinePassDeps;
+      try {
+        deps = await ready();
+      } catch (error) {
+        logger.warn(
+          {
+            pass: requested.pass,
+            err: error instanceof Error ? error.message : String(error),
+          },
+          "chore boot failed; pass did not run",
+        );
+        return;
+      }
+
+      const result = await runPass(
+        requested.pass,
+        { ...deps, ...requested.overrides },
+        { source: "route" },
+      );
+      if (result.outcome === "failed") {
+        logger.warn(
+          {
+            pass: result.pass,
+            runId: result.runId,
+            ms: result.ms,
+            err:
+              result.error instanceof Error
+                ? result.error.message
+                : String(result.error),
+          },
+          "chore pass FAILED",
+        );
+        // The stack is the whole diagnostic and there is no response left to
+        // put it in.
+        console.error(result.error);
+        return;
+      }
+      logger.info(
+        { pass: result.pass, runId: result.runId, outcome: result.outcome, ms: result.ms },
+        "chore pass complete",
+      );
+    })(),
+  );
+
+  // 202 and not 200: the pass has been accepted, and nothing about whether it
+  // worked is knowable yet. `runId` is deliberately absent — it does not exist
+  // until the background half opens the row.
+  json(202, { accepted: requested.pass, ...requested.overrides });
+}
+
+/**
  * The route.
  *
  * **GET and POST both, unlike the drain's POST-only.** The drain refuses GET
@@ -278,120 +301,30 @@ export interface ChoreHandlerOptions {
  * behind the same bearer check, so that argument is already covered — and
  * Vercel's own cron sends GET and nothing else, so POST-only would rule out the
  * documented Pro-tier scheduler for no gain. Supabase Cron posts.
+ *
+ * **The only one of the five entrypoints that declares a `defer`**, and that is
+ * not an accident of who got there first. The 202 shape is what makes pg_net's
+ * timeout a question about the request rather than about the night, and it is
+ * only correct where the response has nothing true to say about the outcome.
+ * The pause guard's answer IS its outcome and the drain's answer is its tally,
+ * so deferring either would replace a real result with an empty promise.
  */
 export function createHandler(
   boot: () => Promise<StorylinePassDeps>,
   options: ChoreHandlerOptions = {},
-): (request: IncomingMessage, response: ServerResponse) => Promise<void> {
-  const logger = options.logger ?? log;
-  const readSecret = options.readSecret ?? secretFromEnvironment;
-  const defer = options.waitUntil ?? platformDefer(logger);
+): CronRouteHandler {
   const runPass = options.runPass ?? runChorePass;
-
-  return async (request, response) => {
-    const json = (status: number, body: object): void => {
-      response.writeHead(status, { "content-type": "application/json" });
-      response.end(JSON.stringify(body));
-    };
-
-    if (request.method !== "POST" && request.method !== "GET") {
-      json(405, { error: "method not allowed" });
-      return;
-    }
-
-    // Auth before anything that costs a connection, exactly as the drain does.
-    // An unset `CRON_SECRET` disables this route rather than opening it: a pass
-    // spends Gemini quota and rewrites the storyline graph, which is not
-    // something an anonymous caller gets to start.
-    const header = request.headers.authorization;
-    if (!isAuthorized(Array.isArray(header) ? header[0] : header, readSecret())) {
-      json(401, { error: "unauthorized" });
-      return;
-    }
-
-    const url = new URL(request.url ?? "/", "http://localhost");
-    const requested = parseChoreRequest(url, request.headers);
-    if (!requested) {
-      // The one case that answers something other than 202, and it has to: an
-      // unrecognised pass name is a configuration mistake in the scheduler, and
-      // the 202 contract would swallow it forever.
-      json(400, { error: "unknown pass", passes: CHORE_PASSES });
-      return;
-    }
-
-    const schedule = request.headers["x-vercel-cron-schedule"];
-    logger.info(
-      {
-        pass: requested.pass,
-        ...requested.overrides,
-        schedule: typeof schedule === "string" ? schedule : null,
-      },
-      "chore pass accepted",
-    );
-
-    // **The work is deferred, INCLUDING the boot**, so that no I/O happens
-    // before the 202 — which is the number that has to fit inside pg_net's
-    // timeout on a cold instance. Note what this does NOT do: the async IIFE
-    // runs synchronously to its first `await`, and `bootFromEnvironment` is
-    // synchronous until then, so `loadConfig()` and the `pg.Pool` object are
-    // built BEFORE the response goes out. That is fine and deliberate — neither
-    // touches the network, `pg.Pool` connects lazily — but it is why this
-    // comment does not claim the 202 costs nothing but config parsing.
-    //
-    // A boot failure cannot be reported in the response either way: it is a log
-    // line and a missing `chore_runs` row, the same trade every other failure
-    // here makes.
-    defer(
-      (async () => {
-        let deps: StorylinePassDeps;
-        try {
-          deps = await boot();
-        } catch (error) {
-          logger.warn(
-            {
-              pass: requested.pass,
-              err: error instanceof Error ? error.message : String(error),
-            },
-            "chore boot failed; pass did not run",
-          );
-          return;
-        }
-
-        const result = await runPass(
-          requested.pass,
-          { ...deps, ...requested.overrides },
-          { source: "route" },
-        );
-        if (result.outcome === "failed") {
-          logger.warn(
-            {
-              pass: result.pass,
-              runId: result.runId,
-              ms: result.ms,
-              err:
-                result.error instanceof Error
-                  ? result.error.message
-                  : String(result.error),
-            },
-            "chore pass FAILED",
-          );
-          // The stack is the whole diagnostic and there is no response left to
-          // put it in.
-          console.error(result.error);
-          return;
-        }
-        logger.info(
-          { pass: result.pass, runId: result.runId, outcome: result.outcome, ms: result.ms },
-          "chore pass complete",
-        );
-      })(),
-    );
-
-    // 202 and not 200: the pass has been accepted, and nothing about whether it
-    // worked is knowable yet. `runId` is deliberately absent — it does not exist
-    // until the background half opens the row.
-    json(202, { accepted: requested.pass, ...requested.overrides });
-  };
+  return createCronRoute<StorylinePassDeps>({
+    name: "/api/chores",
+    methods: ["GET", "POST"],
+    boot,
+    // `true` is `platformDefer` over the resolved logger. The tests pass their
+    // own, so the deferred half can be awaited.
+    defer: options.waitUntil ?? true,
+    readSecret: options.readSecret,
+    logger: options.logger,
+    handle: (context) => handleChorePass(context, runPass),
+  });
 }
 
-export default createHandler(booted);
+export default createHandler(bootFromEnvironment);

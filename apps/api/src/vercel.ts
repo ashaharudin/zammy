@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { FastifyInstance } from "fastify";
-import { ConfigError, loadConfig } from "@zammy/config";
+import { bootOnce, configOrExplain } from "./cron-route.js";
 import { buildApp } from "./server.js";
 
 /**
@@ -28,6 +28,12 @@ import { buildApp } from "./server.js";
  * Note what this file does not do: no auth, no routing, no error mapping. Those
  * belong to the app, and an entrypoint that grew any of them would be a second
  * place to look when production and Compose disagree.
+ *
+ * **That is also why it takes only two things from `cron-route.ts`** — the
+ * boot-once it had its own copy of, and the `ConfigError` wrapping all five
+ * entrypoints share — and not `createCronRoute`. This is the public surface;
+ * its auth is the app's. `cron-routes.test.ts` asserts the exemption rather
+ * than leaving it as this paragraph.
  */
 
 /** The half of `App` an entrypoint actually needs. Narrow so it can be faked. */
@@ -46,25 +52,17 @@ export type VercelHandler = (
  * pinning, and none of it should need a database to assert.
  */
 export function createHandler(boot: () => Promise<Servable>): VercelHandler {
-  let booted: Promise<Servable> | null = null;
-
-  const start = (): Promise<Servable> => {
-    const pending = boot();
-    booted = pending;
-    // A failed boot must not poison the instance for the rest of its life. The
-    // next request builds again — which matters because the things that fail at
-    // boot here (Postgres reachable, Supabase awake) are transient, and an
-    // instance can be reused for hours.
-    pending.catch(() => {
-      if (booted === pending) booted = null;
-    });
-    return pending;
-  };
+  // Once per instance, and a failed boot forgotten so the next request builds
+  // again — which matters because the things that fail at boot here (Postgres
+  // reachable, Supabase awake) are transient and an instance is reused for
+  // hours. `cron-route.ts` has the argument for both halves; this file had the
+  // first of five copies of it.
+  const ready = bootOnce(boot);
 
   return async (request, response) => {
     let servable: Servable;
     try {
-      servable = await (booted ?? start());
+      servable = await ready();
     } catch (error) {
       // 503, not 500: the app never came up, so this instance served nothing —
       // and the platform's log is the only place the reason survives on Hobby
@@ -88,17 +86,9 @@ export function createHandler(boot: () => Promise<Servable>): VercelHandler {
  * during import and reports whatever the platform makes of that.
  */
 async function bootFromEnvironment(): Promise<Servable> {
-  let config;
-  try {
-    config = loadConfig();
-  } catch (error) {
-    if (error instanceof ConfigError) {
-      // Same message `index.ts` prints, for the same reason: every problem at
-      // once, not one 401 per missing variable.
-      console.error(error.message);
-    }
-    throw error;
-  }
+  // `configOrExplain` prints the same message `index.ts` prints, for the same
+  // reason: every problem at once, not one 401 per missing variable.
+  const config = configOrExplain();
 
   const built = await buildApp(config, { consumer: false });
   // `emit("request")` bypasses Fastify's own readiness gate, so this await is
