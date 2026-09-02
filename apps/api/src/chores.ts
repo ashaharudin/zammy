@@ -812,9 +812,14 @@ export async function runSummaryChore(
   // which essentially never happens, so every night quarter would permanently
   // describe five sixths of its span. A day is summarised once it has finished.
   const todayStart = summaryDayBounds(summaryDayKey(now)).from;
-  const from = new Date(
-    todayStart.getTime() - deps.summaryGate.windowDays * 86_400_000,
-  );
+  // The rolling window, unless an operator named one. `summaryWindow` is the
+  // backfill's, and it is applied HERE rather than at the entrypoint so the
+  // command's run takes the same lock, writes the same row and gets the same
+  // warning above as the nightly pass (see `StorylinePassDeps.summaryWindow`).
+  const to = deps.summaryWindow?.to ?? todayStart;
+  const from =
+    deps.summaryWindow?.from ??
+    new Date(todayStart.getTime() - deps.summaryGate.windowDays * 86_400_000);
 
   const tally = await summaryPass(
     // The pass's clock governs BOTH halves. `createSummarizer` leaves `now`
@@ -825,21 +830,34 @@ export async function runSummaryChore(
     { db: deps.db, ...deps.summarizer, now: deps.now },
     {
       from,
-      to: todayStart,
+      to,
       minArticlesExclusive: deps.summaryGate.minArticlesExclusive,
       minGroups: deps.summaryGate.minGroups,
       now: deps.now,
+      ...(deps.summaryStorylineId !== undefined
+        ? { storylineId: deps.summaryStorylineId }
+        : {}),
       ...(deps.maxSummaries !== undefined ? { maxSummaries: deps.maxSummaries } : {}),
       ...(deps.summaryBudgetMs !== undefined ? { budgetMs: deps.summaryBudgetMs } : {}),
       ...(deps.summaryRatePerMinute !== undefined
         ? { ratePerMinute: deps.summaryRatePerMinute }
         : {}),
+      ...(deps.summaryProgress ? { onProgress: deps.summaryProgress } : {}),
       ...(deps.sleep ? { sleep: deps.sleep } : {}),
     },
   );
 
   deps.log.info(
-    { ...tally, from: from.toISOString(), windowDays: deps.summaryGate.windowDays },
+    {
+      ...tally,
+      from: from.toISOString(),
+      // The window as run, not as configured: with `--from`/`--to` the
+      // configured `windowDays` describes nothing, and a line that printed it
+      // anyway would name a window the pass did not cover.
+      to: to.toISOString(),
+      ...(deps.summaryWindow ? {} : { windowDays: deps.summaryGate.windowDays }),
+      ...(deps.summaryStorylineId ? { storylineId: deps.summaryStorylineId } : {}),
+    },
     tally.stoppedBy === "exhausted"
       ? "storyline summary pass — the historical preserve (ADR-0023)"
       : // Its own message for the same reason the label pass has one: the
@@ -925,6 +943,32 @@ export interface StorylinePassDeps extends ChoreDeps {
   summaryBudgetMs?: number;
   /** Model calls per minute for the summary pass — `--summary-rate`. */
   summaryRatePerMinute?: number;
+  /**
+   * An explicit window for the summary pass, replacing the rolling
+   * `summaryGate.windowDays` one — `--from`/`--to` on
+   * `pnpm summaries:storylines`.
+   *
+   * It exists so the historical backfill can go through `runChorePass` like
+   * everything else instead of re-implementing the pass at the entrypoint. That
+   * command used to take the `summaries` lock by hand and call `summaryPass`
+   * directly, which left a manual preserve with no `chore_runs` row, no
+   * `model_calls`, and no non-UTC `APP_TIMEZONE` warning — the one pass whose
+   * rows nothing can rebuild being the one pass with no record that it ran.
+   *
+   * **Deliberately not a route override.** A scheduler naming its own window
+   * would be a schedule that disagrees with `deploy/vercel/supabase-cron.sql`
+   * from inside a query string; deciding which days to spend on is the operator
+   * act the command exists to be.
+   */
+  summaryWindow?: { from: Date; to: Date };
+  /** One arc only — `--storyline`. Same reason as `summaryWindow`. */
+  summaryStorylineId?: string;
+  /**
+   * Progress, for the operator watching a backfill run for an hour. The nightly
+   * pass declares none, because nobody is watching it and the tally in
+   * `chore_runs` is the record that matters there.
+   */
+  summaryProgress?: (progress: { days: number; modelCalls: number }) => void;
 }
 
 export interface StorylinePassReport {

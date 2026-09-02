@@ -468,4 +468,137 @@ describe("handleChorePass", () => {
     expect(c.seen.body).toEqual({ error: "unknown pass", passes: [...CHORE_PASSES] });
     expect(c.lines).toEqual([]);
   });
+
+  /**
+   * `?status` — the read behind the same door as the run.
+   *
+   * The branch exists because `chore_runs` had exactly one reader in the whole
+   * system, `pnpm chores status`, which needs a shell and a `DATABASE_URL` the
+   * Vercel deployment does not have: the durable record ADR-0015 accepts
+   * one-hour log retention in exchange for was unreadable on the deployment it
+   * was written for.
+   *
+   * What "overdue" and "stalled" MEAN is `chore-status.ts`, asserted there over
+   * rows and a clock with no Postgres. What these pin is the three things that
+   * are properties of this HTTP surface and of nothing else: it answers
+   * synchronously, it starts no pass, and a read failure is a 503 naming the
+   * reason rather than a 500. The fail-closed half is `cron-routes.test.ts`,
+   * which tables `?status` beside `?pass=` over every gated entrypoint.
+   */
+  describe("?status", () => {
+    /**
+     * A Kysely stand-in for the ONE read `readChoreRuns` makes: a chain that
+     * ignores every builder call and resolves `execute()` to the rows it holds.
+     * Narrow on purpose, exactly as `storyline-summary-command.test.ts`'s is —
+     * the moment anything asks it a second question the answer is silently
+     * wrong, which is why the pass half of this route's subject is tested
+     * against a real database in `chore-runner.test.ts`.
+     */
+    function rowsDb(rows: readonly unknown[] | Error): StorylinePassDeps["db"] {
+      const chain: unknown = new Proxy(() => undefined, {
+        get: (_target, property) =>
+          property === "execute"
+            ? async () => {
+                if (rows instanceof Error) throw rows;
+                return rows;
+              }
+            : property === "then"
+              ? undefined
+              : chain,
+        apply: () => chain,
+      });
+      return chain as StorylinePassDeps["db"];
+    }
+
+    const NOW = new Date("2026-09-01T06:30:00Z");
+    const statusDeps = (rows: readonly unknown[] | Error): StorylinePassDeps =>
+      ({ db: rowsDb(rows), now: () => NOW }) as unknown as StorylinePassDeps;
+
+    it("answers 200 with the verdict, and starts no pass", async () => {
+      // Synchronously, unlike every other answer this route gives. The 202 shape
+      // exists to fit pg_net's timeout, and no scheduler can reach this branch:
+      // `zammy_cron_post` refuses any path not in its fixed allow-list and none
+      // of the five listed paths carries `status`. The only caller is a person
+      // holding the token, and a status that answered 202 would tell them
+      // nothing at all.
+      const c = context("/api/chores?status", {}, async () =>
+        statusDeps([
+          {
+            id: "run-1",
+            pass: "retention",
+            source: "route",
+            started_at: new Date("2026-09-01T03:00:02Z"),
+            finished_at: new Date("2026-09-01T03:00:41Z"),
+            outcome: "ok",
+            report: null,
+            error: null,
+            model_calls: null,
+          },
+        ]),
+      );
+
+      await handleChorePass(c.context, ok);
+      await c.settle();
+
+      expect(c.seen.status).toBe(200);
+      const body = c.seen.body as {
+        ok: boolean;
+        overdue: string[];
+        stalled: string[];
+        passes: Array<{ pass: string; last: { startedAt: string } | null }>;
+      };
+      expect(body.passes.find((entry) => entry.pass === "retention")?.last?.startedAt).toBe(
+        "2026-09-01T03:00:02.000Z",
+      );
+      // Two of the three scheduled passes have no row here, which is the answer
+      // the endpoint exists to give.
+      expect(body.overdue).toEqual(["storylines", "summaries"]);
+      expect(body.stalled).toEqual([]);
+      expect(body.ok).toBe(false);
+    });
+
+    it("does not run the pass a `pass=` alongside it would have named", async () => {
+      // `?status` is read FIRST, before pass selection. An operator who types
+      // both gets the read: a status request that also spent the label budget
+      // would be the worse of the two possible readings by a wide margin.
+      const c = context("/api/chores?status&pass=labels", {}, async () => statusDeps([]));
+
+      await handleChorePass(c.context, ok);
+      await c.settle();
+
+      expect(c.seen.status).toBe(200);
+    });
+
+    it("answers 503 with the reason when chore_runs cannot be read", async () => {
+      // The commonest cause by far is a deployment whose migrations have not
+      // caught up, which is a statement about the database rather than about
+      // this code — the same 42P01 `chores-command.ts` translates into a
+      // configuration exit code.
+      const c = context("/api/chores?status", {}, async () =>
+        statusDeps(new Error('relation "chore_runs" does not exist')),
+      );
+
+      await handleChorePass(c.context, ok);
+
+      expect(c.seen.status).toBe(503);
+      expect(c.seen.body).toEqual({
+        error: "chore_runs unreadable",
+        reason: 'relation "chore_runs" does not exist',
+      });
+    });
+
+    it("answers 503 when the boot itself never came up", async () => {
+      // Unlike the pass branch, which answers 202 and logs — there the response
+      // is sent before the boot is even attempted. Here the boot's failure IS
+      // the answer, so it travels in the response.
+      const c = context("/api/chores?status", {}, async () => {
+        throw new Error("no DATABASE_SESSION_URL");
+      });
+
+      await handleChorePass(c.context, ok);
+
+      expect(c.seen.status).toBe(503);
+      expect(c.seen.body).toEqual({ error: "boot failed", reason: "no DATABASE_SESSION_URL" });
+    });
+  });
 });

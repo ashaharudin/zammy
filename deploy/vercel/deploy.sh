@@ -127,4 +127,17 @@ is the SECOND read that means something.
   ready     — Postgres and Redis both reachable
   degraded  — Redis is not
   unready   — Postgres is not
+
+\`status\` says nothing about the chores, deliberately — an overdue pass is not a
+reason to call the API unable to serve. \`.chores\` in the same response is:
+
+  curl -s $url/readyz | jq .chores
+
+  ok:false with names in \`overdue\`  — a schedule came and went with no chore_runs row
+  ok:false with names in \`stalled\`  — a row is unfinished past the 300 s ceiling
+  ok:false with an \`error\`          — chore_runs itself could not be read
+
+The rows behind it, with run ids and error messages, are bearer-gated:
+
+  curl -H "Authorization: Bearer \$CRON_SECRET" "$url/api/chores?status" | jq .
 NEXT

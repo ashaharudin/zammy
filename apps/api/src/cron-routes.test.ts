@@ -77,6 +77,20 @@ interface Guarded {
   readonly method: string;
   /** The source file, so the no-second-bearer-check property can read it. */
   readonly source: string;
+  /**
+   * Every query string that reaches a DIFFERENT body behind this door, so the
+   * rule is asserted over each of them and not only over whichever one was
+   * written first.
+   *
+   * `/api/chores` has two: `?pass=` runs a pass, and `?status` reads
+   * `chore_runs` back. The read is a query on the existing route rather than a
+   * path of its own — `vercel.json` already routes this one, and
+   * `zammy_cron_post`'s allow-list would have needed a line for a surface no
+   * scheduler ever posts to — and the whole benefit of that is inheriting this
+   * check. Inheriting it silently is how a branch added later ends up in front
+   * of the auth instead of behind it, so both are listed.
+   */
+  readonly queries: readonly string[];
   disabled(onBoot: () => void): (
     request: IncomingMessage,
     response: ServerResponse,
@@ -88,6 +102,7 @@ const GUARDED: readonly Guarded[] = [
     path: "/api/chores",
     method: "POST",
     source: "chore-route.ts",
+    queries: ["?pass=graph", "?status"],
     disabled: (onBoot) =>
       createChoreHandler(
         async () => {
@@ -106,6 +121,7 @@ const GUARDED: readonly Guarded[] = [
     path: "/api/drain",
     method: "POST",
     source: "drain.ts",
+    queries: [""],
     disabled: (onBoot) =>
       createDrainHandler(async () => {
         onBoot();
@@ -121,6 +137,7 @@ const GUARDED: readonly Guarded[] = [
     path: "/api/keepalive",
     method: "POST",
     source: "keepalive.ts",
+    queries: [""],
     disabled: (onBoot) =>
       createKeepaliveHandler(async () => {
         onBoot();
@@ -149,14 +166,18 @@ const EXEMPT = [
 ] as const;
 
 describe("the fail-closed rule, over every bearer-gated entrypoint", () => {
-  it.each(GUARDED.map((route) => [route.path, route] as const))(
+  it.each(
+    GUARDED.flatMap((route) =>
+      route.queries.map((query) => [`${route.path}${query}`, route, query] as const),
+    ),
+  )(
     "%s is disabled, not open, when CRON_SECRET is unset — and disabled cheaply",
-    async (_path, route) => {
+    async (_label, route, query) => {
       let boots = 0;
       const handler = route.disabled(() => void (boots += 1));
       const { res, seen } = capture();
 
-      await handler(request(route.method, `${route.path}?pass=graph`), res);
+      await handler(request(route.method, `${route.path}${query}`), res);
 
       expect(seen.status).toBe(401);
       expect(boots).toBe(0);

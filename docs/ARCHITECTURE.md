@@ -435,7 +435,7 @@ Accepts front-end requests and turns them into the right upstream query — or, 
 | `GET /api/v1/reference` | Cached `/available/*` values, for front-end filter controls. Languages and regions only — the category taxonomy is no longer served, because nothing can pick from it (ADR-0020). |
 | `GET /api/v1/topics/:fingerprint` | Topic metadata: coverage window, article count, freshness, summary. |
 | `POST /api/v1/storylines/:id/refresh` | Fire-and-forget: queue one background top-up of what this arc's coverage says (§9.1, ADR-0017), and — separately planned, against the arc itself — one deepening fetch (§9.1a, ADR-0019). A UUID is the whole request; the keywords and the language are derived from the arc, never sent. 202 with `{ queued, deepening: { status, queued } }`; nothing on the page reads it. |
-| `GET /healthz` · `GET /readyz` | Liveness, and dependency checks for Postgres/Redis/upstream. |
+| `GET /healthz` · `GET /readyz` | Liveness, and dependency checks for Postgres/Redis/upstream — plus a `chores` digest saying which nightly passes are overdue or stalled (`chore-status.ts`). The digest is additive and never moves `status`: `ready`/`degraded`/`unready` stay a statement about Postgres and Redis alone. |
 
 `GET /api/v1/timeline` request:
 
@@ -1260,8 +1260,10 @@ late-candidate pass instead of the whole fortnight.
 
 Two consequences, neither of them visible in the api's logs. A schedule the app registers cannot be
 forgotten, while an external one is absent until someone configures it — so if nothing schedules the
-runner, every pass silently never runs and `/readyz` stays green throughout (the `chore_runs`
-table's most recent row is the check — `pnpm chores status`; locally, `systemctl list-timers` was). And the labelling pacer no longer spans both: it is a window inside
+runner, every pass silently never runs and `/readyz` stays green throughout — which is why `/readyz`
+now carries a `chores` digest naming the passes whose schedule has come and gone with no
+`chore_runs` row (`chore-status.ts`). `pnpm chores status` and `GET /api/chores?status` give the same
+verdict with the rows behind it; locally, `systemctl list-timers` was the check. And the labelling pacer no longer spans both: it is a window inside
 one Gemini client, so two processes labelling at once is up to 2x `GEMINI_MAX_RPM` on the shared key
 (STORYLINE-LABELS, "The pacer's scope"). What it buys is an api that need not be awake at 3am for
 any of this to happen.

@@ -7,7 +7,8 @@ import {
   type Database,
 } from "@zammy/storage";
 import type { Kysely } from "kysely";
-import { CHORE_LOCK_KEYS, withPassLock } from "./chore-runner.js";
+import { runChorePass } from "./chore-runner.js";
+import type { StorylinePassDeps } from "./chores.js";
 import {
   EXIT_CONFIG,
   POSITIVE_NUMBER,
@@ -15,8 +16,8 @@ import {
   type Args,
   type CommandSpec,
 } from "./operator-command.js";
-import { summaryPass } from "./storyline-summary-service.js";
-import { createSummarizer } from "./wiring.js";
+import type { SummaryPassTally } from "./storyline-summary-service.js";
+import { choreDepsFromConfig } from "./wiring.js";
 
 /**
  * `pnpm summaries:storylines [--storyline=UUID] [--from=YYYY-MM-DD]
@@ -54,6 +55,27 @@ import { createSummarizer } from "./wiring.js";
  *
  * It declares no `labeler`: the summariser is `createSummarizer`'s, and the two
  * are separate lanes the moment `SUMMARY_API_KEY` is set (`wiring.ts`).
+ *
+ * ## It runs the PASS, and does not re-implement it
+ *
+ * A real run goes through `runChorePass("summaries", …)`, the same call the
+ * 05:00 firing and `pnpm chores summaries` make. It used to take
+ * `CHORE_LOCK_KEYS.summaries` by hand and call `summaryPass` directly, which
+ * got the lock right and everything around it wrong: a manual preserve wrote no
+ * `chore_runs` row at all, so the one pass whose rows nothing can rebuild was
+ * the one pass with no durable record that it had run, no `model_calls` against
+ * the night it spent them on, and no non-UTC `APP_TIMEZONE` warning — the thing
+ * that says the day keys being written no longer name the same 24 hours as
+ * `storyline_days`. On one-hour log retention that row is all that outlives the
+ * terminal.
+ *
+ * `--from`/`--to`/`--storyline` reach the pass as `summaryWindow` and
+ * `summaryStorylineId` on the deps rather than as a second call site, and
+ * `SUMMARIES_ENABLED` is forced open rather than read — see below for both.
+ *
+ * `--dry-run` and `--show` stay outside all of it: they call no model, write
+ * nothing, and a `chore_runs` row for a read would be a record of a night that
+ * never happened.
  */
 
 /** One page of the plan. A dry run is a cost estimate, not a full enumeration. */
@@ -127,9 +149,19 @@ async function run(
   args: Args,
   storylineId: string | undefined,
 ): Promise<number | void> {
-  const summarizer = createSummarizer(config, {
-    warn: (fields, message) => console.warn(message, JSON.stringify(fields)),
-  });
+  // The configured night, over the handle this command already holds. Building
+  // it rather than a bare summariser is what routes the run through
+  // `runChorePass` below — see the header — and it also means the pacer, the
+  // model id, the sample size and every gate come from `wiring.ts` exactly as
+  // they do at 05:00, instead of from a second construction here.
+  const log = {
+    info: (fields: object, message: string) =>
+      console.log(JSON.stringify({ level: "info", pass: "summaries", msg: message, ...fields })),
+    warn: (fields: object, message: string) =>
+      console.warn(JSON.stringify({ level: "warn", pass: "summaries", msg: message, ...fields })),
+  };
+  const deps = choreDepsFromConfig(config, log, { db });
+  const summarizer = deps.summarizer;
   const now = new Date();
   const todayStart = summaryDayBounds(summaryDayKey(now)).from;
   // Defaults: the same window the nightly pass covers, so a bare invocation is
@@ -163,70 +195,82 @@ async function run(
     return;
   }
 
-  const startedAt = Date.now();
-  let code: number | undefined;
-  // The SAME lock the nightly pass takes, because this writes the same rows.
+  // **Through `runChorePass`, exactly as the 05:00 firing goes.**
   //
-  // Every other operator CLI in this repo writes state a later pass rebuilds,
-  // so overlapping a scheduled run costs duplicated work and nothing else.
-  // These rows are the one thing here that nothing rebuilds, and the race is
-  // not benign: both runs read "no row", both call the model, and whichever
-  // finishes second writes its own verdict over the first — so a contract
-  // failure on this side can bury a sentence the nightly pass had just
-  // written. (The upsert refuses to null a standing summary as well, which is
-  // the belt to this lock's braces.)
-  const ran = await withPassLock(db, CHORE_LOCK_KEYS.summaries, async () => {
-    code = (await runPass({
-      db,
-      config,
-      summarizer,
-      from,
-      to,
-      startedAt,
-      storylineId,
-      rate,
-      maxSummaries,
-    })) as number | undefined;
-  });
-  if (!ran) {
+  // This used to take `CHORE_LOCK_KEYS.summaries` by hand and call `summaryPass`
+  // directly, which got the lock right and everything around it wrong: a manual
+  // preserve left NO `chore_runs` row, so the one pass whose rows nothing can
+  // rebuild was the one pass with no durable record that it ran, no
+  // `model_calls` against the night it spent them on, and — because the
+  // non-UTC `APP_TIMEZONE` warning lives in `runSummaryChore` — no word that
+  // the day keys it was writing no longer name the same 24 hours as
+  // `storyline_days`. On Hobby's one-hour log retention that record is the only
+  // thing that outlives the terminal.
+  //
+  // The lock is unchanged: `choreLockKey("summaries")` IS
+  // `CHORE_LOCK_KEYS.summaries`, so this still contends with the nightly pass
+  // for the same reason it always did — both runs read "no row", both call the
+  // model, and whichever finishes second writes its verdict over the first, so
+  // a contract failure on this side can bury a sentence the nightly pass had
+  // just written. (The upsert refuses to null a standing summary as well, which
+  // is the belt to that lock's braces.)
+  //
+  // The knobs below are applied to the configured night as overrides, one run
+  // at a time — `wiring.ts`'s rule for exactly this — rather than being a
+  // second configuration.
+  //
+  // **`SUMMARIES_ENABLED` is still not consulted**, which is the one thing the
+  // chore path would otherwise impose. Typing this command IS the deliberate act
+  // the flag protects, exactly as naming `late-candidates` as a pass runs that
+  // sweep regardless of its own gate — so the gate is forced open rather than
+  // read.
+  deps.summariesEnabled = true;
+  deps.summaryWindow = { from, to };
+  if (storylineId !== undefined) deps.summaryStorylineId = storylineId;
+  if (maxSummaries !== undefined) deps.maxSummaries = maxSummaries;
+  if (rate !== undefined) deps.summaryRatePerMinute = rate;
+  // One line per ten days, so a long backfill is watchable rather than silent.
+  // The nightly pass declares none because nobody is watching it.
+  deps.summaryProgress = ({ days, modelCalls }) => {
+    if (days % 10 === 0) console.log(`  ${days} days, ${modelCalls} calls`);
+  };
+  // The budget is the ROUTE's, dropped here for the reason `chores-command.ts`
+  // drops it: `SUMMARY_BUDGET_MS` exists to beat a serverless function's 300 s
+  // deadline, a terminal has none, and inheriting it would truncate the one run
+  // whose whole purpose is to drain a backfill in a single sitting.
+  delete deps.summaryBudgetMs;
+
+  const result = await runChorePass("summaries", deps, { source: "cli" });
+
+  if (result.outcome === "skipped") {
     console.error(
       "another summary run holds the lock — nothing was done. The nightly pass " +
         "is at 05:00 UTC; wait for it, or re-run after it finishes.",
     );
     return; // Overlap is expected, exactly as it is for a chore: exit 0.
   }
-  return code;
+  if (result.outcome === "failed") {
+    console.error(result.error);
+    return 1;
+  }
+  return report(result.report, result.ms);
 }
 
-async function runPass(input: {
-  db: Kysely<Database>;
-  config: Config;
-  summarizer: ReturnType<typeof createSummarizer>;
-  from: Date;
-  to: Date;
-  startedAt: number;
-  storylineId: string | undefined;
-  rate: number | undefined;
-  maxSummaries: number | undefined;
-}): Promise<number | void> {
-  const { db, config, from, to, startedAt, storylineId } = input;
-  const tally = await summaryPass(
-    { db, ...input.summarizer },
-    {
-      from,
-      to,
-      minArticlesExclusive: config.SUMMARY_MIN_ARTICLES_PER_DAY,
-      minGroups: config.SUMMARY_MIN_GROUPS,
-      maxSummaries: input.maxSummaries ?? config.SUMMARY_MAX_PER_RUN,
-      ratePerMinute: input.rate ?? config.GEMINI_MAX_RPM,
-      ...(storylineId ? { storylineId } : {}),
-      onProgress: ({ days, modelCalls }) => {
-        // One line per day, so a long backfill is watchable rather than silent.
-        if (days % 10 === 0) console.log(`  ${days} days, ${modelCalls} calls`);
-      },
-    },
-  );
-
+/**
+ * The tally, printed for a person — and the run id, which is the new half.
+ *
+ * `runChorePass` returns the SUMMARIZED report (`summarizeChoreReport`), which
+ * for this pass is scalars and passes through untouched. Read defensively
+ * anyway: the type is `unknown` because a report is whatever a pass returned,
+ * and a printer that assumed otherwise would throw on the shape rather than
+ * saying it could not read it.
+ */
+function report(reported: unknown, ms: number): number | void {
+  const tally = reported as (SummaryPassTally & { enabled?: boolean }) | null;
+  if (!tally || typeof tally.stoppedBy !== "string") {
+    console.log(`\nno tally reported, in ${(ms / 1000).toFixed(1)}s`);
+    return;
+  }
   console.log(
     `\n${tally.days} days: ${tally.written} written, ${tally.recomputed} rewritten, ` +
       `${tally.refused} refused, ${tally.unavailable} unreachable, ` +
@@ -234,7 +278,7 @@ async function runPass(input: {
   );
   console.log(
     `${tally.model} model calls, stopped by ${tally.stoppedBy}, ` +
-      `in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`,
+      `in ${(ms / 1000).toFixed(1)}s`,
   );
   if (tally.stoppedBy === "no-model") return EXIT_CONFIG;
   return;
