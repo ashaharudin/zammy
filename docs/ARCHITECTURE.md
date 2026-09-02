@@ -886,6 +886,17 @@ Per fetched sighting, in one transaction:
 
 Every fetch is safely repeatable, which lets the worker and a user request race harmlessly.
 
+**Two of the three steps above are DECISIONS, and one module states them** (`@zammy/storage`,
+`fold.ts`). Which candidate row wins — URL key, then the own-day alt key, then a single neighbour,
+and two neighbours a refusal — is `chooseArticle`; what an arriving sighting is entitled to hand
+over is `fieldAuthority`, which returns the scope (`all` / `provider-only` / `nothing`) that the one
+`UPDATE` above is rendered from. Neither needs a database to decide, only to fetch the candidates
+and apply the result, so the ADR truth tables are asserted as tables rather than one sample per
+throwaway Postgres. What stays in SQL is what Postgres uniquely does: the candidate retrieval, the
+`ON CONFLICT (dedup_key)` arbiter, and the two savepoints. The re-expression is pinned by
+`fold-differential.test.ts`, which replays the SQL it came out of over the same candidate sets and
+the same articles — the standing guard on a write path whose failure mode is silent.
+
 Immediately after, outside the transaction, each article the call *created* is offered a group
 (§14.3). Only new articles are grouped — regrouping on every re-sighting would let a group drift
 with no bound — and the pass never throws, because a grouping failure must not fail the read that

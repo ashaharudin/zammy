@@ -15,6 +15,20 @@ import { createDb } from "./database.js";
  * database on the local dev server (`pnpm infra:up`), so files can run in
  * parallel and a crashed run leaves nothing behind that the next `CREATE
  * DATABASE` trips over.
+ *
+ * **That argument is true of the upserts and false of the rules ABOVE them, and
+ * the difference is worth stating because it was read too widely.** "The
+ * collapse is ON CONFLICT arithmetic" justifies a database for the arithmetic:
+ * the `dedup_key` arbiter, the savepoints, the CHECK constraints, the keyset
+ * order. It does not justify one for the fold's PRECEDENCE table — which
+ * candidate row wins, and what a sighting may hand over — because those are
+ * decisions over domain values and nothing about them is arithmetic. They live
+ * in `fold.ts` and are asserted without a database, against the SQL they came
+ * out of in `fold-differential.test.ts`. A truth table asserted through a
+ * throwaway database is asserted at one sample per migration.
+ *
+ * So the question to ask before calling this is not "does this test touch
+ * storage" but "does the thing being asserted need Postgres to be TRUE".
  */
 
 const ADMIN_URL =
