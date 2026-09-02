@@ -67,7 +67,6 @@
     "ioredis": "^5.4.1",
     "kysely": "^0.28.17",
     "pg": "^8.13.1",
-    "prom-client": "^15.1.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {

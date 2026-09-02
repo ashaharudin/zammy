@@ -14,8 +14,8 @@ import {
 import { canonicalKeywords, fingerprintOf, WINDOW_SNAP_MS } from "./canonical.js";
 import { deepeningQuery } from "./cloud-query.js";
 import { planHorizon, subtractCoverage, type Span } from "./coverage-gaps.js";
+import { logIngestOutcome, logUpstreamFetch } from "./observations.js";
 import { freshnessTtlMs } from "./page-cache.js";
-import type { Metrics } from "./metrics.js";
 import { refreshLockKey, release, tryAcquire } from "./single-flight.js";
 import type { DeepenJob, IngestQueue } from "./ingest-queue.js";
 import {
@@ -77,7 +77,6 @@ export interface StorylineDeepeningDeps {
    * configured, and the bigram fallback carries it when one is not.
    */
   labeler?: GroupingDeps["labeler"];
-  metrics?: Metrics;
   log?: {
     warn: (obj: object, msg: string) => void;
     info?: (obj: object, msg: string) => void;
@@ -159,7 +158,6 @@ export async function queueStorylineDeepening(
   if (!deepening) {
     // Not an error and not logged as one: no deepening provider is the shipped
     // configuration, and the caller is a fire-and-forget POST.
-    deps.metrics?.storylineDeepen("unavailable");
     return { status: "unavailable", storylineId };
   }
 
@@ -171,7 +169,6 @@ export async function queueStorylineDeepening(
     profileTokens: storyline.profileTokens,
   });
   if (query === null) {
-    deps.metrics?.storylineDeepen("ungrounded");
     return { status: "ungrounded", storylineId };
   }
 
@@ -188,7 +185,6 @@ export async function queueStorylineDeepening(
     lookbackDays: deps.config.lookbackDays,
   });
   if (gap === undefined) {
-    deps.metrics?.storylineDeepen("fresh");
     return { status: "fresh", storylineId, keywords: query.keywords };
   }
 
@@ -197,7 +193,6 @@ export async function queueStorylineDeepening(
   // grid, and judging it on a snapped clock would hide every staleness younger
   // than the last grid line.
   if (now.getTime() - gap.from.getTime() <= freshnessTtlMs(window.to, now)) {
-    deps.metrics?.storylineDeepen("fresh");
     return { status: "fresh", storylineId, keywords: query.keywords };
   }
 
@@ -210,7 +205,6 @@ export async function queueStorylineDeepening(
   if (to.getTime() <= from.getTime()) {
     // The gap does not reach back past the last grid line. Only reachable in the
     // first quarter-hour of a cold arc's window; the next click asks for it.
-    deps.metrics?.storylineDeepen("fresh");
     return { status: "fresh", storylineId, keywords: query.keywords };
   }
 
@@ -221,7 +215,6 @@ export async function queueStorylineDeepening(
     to: to.toISOString(),
   };
   await deps.queue.enqueueDeepen(job);
-  deps.metrics?.storylineDeepen("queued");
   return { status: "queued", storylineId, keywords: query.keywords, job };
 }
 
@@ -290,7 +283,6 @@ export async function processDeepenJob(
     profileTokens: storyline.profileTokens,
   });
   if (query === null) {
-    deps.metrics?.storylineDeepen("ungrounded");
     deps.log?.warn(
       { storylineId },
       "deepening job's arc no longer grounds its own label; dropping rather than attaching",
@@ -360,39 +352,24 @@ export async function processDeepenJob(
       // No reader is waiting; draw only what the interactive reserve spares.
       { priority: "background" },
     );
-    deps.metrics?.upstreamCall({
-      received: result.normalization.received,
-      dropped: result.normalization.received - result.normalization.kept,
-    });
-    // How much of what this provider just sent is DATED rather than timed
-    // (plan §G6, ADR-0021). Recorded here rather than inside `ingestSightings`
-    // because storage has no metrics and should not grow any, and before the
-    // ingest so a throwing fold does not lose the observation.
-    const dateOnly = result.sightings.filter((s) => s.publishedIsDateOnly === true).length;
-    deps.metrics?.sightingsStamped(result.sightings);
-    // AND as a log field, which is the half that survives the deployment we
-    // actually run. ARCHITECTURE 12 is explicit that `/metrics` is deleted under
-    // the Vercel target — per-process counters mean nothing across ephemeral
-    // instances and nothing scrapes them — and this consumer is its own
-    // function, so the counter above is a Compose-only instrument. ADR-0021
-    // names this observation as the enforcement for a flag nothing can force an
-    // adapter to set, so it has to exist somewhere production can read it.
+    // What came back, and how much of what this provider just sent is DATED
+    // rather than timed (plan §G6, ADR-0021). Recorded here rather than inside
+    // `ingestSightings` because storage should not grow an opinion about
+    // observability, and before the fold so a throwing one cannot take the
+    // observation with it.
     //
-    // Logged on EVERY fetch rather than only when the share is high, because
-    // the alarming direction is the share going to ZERO on an old span: that
-    // means the detector stopped matching, not that the provider improved, and
-    // a line that only fires when the number is large cannot show its absence.
-    deps.log?.info?.(
-      {
-        storylineId,
-        provider: deepening.provider,
-        from: span.from,
-        to: span.to,
-        items: result.sightings.length,
-        dateOnly,
-      },
-      "deepening fetch: how many of these items the provider dated rather than timed",
-    );
+    // This plane wrote these fields first and now shares their shape with the
+    // other two: the numbers are ratios ACROSS the planes, so a line only this
+    // one wrote made every one of them wrong by a plane. `observations.ts`
+    // carries the argument and the ordering rule.
+    logUpstreamFetch(deps.log, {
+      plane: "deepening",
+      provider: deepening.provider,
+      storylineId,
+      span,
+      sightings: result.sightings,
+      normalization: result.normalization,
+    });
 
     const ingested = await ingestSightings(deps.db, {
       // The arc's own topic, minted below rather than skipped, and this is the
@@ -416,7 +393,12 @@ export async function processDeepenJob(
       timeZone: deps.config.grouping.timeZone,
       ...(deps.log ? { log: deps.log } : {}),
     });
-    deps.metrics?.articlesIngested(ingested.articlesCreated);
+    logIngestOutcome(deps.log, {
+      plane: "deepening",
+      provider: deepening.provider,
+      storylineId,
+      created: ingested.articlesCreated,
+    });
 
     // ATTACHMENT BY PROVENANCE. The seam is `groupCreatedArticles`' intent, and
     // the whole of the rule lives there: seeded groups join this arc, nothing is
@@ -446,7 +428,6 @@ export async function processDeepenJob(
     if (walked?.isLastPage) {
       await recordStorylineCoverage(deps.db, storylineId, deepening.provider, span);
     } else {
-      deps.metrics?.truncatedSegment();
       deps.log?.info?.(
         { storylineId, from: span.from, to: span.to, items: result.rawCount },
         "deepening span hit the item cap; coverage not recorded, the gap stays open",

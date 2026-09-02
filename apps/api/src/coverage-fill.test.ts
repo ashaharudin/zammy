@@ -16,7 +16,18 @@ import { refreshLockKey, tryAcquire } from "./single-flight.js";
 import { processSegmentJob } from "./coverage-fill.js";
 import { readTimeline } from "./timeline-read.js";
 import { storyTokens } from "./storyline.js";
-import { CountingClient, createTestHarness, type TestHarness } from "./test-support.js";
+import {
+  INGEST_OUTCOME_MESSAGE,
+  SEGMENT_TRUNCATED_MESSAGE,
+  TIMELINE_READ_MESSAGE,
+  UPSTREAM_FETCH_MESSAGE,
+} from "./observations.js";
+import {
+  captureLog,
+  CountingClient,
+  createTestHarness,
+  type TestHarness,
+} from "./test-support.js";
 import { PLANNED_COVERAGE_PROVIDER } from "./coverage-gaps.js";
 
 /**
@@ -674,62 +685,64 @@ describe("per-topic daily cap (§9.4) — one curious user cannot drain the pool
   });
 });
 
-describe("metrics (§12) — the numbers that make the design observable", () => {
-  const value = async (
-    name: string,
-    labels: Record<string, string> = {},
-  ): Promise<number> => {
-    const metrics = (await harness.metrics.registry.getMetricsAsJSON()) as Array<{
-      name: string;
-      values: Array<{ value: number; labels: Record<string, string>; metricName?: string }>;
-    }>;
-    for (const metric of metrics) {
-      const match = metric.values?.find(
-        (v) =>
-          (v.metricName ?? metric.name) === name &&
-          Object.entries(labels).every(([k, val]) => v.labels[k] === val),
-      );
-      if (match) return match.value;
-    }
-    return Number.NaN;
-  };
+describe("the §12 numbers, which are log fields now that /metrics is gone", () => {
+  /** Sum one field over every line written under one message. */
+  const total = (lines: Record<string, unknown>[], field: string): number =>
+    lines.reduce((sum, line) => sum + (line[field] as number), 0);
 
   it("counts cache tiers, upstream spend, truncation, and reads by source", async () => {
+    // Every assertion below was a Prometheus counter until ADR-0015 deleted
+    // `/metrics`, and the numbers are the same numbers — what moved is where the
+    // test reads them. That was always the honest place: the registry was
+    // per-process, so on the deployment we run these counters would have been
+    // three different registries on three ephemeral instances and nothing would
+    // have scraped any of them.
     harness = await createTestHarness({}, NOW);
+    const capture = captureLog();
+    const deps = { ...harness.deps, log: capture.log };
 
-    await readTimeline(harness.deps, climateQuery(), { limit: 25 }); // miss → upstream
-    await readTimeline(harness.deps, climateQuery(), { limit: 25 }); // hit
-    await readTimeline(harness.deps, broadQuery(), { limit: 100 }); // miss → truncates
+    await readTimeline(deps, climateQuery(), { limit: 25 }); // miss → upstream
+    await readTimeline(deps, climateQuery(), { limit: 25 }); // hit
+    await readTimeline(deps, broadQuery(), { limit: 100 }); // miss → truncates
+
+    const reads = capture.under(TIMELINE_READ_MESSAGE);
+    const fetches = capture.under(UPSTREAM_FETCH_MESSAGE);
+    const ingests = capture.under(INGEST_OUTCOME_MESSAGE);
 
     // Cache hit ratio BY TIER: both windows end >24h before NOW → historical.
-    expect(await value("zammy_page_cache_reads_total", { tier: "historical", result: "miss" })).toBe(2);
-    expect(await value("zammy_page_cache_reads_total", { tier: "historical", result: "hit" })).toBe(1);
+    expect(reads.filter((r) => r.tier === "historical" && r.cache === "miss")).toHaveLength(2);
+    expect(reads.filter((r) => r.tier === "historical" && r.cache === "hit")).toHaveLength(1);
 
-    // The key efficiency number: upstream calls per user request (§12).
-    expect(await value("zammy_upstream_calls_total")).toBe(6); // 1 climate + 5 broad
+    // The key efficiency number: upstream calls per user request (§12). One
+    // fetch line per dispatched call is what makes the count the count.
+    expect(fetches).toHaveLength(6); // 1 climate + 5 broad
 
     // unique-articles-per-upstream-call = created / calls; a fall means
     // upstream duplication is worsening (baseline ~8 of 20).
-    expect(await value("zammy_articles_created_total")).toBeGreaterThan(0);
-    expect(await value("zammy_sightings_received_total")).toBeGreaterThanOrEqual(100);
+    expect(total(ingests, "created")).toBeGreaterThan(0);
+    expect(total(fetches, "received")).toBeGreaterThanOrEqual(100);
 
     // A rising truncation rate means timelines are silently thinning (§11).
-    expect(await value("zammy_truncated_segments_total")).toBe(1);
+    expect(capture.under(SEGMENT_TRUNCATED_MESSAGE)).toHaveLength(1);
 
-    // Stamp quality, by provider (ADR-0021). Asserted here because this counter
-    // is the only alarm on a detector that fails SILENTLY: nothing forces an
-    // adapter to set `publishedIsDateOnly`, and a provider that changed its
-    // convention would simply stop matching. Currents times everything it sends,
-    // so the discovery plane is the denominator — every sighting lands under
-    // `clock` and none under `date_only`.
-    expect(await value("zammy_sightings_stamped_total", { provider: "currents", stamp: "clock" })).toBeGreaterThanOrEqual(100);
-    expect(
-      await value("zammy_sightings_stamped_total", { provider: "currents", stamp: "date_only" }),
-    ).toBeNaN();
+    // Stamp quality, by provider (ADR-0021). Asserted here because this is the
+    // only alarm on a detector that fails SILENTLY: nothing forces an adapter to
+    // set `publishedIsDateOnly`, and a provider that changed its convention
+    // would simply stop matching. Currents times everything it sends, so the
+    // discovery plane is the denominator — every sighting lands timed, and
+    // nothing is attributed as dated.
+    expect(total(fetches, "items")).toBeGreaterThanOrEqual(100);
+    expect(total(fetches, "dateOnly")).toBe(0);
+    expect(fetches.flatMap((f) => f.dateOnlyProviders as string[])).toEqual([]);
+    for (const fetch of fetches) expect(fetch).toMatchObject({ plane: "search", provider: "currents" });
 
     // p95 by servedFrom needs reads labeled by source.
-    expect(await value("zammy_timeline_read_seconds_count", { served_from: "upstream" })).toBe(2);
-    expect(await value("zammy_timeline_read_seconds_count", { served_from: "cache" })).toBe(1);
+    expect(reads.filter((r) => r.servedFrom === "upstream")).toHaveLength(2);
+    expect(reads.filter((r) => r.servedFrom === "cache")).toHaveLength(1);
+    // And a duration to take a percentile OF, which the counter's histogram was
+    // for. Not a latency assertion — `>= 0` is all a pinned clock can promise —
+    // but a `seconds` that stopped being written would read as instant reads.
+    for (const read of reads) expect(typeof read.seconds).toBe("number");
   }, 30_000); // three reads, one of them a five-call broad fill (see truncation)
 });
 

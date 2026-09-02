@@ -28,7 +28,7 @@ import type { LabelerDeps } from "./storyline-naming.js";
 import { mergeCollidingLabels } from "./storyline-label-merge-trigger.js";
 import { reofferJoinedGroups } from "./storyline-rejoin-trigger.js";
 import type { LabelMergeRules } from "./storyline-label-merge.js";
-import type { Metrics } from "./metrics.js";
+import { ARTICLES_GROUPED_MESSAGE } from "./observations.js";
 
 /**
  * Grouping, wired up (ARCHITECTURE 14.3): run over the articles an ingest call
@@ -101,8 +101,11 @@ export interface GroupingDeps {
    * cost `processSampleJob` accepts and documents at its await.
    */
   labelTail?: (task: Promise<void>) => void;
-  metrics?: Metrics;
-  log?: { warn: (obj: object, msg: string) => void };
+  log?: {
+    warn: (obj: object, msg: string) => void;
+    /** §12's grouped rate, which since ADR-0015 exists only as a log field. */
+    info?: (obj: object, msg: string) => void;
+  };
 }
 
 /**
@@ -136,8 +139,7 @@ export function groupingDepsFor(
     db: Kysely<Database>;
     config: { grouping: GroupingDeps["config"] };
     labeler?: Omit<LabelerDeps, "db">;
-    metrics?: Metrics;
-    log?: { warn: (obj: object, msg: string) => void };
+    log?: GroupingDeps["log"];
   },
   /**
    * The one field a CALLER decides rather than the service wiring: whether it
@@ -150,7 +152,6 @@ export function groupingDepsFor(
     db: deps.db,
     config: deps.config.grouping,
     ...(deps.labeler ? { labeler: deps.labeler } : {}),
-    ...(deps.metrics ? { metrics: deps.metrics } : {}),
     ...(deps.log ? { log: deps.log } : {}),
     ...(labelTail ? { labelTail } : {}),
   };
@@ -445,7 +446,19 @@ export async function groupCreatedArticles(
     }
   }
 
-  deps.metrics?.articlesGrouped(grouped);
+  // §12's articles-grouped rate — `grouped / created` — as log fields, which
+  // since ADR-0015 deleted `/metrics` is where it lives (ADR-0005 for why the
+  // rate is the number: §14.3's similarity threshold ships unmeasured, so near
+  // zero means grouping is doing nothing and a sharp rise means it is merging
+  // stories that are merely similar).
+  //
+  // Here rather than at the three ingest planes because this is the one place
+  // that holds both halves of the ratio, and all three write paths reach it —
+  // a plane that computed its own would be the missing-denominator bug again.
+  deps.log?.info?.(
+    { created: created.length, grouped },
+    ARTICLES_GROUPED_MESSAGE,
+  );
   return grouped;
 }
 

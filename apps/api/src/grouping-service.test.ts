@@ -126,11 +126,7 @@ async function seed(config: Partial<TestHarness["deps"]["config"]> = {}) {
     sightings: SYNDICATED,
   });
   await groupCreatedArticles(
-    {
-      db: harness.deps.db,
-      config: harness.deps.config.grouping,
-      metrics: harness.metrics,
-    },
+    { db: harness.deps.db, config: harness.deps.config.grouping },
     ingested.createdArticles,
   );
   await recordCoverage(harness.deps.db, fingerprint, PLANNED_COVERAGE_PROVIDER, WINDOW);

@@ -11,7 +11,6 @@ import { WINDOW_SNAP_MS, type CanonicalizeResult } from "./canonical.js";
 import { storylineKeywords } from "./cloud-query.js";
 import { PLANNED_COVERAGE_PROVIDER, subtractCoverage } from "./coverage-gaps.js";
 import { freshnessTtlMs } from "./page-cache.js";
-import type { Metrics } from "./metrics.js";
 import { segmentJob, type IngestQueue, type SegmentJob } from "./ingest-queue.js";
 
 /**
@@ -43,7 +42,6 @@ export interface StorylineRefreshDeps {
   currents: { limits: { maxRangeDays: number } };
   config: { lookbackDays: number };
   now: () => Date;
-  metrics?: Metrics;
 }
 
 
@@ -176,14 +174,12 @@ export async function queueStorylineRefresh(
     profileTokens: storyline.profileTokens,
   });
   if (keywords === null) {
-    deps.metrics?.storylineRefresh("no_keywords");
     return { status: "no_keywords", storylineId };
   }
 
   const language = await readStorylineLanguage(deps.db, storylineId);
   const canonical = input.canonicalize({ keywords, language: language ?? undefined });
   if (!canonical.ok) {
-    deps.metrics?.storylineRefresh("invalid");
     return { status: "invalid", storylineId, errors: canonical.errors };
   }
   const query = canonical.query;
@@ -219,7 +215,6 @@ export async function queueStorylineRefresh(
     lookbackDays: deps.config.lookbackDays,
   });
   if (gap === undefined) {
-    deps.metrics?.storylineRefresh("fresh");
     return { status: "fresh", ...settled };
   }
 
@@ -260,7 +255,6 @@ export async function queueStorylineRefresh(
     // An interior hole under a covered present. Not a freshness question at all,
     // and §9.4 says a click does not buy history: left for a reader who searches
     // the words.
-    deps.metrics?.storylineRefresh("fresh");
     return { status: "fresh", ...settled };
   }
 
@@ -288,7 +282,6 @@ export async function queueStorylineRefresh(
   }, undefined);
   if (leadingEdgeCoverage !== undefined && gap.from.getTime() === leadingEdgeCoverage) {
     if (now.getTime() - gap.from.getTime() <= freshnessTtlMs(query.window.to, now)) {
-      deps.metrics?.storylineRefresh("fresh");
       return { status: "fresh", ...settled };
     }
     // A stale edge narrow enough to fetch in one call is the §6.4 top-up, whose
@@ -307,7 +300,6 @@ export async function queueStorylineRefresh(
         kind: "topup",
       };
       await deps.queue.enqueueSegment(job);
-      deps.metrics?.storylineRefresh("queued");
       return { status: "queued", ...settled, job };
     }
   }
@@ -324,13 +316,11 @@ export async function queueStorylineRefresh(
     // The gap does not reach back past the last grid line. Only reachable for a
     // cold topic in the first quarter-hour of its window, since a trailing edge
     // narrower than the grid is a top-up above; the next click asks for it.
-    deps.metrics?.storylineRefresh("fresh");
     return { status: "fresh", ...settled };
   }
 
   const job = segmentJob(query.fingerprint, { from, to }, 1, "deepening");
   await deps.queue.enqueueSegment(job);
-  deps.metrics?.storylineRefresh("queued");
   return { status: "queued", ...settled, job };
 }
 

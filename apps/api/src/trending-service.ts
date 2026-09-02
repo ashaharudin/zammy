@@ -10,13 +10,14 @@ import {
 } from "@zammy/storage";
 import { fingerprintOf } from "./canonical.js";
 import { cloudQuery } from "./cloud-query.js";
+import { PLANNED_COVERAGE_PROVIDER } from "./coverage-gaps.js";
+import { logIngestOutcome, logUpstreamFetch } from "./observations.js";
 import {
   groupCreatedArticles,
   groupingDepsFor,
   type GroupingDeps,
 } from "./grouping-service.js";
 import { samplePendingId, type IngestQueue, type SampleJob } from "./ingest-queue.js";
-import type { Metrics } from "./metrics.js";
 import { readCachedPage, writeCachedPage } from "./page-cache.js";
 
 /**
@@ -81,8 +82,11 @@ export interface TrendingDeps {
   config: { grouping: GroupingDeps["config"] };
   now: () => Date;
   labeler?: GroupingDeps["labeler"];
-  metrics?: Metrics;
-  log?: { warn: (obj: object, msg: string) => void };
+  log?: {
+    warn: (obj: object, msg: string) => void;
+    /** §12's numbers, which since ADR-0015 exist only here (`observations.ts`). */
+    info?: (obj: object, msg: string) => void;
+  };
   trending: TrendingConfig;
 }
 
@@ -288,18 +292,30 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
       );
       break;
     }
-    deps.metrics?.upstreamCall({
-      received: result.normalization.received,
-      dropped: result.normalization.received - result.normalization.kept,
-    });
     // The breadth plane's contribution to the stamp-quality share (ADR-0021).
-    // Every `ingestSightings` call site owes this, because the metric is a SHARE
-    // and one missing plane makes the denominator quietly wrong — and this is
-    // the densest of the three. No `date_only` row can originate here today
-    // (`server.ts` wires the deepening provider to the deepening plane alone),
-    // which is exactly why it is worth counting: this is what a plane that
-    // times its output looks like.
-    deps.metrics?.sightingsStamped(result.sightings);
+    // Every `ingestSightings` call site owes this, because the share needs its
+    // denominator and one missing plane makes it quietly wrong — and this is the
+    // densest of the three. No dated item can originate here today (`server.ts`
+    // wires the deepening provider to the deepening plane alone), which is
+    // exactly why it is worth counting: this is what a plane that times its
+    // output looks like.
+    //
+    // Before the ingest so a throwing fold does not lose the observation, and in
+    // the plane's own terms so the three planes read as one series
+    // (`observations.ts` has the whole argument).
+    //
+    // `span: null` is not a gap in the line, it is what this plane is: the
+    // sample asks `latestNews` for whatever upstream is carrying now and names
+    // no range, so a `from`/`to` here would be an invention. The rolling
+    // §10.1 window is a property of the READ, not of this fetch.
+    logUpstreamFetch(deps.log, {
+      plane: "breadth",
+      provider: PLANNED_COVERAGE_PROVIDER,
+      fingerprint,
+      span: null,
+      sightings: result.sightings,
+      normalization: result.normalization,
+    });
     const ingested = await ingestSightings(deps.db, {
       fingerprint,
       sightings: result.sightings,
@@ -316,7 +332,12 @@ export async function processSampleJob(deps: TrendingDeps, job: SampleJob): Prom
       // the only place a failed one surfaces.
       ...(deps.log ? { log: deps.log } : {}),
     });
-    deps.metrics?.articlesIngested(ingested.articlesCreated);
+    logIngestOutcome(deps.log, {
+      plane: "breadth",
+      provider: PLANNED_COVERAGE_PROVIDER,
+      fingerprint,
+      created: ingested.articlesCreated,
+    });
     // The sample is a write path into `articles` like any other, so it owes
     // grouping the same call the timeline fill makes (§14.3) — and grouping is
     // what runs the linker, so this is also the only thing that puts a sampled

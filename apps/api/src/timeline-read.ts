@@ -29,7 +29,7 @@ import {
   readCachedPage,
   writeCachedPage,
 } from "./page-cache.js";
-import type { Metrics } from "./metrics.js";
+import { TIMELINE_READ_MESSAGE } from "./observations.js";
 import type { IngestQueue } from "./ingest-queue.js";
 import { chooseHeading } from "@zammy/representative";
 import { labelWords } from "./storyline-label-merge.js";
@@ -78,7 +78,6 @@ export interface TimelineReadDeps extends StorylineViewDeps {
   redis: Redis;
   /** Only `pendingCount`. Enqueuing is the fill's business, never the read's. */
   queue: Pick<IngestQueue, "pendingCount">;
-  metrics?: Metrics;
 }
 
 export interface TimelineReadResult {
@@ -154,8 +153,34 @@ export async function readTimeline(
   request: ReadRequest,
 ): Promise<TimelineReadResult> {
   const startedAt = Date.now();
+  // Read here, at the same instant `startedAt` is taken, so the tier this line
+  // reports is the one the cache lookup inside will make its decision on.
+  const tier = freshnessTier(query.window.to, deps.now());
   const result = await planAndRead(deps, query, request);
-  deps.metrics?.timelineRead(result.meta.servedFrom, (Date.now() - startedAt) / 1000);
+  // §12's read-path numbers as log fields, which since ADR-0015 deleted
+  // `/metrics` is where they live. Two of the five §12 names in one line,
+  // because they are answered by the same read: **cache hit ratio by tier**
+  // (§6.4) and **p95 latency by `servedFrom`**.
+  //
+  // `cache` is derived from `servedFrom` rather than plumbed up from the lookup,
+  // and the two cannot drift: `planAndRead` returns `servedFrom: "cache"` on
+  // exactly the branch the cache answered on, and no other branch can produce
+  // that value.
+  //
+  // The platform reports invocation latency, which is why the ADR says platform
+  // observability covers latency — but it cannot report it BY `servedFrom`, and
+  // "how slow is a read that had to fetch" is the only version of the question
+  // §6.3 is about.
+  deps.log?.info?.(
+    {
+      fingerprint: query.fingerprint,
+      tier,
+      cache: result.meta.servedFrom === "cache" ? "hit" : "miss",
+      servedFrom: result.meta.servedFrom,
+      seconds: (Date.now() - startedAt) / 1000,
+    },
+    TIMELINE_READ_MESSAGE,
+  );
   return result;
 }
 
@@ -188,7 +213,6 @@ async function planAndRead(
   );
 
   const cached = await readCachedPage<TimelineReadResult>(deps.redis, cacheKey);
-  deps.metrics?.pageCacheRead(freshnessTier(query.window.to, now), cached ? "hit" : "miss");
   if (cached) {
     return { ...cached, meta: { ...cached.meta, servedFrom: "cache" } };
   }

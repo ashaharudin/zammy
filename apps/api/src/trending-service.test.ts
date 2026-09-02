@@ -18,7 +18,8 @@ import {
 } from "@zammy/storage";
 import { fingerprintOf } from "./canonical.js";
 import { storylineBar } from "./storyline-bar.js";
-import { createTestHarness, type TestHarness } from "./test-support.js";
+import { UPSTREAM_FETCH_MESSAGE } from "./observations.js";
+import { captureLog, createTestHarness, type TestHarness } from "./test-support.js";
 import { labelWords } from "./storyline-label-merge.js";
 
 /**
@@ -343,31 +344,42 @@ describe("the sample is a write path, so it groups what it creates (§14.3)", ()
 describe("the sample counts toward the stamp-quality share (ADR-0021)", () => {
   it("labels what the breadth sample ingests, so the share has its denominator", async () => {
     // This branch shipped without this call once, and the miss was invisible:
-    // `zammy_sightings_stamped_total` is a SHARE, and a whole plane missing from
-    // the denominator makes every computed ratio wrong by an unknown factor
-    // without any row looking wrong. The breadth sample is the densest of the
-    // three ingest paths (§10.1), so it is the worst one to omit.
+    // the stamp tally is a SHARE, and a whole plane missing from the denominator
+    // makes every computed ratio wrong by an unknown factor without any row
+    // looking wrong. The breadth sample is the densest of the three ingest paths
+    // (§10.1), so it is the worst one to omit.
     //
-    // Asserted as "every sighting landed under `clock`" rather than as a total,
-    // because that is the claim: no discovery provider dates its output, so this
-    // plane is what a provider that TIMES its items looks like — and the guard
-    // ADR-0021 adds is only readable against that baseline.
+    // Read off the LOG rather than a Prometheus registry, which is where this
+    // number lives since ADR-0015 deleted `/metrics` — and the registry was
+    // never the thing that could have caught the miss in production anyway. What
+    // the assertion is has not moved: the line must EXIST for this plane, and
+    // every item on it must have landed as timed rather than dated.
+    //
+    // Asserted as "every sighting landed timed" rather than as a total, because
+    // that is the claim: no discovery provider dates its output, so this plane is
+    // what a provider that TIMES its items looks like — and the guard ADR-0021
+    // adds is only readable against that baseline.
     harness = await createTestHarness({}, NOW);
-    const deps = trendingDeps(harness);
+    const capture = captureLog();
+    const deps: TrendingDeps = { ...trendingDeps(harness), log: capture.log };
 
     await processSampleJob(deps, { kind: "sample", language: "en" });
 
-    const metrics = (await harness.metrics.registry.getMetricsAsJSON()) as Array<{
-      name: string;
-      values: Array<{ value: number; labels: Record<string, string> }>;
-    }>;
-    const stamped = metrics.find((m) => m.name === "zammy_sightings_stamped_total");
-    const at = (stamp: string): number =>
-      stamped?.values.find((v) => v.labels.provider === "currents" && v.labels.stamp === stamp)
-        ?.value ?? 0;
-
-    expect(at("clock")).toBeGreaterThan(0);
-    expect(at("date_only")).toBe(0);
+    // `toHaveLength(1)`, not `not.toHaveLength(0)`: one sample page is one
+    // upstream call, and this is the assertion that fails if the call this test
+    // exists for is deleted again — an empty list cannot be read as "the share
+    // was fine", which is exactly how the original miss stayed invisible.
+    const fetches = capture.under(UPSTREAM_FETCH_MESSAGE);
+    expect(fetches).toHaveLength(1);
+    expect(fetches[0]).toMatchObject({
+      plane: "breadth",
+      provider: "currents",
+      dateOnly: 0,
+      dateOnlyProviders: [],
+    });
+    // The denominator itself: a line reporting `items: 0` would satisfy
+    // `dateOnly: 0` while contributing nothing to the share.
+    expect(fetches[0]?.items).toBeGreaterThan(0);
   });
 });
 
