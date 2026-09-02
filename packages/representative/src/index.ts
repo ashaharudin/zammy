@@ -6,7 +6,8 @@
  * `chooseRepresentative` in `apps/api`, and `earliestIndex` in `apps/web` — no
  * module naming the rule, and no test able to assert the four agreed.
  *
- * **Why a package of its own, and not `@zammy/shared`.** `TIER_1_SOURCES` is an
+ * **Why a package of its own, and not `@zammy/shared`** (ADR-0024).
+ * `TIER_1_SOURCES` is an
  * editorial stance, not a wire shape, and ADR-0004 reserves `shared` for the
  * shapes the API sends and the browser renders. Its closing rule is the one
  * followed here: what the browser needs but `shared` must not hold "belongs in

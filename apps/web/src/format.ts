@@ -3,7 +3,7 @@ import type { Article, TimelineEntry } from "@zammy/shared";
 // of that card's members split behind it. The rail is its second caller — the
 // API's `toEntry` is the first — and calling the same function is what makes
 // "the lead card and the 18:00 card follow one rule" an assertion. Not in
-// `@zammy/shared`, which ADR-0004 reserves for the wire contract: the tier list
+// `@zammy/shared`, which ADR-0004 reserves for the wire contract (ADR-0024): the tier list
 // it carries is an editorial stance, not a shape the API sends.
 import { chooseHeading, LATER_PART_RULE } from "@zammy/representative";
 // The collapse key IS the bucket key: a card's part of the rail and the section

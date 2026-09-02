@@ -160,7 +160,7 @@ zammy/
 │   ├── shared/            # wire contract ONLY — what ships to the browser (ADR-0004)
 │   ├── representative/    # which article heads a card (§14.3, §8.1) — one rule, four
 │   │                      #   clauses, both apps. Not `shared`: the tier list is an
-│   │                      #   editorial stance, not a wire shape (ADR-0004)
+│   │                      #   editorial stance, not a wire shape (ADR-0024)
 │   ├── config/            # server-only env validation; holds the API key
 │   ├── currents-client/   # Component 1 — upstream SDK, zero app knowledge
 │   └── storage/           # Component 3 — schema, migrations, the collapse (§7.4),
@@ -1838,7 +1838,7 @@ Still open:
      with no tier-1 member, earliest published wins. Two tiers rather than a ranking: a total
      ordering of outlets would mean adjudicating Reuters against AFP — unmaintainable and
      indefensible. The list is a checked-in constant, so it goes through review, and it lives in
-     `@zammy/representative` with the rest of the rule — not in `@zammy/shared`, which ADR-0004
+     `@zammy/representative` with the rest of the rule ([ADR-0024](adr/0024-a-rule-both-sides-apply-is-a-package-of-its-own.md)) — not in `@zammy/shared`, which ADR-0004
      reserves for the wire contract: a stance about outlets is not a shape the API sends. It is an
      editorial stance in the codebase, and an Anglophone one — on a Spanish or Arabic timeline no member is
      tier 1 and it silently falls back to earliest published. Say so where the constant is defined.
