@@ -158,6 +158,9 @@ is a shared type rather than a document that drifts.
 zammy/
 ├── packages/
 │   ├── shared/            # wire contract ONLY — what ships to the browser (ADR-0004)
+│   ├── representative/    # which article heads a card (§14.3, §8.1) — one rule, four
+│   │                      #   clauses, both apps. Not `shared`: the tier list is an
+│   │                      #   editorial stance, not a wire shape (ADR-0024)
 │   ├── config/            # server-only env validation; holds the API key
 │   ├── currents-client/   # Component 1 — upstream SDK, zero app knowledge
 │   └── storage/           # Component 3 — schema, migrations, the collapse (§7.4),
@@ -984,7 +987,14 @@ keywords in, timeline out.
   a storyline day already follows (its earliest as the hero) applied one level down. It is no longer the only
   rule available — every article on the wire now names its group, so a part of the day could choose within its
   heading group by source authority the way §14.3 chooses within a slot's lead — and it is held deliberately:
-  changing which headline a reader sees is its own change with its own review. It is safe on §14.3's count
+  changing which headline a reader sees is its own change with its own review. Both halves are now ONE
+  function (`@zammy/representative`, `chooseHeading`) with the later part's rule as a parameter defaulted to
+  what ships, so the hold is a named constant (`LATER_PART_RULE`) rather than a second algorithm in the
+  browser, and the two halves agreeing is a table-driven test rather than a claim in two doc comments a
+  package apart. Measured over the 23,361-slot dev archive, flipping it would change 153 of 3,104 later-part
+  cards (4.9%, 0.58% of all cards) — and not monotonically toward authority: 43 would move from an untiered
+  outlet to a tier-1 one and 21 the other way, because "largest group" outranks "tier 1" and a syndicated pile
+  of aggregators beats a lone wire piece. It is safe on §14.3's count
   because a slot's members are already scoped to the topic that asked, so a promoted row is never a headline
   the reader's keywords did not find. What gets placed is a HEADLINE, not an article: `moreCoverage` arrives as
   every non-lead group's members flattened, so one piece that four outlets ran arrives as four articles hours
@@ -1827,8 +1837,10 @@ Still open:
      any tier-1 member (AP, BBC, CBC and the like), tie-broken by earliest published then `id`;
      with no tier-1 member, earliest published wins. Two tiers rather than a ranking: a total
      ordering of outlets would mean adjudicating Reuters against AFP — unmaintainable and
-     indefensible. The list is a checked-in constant, so it goes through review. It is an editorial
-     stance in the codebase, and an Anglophone one — on a Spanish or Arabic timeline no member is
+     indefensible. The list is a checked-in constant, so it goes through review, and it lives in
+     `@zammy/representative` with the rest of the rule ([ADR-0024](adr/0024-a-rule-both-sides-apply-is-a-package-of-its-own.md)) — not in `@zammy/shared`, which ADR-0004
+     reserves for the wire contract: a stance about outlets is not a shape the API sends. It is an
+     editorial stance in the codebase, and an Anglophone one — on a Spanish or Arabic timeline no member is
      tier 1 and it silently falls back to earliest published. Say so where the constant is defined.
    - **`sighting_count` must not be the ranking signal.** It measures upstream re-emission, not
      importance (PROBE-FINDINGS 4), so ranking by it would promote exactly what §7.4 neutralises.

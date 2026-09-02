@@ -55,7 +55,11 @@ time falls in; a card the rail cut out of a LATER part is headed by the earliest
 holds. That was once forced — the wire carried no group structure below the slot to choose within —
 and is now a deliberate hold: every article names its group (`Article.groupId`), so source authority
 could pick within the part's heading group the way it picks within a slot's lead. Changing which
-headline a reader sees is its own change, and it has not been made.
+headline a reader sees is its own change, and it has not been made. One module states the rule
+whole (`@zammy/representative`, `chooseHeading`) — the last clause a parameter, `LATER_PART_RULE`,
+defaulted to what ships — so the four clauses agreeing is a test rather than four modules' good
+intentions. Clause one is the exception and stays a SQL join: what the module owns there is the
+precondition that the members it is handed are the ones the search matched.
 _Avoid_: primary, canonical, best, winner
 
 **Seed**:

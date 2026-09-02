@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.0",
+    "@zammy/representative": "workspace:*",
     "@zammy/shared": "workspace:*",
     "d3-cloud": "^1.2.9",
     "react": "^19.0.0",

@@ -49,6 +49,9 @@ importers:
       '@zammy/news-providers':
         specifier: workspace:*
         version: link:../../packages/news-providers
+      '@zammy/representative':
+        specifier: workspace:*
+        version: link:../../packages/representative
       '@zammy/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -95,6 +98,9 @@ importers:
       '@tanstack/react-query':
         specifier: ^5.62.0
         version: 5.101.4(react@19.2.8)
+      '@zammy/representative':
+        specifier: workspace:*
+        version: link:../../packages/representative
       '@zammy/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -236,6 +242,18 @@ importers:
       '@zammy/news-client':
         specifier: workspace:*
         version: link:../news-client
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.5
+        version: 3.2.7(@types/node@22.20.1)
+
+  packages/representative:
     devDependencies:
       '@types/node':
         specifier: ^22.10.0
