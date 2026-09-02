@@ -1,13 +1,10 @@
 import {
-  canonicalizeUrl,
   collapseWhitespace,
-  deriveAltKey,
-  deriveDedupKey,
+  deriveArticleIdentity,
   deriveSightingId,
   finalizeSighting,
   normalizeBatch,
   normalizeImage,
-  sourceDomain,
   type NormalizationStats,
   type NormalizeOutcome,
   type Sighting,
@@ -46,22 +43,29 @@ export function normalizeSighting(raw: RawGnewsArticle): NormalizeOutcome {
   const rawUrl = collapseWhitespace(raw.url);
   if (!rawUrl) return { ok: false, reason: "no_url", detail: raw.id ?? "(no id)" };
 
-  const url = canonicalizeUrl(rawUrl);
-  if (!url) return { ok: false, reason: "bad_url", detail: rawUrl };
-
   const publishedMs = parsePublished(raw.publishedAt);
-  if (Number.isNaN(publishedMs)) {
+  const published = Number.isNaN(publishedMs)
+    ? null
+    : new Date(publishedMs).toISOString();
+
+  // The canonical URL, both keys and the domain, derived together from the
+  // values that are about to be stored — so the identity and the thing it
+  // identifies cannot disagree (ADR-0018). No override: this provider's `url`
+  // IS the article, so its own host names the newsroom.
+  //
+  // Asked BEFORE the timestamp is reported on, because that is the order these
+  // steps ran in when they were open-coded here: a sighting malformed in both
+  // ways counts as `bad_url`, and which counter a drop lands in is a metric.
+  const identity = deriveArticleIdentity({ link: rawUrl, title, published });
+  if (!identity.ok) return identity;
+
+  if (published === null) {
     return { ok: false, reason: "bad_published", detail: raw.publishedAt ?? "(absent)" };
   }
 
   // The canonical URL, not the raw one, so the fallback identity is stable
   // across the tracking parameters that make one article arrive as two strings.
-  const providerSightingId = collapseWhitespace(raw.id) || url;
-
-  // Both derived here, from the same values that are about to be stored, so the
-  // identity and the thing it identifies cannot disagree (ADR-0018).
-  const domain = sourceDomain(url);
-  const published = new Date(publishedMs).toISOString();
+  const providerSightingId = collapseWhitespace(raw.id) || identity.identity.url;
 
   return finalizeSighting({
     // GNews ids are opaque strings, not UUIDs, so one is derived — see
@@ -69,9 +73,9 @@ export function normalizeSighting(raw: RawGnewsArticle): NormalizeOutcome {
     id: deriveSightingId(PROVIDER, providerSightingId),
     provider: PROVIDER,
     providerSightingId,
-    url,
-    dedupKey: deriveDedupKey(url),
-    altKey: deriveAltKey(domain, title, published),
+    // `url`, `dedupKey`, `altKey` and `sourceDomain`, spread whole so no field
+    // of the identity can be replaced without the others.
+    ...identity.identity,
     title,
     description: collapseWhitespace(raw.description) || null,
     // GNews names the outlet but never the journalist. Null is the honest
@@ -81,10 +85,10 @@ export function normalizeSighting(raw: RawGnewsArticle): NormalizeOutcome {
     language: collapseWhitespace(raw.lang) || null,
     categories: [],
     sourceCategories: [],
-    // Derived from the URL rather than taken from `source.name`, so the same
-    // story reported by both providers presents as one source rather than as
-    // "bbc.co.uk" and "BBC News".
-    sourceDomain: domain,
+    // `sourceDomain` arrives in the spread above, derived from the URL rather
+    // than taken from `source.name`, so the same story reported by both
+    // providers presents as one source rather than as "bbc.co.uk" and
+    // "BBC News".
     published,
     raw,
   });

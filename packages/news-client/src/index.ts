@@ -16,6 +16,7 @@
 export * from "./errors.js";
 export * from "./sighting.js";
 export * from "./normalize.js";
+export * from "./article-identity.js";
 export * from "./search-params.js";
 export * from "./quota.js";
 export * from "./breaker.js";

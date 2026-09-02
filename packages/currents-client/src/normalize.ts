@@ -1,14 +1,11 @@
 import {
-  canonicalizeUrl,
   collapseWhitespace,
   dedupeStrings,
-  deriveAltKey,
-  deriveDedupKey,
+  deriveArticleIdentity,
   finalizeSighting,
   firstNonEmpty,
   normalizeBatch,
   normalizeImage,
-  sourceDomain,
   type NormalizationStats,
   type NormalizeOutcome,
   type Sighting,
@@ -50,18 +47,25 @@ export function normalizeSighting(raw: RawSighting): NormalizeOutcome {
   const rawUrl = firstNonEmpty(raw.url, raw.urls);
   if (!rawUrl) return { ok: false, reason: "no_url", detail: raw.id };
 
-  const url = canonicalizeUrl(rawUrl);
-  if (!url) return { ok: false, reason: "bad_url", detail: rawUrl };
-
   const publishedMs = parsePublished(raw.published);
-  if (Number.isNaN(publishedMs)) {
+  const published = Number.isNaN(publishedMs)
+    ? null
+    : new Date(publishedMs).toISOString();
+
+  // The canonical URL, both keys and the domain, derived together from the
+  // values that are about to be stored — so the identity and the thing it
+  // identifies cannot disagree (ADR-0018). No override: this provider's link IS
+  // the article, so its own host names the newsroom.
+  //
+  // Asked BEFORE the timestamp is reported on, because that is the order these
+  // steps ran in when they were open-coded here: a sighting malformed in both
+  // ways counts as `bad_url`, and which counter a drop lands in is a metric.
+  const identity = deriveArticleIdentity({ link: rawUrl, title, published });
+  if (!identity.ok) return identity;
+
+  if (published === null) {
     return { ok: false, reason: "bad_published", detail: raw.published };
   }
-
-  // Both derived here, from the same values that are about to be stored, so the
-  // identity and the thing it identifies cannot disagree (ADR-0018).
-  const domain = sourceDomain(url);
-  const published = new Date(publishedMs).toISOString();
 
   return finalizeSighting({
     // Currents emits real UUIDs, so they are used verbatim rather than derived.
@@ -70,9 +74,9 @@ export function normalizeSighting(raw: RawSighting): NormalizeOutcome {
     id: raw.id,
     provider: PROVIDER,
     providerSightingId: raw.id,
-    url,
-    dedupKey: deriveDedupKey(url),
-    altKey: deriveAltKey(domain, title, published),
+    // `url`, `dedupKey`, `altKey` and `sourceDomain`, spread whole so no field
+    // of the identity can be replaced without the others.
+    ...identity.identity,
     title,
     description: collapseWhitespace(raw.description) || null,
     author: collapseWhitespace(raw.author) || null,
@@ -85,7 +89,6 @@ export function normalizeSighting(raw: RawSighting): NormalizeOutcome {
     // values mean, so lowercasing it would be destroying information we cannot
     // recover without re-fetching (PROBE-FINDINGS 1).
     sourceCategories: dedupeStrings((raw.source_category ?? []).map(collapseWhitespace)),
-    sourceDomain: domain,
     published,
     raw,
   });

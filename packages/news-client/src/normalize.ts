@@ -14,6 +14,13 @@ import { Sighting } from "./sighting.js";
  * `"2026-08-04 20:45:56 +0000"` and GNews sends ISO-8601 — so each adapter owns
  * its own `normalizeSighting` and hands the result to `finalizeSighting` below.
  *
+ * Nor does the ORDER those steps run in. `canonicalizeUrl`, `deriveDedupKey`,
+ * `deriveAltKey` and `sourceDomain` are the steps of an article's identity, and
+ * an adapter that called them itself had to know an unwritten protocol about
+ * which feeds which and what must then be stored beside what.
+ * `article-identity.ts` states it as one call; these four stay exported because
+ * they are what that call is made of.
+ *
  * Normalization is deliberately fallible: a malformed sighting is dropped and
  * counted rather than repaired with a guess (ARCHITECTURE 11). The one case that
  * matters most is a bad timestamp — the timeline axis is the product's core
@@ -476,20 +483,33 @@ export function altKeyProbe(sighting: Sighting): readonly string[] {
   if (Number.isNaN(at)) return [sighting.altKey];
 
   // Derived from the sighting's OWN stored fields, which is safe only because
-  // every adapter derives `altKey` from exactly these three —
-  // `deriveAltKey(domain, title, published)` beside `sourceDomain: domain` in
-  // all three `normalizeSighting`s.
+  // every adapter derives `altKey` from exactly these three. That used to be a
+  // convention held by three open-coded copies of one ordered protocol; it is
+  // now `deriveArticleIdentity`, which returns `altKey` and `sourceDomain` in
+  // one value the adapters spread whole. Google News' departure — it keys on
+  // the PUBLISHER's domain from `<source url>`, not on its redirect's host —
+  // is a named `publisherLink` parameter rather than a substituted derivation,
+  // so the case this check was written to catch is now visible in the type.
   //
-  // CHECKED rather than assumed, because the one adapter that could break it
-  // would break it invisibly: Google News keys on the PUBLISHER's domain read
-  // out of `<source url>`, not on its own `url`'s host, and "correcting" that
-  // to `sourceDomain(url)` would send every neighbour into a `news.google.com`
-  // key space shared by every publisher on the wire — where a folded title
-  // could reach a wholly unrelated article. Failing back to the single stored
-  // key is exactly `main`'s behaviour before this function existed, so the
-  // degradation is a return to the old path rather than a guess; the loud
-  // version of this check lives in the adapters' own fixture tests, where a
-  // broken invariant should be caught long before a batch runs.
+  // **The check stays live anyway, and the reason is what it covers that the
+  // module does not.** `deriveArticleIdentity` closes the DOMAIN axis: an
+  // adapter cannot key on a domain it did not store, because it never names
+  // either one. It does not close the other two. `title` and `published` still
+  // travel into `finalizeSighting` beside the spread rather than inside it, so
+  // an adapter that stripped a headline's outlet suffix before storing it while
+  // keying on the raw one would break this the same way — and that is a live
+  // temptation on exactly one adapter, whose header spends a paragraph arguing
+  // against stripping its titles. `altKeyProbe` also takes a `Sighting`, a
+  // published cross-package type any caller can construct, rather than an
+  // adapter's return value.
+  //
+  // So this is no longer the ONLY thing standing between a derivation departure
+  // and a silent cross-newsroom fold — all three adapters now assert it over
+  // their own recorded corpora, and `identity-differential.test.ts` in each
+  // pins the derivations byte for byte — but it is still the last one, at one
+  // sha256 in front of a lookup that costs a round trip. Failing back to the
+  // single stored key is exactly the behaviour before this function existed, so
+  // the degradation is a return to the old path rather than a guess.
   if (!altKeyProbeIsConsistent(sighting)) return [sighting.altKey];
 
   const neighbour = (offsetMs: number): string | null =>
@@ -517,6 +537,13 @@ export function altKeyProbe(sighting: Sighting): readonly string[] {
  * lookup already costs a round trip — and exported so the adapters' own fixture
  * tests can assert it over real payloads, which is where a violation should be
  * caught rather than degraded around.
+ *
+ * That last sentence was aspirational when it was written: only Google News'
+ * fixture test actually asserted it. All three do now
+ * (`identity-differential.test.ts` in each adapter package, plus
+ * `fixture-client.test.ts` for Google News), over 502 recorded sightings, which
+ * is what makes this a test helper first and a production guard second. See
+ * `altKeyProbe` for why second is not zero.
  */
 export function altKeyProbeIsConsistent(sighting: Sighting): boolean {
   return (
