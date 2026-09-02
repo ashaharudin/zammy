@@ -1,5 +1,11 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
-import { ConfigError, loadConfig } from "@zammy/config";
+import {
+  configOrExplain,
+  createCronRoute,
+  jsonLines,
+  secretFromEnvironment,
+  type CronRequest,
+  type CronRouteHandler,
+} from "./cron-route.js";
 import { INGEST_RETENTION_SECONDS } from "./ingest-queue-vercel.js";
 import {
   PendingSet,
@@ -36,6 +42,12 @@ import { buildServices, ingestDispatch, type ServiceLogger } from "./server.js";
  * **What it deliberately does NOT do:** re-enqueue. It performs the fills
  * inline, because handing the work back to the queue is what already failed —
  * and because a drain that publishes is a drain that can loop.
+ *
+ * **And what it no longer owns.** The bearer check used to live in this file and
+ * be imported FROM here by the chores route and the pause guard, which put the
+ * one function guarding every money-spending route inside the module about
+ * draining a Redis pending set. It is `cron-route.ts`'s now, along with the
+ * boot-once and the JSON-line logger this file had its own copy of.
  */
 
 /**
@@ -72,13 +84,6 @@ export const DRAIN_DEADLINE_MS = 240_000;
 /** Most jobs one pass will fill, whatever the clock says. */
 export const DRAIN_MAX_JOBS = 50;
 
-const emit = (level: string, fields: object, message: string): string =>
-  JSON.stringify({ level, msg: message, ...fields });
-const log: ServiceLogger = {
-  info: (fields, message) => console.log(emit("info", fields, message)),
-  warn: (fields, message) => console.warn(emit("warn", fields, message)),
-};
-
 /** What one pass did, and the response body. */
 export interface DrainReport {
   scanned: number;
@@ -112,7 +117,7 @@ export interface DrainOptions {
 export async function runDrain(
   drainable: Drainable,
   options: DrainOptions = {},
-  logger: ServiceLogger = log,
+  logger: ServiceLogger = jsonLines,
 ): Promise<DrainReport> {
   const now = options.now ?? (() => new Date());
   const limit = options.limit ?? DRAIN_MAX_JOBS;
@@ -239,38 +244,13 @@ async function forgetQuietly(
 }
 
 /**
- * Bearer-token check, constant-time-ish and fail-closed.
- *
- * Unlike `vercel-queue.ts` — which needs no auth because a push-mode consumer
- * has no public URL — this route HAS one, and it is the only surface in the
- * system that spends upstream quota without a user having asked. So an unset
- * secret disables it rather than opening it.
- */
-export function isAuthorized(header: string | undefined, secret: string | undefined): boolean {
-  if (!secret) return false;
-  if (!header) return false;
-  const expected = `Bearer ${secret}`;
-  if (header.length !== expected.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < header.length; i += 1) {
-    mismatch |= header.charCodeAt(i) ^ expected.charCodeAt(i);
-  }
-  return mismatch === 0;
-}
-
-/**
  * Config is loaded inside the boot, as in `vercel.ts` and `vercel-queue.ts`, so
  * a bad deploy answers with a listed reason rather than a module that throws
- * during import.
+ * during import — `configOrExplain` is that wrapping, shared with the other
+ * four entrypoints.
  */
 async function bootFromEnvironment(): Promise<Drainable> {
-  let config;
-  try {
-    config = loadConfig();
-  } catch (error) {
-    if (error instanceof ConfigError) console.error(error.message);
-    throw error;
-  }
+  const config = configOrExplain();
   if (config.INGEST_QUEUE_DRIVER !== "vercel") {
     // Refuse rather than drain, and the reason is not symmetry with the
     // consumer — it is that `DRAIN_MIN_AGE_MS` is derived from the HOSTED
@@ -283,7 +263,7 @@ async function bootFromEnvironment(): Promise<Drainable> {
     );
   }
 
-  const services = await buildServices(config, log);
+  const services = await buildServices(config, jsonLines);
   // Before the first SCAN, not after it. See `redis-ready.ts`: the boot's client
   // connects in the background, and the drain's first act is a Redis read.
   //
@@ -311,110 +291,70 @@ async function bootFromEnvironment(): Promise<Drainable> {
 }
 
 /**
- * The secret alone, read WITHOUT building any services.
+ * The route body: boot, read the bound, run one pass, report it.
  *
- * Split out from the boot so the bearer check can happen before a single
- * connection is opened. `loadConfig` is pure zod over `process.env` and does no
- * I/O, where `buildServices` creates a Postgres pool, a Redis client and an
- * upstream client — so ordering the two this way is the difference between an
- * unauthenticated POST costing nothing and it costing connections.
+ * The boot happens HERE and not before the response, unlike the chores route —
+ * a drain's answer is its tally, so there is nothing to return before the work.
+ * It is still the first thing, because everything after it needs Redis.
  *
- * That matters most in the configuration the docs call "disabled": with
- * `CRON_SECRET` unset this route refuses every request, and it should refuse
- * them cheaply rather than booting the world to discover it has no secret to
- * compare against.
- *
- * Returns `undefined` when config itself will not load, which reads the same as
- * an unset secret at the callsite — refuse. The boot below reports the real
- * reason for anyone holding the token.
+ * No `defer`: this route declares none, and `CronRequest.defer` throws if it
+ * reaches for one. See the note in `cron-route.ts` — a 200 carrying a tally the
+ * pass had not produced yet would be a worse answer than a 500.
  */
-function secretFromEnvironment(): string | undefined {
+export async function handleDrain({
+  ready,
+  url,
+  json,
+}: CronRequest<Drainable>): Promise<void> {
+  let drainable: Drainable;
   try {
-    return loadConfig().CRON_SECRET;
-  } catch {
-    return undefined;
+    drainable = await ready();
+  } catch (error) {
+    console.error("drain boot failed:", error instanceof Error ? error.message : String(error));
+    json(503, { status: "unavailable" });
+    return;
+  }
+
+  const requested = Number(url.searchParams.get("limit"));
+  const limit =
+    Number.isInteger(requested) && requested > 0
+      ? Math.min(requested, DRAIN_MAX_JOBS)
+      : DRAIN_MAX_JOBS;
+
+  try {
+    const report = await runDrain(drainable, { limit });
+    json(200, report);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("drain failed:", message);
+    // The reason travels in the BODY as well as the log, because on Hobby the
+    // log is gone in an hour and `vercel logs` may return nothing at all —
+    // which is how a `{"error":"drain failed"}` with no detail turned a
+    // one-line diagnosis into an afternoon. Safe to include: every caller here
+    // has already presented CRON_SECRET.
+    json(500, { error: "drain failed", reason: message });
   }
 }
-
-function bootOnce(boot: () => Promise<Drainable>): () => Promise<Drainable> {
-  let booted: Promise<Drainable> | null = null;
-  return () => {
-    if (booted) return booted;
-    const pending = boot();
-    booted = pending;
-    pending.catch(() => {
-      if (booted === pending) booted = null;
-    });
-    return pending;
-  };
-}
-
-const booted = bootOnce(bootFromEnvironment);
 
 /**
  * The route. `POST` only, because a pass spends quota and changes state, and a
  * `GET` is the shape a link preview or a crawler follows by accident.
+ *
+ * The 405 lands before the bearer check, which is `cron-route.ts`'s order for
+ * every route: a wrong verb is not a secret, and answering 401 to a GET would
+ * tell a crawler less than nothing while telling us less too.
  */
 export function createHandler(
   boot: () => Promise<Drainable>,
   readSecret: () => string | undefined = secretFromEnvironment,
-): (request: IncomingMessage, response: ServerResponse) => Promise<void> {
-  return async (request, response) => {
-    const json = (status: number, body: object): void => {
-      response.writeHead(status, { "content-type": "application/json" });
-      response.end(JSON.stringify(body));
-    };
-
-    if (request.method !== "POST") {
-      json(405, { error: "method not allowed" });
-      return;
-    }
-
-    // **Auth first, and before the boot rather than after it.** The boot opens a
-    // Postgres pool and a Redis client; the check needs only `process.env`. Doing
-    // it the other way round let an unauthenticated caller drive real connections
-    // on a route an operator has switched off by leaving `CRON_SECRET` unset —
-    // and, because `bootOnce` forgets a FAILED boot so the next request can retry
-    // it, let them drive a fresh one per request on any deployment where the boot
-    // does not succeed.
-    const header = request.headers.authorization;
-    if (!isAuthorized(Array.isArray(header) ? header[0] : header, readSecret())) {
-      // No detail: an unauthorized caller learns nothing about whether the
-      // secret is unset or merely wrong.
-      json(401, { error: "unauthorized" });
-      return;
-    }
-
-    let ready: Drainable;
-    try {
-      ready = await boot();
-    } catch (error) {
-      console.error("drain boot failed:", error instanceof Error ? error.message : String(error));
-      json(503, { status: "unavailable" });
-      return;
-    }
-
-    const url = new URL(request.url ?? "/", "http://localhost");
-    const requested = Number(url.searchParams.get("limit"));
-    const limit =
-      Number.isInteger(requested) && requested > 0
-        ? Math.min(requested, DRAIN_MAX_JOBS)
-        : DRAIN_MAX_JOBS;
-
-    try {
-      const report = await runDrain(ready, { limit });
-      json(200, report);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("drain failed:", message);
-      // The reason travels in the BODY as well as the log, because on Hobby the
-      // log is gone in an hour and `vercel logs` may return nothing at all —
-      // which is how a `{"error":"drain failed"}` with no detail turned a
-      // one-line diagnosis into an afternoon. Safe to include: every caller here
-      // has already presented CRON_SECRET.
-      json(500, { error: "drain failed", reason: message });
-    }
-  };
+): CronRouteHandler {
+  return createCronRoute<Drainable>({
+    name: "/api/drain",
+    methods: ["POST"],
+    boot,
+    readSecret,
+    handle: handleDrain,
+  });
 }
 
-export default createHandler(booted);
+export default createHandler(bootFromEnvironment);

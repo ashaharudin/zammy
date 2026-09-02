@@ -1,8 +1,14 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it } from "vitest";
 import { CHORE_PASSES, type ChorePass, type ChoreRunResult } from "./chore-runner.js";
-import { SCHEDULE_PASSES, createHandler, parseChoreRequest } from "./chore-route.js";
+import {
+  SCHEDULE_PASSES,
+  createHandler,
+  handleChorePass,
+  parseChoreRequest,
+} from "./chore-route.js";
 import type { StorylinePassDeps } from "./chores.js";
+import type { CronRequest } from "./cron-route.js";
 
 /**
  * The chores route's own behaviour, with no Postgres behind it
@@ -329,5 +335,137 @@ describe("createHandler", () => {
 
     await h.settle();
     expect(h.ran).toEqual([]);
+  });
+});
+
+/**
+ * The body on its own, which is what `cron-route.ts` made possible: no socket,
+ * no bearer check, no `waitUntil`. Two things are only reachable this way — the
+ * `chore pass accepted` line, which is the only record that exists before the
+ * background half opens a `chore_runs` row, and the report of a pass that
+ * FAILED, which has no response left to travel in.
+ */
+describe("handleChorePass", () => {
+  function context(
+    url: string,
+    headers: Record<string, string> = {},
+    ready: () => Promise<StorylinePassDeps> = async () => ({}) as StorylinePassDeps,
+  ): {
+    context: CronRequest<StorylinePassDeps>;
+    seen: { status: number | null; body: unknown };
+    lines: Array<{ level: string; fields: Record<string, unknown>; message: string }>;
+    settle: () => Promise<void>;
+  } {
+    const seen: { status: number | null; body: unknown } = { status: null, body: null };
+    const lines: Array<{ level: string; fields: Record<string, unknown>; message: string }> = [];
+    const deferred: Array<Promise<unknown>> = [];
+    return {
+      seen,
+      lines,
+      settle: async () => void (await Promise.all(deferred)),
+      context: {
+        request: { method: "POST", url, headers } as unknown as IncomingMessage,
+        url: new URL(url, "http://localhost"),
+        ready,
+        json: (status, body) => {
+          seen.status = status;
+          seen.body = body;
+        },
+        logger: {
+          info: (fields, message) =>
+            void lines.push({ level: "info", fields: fields as Record<string, unknown>, message }),
+          warn: (fields, message) =>
+            void lines.push({ level: "warn", fields: fields as Record<string, unknown>, message }),
+        },
+        defer: (promise) => void deferred.push(promise),
+      },
+    };
+  }
+
+  const ok = async (pass: ChorePass): Promise<ChoreRunResult> => ({
+    pass,
+    outcome: "ok",
+    runId: "run-1",
+    ms: 12,
+  });
+
+  it("records the pass and the schedule that chose it, before anything runs", async () => {
+    // The only record of the request that exists before the background half
+    // opens a `chore_runs` row — and on a night the boot fails, the only record
+    // that ever exists.
+    const c = context("/api/chores", { "x-vercel-cron-schedule": "0 5 * * *" });
+
+    await handleChorePass(c.context, ok);
+
+    expect(c.seen.status).toBe(202);
+    expect(c.lines[0]).toMatchObject({
+      level: "info",
+      message: "chore pass accepted",
+      fields: { pass: "summaries", schedule: "0 5 * * *" },
+    });
+  });
+
+  it("logs a null schedule when the query chose the pass", async () => {
+    const c = context("/api/chores?pass=graph&max-labels=9");
+
+    await handleChorePass(c.context, ok);
+
+    expect(c.lines[0]).toMatchObject({ fields: { pass: "graph", schedule: null, maxLabels: 9 } });
+    expect(c.seen.body).toEqual({ accepted: "graph", maxLabels: 9 });
+  });
+
+  it("reports a FAILED pass on the warn channel, with the run it belonged to", async () => {
+    // There is no response left to put it in — the 202 went out before the pass
+    // started — so this line and the `chore_runs` row are the whole diagnostic.
+    const c = context("/api/chores?pass=storylines");
+
+    await handleChorePass(c.context, async (pass) => ({
+      pass,
+      outcome: "failed",
+      runId: "run-9",
+      ms: 4200,
+      error: new Error("42703 column link_dirty_at does not exist"),
+    }));
+    await c.settle();
+
+    expect(c.lines.at(-1)).toMatchObject({
+      level: "warn",
+      message: "chore pass FAILED",
+      fields: {
+        pass: "storylines",
+        runId: "run-9",
+        ms: 4200,
+        err: "42703 column link_dirty_at does not exist",
+      },
+    });
+  });
+
+  it("says the pass did not run when the boot never came up", async () => {
+    const c = context("/api/chores?pass=graph", {}, async () => {
+      throw new Error("no DATABASE_SESSION_URL");
+    });
+
+    await handleChorePass(c.context, ok);
+    await c.settle();
+
+    expect(c.seen.status).toBe(202);
+    expect(c.lines.at(-1)).toMatchObject({
+      level: "warn",
+      message: "chore boot failed; pass did not run",
+      fields: { pass: "graph", err: "no DATABASE_SESSION_URL" },
+    });
+  });
+
+  it("neither defers nor logs for an unknown pass", async () => {
+    // The 400 is the one answer that is not a 202, and nothing may be started
+    // behind it: an unrecognised pass name is a scheduler misconfiguration, and
+    // a log line claiming a pass was accepted would make it look handled.
+    const c = context("/api/chores?pass=nightly");
+
+    await handleChorePass(c.context, ok);
+
+    expect(c.seen.status).toBe(400);
+    expect(c.seen.body).toEqual({ error: "unknown pass", passes: [...CHORE_PASSES] });
+    expect(c.lines).toEqual([]);
   });
 });
