@@ -7,7 +7,8 @@ import {
 import { backfillStorylines } from "./storyline-backfill.js";
 import { runBridgeSweep, type LinkerConfig } from "./storyline-linker.js";
 import { labelLinkedStorylines } from "./storyline-label-service.js";
-import { maxBridgingQualifiers } from "./wiring.js";
+import { storylineBar } from "./storyline-bar.js";
+import { linkerBarFromEnv } from "./wiring.js";
 
 /**
  * `pnpm backfill:storylines [--restart] [--labels-only] [--no-labels]
@@ -109,19 +110,21 @@ export const spec: CommandSpec = {
         `labels: ${skipLabels ? "skipped" : labeler.generator ? config.GEMINI_MODEL : "fallback only (no GEMINI_API_KEY)"}`,
     );
 
-    const linkerConfig: LinkerConfig = {
-      // Explicitly on: the flag gates the LIVE write path, and refusing to
-      // run the backfill because the live path is still dark would be
-      // exactly backwards — the backfill is what has to happen first.
-      enabled: true,
-      rules: {
-        anchorMaxShare: config.STORYLINE_ANCHOR_MAX_SHARE,
-        anchorDfFloor: config.STORYLINE_ANCHOR_DF_FLOOR,
-        massThreshold: config.STORYLINE_MASS_THRESHOLD_V2,
-        dormancyDays: config.STORYLINE_DORMANCY_DAYS,
-        dormantStrictness: config.STORYLINE_DORMANT_STRICTNESS,
-      },
-      mergeBridges: config.STORYLINE_MERGE_BRIDGES,
+    /**
+     * The configured bar (`wiring.ts`), diverging on the ONE field this command
+     * has a reason to.
+     *
+     * Everything else is the live path's by construction, and the reasons that
+     * used to be written beside each copied field were all the same reason: a
+     * rebuild is where the whole archive's evidence is written, so a backfill
+     * that retrieved or bridged differently from the live path would leave an
+     * archive nothing has measured and a graph whose standing pairs no arrival
+     * can reproduce. `enabled` is not a divergence either — the flag gates the
+     * LIVE write path, and `STORYLINE_BAR` ships it on, which is right for the
+     * process that has to run first.
+     */
+    const linkerConfig: LinkerConfig = storylineBar({
+      ...linkerBarFromEnv(config),
       // The backfill does NOT gate formations, and that is a budget decision rather
       // than a doubt: replaying the archive produces thousands of them, one model
       // call each, against a ceiling of 500 a day. It rebuilds what the token
@@ -129,22 +132,7 @@ export const spec: CommandSpec = {
       // a backfill does not erase existing refusals, since those are keyed on GROUPS
       // and survive any amount of storyline churn.
       coherenceGate: false,
-      // The configured retrieval, not a choice of the backfill's: a rebuild that
-      // narrowed while the live path did not would leave an archive nothing has
-      // measured, and the backfill is the one process that rewrites everything.
-      narrowRetrieval: config.STORYLINE_NARROW_RETRIEVAL,
-      // Likewise the configured bridge bound. A rebuild is where the whole archive's
-      // bridge evidence is written, so a backfill that bounded differently from the
-      // live path would leave a graph whose standing pairs no arrival can reproduce
-      // — which is what the live archive's seven stranded pairs at K already look
-      // like for an unrelated reason.
-      maxBridgingQualifiers: maxBridgingQualifiers(config),
-      storyDf: {
-        windowDays: config.STORYLINE_DF_WINDOW_DAYS,
-        timeZone: config.APP_TIMEZONE,
-      },
-      timeZone: config.APP_TIMEZONE,
-    };
+    });
     const log = { warn: (obj: object, msg: string) => console.warn(msg, JSON.stringify(obj)) };
 
     const batch = args.number("batch", POSITIVE_INTEGER);

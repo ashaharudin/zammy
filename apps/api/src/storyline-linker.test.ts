@@ -17,6 +17,7 @@ import {
 } from "@zammy/storage";
 import { loadConfig } from "@zammy/config";
 import { createTestHarness, type TestHarness } from "./test-support.js";
+import { storylineBar } from "./storyline-bar.js";
 import { createLinkerConfig, maxBridgingQualifiers } from "./wiring.js";
 import {
   linkGroup,
@@ -55,24 +56,17 @@ beforeEach(async () => {
 });
 
 const DAY = "2026-08-11";
-const CONFIG: LinkerConfig = {
-  enabled: true,
-  rules: {
-    anchorMaxShare: 0.002,
-    anchorDfFloor: 10,
-    massThreshold: 20,
-    dormancyDays: 90,
-    dormantStrictness: 1.5,
-  },
-  mergeBridges: 2,
-  // Off, so everything below describes the pre-gate path: the merge happens
-  // inside `linkGroup`. The gate has its own describe block at the bottom.
-  coherenceGate: false,
-  narrowRetrieval: false,
-  maxBridgingQualifiers: undefined,
-  storyDf: { windowDays: 14, timeZone: "UTC" },
-  timeZone: "UTC",
-};
+/**
+ * The shipped bar (`storyline-bar.ts`), which is the point: these are the tests
+ * that pin what the SERVICE writes at the production thresholds, and until this
+ * was `storylineBar()` they pinned it against a copy free to drift from what
+ * `createLinkerConfig` builds.
+ *
+ * The gate is off in it, so everything below describes the pre-gate path: the
+ * merge happens inside `linkGroup`. The gate has its own describe block at the
+ * bottom, and `storyline-formation.test.ts` is where it is the subject.
+ */
+const CONFIG: LinkerConfig = storylineBar();
 
 const deps = (config: LinkerConfig = CONFIG) => ({ db: db, config });
 

@@ -1,6 +1,7 @@
 import { POSITIVE_INTEGER, type CommandSpec } from "./operator-command.js";
 import { regroup } from "./regroup.js";
-import { maxBridgingQualifiers } from "./wiring.js";
+import { storylineBar } from "./storyline-bar.js";
+import { linkerBarFromEnv } from "./wiring.js";
 
 /**
  * `pnpm regroup [--days=N] [--tokens-only]` — re-derive stored grouping state
@@ -35,33 +36,20 @@ export const spec: CommandSpec = {
           enabled: config.GROUPING_ENABLED,
           threshold: config.GROUPING_SIMILARITY_THRESHOLD,
           timeZone: config.APP_TIMEZONE,
-          // Regroup does not re-run the linker: rebuilding storyline state is
-          // the backfill's job, which replays chronologically from scratch
-          // rather than repairing in place. Disabled explicitly so the CLI
-          // cannot half-link a window as a side effect of re-tokenizing it.
-          linker: {
+          // The configured bar, diverging on the two fields this CLI has a
+          // reason to (`wiring.ts`). Nothing else: a literal here is how the
+          // one place a bound goes missing gets written.
+          linker: storylineBar({
+            ...linkerBarFromEnv(config),
+            // Regroup does not re-run the linker: rebuilding storyline state is
+            // the backfill's job, which replays chronologically from scratch
+            // rather than repairing in place. Disabled explicitly so the CLI
+            // cannot half-link a window as a side effect of re-tokenizing it.
             enabled: false,
-            rules: {
-              anchorMaxShare: config.STORYLINE_ANCHOR_MAX_SHARE,
-              anchorDfFloor: config.STORYLINE_ANCHOR_DF_FLOOR,
-              massThreshold: config.STORYLINE_MASS_THRESHOLD_V2,
-              dormancyDays: config.STORYLINE_DORMANCY_DAYS,
-              dormantStrictness: config.STORYLINE_DORMANT_STRICTNESS,
-            },
-            mergeBridges: config.STORYLINE_MERGE_BRIDGES,
-            // Linking is off in this CLI (`enabled: false`); the gate has nothing
-            // to gate.
+            // Linking is off here, so the gate has nothing to gate — and a gate
+            // left on would be the one field that could still reach a model.
             coherenceGate: false,
-            narrowRetrieval: config.STORYLINE_NARROW_RETRIEVAL,
-            // Nothing bridges here either, for the same reason. Configured anyway
-            // so this literal never becomes the one place a bound is missing.
-            maxBridgingQualifiers: maxBridgingQualifiers(config),
-            storyDf: {
-              windowDays: config.STORYLINE_DF_WINDOW_DAYS,
-              timeZone: config.APP_TIMEZONE,
-            },
-            timeZone: config.APP_TIMEZONE,
-          },
+          }),
         },
         log: { warn: (obj, msg) => console.log(msg, JSON.stringify(obj)) },
       },

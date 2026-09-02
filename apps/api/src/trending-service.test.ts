@@ -17,6 +17,7 @@ import {
   upsertTopic,
 } from "@zammy/storage";
 import { fingerprintOf } from "./canonical.js";
+import { storylineBar } from "./storyline-bar.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
 import { labelWords } from "./storyline-label-merge.js";
 
@@ -617,22 +618,9 @@ describe("the sample waits for the names it started (§10.1)", () => {
    * rare and no mass reaches 20. What is under test is the WIRING — that the
    * sample job holds the label tail — not the production thresholds.
    */
-  const LINKER = {
-    enabled: true,
-    rules: {
-      anchorMaxShare: 0.5,
-      anchorDfFloor: 4,
-      massThreshold: 2,
-      dormancyDays: 90,
-      dormantStrictness: 1.5,
-    },
-    mergeBridges: 2,
-    coherenceGate: false,
-    narrowRetrieval: false,
-    maxBridgingQualifiers: undefined,
-    storyDf: { windowDays: 14, timeZone: "UTC" },
-    timeZone: "UTC",
-  };
+  const LINKER = storylineBar({
+    rules: { anchorMaxShare: 0.5, anchorDfFloor: 4, massThreshold: 2 },
+  });
 
   /**
    * A corpus for rarity to mean anything, then one story in two groups — the

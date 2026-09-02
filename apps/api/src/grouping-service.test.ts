@@ -5,6 +5,7 @@ import { ingestSightings, recordCoverage, upsertTopic } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
 import { groupCreatedArticles } from "./grouping-service.js";
 import { readTrailingCorpus } from "./story-df.js";
+import { storylineBar } from "./storyline-bar.js";
 import type { LinkerConfig } from "./storyline-linker.js";
 import { readTimeline } from "./timeline-read.js";
 import { createTestHarness, type TestHarness } from "./test-support.js";
@@ -31,29 +32,15 @@ const WINDOW = {
 };
 
 /**
- * The storyline layer switched off, spelled in full.
+ * The storyline layer switched off, and nothing else.
  *
  * `grouping` is spread whole over the harness default, so a test that names it
  * must supply the linker too — `enabled: false` is how the layer is turned off
- * (ADR-0011), and the measured rules are carried along because the config wants
- * them whether or not they are consulted.
+ * (ADR-0011), and the rest is carried along because the config wants it whether
+ * or not it is consulted. It used to be spelled out in full for that reason,
+ * which made "carried along" mean "copied, and free to drift".
  */
-const LINKER_OFF: LinkerConfig = {
-  enabled: false,
-  rules: {
-    anchorMaxShare: 0.002,
-    anchorDfFloor: 10,
-    massThreshold: 20,
-    dormancyDays: 90,
-    dormantStrictness: 1.5,
-  },
-  mergeBridges: 2,
-  coherenceGate: false,
-  narrowRetrieval: false,
-  maxBridgingQualifiers: undefined,
-  storyDf: { windowDays: 14, timeZone: "UTC" },
-  timeZone: "UTC",
-};
+const LINKER_OFF: LinkerConfig = storylineBar({ enabled: false });
 
 let harness: TestHarness;
 
@@ -218,24 +205,10 @@ describe("grouping, end to end", () => {
         enabled: false,
         threshold: 0.5,
         timeZone: "UTC",
-        // Linking still runs: it is what births the storyline every slot is,
-        // and turning MATCHING off must not empty the timeline (migration 0012).
-        linker: {
-          enabled: true,
-          rules: {
-            anchorMaxShare: 0.002,
-            anchorDfFloor: 10,
-            massThreshold: 20,
-            dormancyDays: 90,
-            dormantStrictness: 1.5,
-          },
-          mergeBridges: 2,
-          coherenceGate: false, // the pre-gate path these tests already took (§12)
-          narrowRetrieval: false,
-          maxBridgingQualifiers: undefined,
-          storyDf: { windowDays: 14, timeZone: "UTC" },
-          timeZone: "UTC",
-        },
+        // Linking still runs, at the bar it ships at: it is what births the
+        // storyline every slot is, and turning MATCHING off must not empty the
+        // timeline (migration 0012).
+        linker: storylineBar(),
       },
     });
 
@@ -465,22 +438,9 @@ describe("labels arrive without an operator (ADR-0011)", () => {
    * theirs — what is under test is the WIRING, that a promotion on the live path
    * reaches the labeler at all, not the production thresholds the sweep pins.
    */
-  const LINKER = {
-    enabled: true,
-    rules: {
-      anchorMaxShare: 0.5,
-      anchorDfFloor: 4,
-      massThreshold: 2,
-      dormancyDays: 90,
-      dormantStrictness: 1.5,
-    },
-    mergeBridges: 2,
-    coherenceGate: false, // the pre-gate path these tests already took (§12)
-    narrowRetrieval: false,
-    maxBridgingQualifiers: undefined,
-    storyDf: { windowDays: 14, timeZone: "UTC" },
-    timeZone: "UTC",
-  };
+  const LINKER = storylineBar({
+    rules: { anchorMaxShare: 0.5, anchorDfFloor: 4, massThreshold: 2 },
+  });
 
   it("labels a storyline the ingest path just promoted, with no CLI run", async () => {
     harness = await createTestHarness(

@@ -11,6 +11,7 @@ import {
 import { createTestHarness, type TestHarness } from "./test-support.js";
 import { groupCreatedArticles } from "./grouping-service.js";
 import { groupProfile } from "./storyline-link.js";
+import { storylineBar } from "./storyline-bar.js";
 import { linkGroup, type LinkerConfig } from "./storyline-linker.js";
 import { reofferJoinedGroups } from "./storyline-rejoin-trigger.js";
 
@@ -44,22 +45,7 @@ beforeEach(async () => {
 });
 
 const DAY = "2026-08-11";
-const CONFIG: LinkerConfig = {
-  enabled: true,
-  rules: {
-    anchorMaxShare: 0.002,
-    anchorDfFloor: 10,
-    massThreshold: 20,
-    dormancyDays: 90,
-    dormantStrictness: 1.5,
-  },
-  mergeBridges: 2,
-  coherenceGate: false,
-  narrowRetrieval: false,
-  maxBridgingQualifiers: undefined,
-  storyDf: { windowDays: 14, timeZone: "UTC" },
-  timeZone: "UTC",
-};
+const CONFIG: LinkerConfig = storylineBar();
 
 /**
  * Five rare tokens. Any TWO of them carry mass 13.4 and any FIVE carry 33.4

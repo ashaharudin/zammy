@@ -17,6 +17,7 @@ import {
 } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
 import { groupCreatedArticles } from "./grouping-service.js";
+import { storylineBar } from "./storyline-bar.js";
 import { readStorylineView, readTimeline } from "./timeline-read.js";
 import { createReadHarness, type ReadTestHarness } from "./test-support.js";
 import { labelWords } from "./storyline-label-merge.js";
@@ -45,22 +46,7 @@ function linkerOff(_now: Date): ReadTestHarness["deps"]["config"]["grouping"] {
     enabled: true,
     threshold: 0.5,
     timeZone: "UTC",
-    linker: {
-      enabled: false,
-      rules: {
-        anchorMaxShare: 0.002,
-        anchorDfFloor: 10,
-        massThreshold: 20,
-        dormancyDays: 90,
-        dormantStrictness: 1.5,
-      },
-      mergeBridges: 2,
-      coherenceGate: false, // the pre-gate path these tests already took (§12)
-      narrowRetrieval: false,
-      maxBridgingQualifiers: undefined,
-      storyDf: { windowDays: 14, timeZone: "UTC" },
-      timeZone: "UTC",
-    },
+    linker: storylineBar({ enabled: false }),
   };
 }
 

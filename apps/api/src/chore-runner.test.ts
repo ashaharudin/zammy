@@ -12,6 +12,7 @@ import {
   summarizeChoreReport,
   REPORT_ARRAY_CAP,
 } from "./chore-runner.js";
+import { storylineBar } from "./storyline-bar.js";
 import type { StorylinePassDeps } from "./chores.js";
 
 /**
@@ -58,22 +59,7 @@ function deps(overrides: Partial<StorylinePassDeps> = {}): StorylinePassDeps {
       cliffDays: 8,
     },
     summaryGate: { windowDays: 8, minArticlesExclusive: 4, minGroups: 2 },
-    linker: {
-      enabled: true,
-      rules: {
-        anchorMaxShare: 0.002,
-        anchorDfFloor: 10,
-        massThreshold: 20,
-        dormancyDays: 90,
-        dormantStrictness: 1.5,
-      },
-      mergeBridges: 2,
-      coherenceGate: false,
-      narrowRetrieval: false,
-      maxBridgingQualifiers: undefined,
-      storyDf: { windowDays: 14, timeZone: "UTC" },
-      timeZone: "UTC",
-    },
+    linker: storylineBar(),
     labeler: { generator: null, sampleSize: 10, driftFactor: 2 },
     rules: { graceDays: 3, maxComponent: 5 },
     ...overrides,

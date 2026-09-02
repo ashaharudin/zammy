@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { sql } from "kysely";
 import { readGroupStorylines, readStorylineStats } from "@zammy/storage";
 import { createTestHarness, type TestHarness } from "./test-support.js";
+import { storylineBar } from "./storyline-bar.js";
 import type { LinkerConfig } from "./storyline-linker.js";
 import { backfillStorylines } from "./storyline-backfill.js";
 import type { GenerateRequest, GenerateResult } from "./gemini.js";
@@ -43,22 +44,12 @@ beforeEach(async () => {
 });
 
 const DAY = "2026-08-11";
-const CONFIG: LinkerConfig = {
-  enabled: true,
-  rules: {
-    anchorMaxShare: 0.002,
-    anchorDfFloor: 10,
-    massThreshold: 20,
-    dormancyDays: 90,
-    dormantStrictness: 1.5,
-  },
-  mergeBridges: 2,
-  coherenceGate: false, // the pre-gate path these tests already took (§12)
-  narrowRetrieval: false,
-  maxBridgingQualifiers: undefined,
-  storyDf: { windowDays: 14, timeZone: "UTC" },
-  timeZone: "UTC",
-};
+/**
+ * The shipped bar — the backfill replays the archive at the bar the live path
+ * applies, and a rebuild measured at a copy of it would rebuild the archive at
+ * whatever the copy had drifted to (`storyline-bar.ts`).
+ */
+const CONFIG: LinkerConfig = storylineBar();
 
 const deps = () => ({ db, config: CONFIG });
 
