@@ -1,4 +1,6 @@
 import { isChorePass, runChorePass, CHORE_PASSES, type ChorePass } from "./chore-runner.js";
+import { SCHEDULE_PASSES } from "./chore-schedule.js";
+import { choreStatusResponse, readChoreStatus } from "./chore-status.js";
 import type { StorylinePassDeps } from "./chores.js";
 import {
   configOrExplain,
@@ -43,6 +45,12 @@ import { choreDepsFromConfig } from "./wiring.js";
  * write the same row. This file is HTTP — auth, pass selection, the 202 — and
  * nothing else.
  *
+ * And no status predicates. `?status` is answered here because this is where
+ * the bearer check and the boot already are, but what "overdue" and "stalled"
+ * MEAN is `chore-status.ts`, shared with `pnpm chores status` and with `/readyz`
+ * for the same reason the runner is shared: three readers of one table must not
+ * each decide for themselves what a late pass looks like.
+ *
  * And no keep-alive. The Supabase free-tier pause guard is its own route on its
  * own schedule (`keepalive.ts`), because "the database stays awake" must not
  * share a failure mode with the most complex nightly job in the system.
@@ -55,28 +63,17 @@ import { choreDepsFromConfig } from "./wiring.js";
  */
 
 /**
- * The nightly schedules, as the header a cron platform stamps a request with.
+ * The schedule → pass map, re-exported from where it is now derived.
  *
- * §3.3 asks for the pass to come "from the query or from the
- * `x-vercel-cron-schedule` header", and the query is what every scheduler we
- * actually configure uses — Supabase Cron posts to a URL we wrote, and Vercel's
- * own `crons` entries carry their query string. The header path exists for the
- * scheduler that stamps a request without one, and the two expressions here are
- * the schedules this system has always run: `0 3 * * *` for retention and
- * `0 4 * * *` for storylines, both UTC (`chores-cli.ts`).
- *
- * Note this map is for SELECTION only. The header is client-settable and is
- * therefore never an authenticator — Vercel's own scheduler sends
- * `Authorization: Bearer $CRON_SECRET` for that, which is the check below.
+ * It used to be declared here as three literal entries, and it was the second
+ * of what would have been three copies of the schedule — `supabase-cron.sql`
+ * being the first and `chore-status.ts`'s "overdue" needing a third.
+ * `chore-schedule.ts` now mirrors the SQL file under a test that fails on
+ * drift, and this map falls out of that mirror. Kept exported from here because
+ * the header path is this route's, and an importer looking for it should find it
+ * at the door it is used at.
  */
-export const SCHEDULE_PASSES: Record<string, ChorePass> = {
-  "0 3 * * *": "retention",
-  "0 4 * * *": "storylines",
-  // The preserve, an hour after the storyline night (ADR-0023). Its own
-  // schedule rather than a step of the 04:00 pass: that one is already the
-  // expensive one and they spend the same model key.
-  "0 5 * * *": "summaries",
-};
+export { SCHEDULE_PASSES };
 
 /** Per-request overrides of the configured defaults. */
 export interface ChoreOverrides {
@@ -210,6 +207,25 @@ export async function handleChorePass(
   { request, url, ready, json, logger, defer }: CronRequest<StorylinePassDeps>,
   runPass: typeof runChorePass = runChorePass,
 ): Promise<void> {
+  // `?status` FIRST, before pass selection, because it is a read and not a run.
+  //
+  // A query on this route rather than a path of its own, and `vercel.json` is
+  // the reason: `/api/chores` is already a function and already routed, where a
+  // new path is a new function, a new entry in that file and a new line in
+  // `zammy_cron_post`'s allow-list for a surface no scheduler will ever post to.
+  // It also inherits this route's bearer check for free — `cron-routes.test.ts`
+  // holds the fail-closed rule over it alongside the pass it shares a door with.
+  //
+  // No scheduler can reach this branch: `zammy_cron_post` refuses any path not
+  // in its fixed allow-list, and none of the five listed paths carries `status`.
+  // Which is why this half is allowed to answer SYNCHRONOUSLY, boot and all,
+  // rather than taking the 202 shape — the 202 exists to fit pg_net's timeout,
+  // and the only caller here is a person holding a token.
+  if (url.searchParams.has("status")) {
+    await handleChoreStatus({ ready, json, logger });
+    return;
+  }
+
   const requested = parseChoreRequest(url, request.headers);
   if (!requested) {
     // The one case that answers something other than 202, and it has to: an
@@ -292,6 +308,50 @@ export async function handleChorePass(
   // until the background half opens the row.
   json(202, { accepted: requested.pass, ...requested.overrides });
 }
+
+/**
+ * `GET /api/chores?status` — the durable record, read back.
+ *
+ * The answer ADR-0015 owes an operator and could not give one: the deployment
+ * writes `chore_runs` on every pass and had no way to read it, because the only
+ * reader was a CLI needing a shell and a `DATABASE_URL` that Vercel has neither
+ * of. `chore-status.ts` has the predicates and the reasoning; this is the door.
+ *
+ * It boots, which is I/O before a response — and that is fine HERE for the
+ * reason the branch above states: no scheduler can reach this path, so nothing
+ * about pg_net's timeout applies to it.
+ *
+ * A read failure is a 503 with the reason, not a 500: the commonest cause by
+ * far is a deployment whose migrations have not caught up, which is a statement
+ * about the database rather than about this code — the same call
+ * `chores-command.ts` translates 42P01 into a configuration exit code for.
+ */
+async function handleChoreStatus({
+  ready,
+  json,
+  logger,
+}: Pick<CronRequest<StorylinePassDeps>, "ready" | "json" | "logger">): Promise<void> {
+  let deps: StorylinePassDeps;
+  try {
+    deps = await ready();
+  } catch (error) {
+    json(503, { error: "boot failed", reason: reasonOf(error) });
+    return;
+  }
+  try {
+    const status = await readChoreStatus(deps.db, { now: deps.now() });
+    logger.info(
+      { overdue: status.overdue, stalled: status.stalled },
+      "chore status read",
+    );
+    json(200, choreStatusResponse(status));
+  } catch (error) {
+    json(503, { error: "chore_runs unreadable", reason: reasonOf(error) });
+  }
+}
+
+const reasonOf = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
 
 /**
  * The route.

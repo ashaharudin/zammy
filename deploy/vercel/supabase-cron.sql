@@ -259,7 +259,16 @@ select cron.schedule(
 --    Note what the response table can and cannot tell you. It records that the
 --    202 arrived, which is a statement about the REQUEST — the route answers
 --    before the pass starts, by design, so a 202 here is not evidence the night
---    ran. `chore_runs` is (`pnpm chores status`, or the query below).
+--    ran. `chore_runs` is, and there are now three ways to read it without a
+--    psql: `pnpm chores status`, `GET /api/chores?status` (bearer-gated, and it
+--    names the passes whose schedule below has come and gone with no row), and
+--    `/readyz`'s `chores` digest. The query below is the fourth.
+--
+--    Those readers derive "overdue" from the schedules in section 3 — mirrored
+--    into `apps/api/src/chore-schedule.ts` under a test that parses THIS FILE
+--    and fails when the two disagree. So editing an expression below without
+--    updating that mirror fails `verify`, which is deliberate: it is the one
+--    automated nudge that exists for a file nothing applies for you.
 -- ─────────────────────────────────────────────────────────────────────────────
 -- select jobid, jobname, schedule, active from cron.job;
 -- select j.jobname, r.status, r.return_message, r.start_time

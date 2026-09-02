@@ -1,6 +1,7 @@
 import type { Config } from "@zammy/config";
 import { readChoreRuns } from "@zammy/storage";
 import { CHORE_PASSES, runChorePass, type ChorePass } from "./chore-runner.js";
+import { choreStatusResponse, readChoreStatus } from "./chore-status.js";
 import type { StorylinePassDeps } from "./chores.js";
 import {
   EXIT_CONFIG,
@@ -71,7 +72,10 @@ const USAGE_DETAILS = `
     dormancy, bridges, late-candidates, labels, label-merge, graph
 
   status           what recently ran, from chore_runs — the durable answer
-                   to 'did last night's chores run?'
+                   to 'did last night's chores run?'. One verdict line
+                   (which passes are overdue or stalled, against the
+                   schedules in deploy/vercel/supabase-cron.sql), then the
+                   rows. Same answer as GET /api/chores?status.
                    [--pass=NAME] [--limit=N]
 
   --late-candidates  the storyline pass also runs the late-candidate sweep. Off
@@ -157,6 +161,19 @@ export const spec: CommandSpec = {
  * criterion — "did last night's chores run?" is answered by a `chore_runs`
  * query — should not need anybody to write that query by hand against a session
  * pooler.
+ *
+ * **The verdict is not this file's, and that is the change.** "Overdue" and
+ * "stalled" are `chore-status.ts`'s, shared with `GET /api/chores?status` and
+ * with `/readyz` — this command used to be the table's ONLY reader in the whole
+ * system, and the deployment the table exists for could run neither a shell nor
+ * a `DATABASE_URL`. Three readers of one record must agree about what a late
+ * pass looks like, or the CLI and the endpoint answer the same question
+ * differently on the same night. So this is now one caller of that module.
+ *
+ * The verdict is the same per-pass shape the route returns, printed as one JSON
+ * line. The rows follow it in full — `--pass` and `--limit` still narrow those,
+ * and `report` is among them, which is the one member both HTTP surfaces leave
+ * out: a terminal is where somebody who wants a report goes.
  */
 async function printStatus(deps: StorylinePassDeps, args: Args): Promise<number> {
   const limit = args.number("limit", POSITIVE_NUMBER);
@@ -176,6 +193,13 @@ async function printStatus(deps: StorylinePassDeps, args: Args): Promise<number>
     console.error("chore_runs does not exist — run `pnpm db:migrate` (migration 0018)");
     return EXIT_CONFIG; // EX_CONFIG: the database is not the shape this needs
   }
+
+  // The verdict FIRST, because it is the answer and the rows below it are the
+  // evidence. Read over its own window rather than over `runs`, so that a
+  // narrowing `--pass=graph` cannot turn "nothing is overdue" into "nothing I
+  // happened to list is overdue" — a `--limit=1` would otherwise report eight
+  // passes as never having run.
+  console.log(JSON.stringify(choreStatusResponse(await readChoreStatus(deps.db, { now: deps.now() }))));
 
   if (runs.length === 0) console.error("no chore runs recorded");
   for (const run of runs) {

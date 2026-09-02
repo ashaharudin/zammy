@@ -459,6 +459,9 @@ export async function buildApp(
       pool: services.pool,
       redis: services.redis,
       currents: services.currents,
+      // The request path's own handle, so the `chore_runs` digest reads through
+      // the pool `/readyz` already probes rather than opening a second one.
+      db: services.deps.db,
     });
     registerMetricsRoute(app, services.metrics);
 

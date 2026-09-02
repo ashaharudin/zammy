@@ -214,11 +214,25 @@ CLI run against a live server puts two pacers on one key and up to 2× the ceili
 through it. What that costs is not this run — it is the server's labels falling
 back to the bigram extractor, which are sticky until the drift trigger fires.
 
-The CLI takes the **same advisory lock** as the nightly pass, and skips (exit 0)
-if the pass holds it. It is the only operator command here that does: every other
-one writes state a later pass rebuilds, and these rows are the one thing nothing
-rebuilds — two runs deciding independently what a span should say, and the loser
-overwriting the winner, is not a race worth having.
+The CLI **runs the pass** — `runChorePass("summaries", …)`, the same call the 05:00
+firing makes — rather than re-implementing it. So it takes the same advisory lock
+and skips (exit 0) if the nightly pass holds it, and it **writes a `chore_runs`
+row**, which it did not until it was routed this way: a manual backfill used to
+leave no durable record that it had run, no `model_calls` against the night it
+spent them on, and no non-UTC `APP_TIMEZONE` warning. On one-hour log retention
+that row is all that outlives the terminal.
+
+The lock is the half that was always right, and it is the only operator command
+here that takes one: every other writes state a later pass rebuilds, and these
+rows are the one thing nothing rebuilds — two runs deciding independently what a
+span should say, and the loser overwriting the winner, is not a race worth having.
+
+`--from`/`--to`/`--storyline` reach the pass as `summaryWindow` and
+`summaryStorylineId` on the chore deps. They are deliberately **not** query
+parameters on `/api/chores`: a scheduler naming its own window would be a
+schedule disagreeing with `supabase-cron.sql` from inside a query string.
+`--dry-run` and `--show` stay outside the pass entirely — no model, no writes, and
+a `chore_runs` row for a read would record a night that never happened.
 
 ## Verifying it
 

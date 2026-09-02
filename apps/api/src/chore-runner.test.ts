@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { sql, type Kysely } from "kysely";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { loadConfig } from "@zammy/config";
 import { createDb, migrateToLatest, readChoreRuns, type Database } from "@zammy/storage";
 import {
   CHORE_LOCK_KEYS,
@@ -12,7 +13,10 @@ import {
   summarizeChoreReport,
   REPORT_ARRAY_CAP,
 } from "./chore-runner.js";
+import { readChoreStatus } from "./chore-status.js";
+import { EXIT_CONFIG, parseArgs } from "./operator-command.js";
 import { storylineBar } from "./storyline-bar.js";
+import { spec as summarySpec } from "./storyline-summary-command.js";
 import type { StorylinePassDeps } from "./chores.js";
 
 /**
@@ -384,6 +388,169 @@ describe("readChoreRuns", () => {
     const graphOnly = await readChoreRuns(db, { pass: "graph" });
     expect(graphOnly).toHaveLength(2);
     expect(graphOnly[0]?.startedAt).toEqual(new Date("2026-08-25T04:00:00Z"));
+  });
+});
+
+describe("the status predicates, over rows a real pass wrote", () => {
+  /**
+   * `chore-status.test.ts` pins the arithmetic; this pins the JOIN between the
+   * arithmetic and the table.
+   *
+   * A pure test cannot catch a `started_at` that arrives as a string, a
+   * `finished_at` that arrives as `undefined` rather than `null`, or a pass name
+   * spelled one way in `CHORE_PASSES` and another in the column — and those are
+   * exactly the mistakes that would make a green suite report every pass as
+   * having never run. So the rows here come from `runChorePass` rather than from
+   * an `INSERT`, and the predicates read them back through `readChoreRuns`.
+   */
+  const at = (iso: string): StorylinePassDeps["now"] => () => new Date(iso);
+
+  it("reads a real run back as the last run of its pass, and calls nothing overdue", async () => {
+    await runChorePass("retention", deps({ now: at("2026-09-01T03:00:02Z") }), {
+      source: "route",
+    });
+    await runChorePass("storylines", deps({ now: at("2026-09-01T04:00:05Z") }), {
+      source: "route",
+    });
+    await runChorePass("summaries", deps({ now: at("2026-09-01T05:00:01Z") }), {
+      source: "route",
+    });
+
+    const status = await readChoreStatus(db, { now: new Date("2026-09-01T05:30:00Z") });
+
+    expect(status.ok).toBe(true);
+    expect(status.overdue).toEqual([]);
+    expect(status.passes.find((entry) => entry.pass === "storylines")?.last).toMatchObject({
+      source: "route",
+      startedAt: new Date("2026-09-01T04:00:05Z"),
+      outcome: "ok",
+    });
+  });
+
+  it("names the pass whose firing left no row", async () => {
+    // The night retention did not fire. On Hobby's one-hour log retention there
+    // is nothing else left by 06:30 — the absence of this row IS the evidence,
+    // which is the whole argument for the table (ADR-0015).
+    await runChorePass("storylines", deps({ now: at("2026-09-01T04:00:05Z") }), {
+      source: "route",
+    });
+
+    const status = await readChoreStatus(db, { now: new Date("2026-09-01T06:30:00Z") });
+
+    expect(status.overdue).toEqual(["retention", "summaries"]);
+    expect(status.ok).toBe(false);
+  });
+
+  it("names the pass whose row never finished, past the function ceiling", async () => {
+    // The state a kill at `maxDuration` leaves, written the only way it can be:
+    // no `finally` runs after the platform stops the function, so the row stays
+    // open. Same insert the "leaves the row unfinished" test above makes,
+    // because that is what the real failure looks like.
+    await sql`
+      insert into chore_runs (pass, source, started_at)
+      values ('storylines', 'route', ${new Date("2026-09-01T04:00:00Z")})
+    `.execute(db);
+
+    const status = await readChoreStatus(db, { now: new Date("2026-09-01T04:10:00Z") });
+
+    expect(status.stalled).toEqual(["storylines"]);
+    // And NOT overdue as well: it started when it was supposed to. Two
+    // predicates, two questions, and a run can satisfy one without the other.
+    // (The other two passes are overdue here because this table holds one row.)
+    expect(status.overdue).not.toContain("storylines");
+  });
+
+  it("stops calling it stalled once a later run closes its own row", async () => {
+    await sql`
+      insert into chore_runs (pass, source, started_at)
+      values ('storylines', 'route', ${new Date("2026-08-26T04:00:00Z")})
+    `.execute(db);
+    await runChorePass("storylines", deps({ now: at("2026-09-01T04:00:05Z") }), {
+      source: "route",
+    });
+
+    const status = await readChoreStatus(db, { now: new Date("2026-09-01T04:30:00Z") });
+
+    // An unfinished row from last week is a scar, not a stuck process — and a
+    // predicate that kept reporting it would leave `/readyz` permanently red for
+    // a night that has since been re-run successfully.
+    expect(status.stalled).toEqual([]);
+  });
+});
+
+describe("the summary command lands in the same table", () => {
+  /**
+   * `pnpm summaries:storylines` used to be the exception, and it was the worst
+   * possible one to have.
+   *
+   * It took `CHORE_LOCK_KEYS.summaries` by hand and called `summaryPass`
+   * directly, so a manual preserve wrote NO `chore_runs` row at all: the one
+   * pass whose rows nothing can rebuild was the one pass with no durable record
+   * that it had run, no `model_calls` against the night it spent them on, and no
+   * non-UTC `APP_TIMEZONE` warning — the line that says the day keys it is
+   * writing no longer name the same 24 hours as `storyline_days`. It now runs
+   * through `runChorePass` like everything else.
+   *
+   * No key is configured here, so `summaryPass` returns `no-model` before
+   * reading anything — which is the point: even the run that does NOTHING is
+   * recorded, because "the backfill ran and there was no key" and "nobody ever
+   * ran the backfill" are different facts.
+   */
+  it("writes a chore_runs row for a manual backfill", async () => {
+    const config = loadConfig({
+      DATABASE_URL: dbUrl,
+      REDIS_URL: "redis://localhost:6379",
+      CURRENTS_USER_AGENT: "zammy/0.1 (+test)",
+    } as NodeJS.ProcessEnv);
+
+    const code = await summarySpec.run({
+      args: parseArgs(summarySpec, ["--from=2026-08-20", "--to=2026-08-21"]),
+      config,
+      db,
+      get labeler(): never {
+        throw new Error("summaries:storylines declares no labeler");
+      },
+    });
+
+    // 78, EX_CONFIG: no key, so nothing could have been written. The row is the
+    // half that used to be missing.
+    expect(code).toBe(EXIT_CONFIG);
+    const [row] = await readChoreRuns(db, { pass: "summaries" });
+    expect(row).toMatchObject({ pass: "summaries", source: "cli", outcome: "ok" });
+    expect(row?.finishedAt).not.toBeNull();
+    // The tally, summarized into the row exactly as the nightly pass's is — so
+    // "did the backfill spend anything?" is answerable from the table.
+    expect(row?.report).toMatchObject({ stoppedBy: "no-model", days: 0, model: 0 });
+  });
+
+  it("takes the same lock the nightly pass takes, and records the skip", async () => {
+    // The lock was the one thing the old entrypoint got right, and routing
+    // through the runner must not lose it: this command writes the rows the
+    // 05:00 pass writes, and the losing side of that race can overwrite a
+    // sentence with a refusal it decided on from a stale read.
+    const config = loadConfig({
+      DATABASE_URL: dbUrl,
+      REDIS_URL: "redis://localhost:6379",
+      CURRENTS_USER_AGENT: "zammy/0.1 (+test)",
+    } as NodeJS.ProcessEnv);
+    const release = await holdLock(CHORE_LOCK_KEYS.summaries);
+    try {
+      const code = await summarySpec.run({
+        args: parseArgs(summarySpec, []),
+        config,
+        db,
+        get labeler(): never {
+          throw new Error("summaries:storylines declares no labeler");
+        },
+      });
+      // Overlap is expected, exactly as it is for a chore: exit 0.
+      expect(code).toBeUndefined();
+    } finally {
+      await release();
+    }
+
+    const [row] = await readChoreRuns(db, { pass: "summaries" });
+    expect(row).toMatchObject({ outcome: "skipped", source: "cli" });
   });
 });
 

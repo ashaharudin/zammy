@@ -3,7 +3,9 @@
 The scheduled background work: what runs, what it depends on, and why the ingest drain sits beside
 it rather than inside it. Source of truth is [chores.ts](../apps/api/src/chores.ts) (what a pass
 does), [chore-runner.ts](../apps/api/src/chore-runner.ts) (the lock and the record),
-[chore-route.ts](../apps/api/src/chore-route.ts) and
+[chore-status.ts](../apps/api/src/chore-status.ts) (reading that record back) over
+[chore-schedule.ts](../apps/api/src/chore-schedule.ts) (the schedule, mirrored from the SQL that
+applies it), [chore-route.ts](../apps/api/src/chore-route.ts) and
 [chores-command.ts](../apps/api/src/chores-command.ts) (the two entrypoints — the latter behind the
 two-line [chores-cli.ts](../apps/api/src/chores-cli.ts), which
 [operator-command.ts](../apps/api/src/operator-command.ts) explains), and
@@ -142,6 +144,8 @@ A 202 in `net._http_response` means the request arrived, and nothing more.
 - **`?max-labels=` and `?changed-only=`** are the query twins of `--max-labels` and
   `--changed-only`/`--full`. Naming `late-candidates` as the pass runs the sweep regardless of
   `STORYLINE_LATE_CANDIDATE_SWEEP` — that IS the deliberate operator act the gate protects.
+- **`?status` is the one branch that is a read**, answered synchronously and before pass selection.
+  See "Reading it back" below.
 
 ## `chore_runs`, and why it is not optional
 
@@ -171,10 +175,89 @@ a success it would hide a run that never finishes and therefore makes every late
 The CLI writes here too. A table that only knew about the route would answer the question for the
 Vercel half of the system and lie by omission about the other half — and they share a database.
 
+**And so does `pnpm summaries:storylines`,** which used to be the exception and was the worst one to
+have. It took the `summaries` lock by hand and called `summaryPass` directly, so a manual preserve
+backfill wrote no row at all: the one pass whose rows nothing can rebuild was the one pass with no
+durable record that it had run, no `model_calls` against the night it spent them on, and no non-UTC
+`APP_TIMEZONE` warning. It runs through `runChorePass` now, with `--from`/`--to`/`--storyline`
+reaching the pass as deps rather than as a second call site, and `SUMMARIES_ENABLED` still forced
+open rather than read — typing that command *is* the deliberate act the flag protects. `--dry-run`
+and `--show` stay outside all of it: they call no model and write nothing, and a row for a read
+would be a record of a night that never happened.
+
 ```bash
 pnpm chores status --pass=storylines --limit=5
 pnpm chores --help                       # every pass, and every flag
 ```
+
+### Reading it back — three readers, one set of predicates
+
+For a long time the table had exactly **one** reader, `pnpm chores status`, which needs a shell and a
+`DATABASE_URL`. The Vercel deployment — the deployment the table was written *for*, because that is
+where logs last an hour — had neither. So the durable record existed and could not be read from the
+place that needed it. [chore-status.ts](../apps/api/src/chore-status.ts) is the reader, and there are
+now three callers of it:
+
+| | Reads | Carries |
+|---|---|---|
+| `pnpm chores status` | the verdict, then the rows | everything, `report` included |
+| `GET /api/chores?status` | the verdict | per-pass detail: run id, source, timestamps, outcome, model calls, error. No `report` |
+| `GET /readyz` → `chores` | the verdict, digested | pass names, one flag, one timestamp — it is a **public** endpoint |
+
+It answers three questions, and they are different questions:
+
+- **the last run per pass** — the row, not a judgement.
+- **overdue** — the pass has a schedule, its most recent firing is more than 15 minutes past, and no
+  run has *started* since that firing. Started, not finished: the row is opened before the pass, so a
+  run in flight has already discharged its schedule, and a pass that ran and *failed* is not overdue
+  — "it did not run" and "it ran and broke" are different problems. A `skipped` run counts too,
+  because the lock makes skipping normal.
+- **stalled** — the pass's newest row has `finished_at IS NULL` and started more than the function's
+  `maxDuration` ago. That is the shape a kill at the ceiling leaves: no `finally` runs, so nothing
+  closes the row. It reads the *newest* row only, so it self-clears — an unfinished row from last
+  week is a scar, not a stuck process, and a predicate that kept reporting it would leave `/readyz`
+  red for a night that has since been re-run.
+
+The one state neither predicate catches: a run that genuinely never returns *while its session
+survives*. Its unfinished row stops being the newest as soon as the next night records `skipped`
+against the lock it still holds. That shows up in the listing rather than in a boolean — recent rows
+all `skipped` behind one unfinished one is exactly it.
+
+**"Overdue" needs a schedule, and the schedule has one home.**
+[chore-schedule.ts](../apps/api/src/chore-schedule.ts) mirrors all seven `cron.schedule` calls in
+[supabase-cron.sql](../deploy/vercel/supabase-cron.sql) — job name, expression and path — and
+`chore-schedule.test.ts` parses that file and fails if the two have drifted. The SQL stays
+authoritative (nothing in the app can apply it, and `select jobname, schedule, active from cron.job`
+is still the only statement of what a deployment really has); the TypeScript table exists because a
+`.sql` file is not a build input of the function bundle. `SCHEDULE_PASSES` — the
+`x-vercel-cron-schedule` selection map the route used to declare by hand — is derived from it, which
+closed a gap: the hand-written map had three entries and never gained the 06:00 and 07:00 summary
+firings, so a scheduler taking the header path at 06:00 would have been answered 400 by the route
+that runs that pass at 06:00 every night.
+
+The stall ceiling is `vercel.json`'s `maxDuration` for `api/chores.ts`, mirrored the same way and
+pinned by the same test.
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" "$URL/api/chores?status" | jq .
+curl -s "$URL/readyz" | jq .chores
+```
+
+`?status` is a query on the existing route rather than a path of its own: `/api/chores` is already a
+function and already rewritten, and a new path would have wanted a `vercel.json` entry and a line in
+`zammy_cron_post`'s allow-list for a surface no scheduler ever posts to. It inherits this route's
+bearer check, and `cron-routes.test.ts` tables it beside `?pass=` so that inheritance is asserted
+rather than assumed. It is read **before** pass selection, so `?status&pass=labels` is a read — a
+status request that also spent the label budget would be the worse reading by a wide margin. And it
+answers **synchronously**, unlike everything else here: the 202 shape exists to fit pg_net's timeout,
+and no scheduler can reach this branch at all.
+
+On `/readyz` the digest is **additive and inert**. `status` stays a statement about Postgres and
+Redis exactly as [deploy.sh](../deploy/vercel/deploy.sh) documents it — `ready`, `degraded`,
+`unready` — because an overdue chore is not a reason to call the API unable to serve, and a probe
+that went red overnight would train whoever reads it to ignore the colour. An overdue pass shows up
+in `chores.ok` and nowhere else. A `chore_runs` read that throws is reported inside `chores` with the
+reason and changes nothing outside it.
 
 `--help` is `operator-command.ts`'s, and so is the exit-code vocabulary the scheduler reads — `0`
 ran or skipped, `1` failed, `64` usage, `78` configuration. Those four were this command's first and

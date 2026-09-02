@@ -35,6 +35,9 @@ const housekeeping = new Redis(REDIS_URL);
 const clearRateLimitBucket = (): Promise<number> =>
   housekeeping.del(`${RATE_LIMIT_NAMESPACE}127.0.0.1`);
 
+/** The three passes a scheduler points at (`deploy/vercel/supabase-cron.sql`). */
+const SCHEDULED = ["retention", "storylines", "summaries"];
+
 describe("buildApp", () => {
   let dbName: string;
   let built: App;
@@ -166,6 +169,56 @@ describe("buildApp", () => {
       await second.close();
       await clearRateLimitBucket();
     }
+  });
+
+  it("reports whether the chores ran, without letting them change `status`", async () => {
+    // The gap ADR-0015 left. Hobby retains logs for an hour and the chores route
+    // answers 202 before the pass starts, so `chore_runs` is the only durable
+    // record — and `/readyz` reported Postgres, Redis and upstream quota while
+    // saying nothing at all about whether last night ran. This is the one URL a
+    // person already curls after a deploy.
+    const response = await built.app.inject({ method: "GET", url: "/readyz" });
+    const body = response.json() as {
+      status: string;
+      checks: { postgres: { ok: boolean }; redis: { ok: boolean } };
+      upstream: { dailyRemaining: number };
+      chores: { ok: boolean; overdue: string[]; stalled: string[]; lastRunAt: string | null };
+    };
+
+    // ADDITIVE, and asserted as such: `deploy/vercel/deploy.sh` and
+    // `provision-production.sh` both document `status` as a statement about
+    // Postgres and Redis — `ready`, `degraded`, `unready` and nothing else.
+    // This database has no chore runs at all, so every scheduled pass is
+    // overdue, and the probe still reads `ready` with a 200. An overdue chore is
+    // not a reason to call the API unable to serve, and a probe that went red
+    // overnight would train whoever reads it to ignore the colour.
+    expect(response.statusCode).toBe(200);
+    expect(body.status).toBe("ready");
+    expect(body.checks.postgres.ok).toBe(true);
+    expect(typeof body.upstream.dailyRemaining).toBe("number");
+
+    expect(body.chores.ok).toBe(false);
+    expect(body.chores.stalled).toEqual([]);
+    expect(body.chores.lastRunAt).toBeNull();
+    // The clock is the real one here, so which of the three is overdue depends
+    // on what time the suite runs — the exact list is `chore-status.test.ts`'s,
+    // against a fixed instant. What holds at every hour is that something is
+    // late in a table with no rows, and that only a SCHEDULED pass can be: the
+    // other six are steps of the composite night, addressable for a re-run and
+    // scheduled nowhere, so reporting them would mean nine overdue passes every
+    // night of a perfectly healthy deployment.
+    expect(body.chores.overdue.length).toBeGreaterThan(0);
+    expect(body.chores.overdue.filter((pass) => !SCHEDULED.includes(pass))).toEqual([]);
+    // And nothing an unauthenticated caller has no business with: the digest
+    // carries pass names, a flag and one timestamp. Run ids, sources, error
+    // strings and model-call counts are behind the bearer check on
+    // `/api/chores?status`.
+    expect(Object.keys(body.chores).sort()).toEqual([
+      "lastRunAt",
+      "ok",
+      "overdue",
+      "stalled",
+    ]);
   });
 
   it("starts the §9.1 consumer by default and not at all when told not to", async () => {

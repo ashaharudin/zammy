@@ -387,10 +387,17 @@ export function createSummarizer(
  * their query-parameter twins) are deliberately NOT here. They are overrides an
  * operator applies to this, one run at a time; folding them in would make the
  * configured night and a one-off run indistinguishable.
+ *
+ * `options.db` is for the third caller: `summaries:storylines`, which declares
+ * `db: { session: true }` on its spec and therefore already holds exactly the
+ * handle this needs. Passing it in is what lets that command run its pass
+ * through `runChorePass` without opening a second session pool beside the one
+ * `operator-command.ts` opened and will close.
  */
 export function choreDepsFromConfig(
   config: Config,
   log: StorylinePassDeps["log"],
+  options: { db?: Kysely<Database> } = {},
 ): StorylinePassDeps {
   const pacer = createModelPacer(config);
   return {
@@ -398,7 +405,7 @@ export function choreDepsFromConfig(
     // not go through a transaction-mode pooler (`chore-runner.ts` has why), and
     // one connection is pinned holding it while the passes borrow the rest. What
     // it must not be is 1, which would deadlock against the pinned connection.
-    db: createConfiguredDb(config, { max: 4, session: true }),
+    db: options.db ?? createConfiguredDb(config, { max: 4, session: true }),
     config: {
       retentionDays: config.RETENTION_DAYS,
       storyDfWindowDays: config.STORYLINE_DF_WINDOW_DAYS,
