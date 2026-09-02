@@ -1,12 +1,10 @@
 import {
-  canonicalizeUrl,
   collapseWhitespace,
-  deriveAltKey,
-  deriveDedupKey,
+  deriveArticleIdentity,
   deriveSightingId,
   finalizeSighting,
   normalizeBatch,
-  sourceDomain,
+  publisherLinkDomain,
   type NormalizationStats,
   type NormalizeOutcome,
   type Sighting,
@@ -78,13 +76,44 @@ export function normalizeSighting(
   const rawUrl = collapseWhitespace(raw.link);
   if (!rawUrl) return { ok: false, reason: "no_url", detail: raw.guid ?? "(no guid)" };
 
-  const url = canonicalizeUrl(rawUrl);
-  if (!url) return { ok: false, reason: "bad_url", detail: rawUrl };
-
   const publishedMs = parsePublished(raw.pubDate);
-  if (Number.isNaN(publishedMs)) {
+  const published = Number.isNaN(publishedMs)
+    ? null
+    : new Date(publishedMs).toISOString();
+
+  // DEPARTURE — IDENTITY, and the one the whole design leans on.
+  //
+  // Both other adapters call `deriveArticleIdentity` with no `publisherLink`,
+  // which reads the source domain out of the article's own link. This one names
+  // it, and that one parameter is the whole departure: the domain — stored, and
+  // hashed into `altKey` — comes from `<source url="…">` rather than from the
+  // redirect's host. Keyed on the redirect, every Google item in the archive
+  // would fold under `google.com`, which is not a newsroom, and the Currents
+  // article for the same story sits under the publisher's — so nothing would
+  // EVER fold.
+  //
+  // Naming it here rather than substituting a different derivation is the
+  // point. It used to be a `publisherDomain(raw.sourceUrl)` where the others
+  // wrote `sourceDomain(url)` — the same shape of expression with a different
+  // meaning, which is exactly the invisible break `altKeyProbeIsConsistent` was
+  // written to catch at runtime. A parameter is a departure a reader can see.
+  //
+  // Asked BEFORE the timestamp is reported on, because that is the order these
+  // steps ran in when they were open-coded here: an item malformed in both ways
+  // counts as `bad_url`, and which counter a drop lands in is a metric.
+  const identity = deriveArticleIdentity({
+    link: rawUrl,
+    title,
+    published,
+    publisherLink: raw.sourceUrl,
+  });
+  if (!identity.ok) return identity;
+
+  if (published === null) {
     return { ok: false, reason: "bad_published", detail: raw.pubDate ?? "(absent)" };
   }
+
+  const { altKey, sourceDomain: domain } = identity.identity;
 
   // `<guid isPermaLink="false">` is the same `CBM…` id as the link without its
   // `?oc=5`, and it is stable per story: identical on 100/100 shared titles
@@ -92,22 +121,7 @@ export function normalizeSighting(
   // two locales (RESEARCH-FREE-NEWS-SOURCES §6a). Stable enough to key a
   // sighting on, which is all this is — overlapping windows re-fetch the same
   // items constantly and each must collide rather than accumulate.
-  const providerSightingId = collapseWhitespace(raw.guid) || url;
-
-  // DEPARTURE — IDENTITY, and the one the whole design leans on.
-  //
-  // Both other adapters pass `sourceDomain(url)` here, the same value they
-  // store. So does this one — but the value is `publisherDomain(<source url>)`,
-  // not the redirect's host, and the distinction is the difference between the
-  // fallback working and never firing. Keyed on `sourceDomain(url)` every
-  // Google item in the archive would fold under `google.com`, which is not a
-  // newsroom, and the Currents article for the same story is under the
-  // publisher's — so nothing would EVER fold. Computed here from the same value
-  // that is about to be stored, so the identity and the thing it identifies
-  // cannot disagree (ADR-0018).
-  const domain = publisherDomain(raw.sourceUrl);
-  const published = new Date(publishedMs).toISOString();
-  const altKey = deriveAltKey(domain, title, published);
+  const providerSightingId = collapseWhitespace(raw.guid) || identity.identity.url;
 
   // DEPARTURE — a null fallback key is a DROP here, where it is a normal
   // outcome for the other two adapters.
@@ -148,12 +162,18 @@ export function normalizeSighting(
     id: deriveSightingId(PROVIDER, providerSightingId),
     provider: PROVIDER,
     providerSightingId,
-    url,
-    // sha256 of the redirect, so it will never collide with the same story's
-    // real URL arriving from Currents. That is not a bug to fix here: it is why
-    // G1 adds `alt_key` as a FALLBACK identity, and until G1 lands nothing
-    // ingests this provider (the flag is off, see `factory.ts`).
-    dedupKey: deriveDedupKey(url),
+    // `url`, `dedupKey`, `altKey` and `sourceDomain`, spread whole so no field
+    // of the identity can be replaced without the others — and so this
+    // provider's `sourceDomain` cannot drift from the `altKey` derived from it.
+    //
+    // `dedupKey` here is the sha256 of the REDIRECT, so it will never collide
+    // with the same story's real URL arriving from Currents. That is not a bug
+    // to fix here: it is why G1 adds `alt_key` as a FALLBACK identity, and
+    // until G1 lands nothing ingests this provider (the flag is off, see
+    // `factory.ts`).
+    ...identity.identity,
+    // Narrowed from `string | null` by the `no_identity` drop above, which is
+    // this provider's whole reason for making that drop.
     altKey,
     title,
 
@@ -182,8 +202,9 @@ export function normalizeSighting(
     categories: [],
     sourceCategories: [],
 
-    // DEPARTURE — ATTRIBUTION: the publisher, from `<source url="…">` — NOT
-    // `sourceDomain(url)`, which is what both other adapters do.
+    // DEPARTURE — ATTRIBUTION: `sourceDomain` arrives in the spread above, and
+    // it is the publisher's, from `<source url="…">` — NOT the article link's
+    // host, which is what both other adapters get.
     //
     // `url` here is the Google redirect, so following the convention would
     // attribute every article in the archive to `news.google.com`. That is not
@@ -198,9 +219,9 @@ export function normalizeSighting(
     // `sourceDomain(article.url) !== article.source_domain`.** Anything that
     // recomputes a domain from a stored URL — a backfill, a repair, a chore —
     // will disagree with these rows, and it is the recomputation that is wrong.
-    // `alt_key` above is derived from this same value, so a recomputation would
-    // disagree with the identity too, not merely with the source chip.
-    sourceDomain: domain,
+    // `alt_key` above is derived from this same value — by the same call, which
+    // is why they are one spread — so a recomputation would disagree with the
+    // identity too, not merely with the source chip.
 
     published,
 
@@ -247,12 +268,16 @@ export function normalizeSighting(
  * one nothing should be built on lightly, since it holds only while the drop
  * above does. All 120 items across the capture probes carried a usable
  * `<source url>`, so the path is a guard rather than a routine one.
+ *
+ * **The derivation itself is not here.** It is `publisherLinkDomain` in
+ * `@zammy/news-client`, which is what `deriveArticleIdentity` calls when this
+ * adapter names `publisherLink` — so the domain the fixture store filters on and
+ * the domain `alt_key` is scoped to are the same function rather than two
+ * spellings of one, and the identity cannot drift from the corpus that tests it.
+ * This name stays because it is what this provider calls the concept.
  */
 export function publisherDomain(sourceUrl: string | null | undefined): string | null {
-  const trimmed = collapseWhitespace(sourceUrl);
-  if (!trimmed) return null;
-  const canonical = canonicalizeUrl(trimmed);
-  return canonical ? sourceDomain(canonical) : null;
+  return publisherLinkDomain(sourceUrl);
 }
 
 /** `en-CA` → `en`. Null in, null out. */
