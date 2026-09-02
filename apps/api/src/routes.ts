@@ -297,6 +297,19 @@ export async function registerQueryRoutes(
       // observation: ADR-0019's whole argument is that the two planes are
       // planned against different coverage and can DISAGREE on the same click,
       // so a line carrying one of them invites reading it as both.
+      //
+      // How to read the aggregate, which is the reason it is worth writing:
+      // all `fresh` means the freshness gates are doing their job on a warm
+      // archive, while all `queued` on a live window would mean they are not
+      // holding and every click is buying an upstream call. `refresh:
+      // no_keywords` is a labelling failure surfacing here — an arc with
+      // neither a label nor a profile. `deepening: unavailable` dominating is
+      // the shipped state rather than a fault (`GOOGLE_NEWS_ENABLED` gates the
+      // provider); it should fall to zero after the flag goes on. `deepening:
+      // ungrounded` is the number nothing else reports: arcs whose model label
+      // shares no word with their own coverage, which is a labelling failure
+      // the cloud hides rather than a fetch problem — so a sudden rise means
+      // the labeler moved, not that traffic did.
       deps.log?.info?.(
         { storyline: id, refresh: outcome.status, deepening: deepened.status },
         "storyline open: what each plane's freshness gate decided (ADR-0017, ADR-0019)",

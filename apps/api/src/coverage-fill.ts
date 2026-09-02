@@ -27,7 +27,6 @@ import {
   SEGMENT_TRUNCATED_MESSAGE,
 } from "./observations.js";
 import { freshnessTtlMs } from "./page-cache.js";
-import type { Metrics } from "./metrics.js";
 import { refreshLockKey, release, tryAcquire } from "./single-flight.js";
 import { reserveTopicCall } from "./topic-budget.js";
 import { segmentJob, type IngestQueue, type SegmentJob } from "./ingest-queue.js";
@@ -106,7 +105,6 @@ export interface CoverageFillDeps {
    * configured, and the bigram fallback carries it when one is not.
    */
   labeler?: GroupingDeps["labeler"];
-  metrics?: Metrics;
   log?: {
     warn: (obj: object, msg: string) => void;
     info?: (obj: object, msg: string) => void;
@@ -513,19 +511,15 @@ async function fillSegment(
     );
     budget.callsUsed += 1;
     callsMade += 1;
-    deps.metrics?.upstreamCall({
-      received: result.normalization.received,
-      dropped: result.normalization.received - result.normalization.kept,
-    });
-    // The discovery plane's half of the same counter (ADR-0021). Kept even
-    // though no discovery provider dates its items today: the metric is a SHARE
-    // and a share needs its denominator, so a run with no `date_only` rows here
-    // is what "the other providers still time their output" looks like.
-    deps.metrics?.sightingsStamped(result.sightings);
-    // AND as log fields, which is the half that survives the deployment we
-    // actually run (ADR-0015; `observations.ts` has the whole argument).
-    // Before the ingest so a throwing fold does not lose the observation, and
-    // in the plane's own terms so the three planes read as one series.
+    // What came back, what normalization dropped, and how much of it this
+    // provider DATED rather than timed (ADR-0021) — the discovery plane's half
+    // of a share, kept even though no discovery provider dates its items today,
+    // because a share needs its denominator: a run with no dated items here is
+    // what "the other providers still time their output" looks like.
+    //
+    // Before the ingest so a throwing fold does not lose the observation, and in
+    // the plane's own terms so the three planes read as one series
+    // (`observations.ts` has the whole argument).
     logUpstreamFetch(deps.log, {
       plane,
       provider: PLANNED_COVERAGE_PROVIDER,
@@ -544,7 +538,6 @@ async function fillSegment(
       // fill; the warning is the only place a failed one surfaces.
       ...(deps.log ? { log: deps.log } : {}),
     });
-    deps.metrics?.articlesIngested(ingested.articlesCreated);
     logIngestOutcome(deps.log, {
       plane,
       provider: PLANNED_COVERAGE_PROVIDER,
@@ -642,7 +635,6 @@ async function onTruncated(
    */
   plane: SightingPlane,
 ): Promise<SegmentJob[]> {
-  deps.metrics?.truncatedSegment();
   // §12's truncated-segment rate, which exists because of a probe finding: a
   // rise means timelines are silently thinning behind the 100-result cap. On
   // EVERY truncation, not only at the subdivision floor the `warn` below covers

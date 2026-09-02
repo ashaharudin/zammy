@@ -13,7 +13,6 @@ import {
 import { createDb, migrateToLatest } from "@zammy/storage";
 import { BullMqIngestQueue } from "./ingest-queue-bullmq.js";
 import type { IngestQueue } from "./ingest-queue.js";
-import { Metrics } from "./metrics.js";
 import { storylineBar } from "./storyline-bar.js";
 import type { CoverageFillDeps } from "./coverage-fill.js";
 import type { StorylineDeepeningDeps } from "./storyline-deepening.js";
@@ -67,7 +66,6 @@ export interface TestHarness {
   counting: CountingClient;
   redis: Redis;
   queue: IngestQueue;
-  metrics: Metrics;
   /** The clock behind `deps.now()`. Advance it to age the world on purpose. */
   clock: TestClock;
   teardown: () => Promise<void>;
@@ -201,13 +199,11 @@ export async function createTestHarness(
     queueName: `test-planner-${randomUUID()}`,
   });
 
-  const metrics = new Metrics({ quota: () => counting.quota() });
   const deps: HarnessDeps = {
     db,
     redis,
     currents: counting,
     queue,
-    metrics,
     config: {
       syncFillDeadlineMs: 1200,
       maxSyncUpstreamCalls: 5,
@@ -227,7 +223,6 @@ export async function createTestHarness(
     counting,
     redis,
     queue,
-    metrics,
     clock,
     teardown: async () => {
       await queue.obliterate();

@@ -143,7 +143,6 @@ describe("buildApp", () => {
     expect(limited).toBe(true);
 
     expect((await built.app.inject({ method: "GET", url: "/healthz" })).statusCode).toBe(200);
-    expect((await built.app.inject({ method: "GET", url: "/metrics" })).statusCode).toBe(200);
 
     // And the counter is SHARED, which is the whole of §3.5: elastic instances
     // made the in-process ceiling RATE_LIMIT_PER_MINUTE × an unbounded number,

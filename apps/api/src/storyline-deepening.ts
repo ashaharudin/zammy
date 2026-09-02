@@ -16,7 +16,6 @@ import { deepeningQuery } from "./cloud-query.js";
 import { planHorizon, subtractCoverage, type Span } from "./coverage-gaps.js";
 import { logIngestOutcome, logUpstreamFetch } from "./observations.js";
 import { freshnessTtlMs } from "./page-cache.js";
-import type { Metrics } from "./metrics.js";
 import { refreshLockKey, release, tryAcquire } from "./single-flight.js";
 import type { DeepenJob, IngestQueue } from "./ingest-queue.js";
 import {
@@ -78,7 +77,6 @@ export interface StorylineDeepeningDeps {
    * configured, and the bigram fallback carries it when one is not.
    */
   labeler?: GroupingDeps["labeler"];
-  metrics?: Metrics;
   log?: {
     warn: (obj: object, msg: string) => void;
     info?: (obj: object, msg: string) => void;
@@ -160,7 +158,6 @@ export async function queueStorylineDeepening(
   if (!deepening) {
     // Not an error and not logged as one: no deepening provider is the shipped
     // configuration, and the caller is a fire-and-forget POST.
-    deps.metrics?.storylineDeepen("unavailable");
     return { status: "unavailable", storylineId };
   }
 
@@ -172,7 +169,6 @@ export async function queueStorylineDeepening(
     profileTokens: storyline.profileTokens,
   });
   if (query === null) {
-    deps.metrics?.storylineDeepen("ungrounded");
     return { status: "ungrounded", storylineId };
   }
 
@@ -189,7 +185,6 @@ export async function queueStorylineDeepening(
     lookbackDays: deps.config.lookbackDays,
   });
   if (gap === undefined) {
-    deps.metrics?.storylineDeepen("fresh");
     return { status: "fresh", storylineId, keywords: query.keywords };
   }
 
@@ -198,7 +193,6 @@ export async function queueStorylineDeepening(
   // grid, and judging it on a snapped clock would hide every staleness younger
   // than the last grid line.
   if (now.getTime() - gap.from.getTime() <= freshnessTtlMs(window.to, now)) {
-    deps.metrics?.storylineDeepen("fresh");
     return { status: "fresh", storylineId, keywords: query.keywords };
   }
 
@@ -211,7 +205,6 @@ export async function queueStorylineDeepening(
   if (to.getTime() <= from.getTime()) {
     // The gap does not reach back past the last grid line. Only reachable in the
     // first quarter-hour of a cold arc's window; the next click asks for it.
-    deps.metrics?.storylineDeepen("fresh");
     return { status: "fresh", storylineId, keywords: query.keywords };
   }
 
@@ -222,7 +215,6 @@ export async function queueStorylineDeepening(
     to: to.toISOString(),
   };
   await deps.queue.enqueueDeepen(job);
-  deps.metrics?.storylineDeepen("queued");
   return { status: "queued", storylineId, keywords: query.keywords, job };
 }
 
@@ -291,7 +283,6 @@ export async function processDeepenJob(
     profileTokens: storyline.profileTokens,
   });
   if (query === null) {
-    deps.metrics?.storylineDeepen("ungrounded");
     deps.log?.warn(
       { storylineId },
       "deepening job's arc no longer grounds its own label; dropping rather than attaching",
@@ -361,19 +352,16 @@ export async function processDeepenJob(
       // No reader is waiting; draw only what the interactive reserve spares.
       { priority: "background" },
     );
-    deps.metrics?.upstreamCall({
-      received: result.normalization.received,
-      dropped: result.normalization.received - result.normalization.kept,
-    });
-    // How much of what this provider just sent is DATED rather than timed
-    // (plan §G6, ADR-0021). Recorded here rather than inside `ingestSightings`
-    // because storage has no metrics and should not grow any.
-    deps.metrics?.sightingsStamped(result.sightings);
-    // AND as log fields, which is the half that survives the deployment we
-    // actually run (ADR-0015). This plane wrote them first and now shares the
-    // shape with the other two: the numbers are ratios ACROSS the planes, so a
-    // line only this one wrote made every one of them wrong by a plane.
-    // `observations.ts` carries the argument and the ordering rule.
+    // What came back, and how much of what this provider just sent is DATED
+    // rather than timed (plan §G6, ADR-0021). Recorded here rather than inside
+    // `ingestSightings` because storage should not grow an opinion about
+    // observability, and before the fold so a throwing one cannot take the
+    // observation with it.
+    //
+    // This plane wrote these fields first and now shares their shape with the
+    // other two: the numbers are ratios ACROSS the planes, so a line only this
+    // one wrote made every one of them wrong by a plane. `observations.ts`
+    // carries the argument and the ordering rule.
     logUpstreamFetch(deps.log, {
       plane: "deepening",
       provider: deepening.provider,
@@ -405,7 +393,6 @@ export async function processDeepenJob(
       timeZone: deps.config.grouping.timeZone,
       ...(deps.log ? { log: deps.log } : {}),
     });
-    deps.metrics?.articlesIngested(ingested.articlesCreated);
     logIngestOutcome(deps.log, {
       plane: "deepening",
       provider: deepening.provider,
@@ -441,7 +428,6 @@ export async function processDeepenJob(
     if (walked?.isLastPage) {
       await recordStorylineCoverage(deps.db, storylineId, deepening.provider, span);
     } else {
-      deps.metrics?.truncatedSegment();
       deps.log?.info?.(
         { storylineId, from: span.from, to: span.to, items: result.rawCount },
         "deepening span hit the item cap; coverage not recorded, the gap stays open",

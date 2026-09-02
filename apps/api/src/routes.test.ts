@@ -4,7 +4,6 @@ import { sql } from "kysely";
 import { encodeCursor, TimelinePage, TrendingResponse } from "@zammy/shared";
 import { readTopic } from "@zammy/storage";
 import { canonicalize } from "./canonical.js";
-import { registerMetricsRoute } from "./metrics.js";
 import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
 import type { TrendingDeps } from "./trending-service.js";
 import { createTestHarness, purgeTopicKeys, type TestHarness } from "./test-support.js";
@@ -47,7 +46,6 @@ async function setup(): Promise<void> {
   };
   await registerQueryRoutes(app, { deps: harness.deps, defaultLanguage: "en" });
   registerTrendingRoute(app, { deps: trendingDeps });
-  registerMetricsRoute(app, harness.metrics);
   await app.ready();
 
   // Deterministic fingerprints collide with previous runs via shared Redis.
@@ -418,22 +416,6 @@ describe("GET /api/v1/trending", () => {
     });
     expect(response.statusCode).toBe(200);
     expect(TrendingResponse.parse(response.json()).windowEnd).toBe(ROUTES_NOW.toISOString());
-  });
-});
-
-describe("GET /metrics", () => {
-  it("exposes the §12 counters in Prometheus text format", async () => {
-    await setup();
-    await app.inject({ method: "GET", url: `${TIMELINE}?q=climate&${QS}` });
-
-    const response = await app.inject({ method: "GET", url: "/metrics" });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.headers["content-type"]).toContain("text/plain");
-    expect(response.body).toContain("zammy_upstream_calls_total 1");
-    // ROUTES_NOW is 12h after the window's end: the "recent" tier (§6.4).
-    expect(response.body).toContain('zammy_page_cache_reads_total{tier="recent",result="miss"}');
-    expect(response.body).toContain("zammy_quota_daily_remaining");
   });
 });
 

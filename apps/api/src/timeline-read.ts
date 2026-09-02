@@ -29,7 +29,6 @@ import {
   readCachedPage,
   writeCachedPage,
 } from "./page-cache.js";
-import type { Metrics } from "./metrics.js";
 import { TIMELINE_READ_MESSAGE } from "./observations.js";
 import type { IngestQueue } from "./ingest-queue.js";
 import { chooseHeading } from "@zammy/representative";
@@ -79,7 +78,6 @@ export interface TimelineReadDeps extends StorylineViewDeps {
   redis: Redis;
   /** Only `pendingCount`. Enqueuing is the fill's business, never the read's. */
   queue: Pick<IngestQueue, "pendingCount">;
-  metrics?: Metrics;
 }
 
 export interface TimelineReadResult {
@@ -183,7 +181,6 @@ export async function readTimeline(
     },
     TIMELINE_READ_MESSAGE,
   );
-  deps.metrics?.timelineRead(result.meta.servedFrom, (Date.now() - startedAt) / 1000);
   return result;
 }
 
@@ -216,7 +213,6 @@ async function planAndRead(
   );
 
   const cached = await readCachedPage<TimelineReadResult>(deps.redis, cacheKey);
-  deps.metrics?.pageCacheRead(freshnessTier(query.window.to, now), cached ? "hit" : "miss");
   if (cached) {
     return { ...cached, meta: { ...cached.meta, servedFrom: "cache" } };
   }

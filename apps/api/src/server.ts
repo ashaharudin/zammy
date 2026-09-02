@@ -23,7 +23,6 @@ import {
   createLabelMergeRules,
   createLinkerConfig,
 } from "./wiring.js";
-import { Metrics, registerMetricsRoute } from "./metrics.js";
 import { createQuotaGovernors } from "./quota-redis.js";
 import { processSegmentJob } from "./coverage-fill.js";
 import { processDeepenJob } from "./storyline-deepening.js";
@@ -130,7 +129,6 @@ export interface Services {
   redis: Redis;
   currents: CurrentsClient;
   queue: IngestQueue;
-  metrics: Metrics;
   /**
    * The one object the four planner modules are all driven from. `QueryRouteDeps`
    * because the HTTP surface reaches the widest set of them; the queue consumer
@@ -266,9 +264,6 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
       );
     }
 
-    // §12 observability: everything the planner counts, scraped from one place.
-    const metrics = new Metrics({ quota: () => currents.quota() });
-
     const db = createDb(pool);
     // WHICH transport this is depends on `INGEST_QUEUE_DRIVER` and nothing else
     // here knows: the read path publishes and polls the pending set through the
@@ -298,7 +293,6 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
       currents,
       ...(deepening ? { deepening } : {}),
       queue,
-      metrics,
       labeler,
       config: {
         syncFillDeadlineMs: config.SYNC_FILL_DEADLINE_MS,
@@ -361,7 +355,7 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
       if (!pool.ending) await pool.end();
     };
 
-    return { pool, redis, currents, queue, metrics, deps, trendingDeps, close };
+    return { pool, redis, currents, queue, deps, trendingDeps, close };
   } catch (error) {
     await Promise.allSettled(abandon.reverse().map((release) => release()));
     throw error;
@@ -408,8 +402,7 @@ export async function buildApp(
     await app.register(cors, { origin: config.CORS_ORIGIN.split(",").map((o) => o.trim()) });
 
     // Per-IP limit on /api/v1/* only (§9.4, §12): novel-fingerprint spam can
-    // mint topics and spend quota, but the health check and the metrics scrape
-    // must never 429.
+    // mint topics and spend quota, but the health check must never 429.
     //
     // **The counters are Redis-held, and they used to be in-process on purpose.**
     // The note that stood here said a shared counter "would add a shared failure
@@ -463,7 +456,6 @@ export async function buildApp(
       // the pool `/readyz` already probes rather than opening a second one.
       db: services.deps.db,
     });
-    registerMetricsRoute(app, services.metrics);
 
     // The query service (§6) and its job consumer (§9.1). WHERE the consumer runs
     // is a deployment property, not a code one: a persistent process shares it

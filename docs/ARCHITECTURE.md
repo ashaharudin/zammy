@@ -1662,7 +1662,20 @@ apart see the same cloud.
   prom-client counters mean nothing across ephemeral instances and nothing scrapes them. Latency
   and invocation counts come from platform observability; the domain numbers above are carried as
   structured log fields, and quota spend lands in the nightly `chore_runs` record so it survives
-  1-hour log retention. Two of the numbers exist
+  1-hour log retention.
+
+  Those log fields are real rather than promised, and
+  [`observations.ts`](../apps/api/src/observations.ts) owns their vocabulary: the message each
+  observation is written under, plus the fields the three ingest planes share. It is one module
+  because these numbers are ratios ACROSS the planes — `search` (a reader's fill), `breadth` (the
+  sample) and `deepening` (an arc's own provider) — so a plane that spelled a field differently
+  would read as a smaller denominator rather than as a missing plane, which is exactly the bug
+  ADR-0021's stamp share shipped with on the breadth plane for one release. The fetch line is
+  written BEFORE the fold, so a throwing ingest cannot take the observation with it. Quota headroom
+  is the one number with a second home: `/readyz` reports it live from the shared snapshot, which is
+  fresher than any stored value.
+
+  Two of the numbers exist
   because of probe findings: **unique-articles-per-upstream-call** (baseline ~8 of 20 — a fall means
   duplication is worsening) and **truncated-segment rate** (§11). A third,
   **articles-grouped rate** (grouped / created), exists because §14.3's similarity threshold ships
