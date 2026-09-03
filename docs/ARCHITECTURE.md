@@ -474,7 +474,14 @@ Response:
 ```jsonc
 {
   "topic":  { "fingerprint": "…", "keywords": ["…"], "coverage": { "from": "…", "to": "…" } },
-  "items":  [ /* Article, published DESC */ ],
+  // Storylines this SEARCH surfaced, beside the results rather than narrowing
+  // them (ADR-0011). Empty for the storyline view, which is already about one.
+  "storylines": [ /* StorylineSummary */ ],
+  // Which storylines each GROUP on this page is filed in, and the arcs those
+  // ids resolve through (ADR-0025). A group in exactly one is absent.
+  "memberships": { "byGroup": { "<groupId>": ["<storylineId>", "…"] },
+                   "storylines": [ /* StorylineSummary */ ] },
+  "items":  [ /* TimelineEntry — one storyline-DAY per slot, published DESC */ ],
   "page":   { "nextCursor": "…|null", "hasMore": true },
   "meta":   {
     "servedFrom": "cache|store|upstream",
