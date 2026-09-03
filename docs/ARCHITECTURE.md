@@ -474,7 +474,17 @@ Response:
 ```jsonc
 {
   "topic":  { "fingerprint": "…", "keywords": ["…"], "coverage": { "from": "…", "to": "…" } },
-  "items":  [ /* Article, published DESC */ ],
+  // Storylines this SEARCH surfaced, beside the results rather than narrowing
+  // them (ADR-0011). The storyline VIEW fills it with one entry — the arc being
+  // viewed — which is where the command bar reads that chip's label from.
+  "storylines": [ /* StorylineSummary */ ],
+  // Which storylines each GROUP on this page is filed in, and the arcs those
+  // ids resolve through (ADR-0025). A group with fewer than two NAMEABLE arcs is
+  // absent — which is not the same as "in exactly one", and the arc a row is
+  // read under need not be in its list. See `memberships.byGroup`.
+  "memberships": { "byGroup": { "<groupId>": ["<storylineId>", "…"] },
+                   "storylines": [ /* StorylineSummary */ ] },
+  "items":  [ /* TimelineEntry — one storyline-DAY per slot, published DESC */ ],
   "page":   { "nextCursor": "…|null", "hasMore": true },
   "meta":   {
     "servedFrom": "cache|store|upstream",

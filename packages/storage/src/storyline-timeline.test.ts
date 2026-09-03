@@ -3,8 +3,17 @@ import { Article } from "@zammy/shared";
 import { deriveAltKey, deriveDedupKey, type Sighting } from "@zammy/news-client";
 import { ingestSightings, upsertTopic } from "./ingest.js";
 import { migrateToLatest } from "./migrator.js";
-import { readStorylineTimelinePage, type StorylineTimelinePage } from "./storyline-timeline.js";
-import { attachGroup, createProvisionalStoryline } from "./storylines.js";
+import {
+  readGroupMemberships,
+  readStorylineTimelinePage,
+  type StorylineTimelinePage,
+} from "./storyline-timeline.js";
+import {
+  attachGroup,
+  createProvisionalStoryline,
+  promoteStoryline,
+  setStorylineLabel,
+} from "./storylines.js";
 import { recordGrouping } from "./grouping.js";
 import {
   createTestDatabase,
@@ -439,5 +448,192 @@ describe("slots sharing a position", () => {
     // provide, and the reason the cursor carries an id at all.
     const tied = seen.slice(0, 3);
     expect([...tied].sort().reverse()).toEqual(tied);
+  });
+});
+
+/**
+ * `readGroupMemberships` — which storylines a group is filed in (ADR-0025).
+ *
+ * The fact CONTEXT.md states and the wire could not carry: "A group may belong
+ * to several storylines." Membership is a property of the GROUP, so these are
+ * asked of group ids and answered without a slot in sight.
+ */
+describe("a group's storylines", () => {
+  let harness: TestDatabase;
+  const MEMBERSHIP_TOPIC = testFingerprint("9e11b0");
+  const DAY = "2026-08-19";
+
+  /** g1: only in `arcA`. g2: in BOTH arcs — the crossing. g3: only in `arcB`. */
+  let g1: string;
+  let g2: string;
+  let g3: string;
+  let arcA: string;
+  let arcB: string;
+
+  const story = (id: string, url: string, published: string, title: string): Sighting => ({
+    id,
+    url,
+    provider: "currents",
+    providerSightingId: url,
+    dedupKey: deriveDedupKey(url),
+    altKey: deriveAltKey(new URL(url).hostname, title, published),
+    title,
+    description: null,
+    author: null,
+    imageUrl: null,
+    language: "en",
+    categories: [],
+    sourceCategories: [],
+    sourceDomain: new URL(url).hostname,
+    published,
+    raw: { id },
+  });
+
+  beforeAll(async () => {
+    harness = await createTestDatabase();
+    await migrateToLatest(harness.db);
+    await upsertTopic(harness.db, { fingerprint: MEMBERSHIP_TOPIC, keywords: ["tanker"] });
+
+    const ingested = await ingestSightings(harness.db, {
+      plane: "search",
+      timeZone: TZ,
+      fingerprint: MEMBERSHIP_TOPIC,
+      sightings: [
+        story("00000000-0000-4000-8000-000000000031", "https://a.example/1", `${DAY}T09:00:00.000Z`, "Tanker seized"),
+        story("00000000-0000-4000-8000-000000000032", "https://b.example/2", `${DAY}T10:00:00.000Z`, "Safety review ordered"),
+        story("00000000-0000-4000-8000-000000000033", "https://c.example/3", `${DAY}T11:00:00.000Z`, "Sanctions widened"),
+      ],
+    });
+    const [first, second, third] = ingested.createdArticles;
+    g1 = first!.id;
+    g2 = second!.id;
+    g3 = third!.id;
+
+    // Arc A holds g1 and g2; arc B holds g3 and g2. The middle group is in two
+    // real storylines, which is the whole fact under test.
+    const a = await createProvisionalStoryline(harness.db, { groupId: g1, timeZone: TZ });
+    await attachGroup(harness.db, { storylineId: a.id, groupId: g2, timeZone: TZ });
+    await promoteStoryline(harness.db, { storylineId: a.id });
+    arcA = a.id;
+
+    const b = await createProvisionalStoryline(harness.db, { groupId: g3, timeZone: TZ });
+    await attachGroup(harness.db, { storylineId: b.id, groupId: g2, timeZone: TZ });
+    await promoteStoryline(harness.db, { storylineId: b.id });
+    arcB = b.id;
+  });
+
+  afterAll(async () => {
+    await harness.drop();
+  });
+
+  it("reports a group filed in two storylines, naming both", async () => {
+    const { byGroup } = await readGroupMemberships(harness.db, [g1, g2, g3]);
+    expect([...(byGroup.get(g2) ?? [])].sort()).toEqual([arcA, arcB].sort());
+  });
+
+  it("says nothing about a group filed in exactly one", async () => {
+    const { byGroup } = await readGroupMemberships(harness.db, [g1, g2, g3]);
+    // Absent, not present-with-one-entry: the arc a single-membership group is
+    // in is the arc of whatever slot it appears in, already on the wire.
+    expect(byGroup.has(g1)).toBe(false);
+    expect(byGroup.has(g3)).toBe(false);
+  });
+
+  it("describes every storyline it names, and no others", async () => {
+    const { byGroup, storylines } = await readGroupMemberships(harness.db, [g2]);
+    const named = new Set([...byGroup.values()].flat());
+    expect(new Set(storylines.map((storyline) => storyline.id))).toEqual(named);
+  });
+
+  it("carries the label, the span and the whole-life size of each", async () => {
+    await setStorylineLabel(harness.db, {
+      storylineId: arcA,
+      label: "Tanker Seizure",
+      labelWords: ["tanker", "seizure"],
+      labelAt: new Date(),
+      labelGroupCount: 2,
+      labelSource: "test",
+    });
+
+    const { storylines } = await readGroupMemberships(harness.db, [g2]);
+    const a = storylines.find((storyline) => storyline.id === arcA)!;
+    expect(a.label).toBe("Tanker Seizure");
+    expect(a.spanFrom).toBe(`${DAY}T09:00:00.000Z`);
+    expect(a.spanTo).toBe(`${DAY}T09:00:00.000Z`);
+    // Two member groups of one article each, over the arc's whole life.
+    expect(a.size).toBe(2);
+    expect(a.status).toBe("active");
+  });
+
+  it("does not count a PROVISIONAL storyline as an arc a group is also in", async () => {
+    // A storyline-of-one is invisible as a storyline (ADR-0011's Lifecycle),
+    // and a slot in one already reaches the browser with `storyline: null`.
+    // Naming one here would be the first place the UI called it a story.
+    const shadow = await createProvisionalStoryline(harness.db, { groupId: g1, timeZone: TZ });
+    try {
+      const { byGroup } = await readGroupMemberships(harness.db, [g1]);
+      expect(byGroup.has(g1)).toBe(false);
+    } finally {
+      await harness.db.deleteFrom("storylines").where("id", "=", shadow.id).execute();
+    }
+  });
+
+  it("does not count an ALIAS, so a merged-away UUID is never offered", async () => {
+    const alias = await createProvisionalStoryline(harness.db, { groupId: g1, timeZone: TZ });
+    await promoteStoryline(harness.db, { storylineId: alias.id });
+    await harness.db
+      .updateTable("storylines")
+      .set({ merged_into: arcA })
+      .where("id", "=", alias.id)
+      .execute();
+    try {
+      const { byGroup } = await readGroupMemberships(harness.db, [g1]);
+      expect(byGroup.has(g1)).toBe(false);
+    } finally {
+      await harness.db.updateTable("storylines").set({ merged_into: null })
+        .where("id", "=", alias.id).execute();
+      await harness.db.deleteFrom("storylines").where("id", "=", alias.id).execute();
+    }
+  });
+
+  it("counts NAMEABLE arcs, so a provisional one cannot make up the second", async () => {
+    // The threshold is "two arcs this page will name", not "two rows in
+    // storyline_groups" — the provisional filter runs first. So a group in one
+    // real arc and one provisional arc is absent, and a slot under the
+    // provisional one is told nothing, even though the piece really is running
+    // in a named arc.
+    //
+    // That is a LIMITATION rather than a bug (ADR-0025): the braid's solid tick
+    // says which arc you are standing in, and a provisional slot has no arc to
+    // make solid. Pinned here so the rule the wire documents is the rule the
+    // query implements — measured at 2 groups of 28,729 on the dev archive.
+    const shadow = await createProvisionalStoryline(harness.db, { groupId: g1, timeZone: TZ });
+    try {
+      const { byGroup } = await readGroupMemberships(harness.db, [g1]);
+      expect(byGroup.has(g1)).toBe(false);
+
+      // And the sharper case, on the group that HAS two nameable arcs: the map
+      // names those two and not the provisional slot's own, so a consumer
+      // standing on that slot cannot assume its arc is in the list.
+      const crossing = await createProvisionalStoryline(harness.db, {
+        groupId: g2,
+        timeZone: TZ,
+      });
+      try {
+        const both = await readGroupMemberships(harness.db, [g2]);
+        expect([...(both.byGroup.get(g2) ?? [])].sort()).toEqual([arcA, arcB].sort());
+        expect(both.byGroup.get(g2)).not.toContain(crossing.id);
+      } finally {
+        await harness.db.deleteFrom("storylines").where("id", "=", crossing.id).execute();
+      }
+    } finally {
+      await harness.db.deleteFrom("storylines").where("id", "=", shadow.id).execute();
+    }
+  });
+
+  it("asks nothing of the database for an empty group list", async () => {
+    const { byGroup, storylines } = await readGroupMemberships(harness.db, []);
+    expect(byGroup.size).toBe(0);
+    expect(storylines).toEqual([]);
   });
 });

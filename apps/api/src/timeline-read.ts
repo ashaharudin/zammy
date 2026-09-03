@@ -6,12 +6,14 @@ import {
   encodeCursor,
   type Article,
   type Cursor,
-  type SurfacedStoryline,
+  type StorylineSummary,
   type TimelineEntry,
+  type TimelinePage,
 } from "@zammy/shared";
 import {
   findSurfacedStorylines,
   readCoverage,
+  readGroupMemberships,
   readStorylineArticleCount,
   readStorylineTimelinePage,
   resolveStoryline,
@@ -87,7 +89,19 @@ export interface TimelineReadResult {
     coverage: { from: string; to: string } | null;
   };
   /** Storylines this search surfaced (ADR-0011). Empty under the old model. */
-  storylines: SurfacedStoryline[];
+  storylines: StorylineSummary[];
+  /**
+   * Which storylines each GROUP on this page is filed in, and the arcs that
+   * answer those names — the wire contract's `memberships`, whose own comment
+   * carries why it is keyed by group and page-level rather than hung on an
+   * entry.
+   *
+   * Both entry points fill it. A reader inside one arc needs it as much as a
+   * searcher does: the storyline view is precisely the place where "this piece
+   * also runs somewhere else" is a way out, and it is the one view where the
+   * gutter beside every row says the same thing.
+   */
+  memberships: TimelinePage["memberships"];
   items: TimelineEntry[];
   page: { nextCursor: string | null; hasMore: boolean };
   meta: {
@@ -277,6 +291,12 @@ async function planAndRead(
     limit: SURFACED_STORYLINE_LIMIT,
   });
 
+  // Which storylines the page's groups are filed in (`memberships`). After the
+  // page is settled and over its groups alone, so it costs one indexed statement
+  // per page rather than a wider join in the keyset scan
+  // (`readGroupMemberships`).
+  const memberships = await readGroupMemberships(deps.db, groupsOn(stored.items));
+
   const pendingJobs = await deps.queue.pendingCount(query.fingerprint);
   const state: "complete" | "in_progress" =
     pendingJobs > 0 || fill.lockLostToPeer ? "in_progress" : "complete";
@@ -299,14 +319,11 @@ async function planAndRead(
           : null,
     },
     items: stored.items.map(toStorylineEntry),
-    storylines: surfaced.map((storyline) => ({
-      id: storyline.id,
-      label: storyline.label,
-      from: storyline.spanFrom,
-      to: storyline.spanTo,
-      size: storyline.size,
-      dormant: storyline.status === "dormant",
-    })),
+    storylines: surfaced.map(toSummary),
+    memberships: {
+      byGroup: Object.fromEntries(memberships.byGroup),
+      storylines: memberships.storylines.map(toSummary),
+    },
     page: {
       nextCursor: stored.nextCursor ? encodeCursor(stored.nextCursor) : null,
       hasMore: stored.hasMore,
@@ -434,6 +451,7 @@ export async function readStorylineView(
   // Whole-life, so page two says what page one said (the wire contract's own
   // wording). One extra count for a read that is already three statements deep.
   const size = first ? await readStorylineArticleCount(deps.db, resolved) : 0;
+  const memberships = await readGroupMemberships(deps.db, groupsOn(stored.items));
   return {
     // No topic: the view is not a search, and inventing a fingerprint for it
     // would put a keyword-less row in `topics` that nothing could ever hit
@@ -452,6 +470,10 @@ export async function readStorylineView(
           },
         ]
       : [],
+    memberships: {
+      byGroup: Object.fromEntries(memberships.byGroup),
+      storylines: memberships.storylines.map(toSummary),
+    },
     items: stored.items.map(toStorylineEntry),
     page: {
       nextCursor: stored.nextCursor ? encodeCursor(stored.nextCursor) : null,
@@ -466,6 +488,51 @@ export async function readStorylineView(
       // "in_progress": what it shows is what is stored, whole.
       ingest: { state: "complete", pendingJobs: 0 },
     },
+  };
+}
+
+/**
+ * Every group the page holds an article from — what membership is asked about.
+ *
+ * The SLOT's members, not the entry's headline: a slot's articles are split into
+ * three lists by `toEntry` and all three are on screen, so asking about the lead
+ * group alone would leave every "more coverage" row unanswered — which is
+ * exactly where the crossings the feature exists for actually live.
+ *
+ * Asking about `related` costs nothing and reports nothing, and that asymmetry
+ * is the design rather than an oversight: "same story" is the lead group's OTHER
+ * MEMBERS, so those rows carry the lead's own `groupId` and are in precisely the
+ * headline's storylines, always. They are already in this list by virtue of the
+ * lead being in it.
+ */
+function groupsOn(slots: readonly StorylineSlot[]): string[] {
+  return slots.flatMap((slot) => slot.members.map((member) => member.groupId));
+}
+
+/**
+ * A stored storyline → the summary a page names it by, for both of the lists
+ * that carry one: the search's surfaced storylines and the membership
+ * directory. One mapper, because the two differ in why the storyline is on the
+ * page and in nothing about the storyline.
+ *
+ * `dormant` rather than the status, per the wire contract: `provisional` never
+ * reaches either list, so running-or-quiet is the whole distinction left.
+ */
+function toSummary(storyline: {
+  id: string;
+  label: string | null;
+  spanFrom: string;
+  spanTo: string;
+  size: number;
+  status: string;
+}): StorylineSummary {
+  return {
+    id: storyline.id,
+    label: storyline.label,
+    from: storyline.spanFrom,
+    to: storyline.spanTo,
+    size: storyline.size,
+    dormant: storyline.status === "dormant",
   };
 }
 

@@ -204,6 +204,152 @@ export async function readStorylineTimelinePage(
 }
 
 /**
+ * One storyline as a page NAMES it: what a reader needs to tell two arcs apart
+ * and open one. The shared contract's `StorylineSummary`, before it is parsed.
+ */
+export interface StorylineSummaryRow {
+  id: string;
+  label: string | null;
+  status: StorylineStatus;
+  spanFrom: string;
+  spanTo: string;
+  /** Member articles over the storyline's whole life. */
+  size: number;
+}
+
+/**
+ * Which storylines each of these GROUPS is filed in, plus the storylines that
+ * answer names.
+ *
+ * A SECOND READ, deliberately, and this is the file's own argument about the
+ * hot path applied rather than ignored: the keyset scan above is scoped so that
+ * a slot's members are the ones that matched the search, and "whatever this read
+ * returns as a slot's members is exactly what may be promoted to its headline".
+ * Widening its join to carry membership would widen the headline with it. So
+ * membership is asked separately, of the groups the page already settled on,
+ * over the reverse index `storyline_groups (group_id)` that migration 0007
+ * created for exactly this question.
+ *
+ * Only groups filed in MORE THAN ONE storyline come back. A group in one is the
+ * common case by a wide margin, and its one arc is the arc of whatever slot it
+ * appears in — already on the wire — so a row for it would be a row reporting no
+ * news (`groupStorylines` in `@zammy/shared` is where that reading lives).
+ *
+ * Three exclusions, all of them ADR-0011's rather than this function's:
+ *
+ *  - **provisional** — a storyline-of-one is invisible as a storyline, which is
+ *    the same reason a provisional slot reaches the browser with `storyline:
+ *    null`. Naming one as a crossing would be the first place the UI called it
+ *    a story.
+ *  - **aliases** (`merged_into is not null`) — belt and braces. `mergeStorylines`
+ *    deletes the loser's `storyline_groups` rows, so an alias should hold no
+ *    membership at all; a row that survived one would otherwise name a UUID that
+ *    resolves elsewhere.
+ *  - **storylines with no covered day** — impossible for a promoted arc, since
+ *    every attach re-derives `storyline_days`, but the join enforces it anyway,
+ *    and the reconciliation below is what keeps the map from naming a storyline
+ *    the directory cannot describe.
+ *
+ * UNLABELLED promoted storylines are NOT excluded, unlike `findSurfacedStorylines`
+ * which refuses to offer one. The difference is that this is not an offer: a
+ * label-less arc is a valid thing to RENDER (ADR-0011's Labels — a promoted
+ * storyline whose label generation failed renders label-less rather than not at
+ * all), and it may be the arc a slot is being READ under, where dropping it
+ * would silently take a row's own tick away. Whether an unnamed arc is worth
+ * OFFERING as a destination is presentation's question, asked where the answer
+ * can look at the label.
+ */
+export interface GroupMemberships {
+  /** Group id → the storylines it is filed in, unordered. Never a single. */
+  byGroup: Map<string, string[]>;
+  /** Every storyline named in `byGroup`, and nothing else. */
+  storylines: StorylineSummaryRow[];
+}
+
+export async function readGroupMemberships(
+  db: Kysely<Database>,
+  groupIds: readonly string[],
+): Promise<GroupMemberships> {
+  const unique = [...new Set(groupIds)];
+  if (unique.length === 0) return { byGroup: new Map(), storylines: [] };
+
+  const { rows: memberships } = await sql<{ group_id: string; storyline_ids: string[] }>`
+    select sg.group_id, array_agg(sg.storyline_id::text) as storyline_ids
+    from storyline_groups sg
+    join storylines s on s.id = sg.storyline_id
+    where sg.group_id in (${sql.join(unique.map((id) => sql`${id}::bigint`))})
+      and s.merged_into is null
+      and s.status <> 'provisional'
+    group by sg.group_id
+    having count(*) > 1
+  `.execute(db);
+  if (memberships.length === 0) return { byGroup: new Map(), storylines: [] };
+
+  const named = [...new Set(memberships.flatMap((row) => row.storyline_ids))];
+  const storylines = await readStorylineSummaries(db, named);
+
+  // Reconcile rather than trust: the contract is that every id in `byGroup` is
+  // described in `storylines`, and a storyline the second statement could not
+  // describe — no covered day, or deleted between the two — must not be left as
+  // a UUID the browser can render a tick for and never a name. Dropping it can
+  // take a group back down to one arc, which is then a group with nothing to
+  // report and no entry at all.
+  const describable = new Set(storylines.map((storyline) => storyline.id));
+  const byGroup = new Map<string, string[]>();
+  for (const row of memberships) {
+    const ids = row.storyline_ids.filter((id) => describable.has(id));
+    if (ids.length > 1) byGroup.set(String(row.group_id), ids);
+  }
+  // Same direction back: a storyline whose only groups were dropped above
+  // describes nothing on this page.
+  const kept = new Set([...byGroup.values()].flat());
+  return { byGroup, storylines: storylines.filter((storyline) => kept.has(storyline.id)) };
+}
+
+/**
+ * The storylines behind a set of UUIDs, as a page names them.
+ *
+ * The same five facts `findSurfacedStorylines` reports and the same aggregate
+ * behind them, asked by ID instead of by keyword — the size subquery counts
+ * member articles per storyline, which is a fact about the story rather than
+ * about whatever put it on this page.
+ */
+async function readStorylineSummaries(
+  db: Kysely<Database>,
+  ids: readonly string[],
+): Promise<StorylineSummaryRow[]> {
+  if (ids.length === 0) return [];
+  const { rows } = await sql<{
+    id: string;
+    label: string | null;
+    status: StorylineStatus;
+    span_from: Date;
+    span_to: Date;
+    size: string;
+  }>`
+    select s.id, s.label, s.status,
+           min(d.day_slot_published) as span_from,
+           max(d.day_slot_published) as span_to,
+           (select count(*) from storyline_groups sg
+              join articles a on a.group_id = sg.group_id
+             where sg.storyline_id = s.id) as size
+    from storylines s
+    join storyline_days d on d.storyline_id = s.id
+    where s.id in (${sql.join(ids.map((id) => sql`${id}::uuid`))})
+    group by s.id, s.label, s.status
+  `.execute(db);
+
+  return rows.map((row) => ({
+    id: row.id,
+    label: row.label,
+    status: row.status,
+    spanFrom: row.span_from.toISOString(),
+    spanTo: row.span_to.toISOString(),
+    size: Number(row.size),
+  }));
+}
+
+/**
  * Storylines a SEARCH surfaces: those whose own vocabulary contains every
  * keyword (ADR-0011 — "search keywords ⊆ profile tokens", widened to the label).
  *

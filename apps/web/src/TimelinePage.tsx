@@ -13,6 +13,8 @@ import {
   type RailSlot,
   type Segment,
 } from "./format.js";
+import { mergeMemberships, rowMembership, type PageMemberships } from "./memberships.js";
+import { braidOnRule, StorylineBraid } from "./StorylineBraid.js";
 import { storylineQualifiers, visibleStorylines } from "./storylineLabels.js";
 import { LoadingGlyph } from "./LoadingGlyph.js";
 import { collapseCopies, outletLinks } from "./relatedRows.js";
@@ -55,6 +57,10 @@ export function TimelinePage({
   const items = useMemo(() => pages.flatMap((page) => page.items), [timeline.data]);
   const { visible, newCount, reveal } = useHeldNewItems(items, JSON.stringify(topic));
   const surfaced = latest?.storylines ?? [];
+  // Merged over every LOADED page, not just the newest: `items` above is every
+  // page's slots flattened, so a slot from page one must still find its group's
+  // arcs after page four has arrived.
+  const memberships = useMemo(() => mergeMemberships(pages), [timeline.data]);
   // The date qualifier each storyline needs, computed over everything ON SCREEN
   // together — slots and pills alike — because "is this label ambiguous" is the
   // condition ADR-0011 attaches the disambiguator to, and it is a question
@@ -101,6 +107,7 @@ export function TimelinePage({
             // search waiting behind it is still theirs (openStorylineView).
             onOpenStorylineView={onOpenStoryline}
             qualifiers={qualifiers}
+            memberships={memberships}
             items={visible}
             newCount={newCount}
             onReveal={reveal}
@@ -299,6 +306,7 @@ function Rail({
   onReveal,
   onOpenStorylineView,
   qualifiers,
+  memberships,
   ingesting,
   pendingJobs,
   terminal,
@@ -313,6 +321,8 @@ function Rail({
   onOpenStorylineView: (storylineId: string) => void;
   /** storyline id → the date that separates it from its namesakes on screen. */
   qualifiers: Map<string, string>;
+  /** Which storylines each group on the page is filed in (ADR-0025). */
+  memberships: PageMemberships;
   ingesting: boolean;
   pendingJobs: number;
   terminal: boolean;
@@ -470,6 +480,7 @@ function Rail({
                           entry={slot}
                           onOpenStorylineView={onOpenStorylineView}
                           qualifiers={qualifiers}
+                          memberships={memberships}
                           timeZone={timeZone}
                           // A card's own disclosures sit one level below
                           // whatever heads them, so they are h4 under a
@@ -564,6 +575,7 @@ function GroupCard({
   entry,
   onOpenStorylineView,
   qualifiers,
+  memberships,
   timeZone,
   relatedLevel,
 }: {
@@ -571,12 +583,18 @@ function GroupCard({
   onOpenStorylineView: (storylineId: string) => void;
   /** storyline id → the date that separates it from its namesakes on screen. */
   qualifiers: Map<string, string>;
+  /** Which storylines each group on the page is filed in (ADR-0025). */
+  memberships: PageMemberships;
   /** The reader's zone, so a card's clock agrees with the day it sits under. */
   timeZone: string;
   /** The heading level for this card's own disclosures — one below its head. */
   relatedLevel: "h3" | "h4";
 }) {
   const [showRelated, setShowRelated] = useState(false);
+  // Asked of THIS CARD's headline group, not the slot's lead: the rail cuts a
+  // slot into parts of the reader's day, and a card cut out of a later part is
+  // headed by a different group with memberships of its own (`format.ts`).
+  const braid = rowMembership(memberships, entry.article.groupId, entry.storylineId);
   const updated = hasLaterCoverage(entry);
   // What this card holds — coverage that landed in a later part of the day is
   // counted by the card that heads that part, so the disclosure never promises
@@ -585,7 +603,21 @@ function GroupCard({
 
   return (
     <RailEntry
-      marker="○"
+      // A slot that crosses nothing keeps the ○ the rail has always drawn and
+      // costs the reader nothing, which is the whole of why this treatment went
+      // on the spine rather than into the gutter (S9's verdict).
+      marker={
+        braid.ticks.length > 0 ? (
+          <StorylineBraid
+            membership={braid}
+            subject="This article"
+            onOpenStoryline={onOpenStorylineView}
+          />
+        ) : (
+          "○"
+        )
+      }
+      markerControl={braid.ticks.length > 0}
       // The headline card alone is the marker's anchor: the disclosure and the
       // rows it opens are content BELOW the article, and a glyph that slid down
       // to the middle of an expanded slot would no longer point at anything.
@@ -637,7 +669,7 @@ function GroupCard({
             <div
               style={{
                 margin: "0.25rem 0 0",
-                padding: "0 0 0 0.9rem",
+                padding: `0 0 0 ${DISCLOSURE_INSET}`,
                 borderLeft: "1px solid var(--border)",
                 display: "flex",
                 flexDirection: "column",
@@ -659,6 +691,31 @@ function GroupCard({
                   articles={entry.moreCoverage}
                   timeZone={timeZone}
                   level={relatedLevel}
+                  // Only THIS section gets marks. "Same story" is the lead
+                  // group's own members, so those rows are in exactly the
+                  // headline's storylines and have nothing of their own to
+                  // report (ADR-0025); "more coverage" is every other group in
+                  // the slot, each with its own memberships, and this is where
+                  // most of the crossings actually are.
+                  mark={(article) => {
+                    const membership = rowMembership(
+                      memberships,
+                      article.groupId,
+                      entry.storylineId,
+                    );
+                    // Most rows cross nothing. Answering null rather than a
+                    // braid that renders null is what lets such a row keep the
+                    // DOM it has always had.
+                    if (membership.ticks.length === 0) return null;
+                    return (
+                      <StorylineBraid
+                        membership={membership}
+                        subject={`“${article.title}”`}
+                        onOpenStoryline={onOpenStorylineView}
+                        dense
+                      />
+                    );
+                  }}
                 />
               )}
             </div>
@@ -819,6 +876,18 @@ function StorylineLabel({
 const SAME_STORY_CAP = 3;
 
 /**
+ * The disclosure's own geometry: how far its content clears the hairline down
+ * its left, and the type the rows are set in.
+ *
+ * Named because two other things now measure from them — the mark hung on the
+ * rule, and the height it centres in — and a literal repeated in three places
+ * is two chances to move one of them alone.
+ */
+const DISCLOSURE_INSET = "0.9rem";
+const ROW_FONT_SIZE = "0.85rem";
+const ROW_LINE_HEIGHT = 1.3;
+
+/**
  * One disclosure section, its heading a disclosure of its own: clicking it
  * folds the section's rows, and the folded heading carries its article count
  * so the "N related" promise stays reconcilable while part of it is hidden.
@@ -835,6 +904,7 @@ function RelatedSection({
   timeZone,
   level,
   softCap,
+  mark,
 }: {
   label: string;
   articles: Article[];
@@ -842,6 +912,15 @@ function RelatedSection({
   /** h4 beneath a segment's h3, h3 beneath a bare day's h2. */
   level: "h3" | "h4";
   softCap?: boolean;
+  /**
+   * A mark hung on the disclosure's hairline beside one row — the spine braid,
+   * one level down. Takes the ROW's leading article, because a row's group is
+   * what the mark is about and `collapseCopies` folds within a group.
+   *
+   * Rendering nothing is the normal answer and must stay cheap: a mark on every
+   * row would be a new glyph reporting no news.
+   */
+  mark?: (article: Article) => React.ReactNode;
 }) {
   const [showAll, setShowAll] = useState(false);
   const [open, setOpen] = useState(true);
@@ -900,13 +979,75 @@ function RelatedSection({
             gap: "0.4rem",
           }}
         >
-          {capped.map(({ article, copies }) => (
-            <li key={article.id}>
+          {capped.map(({ article, copies }) => {
+            // Asked once and used twice: a row with nothing to report must not
+            // get the box either. The box carries `--bg` to mask the hairline,
+            // and a hole punched in the rule for every coverage row is exactly
+            // the "reports no news" glyph this section refuses to draw. It is
+            // zero-width today, so that is a latent hole rather than a visible
+            // one — and it is the width that is the accident.
+            const badge = mark?.(article) ?? null;
+            return (
+            <li key={article.id} style={badge ? { position: "relative" } : undefined}>
+              {badge && (
+                // Hung ON the hairline, the way the rail's glyphs are hung on
+                // the spine: this section already has a vertical rule down its
+                // left (the container in `GroupCard`), so the idiom carries over
+                // rather than being invented again. The background masks the
+                // rule where the ticks cross it.
+                //
+                // `braidOnRule` owns the horizontal, because only the braid
+                // knows its own tick width, and it lands on the rule exactly.
+                //
+                // The vertical is CLOSE and not exact, which is worth saying in
+                // a file whose rule is "derive, don't tune". It pins the box's
+                // middle to half the row's own type height and lets the box size
+                // itself — the sizing is the part that matters, because a braid
+                // grows with the arc count and a box fixed at one line's height
+                // stopped covering the ticks at four arcs, letting the hairline
+                // show through the gaps. But the `<li>`'s first LINE BOX is set
+                // by its own inherited strut, not by the `line-height` on the
+                // `<a>` this measures, so the glyph sits ~0.9px high. Deriving
+                // it properly needs a value CSS will not hand us here; a
+                // measured constant would buy that pixel by breaking the rule
+                // the rest of this file keeps.
+                <span
+                  style={{
+                    position: "absolute",
+                    left: braidOnRule(DISCLOSURE_INSET),
+                    top: `calc(${ROW_FONT_SIZE} * ${ROW_LINE_HEIGHT} / 2)`,
+                    transform: "translateY(-50%)",
+                    background: "var(--bg)",
+                    lineHeight: 0,
+                    // THE SAME TRAP THE RAIL MARKER HAS. Before this box had a
+                    // transform or a z-index, nothing between it and the
+                    // document created a stacking context, so the popover's 20
+                    // competed in the ROOT — above the sticky command bar's 10,
+                    // which it painted over as the reader scrolled (measured:
+                    // 208×63px of the bar covered).
+                    //
+                    // Still load-bearing now that the centring transform above
+                    // makes a context anyway: the transform decides that the
+                    // popover is CAPPED here, and this decides what level "here"
+                    // is. Drop it and the box falls to level 0 in tree order and
+                    // the next row's card paints over the popover instead. Two
+                    // is where the rail's own marker sits, and under the command
+                    // bar's 10.
+                    zIndex: 2,
+                  }}
+                >
+                  {badge}
+                </span>
+              )}
               <a
                 href={article.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                style={{ fontSize: "0.85rem", lineHeight: 1.3, textDecoration: "none" }}
+                style={{
+                  fontSize: ROW_FONT_SIZE,
+                  lineHeight: ROW_LINE_HEIGHT,
+                  textDecoration: "none",
+                }}
               >
                 {article.title}
               </a>
@@ -941,7 +1082,8 @@ function RelatedSection({
                 ))}
               </div>
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
       {open && hidden > 0 && (
@@ -1095,12 +1237,23 @@ function ArticleCard({
 
 function RailEntry({
   marker,
+  markerControl,
   big,
   toggle,
   head,
   children,
 }: {
-  marker: string;
+  marker: React.ReactNode;
+  /**
+   * The marker is a CONTROL of its own — the spine braid — so the box around it
+   * stays in the accessibility tree and keeps its own label and expanded state.
+   *
+   * The opposite of `toggle` below, deliberately: that one is a pointer
+   * shortcut for a control the entry already carries, and is hidden. This one
+   * IS the only way to what it opens, so hiding it would put the crossings out
+   * of reach of the keyboard entirely.
+   */
+  markerControl?: boolean;
   big?: boolean;
   /**
    * A pointer shortcut on the rail marker for a control the entry's content
@@ -1133,6 +1286,13 @@ function RailEntry({
     color: "var(--fg)",
     background: "var(--bg)",
     fontSize: big ? "0.9rem" : "0.75rem",
+    // The centring transform below makes this box a STACKING CONTEXT, which
+    // traps anything hung off the marker: the braid's popover sets `z-index:
+    // 20` and is still painted over by the next row's card, because 20 only
+    // orders it against its siblings INSIDE this box while the box itself sits
+    // at level 0 in tree order. This is what lifts the box — and everything in
+    // it — over the cards below, and it stays under the command bar's 10.
+    zIndex: 2,
     // Day markers anchor to their heading's line. Everything else centres on
     // its anchor box — `head` when the entry has one, otherwise the entry
     // itself, whose vertical padding is symmetric. Tall cards therefore carry
@@ -1171,7 +1331,7 @@ function RailEntry({
       {marker}
     </span>
   ) : (
-    <span aria-hidden="true" style={markerStyle}>
+    <span {...(markerControl ? {} : { "aria-hidden": true })} style={markerStyle}>
       {marker}
     </span>
   );

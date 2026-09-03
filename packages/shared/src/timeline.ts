@@ -144,33 +144,43 @@ export const StorylineRef = z.object({
 });
 export type StorylineRef = z.infer<typeof StorylineRef>;
 
-/** A surfaced storyline: a ref plus the UUID the storyline view opens by. */
-export const SurfacedStoryline = StorylineRef.extend({
+/**
+ * A storyline NAMED to the reader: a ref, plus the UUID the storyline view
+ * opens by and the two facts that let a reader choose between two of them.
+ *
+ * Named for the facts rather than for the reason it is on the page, because a
+ * page now carries two lists of these and they arrive for different reasons —
+ * `storylines`, matched by this SEARCH (ADR-0011), and `memberships.storylines`,
+ * the arcs something on this page is FILED in. The lists are what carry the
+ * reason; one literal copy of the shape per reason would be two places for the
+ * span, the size and the dormancy marker to drift.
+ */
+export const StorylineSummary = StorylineRef.extend({
   id: z.string().min(1),
   /**
    * Articles in the storyline, over its whole life rather than this search.
    *
    * A SIZE, and the surfacing UI renders it as a bucket rather than a number
-   * (S8's verdict): the question a reader asks of a surfaced storyline is "how
-   * big is this", not "how many exactly", and a bucket survives the count
-   * moving while they look at it. The exact figure still travels, because it
-   * costs nothing here and the pill puts it in its `title`.
+   * (S8's verdict): the question a reader asks of a storyline they have not
+   * opened is "how big is this", not "how many exactly", and a bucket survives
+   * the count moving while they look at it. The exact figure still travels,
+   * because it costs nothing here and the pill puts it in its `title`.
    */
   size: z.int().min(0),
   /**
    * Quiet for longer than the dormancy window (ADR-0011) — the one bit the pill
    * needs to say so.
    *
-   * A dormant storyline is still surfaced: it is a real story that has fallen
+   * A dormant storyline is still named: it is a real story that has fallen
    * quiet, and quiet is a thing to tell the reader rather than a reason to hide
    * a match. S8's round found the marker load-bearing — without it a
    * five-month-old story appearing beside today's news reads as a bug. A
-   * boolean and not the status string: `provisional` never surfaces at all, so
+   * boolean and not the status string: `provisional` is never named at all, so
    * the only distinction left on the wire is running or quiet.
    */
   dormant: z.boolean(),
 });
-export type SurfacedStoryline = z.infer<typeof SurfacedStoryline>;
+export type StorylineSummary = z.infer<typeof StorylineSummary>;
 
 export const TimelineEntry = z.object({
   /**
@@ -237,10 +247,79 @@ export const TimelinePage = z.object({
    * come from the profile and the next from the label.
    *
    * Surfaced, never filtered: a search is never limited to a storyline, so
-   * these sit beside the results rather than narrowing them. Empty under the
-   * old model and for the storyline view, which is already about one.
+   * these sit beside the results rather than narrowing them.
+   *
+   * The STORYLINE VIEW fills it with exactly one entry — the arc being viewed —
+   * and that is not a search result but the view's own subject: it is where the
+   * command bar reads the chip's label from (`apps/web/src/CommandBar.tsx`), so
+   * a reader who arrived by UUID still sees the story's name. This comment said
+   * "empty for the storyline view" from ADR-0011 until the view started
+   * answering its own name, and the claim outlived the code by long enough to
+   * be copied into ARCHITECTURE 6.1.
    */
-  storylines: z.array(SurfacedStoryline).default([]),
+  storylines: z.array(StorylineSummary).default(() => []),
+  /**
+   * Which storylines each GROUP on this page is filed in — the one fact
+   * `TimelineEntry` structurally cannot carry, because membership lives on the
+   * group (`storyline_groups`) and an entry names exactly one storyline.
+   *
+   * PAGE-LEVEL and keyed by group, not repeated per row, and that is not only
+   * about bytes. A slot is re-cut in the browser into the parts of the reader's
+   * day (`apps/web/src/format.ts`, `railSlots`), and a card cut out of a later
+   * part is headed by a DIFFERENT group than the slot's lead — so a membership
+   * list hung on the entry would be the lead group's, answering for a headline
+   * that is no longer on the card. Keyed by group it survives the cut, because
+   * every article already carries `groupId` (page shape 9).
+   *
+   * Nothing here ranks: the arcs a group is in arrive in no order that means
+   * anything, and there is no primary one to put first
+   * (`packages/storage/src/storylines.ts` — "'primary storyline' is a concept
+   * with no principled definition"). A consumer that wants an order must make
+   * one and own it.
+   */
+  memberships: z
+    .object({
+      /**
+       * Group id → every storyline that group is filed in that this page is
+       * willing to NAME: promoted, and not an alias. A group with fewer than two
+       * of those is absent, because one arc is the arc of whatever slot the
+       * group appears in and a row for it would report no news.
+       *
+       * Provisional storylines are excluded, because they are invisible as
+       * storylines (ADR-0011's Lifecycle) — the same reason `TimelineEntry`
+       * sends `storyline: null` for one.
+       *
+       * WHICH MEANS the arc a slot reads a group under is USUALLY in that
+       * group's list, and not always. A slot in a provisional storyline is an
+       * ordinary article slot whose own arc is deliberately unnameable, so if
+       * its group has also joined two real arcs, this map names those two and
+       * not the slot's own. Measured on the dev archive: 2 groups of 28,729,
+       * and a transient state — the linker merges a provisional away when its
+       * only group finds a home. Rare, but a consumer must not read the list's
+       * length as "how many arcs this row is in", and must not assume the arc
+       * it is reading under is somewhere in it.
+       */
+      byGroup: z.record(z.string().min(1), z.array(z.string().min(1))),
+      /**
+       * Every storyline named in `byGroup`, so a crossing can be rendered and
+       * opened without a second request.
+       *
+       * A DIRECTORY, and deliberately not folded into `storylines` above: that
+       * list has a specific documented meaning — the storylines this SEARCH
+       * surfaced, matched keyword-by-keyword against a storyline's own
+       * vocabulary (ADR-0011) — and widening it into "storylines mentioned
+       * anywhere on this page" would put arcs no keyword matched into the
+       * pills row.
+       */
+      storylines: z.array(StorylineSummary),
+    })
+    // A GETTER, not a literal. Zod shallow-clones a default's top level and no
+    // further, so a literal here would hand every memberships-less page the SAME
+    // `byGroup` object: one consumer merging into it in place would poison the
+    // schema's default for every later parse in the process. Demonstrated on zod
+    // 4.4.3 before this line was a function. The same hazard is why `storylines`
+    // above takes one too.
+    .default(() => ({ byGroup: {}, storylines: [] })),
   /** Slots, not articles: `limit` counts these (§7.3 keyset over groups). */
   items: z.array(TimelineEntry),
   page: z.object({
@@ -254,4 +333,34 @@ export type TimelinePage = z.infer<typeof TimelinePage>;
 /** True only when the store is exhausted AND nothing further is being ingested. */
 export function isTerminalPage(page: TimelinePage): boolean {
   return !page.page.hasMore && page.meta.ingest.state === "complete";
+}
+
+/**
+ * Every storyline the group `groupId` is filed in, as this page reports it.
+ *
+ * The one place the `memberships.byGroup` contract's "absent means at most one
+ * nameable arc" rule is read. `readUnder` is the arc the row asking is being
+ * shown under — the slot's `storylineId` — and a group the map does not name has
+ * no second arc worth pointing at, so the row's own arc is the whole answer.
+ *
+ * That fallback is about what to RENDER, not a claim that the group is in
+ * exactly one storyline: it may also sit in a provisional arc, which this
+ * contract never names. And when the map DOES name the group, `readUnder` is
+ * usually among them but need not be — see `memberships.byGroup`. A caller
+ * drawing something per arc has to handle the row it is standing on not being
+ * in the list, rather than assume it away.
+ *
+ * In no meaningful order — see `memberships`. A caller wanting only the
+ * crossings filters `readUnder` out and gets an empty list for most rows, which
+ * is the point.
+ */
+export function groupStorylines(
+  // The map alone, so a consumer that has merged several pages' maps into one
+  // — the browser holds an infinite query's pages at once — can read the rule
+  // without first assembling a whole `memberships` object to satisfy a type.
+  memberships: Pick<TimelinePage["memberships"], "byGroup">,
+  groupId: string,
+  readUnder: string,
+): string[] {
+  return memberships.byGroup[groupId] ?? [readUnder];
 }

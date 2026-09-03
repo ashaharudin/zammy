@@ -813,3 +813,153 @@ describe("after the cutover", () => {
     ).rejects.toThrow(/unusable cursor/);
   });
 });
+
+/**
+ * MEMBERSHIP ON THE WIRE (ADR-0025): which storylines each group on a page is
+ * filed in.
+ *
+ * Membership lives on the GROUP (`storyline_groups`), never on the article and
+ * never on the slot, so these assertions are all about `memberships.byGroup`
+ * rather than about any entry. What the page has to make possible is a row
+ * saying "this piece also runs over there" and being able to get there.
+ */
+describe("the storylines a page's groups are in", () => {
+  /**
+   * Two arcs sharing one group, and a third group that is in only one of them.
+   * Returns the shared group and both storyline ids.
+   */
+  async function twoArcsSharingAGroup(): Promise<{
+    query: CanonicalQuery;
+    shared: string;
+    lone: string;
+    first: string;
+    second: string;
+  }> {
+    const query = await seed([
+      sighting({ domain: "a.example", title: "Fausto nears Hawaii", published: MONDAY }),
+      sighting({ domain: "b.example", title: "Genevieve strengthens offshore", published: MONDAY }),
+      sighting({ domain: "c.example", title: "Shipping lanes rerouted west", published: MONDAY }),
+    ]);
+    const [shared, lone, third] = await groupIds();
+    const first = await storylineOf([shared!, lone!], "Pacific Storms");
+    const second = await storylineOf([shared!, third!], "Shipping Disruption");
+    return { query, shared: shared!, lone: lone!, first, second };
+  }
+
+  it("names both storylines a shared group is filed in, and describes each", async () => {
+    const { query, shared, first, second } = await twoArcsSharingAGroup();
+
+    const result = await readTimeline(harness.deps, query, { limit: 25 });
+
+    expect(new Set(result.memberships.byGroup[shared])).toEqual(new Set([first, second]));
+    // A UUID a reader can be sent to is worth nothing without something to
+    // call it, so the directory answers every id the map names.
+    const directory = new Map(result.memberships.storylines.map((s) => [s.id, s]));
+    expect(directory.get(first)?.label).toBe("Pacific Storms");
+    expect(directory.get(second)?.label).toBe("Shipping Disruption");
+    expect(directory.get(first)?.dormant).toBe(false);
+  });
+
+  it("says nothing about a group filed in exactly one storyline", async () => {
+    const { query, lone } = await twoArcsSharingAGroup();
+
+    const result = await readTimeline(harness.deps, query, { limit: 25 });
+
+    // The common case by a wide margin, and it must cost the wire nothing: the
+    // one arc such a group is in is the arc of the slot it appears in, which
+    // the entry already carries.
+    expect(result.memberships.byGroup[lone]).toBeUndefined();
+  });
+
+  it("reports nothing at all for a page whose groups all sit in one arc", async () => {
+    const query = await seed([
+      sighting({ domain: "a.example", title: "Fausto nears Hawaii", published: MONDAY }),
+      sighting({ domain: "b.example", title: "Genevieve strengthens offshore", published: MONDAY }),
+    ]);
+    const groups = await groupIds();
+    await storylineOf(groups, "Pacific Storms");
+
+    const result = await readTimeline(harness.deps, query, { limit: 25 });
+
+    expect(result.memberships.byGroup).toEqual({});
+    expect(result.memberships.storylines).toEqual([]);
+  });
+
+  /**
+   * THE ASYMMETRY, pinned so a later change cannot quietly start reporting it.
+   *
+   * `related` is the lead group's OTHER MEMBERS — same `groupId` as the
+   * headline by construction — so those rows are in precisely the headline's
+   * storylines, always, and membership has nothing to add to them. `moreCoverage`
+   * is every OTHER group in the slot, each with its own rows in
+   * `storyline_groups`, and those genuinely can run in arcs the headline never
+   * touches. A page that reported membership per row would be saying something
+   * about "same story" that is true of the headline and news about neither.
+   */
+  it("adds nothing to SAME STORY: those rows are the headline's own group", async () => {
+    const query = await seed([
+      // Two outlets, one story, one group — the slot's "same story" rows, and
+      // the largest group in the slot, so this is also its headline.
+      sighting({ domain: "a.example", title: "Fausto nears Hawaii", published: MONDAY }),
+      sighting({ domain: "b.example", title: "Fausto nears Hawaii", published: MONDAY }),
+      // A different piece, its own group: the slot's "more coverage".
+      sighting({ domain: "c.example", title: "Shipping lanes rerouted west", published: MONDAY }),
+      // A fourth piece, in the second arc only, so that arc is a real one.
+      sighting({ domain: "d.example", title: "Port backlog grows in Oakland", published: MONDAY }),
+    ]);
+    const [lead, angle, offshore] = await groupIds();
+    // The ANGLE crosses into a second arc. The HEADLINE's group does not — so
+    // the only crossing on this slot is one the disclosure holds.
+    const first = await storylineOf([lead!, angle!], "Pacific Storms");
+    const second = await storylineOf([angle!, offshore!], "Shipping Disruption");
+
+    const result = await readTimeline(harness.deps, query, { limit: 25 });
+    const slot = result.items.find((item) => item.storylineId === first)!;
+
+    // The premise: every "same story" row IS the headline's group.
+    expect(slot.related.length).toBeGreaterThan(0);
+    for (const article of slot.related) {
+      expect(article.groupId).toBe(slot.article.groupId);
+    }
+    // So a row of "same story" can never cross where its headline does not,
+    // and here the headline crosses nowhere: the map says nothing about that
+    // group, and the whole "same story" section inherits the silence.
+    expect(result.memberships.byGroup[slot.article.groupId]).toBeUndefined();
+
+    // "More coverage" is the section where a crossing can differ, and it is
+    // answered by the same map because every article names its group.
+    expect(slot.moreCoverage.map((article) => article.groupId)).toContain(angle);
+    expect(new Set(result.memberships.byGroup[angle!])).toEqual(new Set([first, second]));
+  });
+
+  it("gives the STORYLINE VIEW the crossings too, and names arcs it cannot show", async () => {
+    // The view is filtered to one arc, so the arc a row crosses into has no
+    // slot on this page at all — which is exactly why the directory travels
+    // beside the map rather than being read off the items.
+    const { shared, first, second } = await twoArcsSharingAGroup();
+
+    const view = (await readStorylineView(harness.deps, { storylineId: first, limit: 25 }))!;
+
+    expect(new Set(view.memberships.byGroup[shared])).toEqual(new Set([first, second]));
+    expect(view.items.every((item) => item.storylineId === first)).toBe(true);
+    expect(view.memberships.storylines.map((s) => s.id)).toContain(second);
+  });
+
+  it("never names a PROVISIONAL storyline as an arc a group is also in", async () => {
+    const query = await seed([
+      sighting({ domain: "a.example", title: "Fausto nears Hawaii", published: MONDAY }),
+      sighting({ domain: "b.example", title: "Genevieve strengthens offshore", published: MONDAY }),
+    ]);
+    const groups = await groupIds();
+    await storylineOf(groups, "Pacific Storms");
+    // A storyline-of-one over a group that already has a real arc. It is
+    // invisible as a storyline (ADR-0011's Lifecycle) and its own slot reaches
+    // the browser with `storyline: null`, so naming it here would be the first
+    // place the UI called it a story.
+    await createProvisionalStoryline(db, { groupId: groups[0]!, ...TZ });
+
+    const result = await readTimeline(harness.deps, query, { limit: 25 });
+
+    expect(result.memberships.byGroup[groups[0]!]).toBeUndefined();
+  });
+});

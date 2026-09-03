@@ -49,13 +49,16 @@ export function freshnessTier(windowEnd: Date, now: Date): "hot" | "recent" | "h
  *       the reader's day and must know which articles are one piece, which it
  *       had been inferring from exact title equality (ADR-0004's test — the
  *       browser needs it — and CONTEXT.md's Group)
+ *  10 — pages carry `memberships`: which storylines each group on the page is
+ *       filed in, plus the directory those ids resolve through, so a row can
+ *       name the other arcs it runs in (ADR-0025)
  *
  * The bump stops a page cached by an older BUILD reaching a client parsing with
  * the new schema. It briefly also had to keep the two MODELS apart, since both
  * wrote shape 5 — the key carried a `model` segment for exactly as long as
  * there were two. Migration 0012 left one, so the segment went with it.
  */
-const PAGE_SHAPE_VERSION = 9;
+const PAGE_SHAPE_VERSION = 10;
 
 /** page:v<shape>:<fingerprint>:<windowHash>:<cursor>:<limit> (§7.1). */
 export function pageCacheKey(

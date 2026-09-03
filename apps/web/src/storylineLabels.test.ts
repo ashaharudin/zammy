@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { SurfacedStoryline, TimelineEntry } from "@zammy/shared";
+import type { StorylineSummary, TimelineEntry } from "@zammy/shared";
 import {
   pillDetail,
   sizeBucket,
   SIZE_STEPS,
   storylineQualifier,
   storylineQualifiers,
+  storylineSpan,
   visibleStorylines,
 } from "./storylineLabels.js";
 
@@ -20,7 +21,7 @@ const entry = (
     storyline: label === undefined ? null : { label, from: published, to: published },
   }) as unknown as TimelineEntry;
 
-const surfaced = (id: string, label: string | null, size = 5): SurfacedStoryline => ({
+const surfaced = (id: string, label: string | null, size = 5): StorylineSummary => ({
   id,
   label,
   size,
@@ -139,5 +140,28 @@ describe("sizeBucket", () => {
 
   it("never draws an empty glyph — a surfaced storyline has at least one article", () => {
     expect(sizeBucket(0)).toBeGreaterThan(0);
+  });
+});
+
+describe("storylineSpan", () => {
+  it("names both ends of a multi-day arc", () => {
+    expect(storylineSpan("2026-08-11T09:00:00.000Z", "2026-08-13T09:00:00.000Z")).toMatch(
+      /Aug 1[01].+Aug 1[34]/,
+    );
+  });
+
+  it("collapses a single covered day to one date rather than repeating it", () => {
+    const one = storylineSpan("2026-03-14T09:00:00.000Z", "2026-03-14T21:00:00.000Z");
+    expect(one).not.toContain("–");
+    expect(one).toMatch(/Mar 1[34]/);
+  });
+
+  it("is not the qualifier: it dates an arc whether or not its label collides", () => {
+    // `storylineQualifiers` answers "which of these same-named arcs is this" and
+    // stays silent when nothing collides. This answers "when did this run" and
+    // never stays silent — the popover lists arcs with no slot on the page, so
+    // the dates are the part a reader cannot get by looking at the timeline.
+    expect(storylineQualifiers([{ id: "a", label: "Solo", from: "2026-08-10" }]).size).toBe(0);
+    expect(storylineSpan("2026-08-10T00:00:00.000Z", "2026-08-12T00:00:00.000Z")).not.toBe("");
   });
 });
