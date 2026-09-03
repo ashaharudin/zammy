@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { StorylineSummary } from "@zammy/shared";
 import type { RowMembership } from "./memberships.js";
 import { pillDetail, storylineSpan } from "./storylineLabels.js";
@@ -119,7 +119,6 @@ export function StorylineBraid({
   const [open, setOpen] = useState(false);
   const container = useRef<HTMLSpanElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
-  const listId = useId();
 
   /**
    * Close, and put the keyboard back where it was.
@@ -175,10 +174,14 @@ export function StorylineBraid({
         type="button"
         onClick={() => (open ? close(true) : setOpen(true))}
         aria-expanded={open}
-        // Named rather than `aria-haspopup`: what opens is a short list of
-        // destinations, not a menu or a listbox, and claiming a role the markup
-        // does not carry would describe it worse than the plain disclosure it is.
-        aria-controls={listId}
+        // `aria-expanded` and nothing else. Not `aria-haspopup`, because what
+        // opens is a short list of destinations rather than a menu or a listbox
+        // and claiming a role the markup does not carry describes it worse than
+        // the plain disclosure it is. And not `aria-controls`, which was here
+        // and came out: the list it would point at only exists while the popover
+        // is open, so on a page carrying 166 of these it was a dangling IDREF on
+        // every closed one. The list carries the same words as its own
+        // accessible name, so nothing was lost with it.
         aria-label={`${subject} is also in ${count} other storyline${
           count === 1 ? "" : "s"
         }. Name them.`}
@@ -214,7 +217,6 @@ export function StorylineBraid({
       </button>
       {open && (
         <MembershipList
-          id={listId}
           others={membership.others}
           qualifiers={membership.qualifiers}
           left={dense ? "1.4rem" : "1.7rem"}
@@ -242,13 +244,11 @@ export function StorylineBraid({
  * wording and the elevation to drift.
  */
 function MembershipList({
-  id,
   others,
   qualifiers,
   left,
   onOpenStoryline,
 }: {
-  id: string;
   others: readonly StorylineSummary[];
   qualifiers: Map<string, string>;
   left: string;
@@ -302,7 +302,6 @@ function MembershipList({
         {heading}
       </p>
       <ul
-        id={id}
         aria-label={heading}
         style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "0.15rem" }}
       >

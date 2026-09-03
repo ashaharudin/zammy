@@ -996,14 +996,21 @@ function RelatedSection({
                 // rather than being invented again. The background masks the
                 // rule where the ticks cross it.
                 //
-                // Both offsets are derived rather than tuned. `braidOnRule`
-                // owns the horizontal, because only the braid knows its own
-                // tick width; the vertical pins the box's MIDDLE to the middle
-                // of the row's first line and lets the box size itself, because
-                // a braid grows with the number of arcs — a box fixed at the
-                // line's height masked the hairline for three arcs and stopped
-                // covering the ticks at four, leaving the rule showing through
-                // the gaps.
+                // `braidOnRule` owns the horizontal, because only the braid
+                // knows its own tick width, and it lands on the rule exactly.
+                //
+                // The vertical is CLOSE and not exact, which is worth saying in
+                // a file whose rule is "derive, don't tune". It pins the box's
+                // middle to half the row's own type height and lets the box size
+                // itself — the sizing is the part that matters, because a braid
+                // grows with the arc count and a box fixed at one line's height
+                // stopped covering the ticks at four arcs, letting the hairline
+                // show through the gaps. But the `<li>`'s first LINE BOX is set
+                // by its own inherited strut, not by the `line-height` on the
+                // `<a>` this measures, so the glyph sits ~0.9px high. Deriving
+                // it properly needs a value CSS will not hand us here; a
+                // measured constant would buy that pixel by breaking the rule
+                // the rest of this file keeps.
                 <span
                   style={{
                     position: "absolute",
@@ -1012,15 +1019,20 @@ function RelatedSection({
                     transform: "translateY(-50%)",
                     background: "var(--bg)",
                     lineHeight: 0,
-                    // THE SAME TRAP THE RAIL MARKER HAS, and it does not come
-                    // free here: nothing between this box and the document
-                    // creates a stacking context, so without a z-index of its
-                    // own the popover's 20 competes in the ROOT — above the
-                    // sticky command bar's 10, which it then paints over as the
-                    // reader scrolls (measured: 208×63px of the bar covered).
-                    // A positioned box with a non-auto z-index IS a stacking
-                    // context, so this both caps the popover and puts it at the
-                    // level the rail's own marker sits at.
+                    // THE SAME TRAP THE RAIL MARKER HAS. Before this box had a
+                    // transform or a z-index, nothing between it and the
+                    // document created a stacking context, so the popover's 20
+                    // competed in the ROOT — above the sticky command bar's 10,
+                    // which it painted over as the reader scrolled (measured:
+                    // 208×63px of the bar covered).
+                    //
+                    // Still load-bearing now that the centring transform above
+                    // makes a context anyway: the transform decides that the
+                    // popover is CAPPED here, and this decides what level "here"
+                    // is. Drop it and the box falls to level 0 in tree order and
+                    // the next row's card paints over the popover instead. Two
+                    // is where the rail's own marker sits, and under the command
+                    // bar's 10.
                     zIndex: 2,
                   }}
                 >
