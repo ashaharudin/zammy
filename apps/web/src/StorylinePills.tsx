@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { SurfacedStoryline } from "@zammy/shared";
+import type { StorylineSummary } from "@zammy/shared";
 import { MONO } from "./theme.js";
 import { pillDetail, sizeBucket, SIZE_STEPS } from "./storylineLabels.js";
 
@@ -23,7 +23,7 @@ export function StorylinePills({
   qualifiers,
   onOpen,
 }: {
-  storylines: readonly SurfacedStoryline[];
+  storylines: readonly StorylineSummary[];
   qualifiers: Map<string, string>;
   onOpen: (storylineId: string) => void;
 }) {
@@ -118,7 +118,7 @@ function StorylinePill({
   qualifier,
   onOpen,
 }: {
-  storyline: SurfacedStoryline;
+  storyline: StorylineSummary;
   qualifier: string | null;
   onOpen: () => void;
 }) {

@@ -1,4 +1,4 @@
-import type { SurfacedStoryline, TimelineEntry } from "@zammy/shared";
+import type { StorylineSummary, TimelineEntry } from "@zammy/shared";
 
 /**
  * Storyline presentation rules (ADR-0011, S8's verdict). Pure, because both of
@@ -66,7 +66,7 @@ export function storylineQualifiers(
 /** Every storyline visible on screen: the slots' own, plus the surfaced row. */
 export function visibleStorylines(
   items: readonly TimelineEntry[],
-  surfaced: readonly SurfacedStoryline[],
+  surfaced: readonly StorylineSummary[],
 ): { id: string; label: string | null; from: string }[] {
   const seen = new Map<string, { label: string | null; from: string }>();
   for (const item of items) {

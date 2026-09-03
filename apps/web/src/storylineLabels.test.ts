@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SurfacedStoryline, TimelineEntry } from "@zammy/shared";
+import type { StorylineSummary, TimelineEntry } from "@zammy/shared";
 import {
   pillDetail,
   sizeBucket,
@@ -20,7 +20,7 @@ const entry = (
     storyline: label === undefined ? null : { label, from: published, to: published },
   }) as unknown as TimelineEntry;
 
-const surfaced = (id: string, label: string | null, size = 5): SurfacedStoryline => ({
+const surfaced = (id: string, label: string | null, size = 5): StorylineSummary => ({
   id,
   label,
   size,
