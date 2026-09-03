@@ -14,11 +14,11 @@ describe("groupStorylines", () => {
     // The "absent means exactly one" rule. A group in one storyline is left out
     // of `byGroup`, and the one arc it is in must be the arc of the slot it
     // appears in — there is nowhere else it could be.
-    expect(groupStorylines({ byGroup: {}, storylines: [] }, "42", ARC_A)).toEqual([ARC_A]);
+    expect(groupStorylines({ byGroup: {} }, "42", ARC_A)).toEqual([ARC_A]);
   });
 
   it("returns every arc the map names, the one being read under included", () => {
-    const memberships = { byGroup: { "42": [ARC_A, ARC_B] }, storylines: [] };
+    const memberships = { byGroup: { "42": [ARC_A, ARC_B] } };
     expect(new Set(groupStorylines(memberships, "42", ARC_A))).toEqual(new Set([ARC_A, ARC_B]));
     // And the same answer whichever of them the row is being read under: the
     // list is a fact about the group, not about the slot asking.

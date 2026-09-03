@@ -326,7 +326,10 @@ export function isTerminalPage(page: TimelinePage): boolean {
  * and gets an empty list for most rows, which is the point.
  */
 export function groupStorylines(
-  memberships: TimelinePage["memberships"],
+  // The map alone, so a consumer that has merged several pages' maps into one
+  // — the browser holds an infinite query's pages at once — can read the rule
+  // without first assembling a whole `memberships` object to satisfy a type.
+  memberships: Pick<TimelinePage["memberships"], "byGroup">,
   groupId: string,
   readUnder: string,
 ): string[] {
