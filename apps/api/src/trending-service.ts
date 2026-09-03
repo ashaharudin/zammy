@@ -49,7 +49,7 @@ export interface TrendingConfig {
   samplePages: number;
   /** How long a snapshot stays fresh; the cadence knob (§10.1, default 60). */
   sampleRefreshMinutes: number;
-  /** How far back the cloud looks, in hours (§10.1, default 24). */
+  /** How far back the cloud looks, in hours (§10.1, default 48). */
   windowHours: number;
   /**
    * The ranking decay's half-life in hours (§10.3, default 8) — how fast an

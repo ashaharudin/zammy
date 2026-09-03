@@ -1284,7 +1284,7 @@ const EnvSchema = z
      * not come back: a storyline needs no suppressor, because "is this word
      * perennial" is a question about words (ADR-0013).
      */
-    TREND_WINDOW_HOURS: z.coerce.number().int().min(1).max(168).default(24),
+    TREND_WINDOW_HOURS: z.coerce.number().int().min(1).max(168).default(48),
 
     /**
      * The half-life of the wordcloud's recency decay, in hours (§10.3). A
