@@ -81,6 +81,28 @@ export function visibleStorylines(
 }
 
 /**
+ * The days a storyline ran — "Aug 11 – Aug 13", or one date for an arc that
+ * covered a single day.
+ *
+ * NOT a qualifier and not a substitute for one. `storylineQualifiers` above
+ * answers "which of these same-named arcs is this", dates from the FIRST
+ * covered day, and appears only when a label is ambiguous in the set on screen.
+ * This answers "when did this run", always — which is a different question and
+ * the one a reader asks of an arc that has no slot on the page to look at.
+ *
+ * Localised like the qualifier and with no explicit zone, so both read in the
+ * reader's own; the year is left to the qualifier, which supplies one exactly
+ * when two arcs need telling apart.
+ */
+export function storylineSpan(from: string, to: string): string {
+  const day = (value: string) =>
+    new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const start = day(from);
+  const end = day(to);
+  return start === end ? start : `${start} – ${end}`;
+}
+
+/**
  * What a pill says in words rather than in glyphs: the exact article count, and
  * "dormant" when the storyline has fallen quiet (ADR-0011's Lifecycle).
  *

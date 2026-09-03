@@ -43,6 +43,17 @@ describe("mergeMemberships", () => {
     expect(Object.keys(merged.byGroup).sort()).toEqual(["1", "2"]);
     expect([...merged.storylines.keys()].sort()).toEqual([ARC_A, ARC_B, ARC_C].sort());
   });
+
+  it("lets a later page win a collision, so a size that has grown is the one kept", () => {
+    // Documented behaviour with nothing pinning it until now. The two entries
+    // are the same storyline read a few seconds apart, so which way this goes
+    // barely matters — but it should not change without someone meaning it.
+    const merged = mergeMemberships([
+      page({ "1": [ARC_A, ARC_B] }, [arc(ARC_A, "Pacific Storms", { size: 6 })]),
+      page({ "1": [ARC_A, ARC_B] }, [arc(ARC_A, "Pacific Storms", { size: 9 })]),
+    ]);
+    expect(merged.storylines.get(ARC_A)?.size).toBe(9);
+  });
 });
 
 describe("rowMembership", () => {

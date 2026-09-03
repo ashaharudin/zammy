@@ -998,18 +998,18 @@ function RelatedSection({
                 //
                 // Both offsets are derived rather than tuned. `braidOnRule`
                 // owns the horizontal, because only the braid knows its own
-                // tick width; the box takes the height of the row's FIRST LINE
-                // and centres in it, because a mark's height grows with the
-                // number of arcs and a fixed `top` would centre exactly one of
-                // them.
+                // tick width; the vertical pins the box's MIDDLE to the middle
+                // of the row's first line and lets the box size itself, because
+                // a braid grows with the number of arcs — a box fixed at the
+                // line's height masked the hairline for three arcs and stopped
+                // covering the ticks at four, leaving the rule showing through
+                // the gaps.
                 <span
                   style={{
                     position: "absolute",
                     left: braidOnRule(DISCLOSURE_INSET),
-                    top: 0,
-                    height: `calc(${ROW_FONT_SIZE} * ${ROW_LINE_HEIGHT})`,
-                    display: "flex",
-                    alignItems: "center",
+                    top: `calc(${ROW_FONT_SIZE} * ${ROW_LINE_HEIGHT} / 2)`,
+                    transform: "translateY(-50%)",
                     background: "var(--bg)",
                     lineHeight: 0,
                     // THE SAME TRAP THE RAIL MARKER HAS, and it does not come

@@ -1,8 +1,73 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { StorylineSummary } from "@zammy/shared";
 import type { RowMembership } from "./memberships.js";
-import { pillDetail } from "./storylineLabels.js";
+import { pillDetail, storylineSpan } from "./storylineLabels.js";
 import { MONO } from "./theme.js";
+
+/**
+ * The dense braid's own metrics: one tick's width, and the padding its button
+ * puts to the left of that tick.
+ *
+ * `braidOnRule` below is the only thing that should have to know them.
+ * Hand-tuning that offset instead is how the rail's glyphs came to sit 0.9px
+ * off the spine (`markerLeft`), and how this one first sat 1.5px off the
+ * disclosure's hairline.
+ */
+const DENSE_TICK_WIDTH = "9px";
+const DENSE_PADDING = "0.15rem";
+const TICK_WIDTH = "11px";
+const RAIL_PADDING = "0.2rem 0.3rem";
+
+/**
+ * Pointer target, grown WITHOUT moving anything.
+ *
+ * The glyph is eleven pixels of furniture; the thing a finger has to hit is
+ * not. `TimelinePage`'s day dot already holds this line — it wears a 1.5rem box
+ * "giving the pointer a 24px target instead of the glyph's ~22×16" — and the
+ * braid shipped smaller than the glyph that comment calls too small (measured
+ * 20.6×12.4 on the rail, 13.8×10.8 on the hairline, unchanged at 375px).
+ *
+ * Padding grows the button and an equal negative margin takes it back out of
+ * layout, so the hit area reaches 24px in both directions while the marker box,
+ * the `--bg` mask it punches in the spine, and every offset `braidOnRule`
+ * computes stay exactly where they were. Growing the padding alone would widen
+ * the hole in the rail and push the ticks off the hairline.
+ */
+const HIT_GROW = { rail: "6px 2px", dense: "7px 6px" } as const;
+
+/**
+ * The button's padding, grown by `HIT_GROW`, and the margin that takes the
+ * growth back out of layout.
+ *
+ * ADDED to the base padding rather than replacing it, which is the whole
+ * arithmetic: the parent lays out the MARGIN box, whose width is
+ * `-grow + (glyph + 2·(base + grow)) - grow` = `glyph + 2·base`, unchanged; and
+ * the ticks sit at `marginLeft + base`, also unchanged, which is what keeps
+ * `braidOnRule`'s subtraction of `base` correct. Replacing the base instead
+ * moved the ticks and made the target smaller in one dimension while growing it
+ * in the other — measured 15×18 on the rail against the 20.6×12.4 it started
+ * from, which is how that mistake was caught.
+ */
+function hitArea(base: string, grow: string): { padding: string; margin: string } {
+  const [v, h] = grow.split(" ") as [string, string];
+  const [bv, bh] = base.includes(" ") ? (base.split(" ") as [string, string]) : [base, base];
+  return {
+    padding: `calc(${bv} + ${v}) calc(${bh} + ${h})`,
+    margin: `-${v} -${h}`,
+  };
+}
+
+/**
+ * How far LEFT of a row's content box a dense braid must sit for its ticks to
+ * land centred on a 1px rule running `inset` to that row's left.
+ *
+ * The disclosure's hairline is a border, so its centre is half a pixel further
+ * out than the padding that clears it — which is the half of this that is easy
+ * to drop and impossible to see dropping.
+ */
+export function braidOnRule(inset: string): string {
+  return `calc(-1 * ${inset} - 0.5px - ${DENSE_TICK_WIDTH} / 2 - ${DENSE_PADDING})`;
+}
 
 /**
  * The SPINE BRAID (S9's verdict, ADR-0025): where else the piece on this row is
@@ -34,32 +99,6 @@ import { MONO } from "./theme.js";
  * that dimmed every row outside a selected arc, which made the duplication
  * ADR-0011 accepts explain itself; it was cut deliberately.
  */
-/**
- * The dense braid's own metrics: one tick's width, and the padding its button
- * puts to the left of that tick.
- *
- * Exported because a caller hanging the braid on a rule cannot centre it
- * without them, and `braidOnRule` below is the only thing that should have to
- * know them. Hand-tuning that offset instead is how the rail's glyphs came to
- * sit 0.9px off the spine (`markerLeft`), and how this one first sat 1.5px off
- * the disclosure's hairline.
- */
-const DENSE_TICK_WIDTH = "9px";
-const DENSE_PADDING = "0.15rem";
-const TICK_WIDTH = "11px";
-
-/**
- * How far LEFT of a row's content box a dense braid must sit for its ticks to
- * land centred on a 1px rule running `inset` to that row's left.
- *
- * The disclosure's hairline is a border, so its centre is half a pixel further
- * out than the padding that clears it — which is the half of this that is easy
- * to drop and impossible to see dropping.
- */
-export function braidOnRule(inset: string): string {
-  return `calc(-1 * ${inset} - 0.5px - ${DENSE_TICK_WIDTH} / 2 - ${DENSE_PADDING})`;
-}
-
 export function StorylineBraid({
   membership,
   subject,
@@ -79,22 +118,49 @@ export function StorylineBraid({
 }) {
   const [open, setOpen] = useState(false);
   const container = useRef<HTMLSpanElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const listId = useId();
 
-  // The same dismissal `FilterChipRow` uses, and deliberately the same: a
-  // popover that closes on outside-press also gives one-open-at-a-time for
-  // free, because pressing a second braid is an outside press on the first.
+  /**
+   * Close, and put the keyboard back where it was.
+   *
+   * `restoreFocus` is the difference between the two ways out. Escape is a
+   * cancel — the reader is still on this row and their place in a rail that can
+   * run to seventy cards must survive it, where unmounting the popover under a
+   * focused list item strands focus on `<body>` and the next Tab restarts at the
+   * top of the document. A press outside, or focus deliberately moving away, is
+   * not a cancel: pulling focus back there would take it off whatever the reader
+   * just chose.
+   */
+  const close = (restoreFocus: boolean) => {
+    setOpen(false);
+    if (restoreFocus) trigger.current?.focus();
+  };
+
   useEffect(() => {
     if (!open) return;
-    const onPointerDown = (event: MouseEvent) => {
-      if (!container.current?.contains(event.target as Node)) setOpen(false);
+    const onPointerDown = (event: Event) => {
+      if (!container.current?.contains(event.target as Node)) close(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") close(true);
     };
+    // THREE WAYS OUT, because outside-press alone covered exactly one of them.
+    // Enter and Space on a button produce a bare `click` with no `mousedown`,
+    // so tabbing down the rail opening braids left every one of them open at
+    // once — on a page carrying 166 of these. `click` is what makes "only one
+    // is open" true for the keyboard as well; it cannot close the popover its
+    // own opening press just opened, because that press's target is the trigger
+    // and the trigger is inside this container. `focusin` adds the case where
+    // focus leaves without activating anything, i.e. tabbing past.
     window.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("click", onPointerDown);
+    window.addEventListener("focusin", onPointerDown);
     window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("mousedown", onPointerDown);
+      window.removeEventListener("click", onPointerDown);
+      window.removeEventListener("focusin", onPointerDown);
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [open]);
@@ -105,9 +171,14 @@ export function StorylineBraid({
   return (
     <span ref={container} style={{ position: "relative", lineHeight: 0 }}>
       <button
+        ref={trigger}
         type="button"
-        onClick={() => setOpen(!open)}
+        onClick={() => (open ? close(true) : setOpen(true))}
         aria-expanded={open}
+        // Named rather than `aria-haspopup`: what opens is a short list of
+        // destinations, not a menu or a listbox, and claiming a role the markup
+        // does not carry would describe it worse than the plain disclosure it is.
+        aria-controls={listId}
         aria-label={`${subject} is also in ${count} other storyline${
           count === 1 ? "" : "s"
         }. Name them.`}
@@ -116,7 +187,9 @@ export function StorylineBraid({
           gap: "2px",
           border: "none",
           background: "none",
-          padding: dense ? DENSE_PADDING : "0.2rem 0.3rem",
+          ...(dense
+            ? hitArea(DENSE_PADDING, HIT_GROW.dense)
+            : hitArea(RAIL_PADDING, HIT_GROW.rail)),
           cursor: "pointer",
           lineHeight: 0,
         }}
@@ -141,14 +214,16 @@ export function StorylineBraid({
       </button>
       {open && (
         <MembershipList
+          id={listId}
           others={membership.others}
           qualifiers={membership.qualifiers}
           left={dense ? "1.4rem" : "1.7rem"}
           onOpenStoryline={(id) => {
             // Closed on the way out: the next rail may hold a row under the
             // same key, and a popover that survived the navigation would
-            // re-open itself on something the reader never pressed.
-            setOpen(false);
+            // re-open itself on something the reader never pressed. No focus
+            // restore — the rail this trigger belongs to is being replaced.
+            close(false);
             onOpenStoryline(id);
           }}
         />
@@ -158,8 +233,8 @@ export function StorylineBraid({
 }
 
 /**
- * What the ticks open, wherever they are: a header counting exactly what is
- * under it, and the crossings, each opening its storyline on one press.
+ * What the ticks open, wherever they are: a line counting exactly what is under
+ * it, and the crossings, each opening its storyline on one press.
  *
  * One component for both spines. The rail's braid and the disclosure's differ
  * in what they are ABOUT — a slot's headline versus one row of coverage — and
@@ -167,16 +242,19 @@ export function StorylineBraid({
  * wording and the elevation to drift.
  */
 function MembershipList({
+  id,
   others,
   qualifiers,
   left,
   onOpenStoryline,
 }: {
+  id: string;
   others: readonly StorylineSummary[];
   qualifiers: Map<string, string>;
   left: string;
   onOpenStoryline: (storylineId: string) => void;
 }) {
+  const heading = `also in ${others.length} storyline${others.length === 1 ? "" : "s"}`;
   return (
     <div
       style={{
@@ -199,7 +277,17 @@ function MembershipList({
         lineHeight: "normal",
       }}
     >
-      <h3
+      {/*
+        A paragraph, NOT a heading, and that is the one thing about it that had
+        to be decided rather than styled. `RelatedSection` takes a `level` prop
+        because its depth varies; this hangs off a rail marker and has no fixed
+        depth at all, so a hardcoded `h3` landed in the outline as a sibling of
+        the day's segment — a screen reader navigating by heading heard "also in
+        1 storyline" as a peer of "Evening, Aug 24" rather than as something
+        inside the row. The list below carries the same words as its accessible
+        name, so nothing is lost by leaving the outline alone.
+      */}
+      <p
         style={{
           margin: "0 0 0.25rem",
           padding: "0 0.35rem",
@@ -211,12 +299,21 @@ function MembershipList({
           color: "var(--fg-faint)",
         }}
       >
-        also in {others.length} storyline{others.length === 1 ? "" : "s"}
-      </h3>
-      <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "0.15rem" }}>
+        {heading}
+      </p>
+      <ul
+        id={id}
+        aria-label={heading}
+        style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "0.15rem" }}
+      >
         {others.map((arc) => {
           const qualifier = qualifiers.get(arc.id);
-          const detail = pillDetail(arc);
+          // The span, then the size and dormancy — "when did this run" before
+          // "how big is it". This is the one surface where a reader chooses
+          // between arcs that have NO slot on the page to look at, so the dates
+          // are the part that cannot be read off the timeline instead. The
+          // qualifier is a different fact and appears only on a collision.
+          const detail = `${storylineSpan(arc.from, arc.to)} · ${pillDetail(arc)}`;
           return (
             <li key={arc.id}>
               <button
