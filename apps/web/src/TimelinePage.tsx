@@ -697,18 +697,25 @@ function GroupCard({
                   // report (ADR-0025); "more coverage" is every other group in
                   // the slot, each with its own memberships, and this is where
                   // most of the crossings actually are.
-                  mark={(article) => (
-                    <StorylineBraid
-                      membership={rowMembership(
-                        memberships,
-                        article.groupId,
-                        entry.storylineId,
-                      )}
-                      subject={`“${article.title}”`}
-                      onOpenStoryline={onOpenStorylineView}
-                      dense
-                    />
-                  )}
+                  mark={(article) => {
+                    const membership = rowMembership(
+                      memberships,
+                      article.groupId,
+                      entry.storylineId,
+                    );
+                    // Most rows cross nothing. Answering null rather than a
+                    // braid that renders null is what lets such a row keep the
+                    // DOM it has always had.
+                    if (membership.ticks.length === 0) return null;
+                    return (
+                      <StorylineBraid
+                        membership={membership}
+                        subject={`“${article.title}”`}
+                        onOpenStoryline={onOpenStorylineView}
+                        dense
+                      />
+                    );
+                  }}
                 />
               )}
             </div>
@@ -869,17 +876,6 @@ function StorylineLabel({
 const SAME_STORY_CAP = 3;
 
 /**
- * One disclosure section, its heading a disclosure of its own: clicking it
- * folds the section's rows, and the folded heading carries its article count
- * so the "N related" promise stays reconcilable while part of it is hidden.
- *
- * "Same story" rows are syndication copies, so word-identical titles collapse
- * to one row — four "The Latest:" wire updates are one fact, not four lines —
- * listing each outlet that printed it, linked to that outlet's own copy. The
- * section soft-caps behind an expander: the copies prove breadth, the
- * coverage section is the part worth the vertical space.
- */
-/**
  * The disclosure's own geometry: how far its content clears the hairline down
  * its left, and the type the rows are set in.
  *
@@ -891,6 +887,17 @@ const DISCLOSURE_INSET = "0.9rem";
 const ROW_FONT_SIZE = "0.85rem";
 const ROW_LINE_HEIGHT = 1.3;
 
+/**
+ * One disclosure section, its heading a disclosure of its own: clicking it
+ * folds the section's rows, and the folded heading carries its article count
+ * so the "N related" promise stays reconcilable while part of it is hidden.
+ *
+ * "Same story" rows are syndication copies, so word-identical titles collapse
+ * to one row — four "The Latest:" wire updates are one fact, not four lines —
+ * listing each outlet that printed it, linked to that outlet's own copy. The
+ * section soft-caps behind an expander: the copies prove breadth, the
+ * coverage section is the part worth the vertical space.
+ */
 function RelatedSection({
   label,
   articles,
@@ -972,9 +979,17 @@ function RelatedSection({
             gap: "0.4rem",
           }}
         >
-          {capped.map(({ article, copies }) => (
-            <li key={article.id} style={mark ? { position: "relative" } : undefined}>
-              {mark && (
+          {capped.map(({ article, copies }) => {
+            // Asked once and used twice: a row with nothing to report must not
+            // get the box either. The box carries `--bg` to mask the hairline,
+            // and a hole punched in the rule for every coverage row is exactly
+            // the "reports no news" glyph this section refuses to draw. It is
+            // zero-width today, so that is a latent hole rather than a visible
+            // one — and it is the width that is the accident.
+            const badge = mark?.(article) ?? null;
+            return (
+            <li key={article.id} style={badge ? { position: "relative" } : undefined}>
+              {badge && (
                 // Hung ON the hairline, the way the rail's glyphs are hung on
                 // the spine: this section already has a vertical rule down its
                 // left (the container in `GroupCard`), so the idiom carries over
@@ -997,9 +1012,19 @@ function RelatedSection({
                     alignItems: "center",
                     background: "var(--bg)",
                     lineHeight: 0,
+                    // THE SAME TRAP THE RAIL MARKER HAS, and it does not come
+                    // free here: nothing between this box and the document
+                    // creates a stacking context, so without a z-index of its
+                    // own the popover's 20 competes in the ROOT — above the
+                    // sticky command bar's 10, which it then paints over as the
+                    // reader scrolls (measured: 208×63px of the bar covered).
+                    // A positioned box with a non-auto z-index IS a stacking
+                    // context, so this both caps the popover and puts it at the
+                    // level the rail's own marker sits at.
+                    zIndex: 2,
                   }}
                 >
-                  {mark(article)}
+                  {badge}
                 </span>
               )}
               <a
@@ -1045,7 +1070,8 @@ function RelatedSection({
                 ))}
               </div>
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
       {open && hidden > 0 && (

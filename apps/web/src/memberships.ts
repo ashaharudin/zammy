@@ -12,22 +12,25 @@ import { storylineQualifiers } from "./storylineLabels.js";
  */
 
 /**
- * Every loaded page's memberships as one.
- *
- * The rail holds an INFINITE query: `items` is every page's slots flattened, so
- * a slot from page one must still find its group's arcs after page four has
- * arrived. The directory becomes a Map on the way through, since every read of
- * it is by id.
- *
- * Later pages win a collision, and it does not matter which way that goes: the
- * two entries are the same storyline read a few seconds apart, differing at
- * most in a size that has grown.
+ * A page's memberships as the browser holds them: the wire's map, and its
+ * directory turned into a Map because every read of it is by id.
  */
 export interface PageMemberships {
   byGroup: Record<string, string[]>;
   storylines: Map<string, StorylineSummary>;
 }
 
+/**
+ * Every loaded page's memberships as one.
+ *
+ * The rail holds an INFINITE query: `items` is every page's slots flattened, so
+ * a slot from page one must still find its group's arcs after page four has
+ * arrived.
+ *
+ * Later pages win a collision, and it does not matter which way that goes: the
+ * two entries are the same storyline read a few seconds apart, differing at
+ * most in a size that has grown.
+ */
 export function mergeMemberships(
   pages: readonly Pick<TimelinePage, "memberships">[],
 ): PageMemberships {

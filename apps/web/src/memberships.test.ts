@@ -106,11 +106,20 @@ describe("rowMembership", () => {
   });
 
   it("draws nothing when the row's own arc is not one the group is filed in", () => {
-    // A slot in a provisional storyline whose group has since joined two real
-    // arcs: there is no solid tick to draw, and a glyph naming three arcs and
-    // pointing at none is worse than no glyph.
+    // A slot whose group has since joined two other arcs: there is no solid
+    // tick to draw, and a glyph naming two arcs and pointing at neither is
+    // worse than no glyph.
+    //
+    // ARC_A is in the DIRECTORY but not in the group's list, and that is the
+    // whole point of the fixture: leaving it out of both would let the
+    // "describable" branch answer instead, and this assertion would pass
+    // without the membership check it names ever running. Mutation-tested.
     const row = rowMembership(
-      memberships({ "42": [ARC_B, ARC_C] }, [arc(ARC_B, "Shipping"), arc(ARC_C, "Sanctions")]),
+      memberships({ "42": [ARC_B, ARC_C] }, [
+        arc(ARC_A, "Pacific Storms"),
+        arc(ARC_B, "Shipping"),
+        arc(ARC_C, "Sanctions"),
+      ]),
       "42",
       ARC_A,
     );
