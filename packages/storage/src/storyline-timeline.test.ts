@@ -596,6 +596,41 @@ describe("a group's storylines", () => {
     }
   });
 
+  it("counts NAMEABLE arcs, so a provisional one cannot make up the second", async () => {
+    // The threshold is "two arcs this page will name", not "two rows in
+    // storyline_groups" — the provisional filter runs first. So a group in one
+    // real arc and one provisional arc is absent, and a slot under the
+    // provisional one is told nothing, even though the piece really is running
+    // in a named arc.
+    //
+    // That is a LIMITATION rather than a bug (ADR-0025): the braid's solid tick
+    // says which arc you are standing in, and a provisional slot has no arc to
+    // make solid. Pinned here so the rule the wire documents is the rule the
+    // query implements — measured at 2 groups of 28,729 on the dev archive.
+    const shadow = await createProvisionalStoryline(harness.db, { groupId: g1, timeZone: TZ });
+    try {
+      const { byGroup } = await readGroupMemberships(harness.db, [g1]);
+      expect(byGroup.has(g1)).toBe(false);
+
+      // And the sharper case, on the group that HAS two nameable arcs: the map
+      // names those two and not the provisional slot's own, so a consumer
+      // standing on that slot cannot assume its arc is in the list.
+      const crossing = await createProvisionalStoryline(harness.db, {
+        groupId: g2,
+        timeZone: TZ,
+      });
+      try {
+        const both = await readGroupMemberships(harness.db, [g2]);
+        expect([...(both.byGroup.get(g2) ?? [])].sort()).toEqual([arcA, arcB].sort());
+        expect(both.byGroup.get(g2)).not.toContain(crossing.id);
+      } finally {
+        await harness.db.deleteFrom("storylines").where("id", "=", crossing.id).execute();
+      }
+    } finally {
+      await harness.db.deleteFrom("storylines").where("id", "=", shadow.id).execute();
+    }
+  });
+
   it("asks nothing of the database for an empty group list", async () => {
     const { byGroup, storylines } = await readGroupMemberships(harness.db, []);
     expect(byGroup.size).toBe(0);

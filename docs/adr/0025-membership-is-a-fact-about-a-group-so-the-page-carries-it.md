@@ -36,8 +36,8 @@ and never on the slot. Two consequences shape the shape:
 
 `packages/storage/src/storylines.ts` says it outright — *"'primary storyline' is a concept
 with no principled definition"*. So the wire may name the arcs a group is filed in; it may not
-order them, and the arc a slot is being read under is **in** the list rather than separated
-from it. A consumer that wants an order must make one and own it. S9's verdict took the same
+order them, and the arc a slot is being read under is not separated out from the rest of the
+list. A consumer that wants an order must make one and own it. S9's verdict took the same
 constraint into the UI: the popover lists only the crossings, under a header counting exactly
 them, because the gutter label beside the row already names the remaining arc and is already
 clickable.
@@ -89,6 +89,17 @@ pinned by a test so a later change cannot quietly start reporting it.
   "this piece also runs over there" is a way out — and it is the one view where the gutter
   beside every row says the same thing. It is also where the directory earns its keep: the arc
   a row crosses into has no slot on that page at all.
+- **A slot in a provisional storyline reports no crossing, even into a named arc.** The map
+  names only arcs this page will name, so a group in one provisional arc and one real one has
+  fewer than two entries and is absent; and where such a group has joined *two* real arcs, the
+  map names those two and not the slot's own. The treatment cannot express that case anyway —
+  the braid's solid tick says which arc you are standing in, and on a provisional slot there is
+  no arc to make solid — so closing it needs a design round S9 did not run, not a fix. Recorded
+  with its size: **2 groups of 28,729** on the dev archive, and a transient state, since the
+  linker merges a provisional away when its only group finds a home. The consequence for
+  consumers is in `memberships.byGroup`'s own comment: the arc you are reading under is usually
+  in the list and not always, and the list's length is not "how many arcs this row is in".
+
 - **This does not tell a reader that two rows on one screen are one piece.** S9's round had a
   version of the treatment that dimmed every row outside a selected arc, which made ADR-0011's
   accepted duplication explain itself. It was cut deliberately; recorded here so it is not

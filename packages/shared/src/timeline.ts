@@ -247,10 +247,17 @@ export const TimelinePage = z.object({
    * come from the profile and the next from the label.
    *
    * Surfaced, never filtered: a search is never limited to a storyline, so
-   * these sit beside the results rather than narrowing them. Empty under the
-   * old model and for the storyline view, which is already about one.
+   * these sit beside the results rather than narrowing them.
+   *
+   * The STORYLINE VIEW fills it with exactly one entry — the arc being viewed —
+   * and that is not a search result but the view's own subject: it is where the
+   * command bar reads the chip's label from (`apps/web/src/CommandBar.tsx`), so
+   * a reader who arrived by UUID still sees the story's name. This comment said
+   * "empty for the storyline view" from ADR-0011 until the view started
+   * answering its own name, and the claim outlived the code by long enough to
+   * be copied into ARCHITECTURE 6.1.
    */
-  storylines: z.array(StorylineSummary).default([]),
+  storylines: z.array(StorylineSummary).default(() => []),
   /**
    * Which storylines each GROUP on this page is filed in — the one fact
    * `TimelineEntry` structurally cannot carry, because membership lives on the
@@ -273,14 +280,24 @@ export const TimelinePage = z.object({
   memberships: z
     .object({
       /**
-       * Group id → every promoted storyline that group is filed in, the arc a
-       * given slot reads it under INCLUDED. A group filed in exactly one is
-       * absent: its one arc is the storyline of whatever slot it appears in,
-       * which the entry already names, and a row for it would report no news.
+       * Group id → every storyline that group is filed in that this page is
+       * willing to NAME: promoted, and not an alias. A group with fewer than two
+       * of those is absent, because one arc is the arc of whatever slot the
+       * group appears in and a row for it would report no news.
        *
        * Provisional storylines are excluded, because they are invisible as
        * storylines (ADR-0011's Lifecycle) — the same reason `TimelineEntry`
        * sends `storyline: null` for one.
+       *
+       * WHICH MEANS the arc a slot reads a group under is USUALLY in that
+       * group's list, and not always. A slot in a provisional storyline is an
+       * ordinary article slot whose own arc is deliberately unnameable, so if
+       * its group has also joined two real arcs, this map names those two and
+       * not the slot's own. Measured on the dev archive: 2 groups of 28,729,
+       * and a transient state — the linker merges a provisional away when its
+       * only group finds a home. Rare, but a consumer must not read the list's
+       * length as "how many arcs this row is in", and must not assume the arc
+       * it is reading under is somewhere in it.
        */
       byGroup: z.record(z.string().min(1), z.array(z.string().min(1))),
       /**
@@ -296,7 +313,13 @@ export const TimelinePage = z.object({
        */
       storylines: z.array(StorylineSummary),
     })
-    .default({ byGroup: {}, storylines: [] }),
+    // A GETTER, not a literal. Zod shallow-clones a default's top level and no
+    // further, so a literal here would hand every memberships-less page the SAME
+    // `byGroup` object: one consumer merging into it in place would poison the
+    // schema's default for every later parse in the process. Demonstrated on zod
+    // 4.4.3 before this line was a function. The same hazard is why `storylines`
+    // above takes one too.
+    .default(() => ({ byGroup: {}, storylines: [] })),
   /** Slots, not articles: `limit` counts these (§7.3 keyset over groups). */
   items: z.array(TimelineEntry),
   page: z.object({
@@ -315,15 +338,21 @@ export function isTerminalPage(page: TimelinePage): boolean {
 /**
  * Every storyline the group `groupId` is filed in, as this page reports it.
  *
- * The one place the `memberships.byGroup` contract's "absent means exactly one"
- * rule is read. `readUnder` is the arc the row asking is being shown under —
- * the slot's `storylineId` — which is what makes the rule sound: a group absent
- * from the map is in exactly one storyline, and a group appearing in this slot
- * is in this slot's storyline, so that one arc is this one.
+ * The one place the `memberships.byGroup` contract's "absent means at most one
+ * nameable arc" rule is read. `readUnder` is the arc the row asking is being
+ * shown under — the slot's `storylineId` — and a group the map does not name has
+ * no second arc worth pointing at, so the row's own arc is the whole answer.
  *
- * Returns the arc it is read under INCLUDED, and in no meaningful order — see
- * `memberships`. A caller wanting only the crossings filters `readUnder` out
- * and gets an empty list for most rows, which is the point.
+ * That fallback is about what to RENDER, not a claim that the group is in
+ * exactly one storyline: it may also sit in a provisional arc, which this
+ * contract never names. And when the map DOES name the group, `readUnder` is
+ * usually among them but need not be — see `memberships.byGroup`. A caller
+ * drawing something per arc has to handle the row it is standing on not being
+ * in the list, rather than assume it away.
+ *
+ * In no meaningful order — see `memberships`. A caller wanting only the
+ * crossings filters `readUnder` out and gets an empty list for most rows, which
+ * is the point.
  */
 export function groupStorylines(
   // The map alone, so a consumer that has merged several pages' maps into one

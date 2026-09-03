@@ -475,7 +475,8 @@ Response:
 {
   "topic":  { "fingerprint": "…", "keywords": ["…"], "coverage": { "from": "…", "to": "…" } },
   // Storylines this SEARCH surfaced, beside the results rather than narrowing
-  // them (ADR-0011). Empty for the storyline view, which is already about one.
+  // them (ADR-0011). The storyline VIEW fills it with one entry — the arc being
+  // viewed — which is where the command bar reads that chip's label from.
   "storylines": [ /* StorylineSummary */ ],
   // Which storylines each GROUP on this page is filed in, and the arcs those
   // ids resolve through (ADR-0025). A group in exactly one is absent.
