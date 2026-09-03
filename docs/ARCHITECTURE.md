@@ -20,7 +20,7 @@ for decisions and the alternatives they beat.
 - Cache results: the first searcher of a topic populates it, everyone after reads from storage.
 - Accumulate articles over time so a topic's timeline deepens beyond one upstream call — driven by
   actual use, not a scheduled watchlist (§9).
-- **A landing-page wordcloud of the storylines the last 24 hours updated** (§10): each word a
+- **A landing-page wordcloud of the storylines the last 48 hours updated** (§10): each word a
   storyline's label, sized by unique articles gained inside the window, coloured by recency,
   clickable to open the storyline it names. The window rolls continuously. Vocabulary: a
   **storyline** is one arc of one event and its **label** names it; a **topic** is a saved canonical
@@ -1367,7 +1367,7 @@ label — "Fort Hood Crash", not "fort hood" — sized by articles gained inside
 recency, clicking a word opening that storyline by UUID (ADR-0016). It doubles as the cold-start
 answer (§9.3): the landing page is never blank.
 
-**The window rolls; it does not reset.** The cloud covers `TREND_WINDOW_HOURS` (default 24) back
+**The window rolls; it does not reset.** The cloud covers `TREND_WINDOW_HOURS` (default 48) back
 from now ([ADR-0008](adr/0008-the-cloud-rolls-over-a-weighted-24-hour-window.md)), which retired the
 fixed `APP_TIMEZONE` calendar-day design that froze when the day closed. `APP_TIMEZONE` survives
 elsewhere: article grouping still bounds a group by the local calendar day (§7.4, ADR-0005).
