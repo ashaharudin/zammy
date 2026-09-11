@@ -7,7 +7,7 @@ import type { LinkerConfig } from "./storyline-linker.js";
  * the thing `wiring.ts`'s header asks for and could not deliver on its own.
  *
  * `createLinkerConfig` fixed the bar for the two PRODUCTION entrypoints and
- * nothing else, so the same fourteen fields were written out again at nineteen
+ * nothing else, so the same fifteen fields were written out again at nineteen
  * sites: two operator CLIs, a second default in `test-support.ts`, and ~18 more
  * across 13 test files. Re-measuring a threshold was a nineteen-file change,
  * and — worse — a test asserting formation behaviour was asserting against a

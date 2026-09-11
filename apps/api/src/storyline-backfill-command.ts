@@ -1,3 +1,4 @@
+import type { Config } from "@zammy/config";
 import { countFormationRefusals, readStorylineStats } from "@zammy/storage";
 import {
   EXIT_FAILED,
@@ -9,6 +10,52 @@ import { runBridgeSweep, type LinkerConfig } from "./storyline-linker.js";
 import { labelLinkedStorylines } from "./storyline-label-service.js";
 import { storylineBar } from "./storyline-bar.js";
 import { linkerBarFromEnv } from "./wiring.js";
+
+/**
+ * The bar a BACKFILL judges at: the configured one (`wiring.ts`), diverging on
+ * `coherenceGate` always and on `honourRefusals` only when the operator asks.
+ *
+ * Everything else is the live path's by construction, and the reasons that used
+ * to be written beside each copied field were all the same reason: a rebuild is
+ * where the whole archive's evidence is written, so a backfill that retrieved or
+ * bridged differently from the live path would leave an archive nothing has
+ * measured and a graph whose standing pairs no arrival can reproduce. `enabled`
+ * is not a divergence either — the flag gates the LIVE write path, and
+ * `STORYLINE_BAR` ships it on, which is right for the process that has to run
+ * first.
+ *
+ * A function at module scope rather than a literal inside `run`, because the
+ * mapping from one flag to one field is the place a typo inverts the fix
+ * silently: `honourRefusals: ignoreRefusals` type-checks, passes every linker
+ * test, and rebuilds every pile a verdict ever refused.
+ * `storyline-backfill-command.test.ts` pins both directions.
+ *
+ * **`coherenceGate` is false unconditionally**, and that is structural before it
+ * is budget: the gate DEFERS a formation to a tail `backfillStorylines` does not
+ * have, so a gated replay forms nothing (a rebuild) or silently drops every
+ * formation from an ordinary-looking report (a resume).
+ * `assertNoUnresolvableGate` refuses such a run rather than letting this line be
+ * the only thing preventing it.
+ *
+ * **`honourRefusals` is true unless the operator says otherwise**, and nothing
+ * about replaying a verdict is a budget decision: a refusal is keyed on GROUPS,
+ * survives any amount of storyline churn, and costs one indexed read per
+ * formation-shaped decision. It used to be unreachable — the linker read the
+ * refusals table inside the gate's own `if` — and what that cost is recorded in
+ * docs/STORYLINE-BACKFILL.md ("What a rebuild remembers"), along with the
+ * arithmetic for why buying NEW verdicts here is still not worth it — measured
+ * in docs/STORYLINE-LINKING.md ("The rerun the section above is owed").
+ */
+export function backfillBar(
+  config: Config,
+  options: { ignoreRefusals: boolean },
+): LinkerConfig {
+  return storylineBar({
+    ...linkerBarFromEnv(config),
+    coherenceGate: false,
+    honourRefusals: !options.ignoreRefusals,
+  });
+}
 
 /**
  * `pnpm backfill:storylines [--restart] [--labels-only] [--no-labels]
@@ -117,66 +164,7 @@ export const spec: CommandSpec = {
         `labels: ${skipLabels ? "skipped" : labeler.generator ? config.GEMINI_MODEL : "fallback only (no GEMINI_API_KEY)"}`,
     );
 
-    /**
-     * The configured bar (`wiring.ts`), diverging on `coherenceGate` always and
-     * on `honourRefusals` only when the operator asks — the shipped value is
-     * what a plain run leaves standing. Both are stated here rather than one,
-     * because they used to BE one field, and that is what cost the archive every
-     * refusal it had ever recorded (see below).
-     *
-     * Everything else is the live path's by construction, and the reasons that
-     * used to be written beside each copied field were all the same reason: a
-     * rebuild is where the whole archive's evidence is written, so a backfill
-     * that retrieved or bridged differently from the live path would leave an
-     * archive nothing has measured and a graph whose standing pairs no arrival
-     * can reproduce. `enabled` is not a divergence either — the flag gates the
-     * LIVE write path, and `STORYLINE_BAR` ships it on, which is right for the
-     * process that has to run first.
-     */
-    const linkerConfig: LinkerConfig = storylineBar({
-      ...linkerBarFromEnv(config),
-      /**
-       * The backfill does NOT ask for new verdicts, and there are two reasons —
-       * one structural, one measured. The structural one is decisive:
-       * `coherenceGate` DEFERS a formation rather than refusing it, and
-       * `backfillStorylines` has no tail to resolve what it defers, so a gated
-       * run would withhold every formation in the archive and form nothing.
-       * `assertNoUnresolvableGate` refuses such a run rather than letting this
-       * line be the only thing standing between an operator and that outcome.
-       *
-       * The measured one says the wiring is not worth building either. The
-       * budget argument this comment used to make — "thousands of calls against
-       * a ceiling of 500 a day" — is stale: the configured model publishes
-       * 14,400/day since 2026-08-27, so the daily cap binds nothing. What binds
-       * is RATE and what it collides with. A replay of the dev archive earns
-       * ~5,000 formations; at the 30/min ceiling that is ~3 hours of calls on
-       * the SAME per-key allowance the live labeler is drawing from, and a
-       * manual campaign paced to 30/min has already been measured pushing 37
-       * organic promotions onto bigram fallbacks. Buying that contention would
-       * buy the gate's measured trade at archive scale: 0.88 declined piles
-       * caught per real arc destroyed, on a figure that is itself a month old
-       * (docs/STORYLINE-LINKING.md). Re-measure before anyone reconsiders.
-       */
-      coherenceGate: false,
-      /**
-       * Refusals already recorded ARE replayed, and this is the line the
-       * 2026-08-21 rebuild needed and did not have.
-       *
-       * It used to be unreachable: the linker read the refusals table inside the
-       * gate's own `if`, so `coherenceGate: false` here silently meant "discard
-       * every verdict ever paid for" as well. It cost 66 hand-verified subjects
-       * — `dissolve:storyline-piles --apply` cleaned them on 2026-08-19, a
-       * `--restart` re-minted them on 2026-08-21 — and 167 of the 264 recorded
-       * pairs (63%) are back in a shared storyline in the dev archive today.
-       *
-       * Nothing about replaying them is a budget decision: a refusal is keyed on
-       * GROUPS, survives any amount of storyline churn, and costs one indexed
-       * read per formation-shaped decision. `--ignore-refusals` is how an
-       * operator asks for the old behaviour deliberately — a rebuild on pure
-       * token evidence — rather than inheriting it from a missing API key.
-       */
-      honourRefusals: !ignoreRefusals,
-    });
+    const linkerConfig = backfillBar(config, { ignoreRefusals });
     const log = { warn: (obj: object, msg: string) => console.warn(msg, JSON.stringify(obj)) };
 
     // Said out loud, because the run reports identically either way and the

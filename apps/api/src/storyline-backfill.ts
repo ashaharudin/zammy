@@ -12,7 +12,7 @@ import {
   type StorylineStats,
 } from "@zammy/storage";
 import { readTrailingCorpus } from "./story-df.js";
-import { linkGroup, type LinkerDeps } from "./storyline-linker.js";
+import { linkGroup, type LinkerConfig, type LinkerDeps } from "./storyline-linker.js";
 import { nameStoryline, type LabelerDeps } from "./storyline-naming.js";
 import { modelLabelSource, needsLabel } from "./storyline-label.js";
 
@@ -205,7 +205,6 @@ export async function backfillStorylines(
   deps: LinkerDeps & { labeler?: Omit<LabelerDeps, "db"> },
   options: BackfillOptions = {},
 ): Promise<BackfillReport> {
-  assertNoUnresolvableGate(deps);
   const batchSize = options.batchSize ?? 500;
   const sleep = options.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
 
@@ -223,6 +222,11 @@ export async function backfillStorylines(
   };
 
   if (!options.labelsOnly) {
+    // Here and not at the top of the function: the guard is about LINKING, and
+    // `--labels-only` links nothing. Asserted before the pass rather than inside
+    // `link()` so the refusal happens before the corpus probe, which is the
+    // slower of the two and would otherwise report first.
+    assertNoUnresolvableGate(deps.config);
     const startedAt = Date.now();
     Object.assign(report, await link(deps, options, batchSize));
     report.linkMs = Date.now() - startedAt;
@@ -540,39 +544,41 @@ export async function labelPass(
 }
 
 /**
- * Refuse a gated backfill, because this module cannot resolve what the gate
+ * Refuse a gated linking pass, because this module cannot resolve what the gate
  * withholds.
  *
- * `coherenceGate` does not refuse a formation — it DEFERS one, handing the
- * caller a `pendingFormation` that something downstream has to ask a model
- * about (`resolvePendingFormations`). The live path has that something: the
- * ingest tail and the nightly sweep both pass their outcomes to
- * `labelLinkedStorylines` with a `formations` deps object. The loop below has
- * nothing of the kind — it reads `attached` and `merged` off each outcome and
- * drops the rest on the floor.
+ * `coherenceGate` does not refuse a formation — it DEFERS one, handing back a
+ * `pendingFormation` that something downstream has to ask a model about
+ * (`resolvePendingFormations`). The live path has that something: the ingest
+ * tail and the nightly sweep both reach it through `labelLinkedStorylines`. The
+ * loop below has nothing of the kind — it reads `attached` and `merged` off each
+ * outcome and drops the rest on the floor.
  *
- * So a backfill run with the gate ON does not gate anything. It withholds every
- * formation in the archive and resolves none of them: the run reports zero
- * attaches, every group keeps its birth storyline, and nothing in the report
- * says why. That is a worse outcome than either honest setting, and it is one
- * config field away from any operator who reads "the backfill does not gate
- * formations" and decides it should.
+ * So a gated run does not gate. It withholds every formation it earns and
+ * resolves none of them, and what that looks like depends on the run, which is
+ * why the error says the worse half: a `--restart` reaches two groups nowhere
+ * and builds nothing, but a RESUME goes on attaching to storylines that are
+ * already real — `mayRefuseFormation` only fires at a promotion whose winner
+ * held one group — so it produces an ordinary-looking report with every
+ * formation silently missing from it. That is the outcome no operator would
+ * catch, and it is one config field away from anyone who reads "the backfill
+ * does not gate formations" and decides it should.
  *
- * Refusing is right rather than resolving here, and the reason is measured, not
- * squeamish: a full replay earns thousands of formations, and the gate's own
- * trade at the two-group moment is 0.88 piles caught per real arc destroyed
- * (docs/STORYLINE-LINKING.md). Wiring a resolver in would spend hours of model
- * calls against a shared per-minute ceiling to make the archive worse. Replaying
- * refusals already recorded — `honourRefusals`, which stays on — is the half of
- * the gate a backfill can afford, and it costs nothing.
+ * Refusing rather than wiring a resolver in is a measured choice, not
+ * squeamishness; docs/STORYLINE-BACKFILL.md ("Why the backfill still does not
+ * gate") holds the arithmetic, and docs/STORYLINE-LINKING.md ("The rerun the
+ * section above is owed") the measurement under it. Replaying refusals already
+ * recorded (`honourRefusals`) is the half of the gate a backfill can afford, and
+ * it stays on.
  */
-function assertNoUnresolvableGate(deps: LinkerDeps): void {
-  if (!deps.config.coherenceGate) return;
+function assertNoUnresolvableGate(config: LinkerConfig): void {
+  if (!config.coherenceGate) return;
   throw new Error(
     "coherenceGate is ON, and a backfill cannot resolve a withheld formation: " +
-      "`linkGroup` would defer every formation in the archive to a tail that " +
-      "does not exist here, so the run would build no storylines at all and " +
-      "say nothing about why.\n" +
+      "`linkGroup` defers every formation to a tail that does not exist here. " +
+      "A rebuild would therefore form nothing, and a resume would keep " +
+      "attaching to storylines that are already real while every FORMATION " +
+      "went missing from an otherwise ordinary-looking report.\n" +
       "Leave the gate off. Recorded refusals are replayed regardless " +
       "(`honourRefusals`), which is the part that needs no model call.",
   );

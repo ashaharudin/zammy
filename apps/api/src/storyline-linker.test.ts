@@ -844,20 +844,19 @@ describe("recorded refusals, with no gate running", () => {
   /**
    * The backfill's bar: no model, no new verdicts — and, until 2026-09-11, no
    * memory of the old ones either, because the refusals table was read inside
-   * the gate's own `if`.
-   *
-   * That coupling is what `backfill:storylines --restart` on 2026-08-21 rode
-   * through the whole archive: it re-minted 167 of the 264 recorded pairs,
-   * including all 66 subjects `dissolve:storyline-piles --apply` had cleaned two
-   * days earlier. Replaying a verdict costs one indexed read; buying one costs a
-   * model call. These tests pin them apart.
+   * the gate's own `if`. Replaying a verdict costs one indexed read; buying one
+   * costs a model call, and these tests pin them apart. What the coupling cost
+   * the archive is in docs/STORYLINE-BACKFILL.md, "What a rebuild remembers".
    */
-  const UNGATED: LinkerConfig = storylineBar({ coherenceGate: false });
+  /**
+   * `CONFIG` itself — the shipped bar already has the gate off and refusals on,
+   * which IS the backfill's bar. Naming a second constant that restated
+   * `coherenceGate: false` would have been a copy of the bar rather than a
+   * divergence from it, which is the thing `storyline-bar.ts` exists to stop.
+   */
+  const UNGATED = CONFIG;
   /** The named escape hatch — `backfill:storylines --ignore-refusals`. */
-  const FORGETFUL: LinkerConfig = storylineBar({
-    coherenceGate: false,
-    honourRefusals: false,
-  });
+  const FORGETFUL: LinkerConfig = storylineBar({ honourRefusals: false });
 
   it("does not re-form a pair a verdict already refused", async () => {
     await seedCorpus({ rare: STORY });

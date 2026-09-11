@@ -317,15 +317,12 @@ describe("the backfill", () => {
 
   describe("what a rebuild remembers", () => {
     /**
-     * The 2026-08-21 event, in miniature.
-     *
-     * `dissolve:storyline-piles --apply` recorded 264 refusals over
-     * 2026-08-18..21 and the rebuild two days later re-minted 167 of those pairs
-     * (63%), including all 66 subjects the cleanup had hand-verified. The cause
-     * was not the `--restart`: refusals key on GROUPS and survived it intact. It
-     * was that the linker read them inside the coherence gate's own `if`, so a
-     * backfill built without a model forgot every verdict a model had ever
-     * given.
+     * The 2026-08-21 event, in miniature: a rebuild that forgot every verdict a
+     * model had ever given, because the linker read the refusals table inside
+     * the coherence gate's own `if` and a backfill runs with the gate off. The
+     * cause was not the `--restart` — refusals key on GROUPS and survived it
+     * intact. What it cost is recorded once, in docs/STORYLINE-BACKFILL.md
+     * ("What a rebuild remembers").
      */
 
     /**
@@ -404,6 +401,23 @@ describe("the backfill", () => {
 
       // And nothing was written on the way to refusing.
       expect((await readStorylineStats(db)).linkedGroups).toBe(0);
+    });
+
+    it("lets a labels-only run through, because it forms nothing to gate", async () => {
+      // The guard is about LINKING. `--labels-only` never calls `linkGroup`, so
+      // refusing it would be refusing a run that cannot reach the failure — and
+      // the labelling half is exactly what an operator reaches for when the gate
+      // is on for the live path.
+      await seedArchive();
+      await backfillStorylines(deps(), { skipLabels: true });
+
+      const report = await backfillStorylines(
+        { db, config: storylineBar({ coherenceGate: true }) },
+        { labelsOnly: true, skipLabels: true },
+      );
+
+      expect(report.linked).toBe(0);
+      expect((await readStorylineStats(db)).linkedGroups).toBe(8);
     });
   });
 

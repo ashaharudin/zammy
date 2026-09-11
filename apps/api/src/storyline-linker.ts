@@ -95,26 +95,26 @@ export interface LinkerConfig {
    *
    * A separate field from `coherenceGate`, and the separation is the whole
    * point: that one is permission to SPEND (withhold a formation and buy a
-   * verdict), this one is permission to READ evidence already bought. Coupling
-   * them — which is what this file did until 2026-09-11, by reading the table
-   * inside the gate's `if` — meant every caller that could not afford a model
-   * call also silently discarded every verdict ever paid for.
+   * verdict), this one is permission to READ evidence already bought. They were
+   * one field until 2026-09-11, and what that cost is recorded once, in
+   * docs/STORYLINE-BACKFILL.md ("What a rebuild remembers") — 63% of every
+   * refusal ever made, rebuilt by a single command.
    *
-   * The caller that could not afford one is the backfill, and the cost was
-   * measured: `dissolve:storyline-piles --apply` recorded 264 refusals over
-   * 2026-08-18..21, and `backfill:storylines --restart` on 2026-08-21 rebuilt
-   * 167 of those pairs (63%) back into a shared storyline — including all 66
-   * subjects of the hand-verified cleanup, two days after it ran. Migration
-   * 0015 and `dissolve:storyline-piles` both state the opposite in prose ("the
-   * refusal is what stops the next backfill rebuilding the pile"); this field
-   * is what makes the prose true.
+   * On in `STORYLINE_BAR` for every caller, with no environment variable to
+   * turn it off, and that asymmetry with `STORYLINE_COHERENCE_GATE` is
+   * deliberate. A gate needs a kill switch because it SPENDS and it WITHHOLDS
+   * on a live verdict that may be wrong. This only ever removes candidates from
+   * a list, so its worst failure is a group standing alone for a night — the
+   * pre-gate world's ordinary outcome — and it acts on verdicts a person has
+   * already read. The one caller with a reason to decline is an operator
+   * rebuilding on pure token evidence, and it says so on the command line
+   * (`backfill:storylines --ignore-refusals`), where the decision is visible in
+   * the shell history rather than inferred from a deployment's environment.
    *
-   * On in `STORYLINE_BAR`, which is right for every caller: a refusal is a
-   * model verdict that a person then hand-checked, keyed on GROUPS so it
-   * survives any amount of storyline churn, and replaying it costs one indexed
-   * read per formation-shaped decision and no model call at all. Off is
-   * reachable only by naming it — `backfill:storylines --ignore-refusals` —
-   * for the rebuild that deliberately wants pure token evidence.
+   * `coherenceGate: true` with this OFF is incoherent and nothing constructs it:
+   * it would buy a verdict for a pair it had already refused, every night, which
+   * is the loop migration 0015 exists to close. `wiring.test.ts` pins that no
+   * environment produces the pair.
    */
   honourRefusals: boolean;
   /**
@@ -337,11 +337,9 @@ export async function linkGroup(
   // measurably wrong about mature coverage, so its verdicts do not reach there.
   //
   // `honourRefusals`, NOT `coherenceGate`: replaying a verdict already paid for
-  // is not the same permission as buying a new one, and a caller with no model
-  // budget needs the first exactly as much as the live path does. The
-  // `some()` is in memory and runs first, so a group with no singleton
-  // candidate costs nothing, and the query that follows returns no rows for
-  // every group no verdict has ever named.
+  // is not the same permission as buying a new one. The `some()` is in memory
+  // and runs first, so a group with no singleton candidate costs nothing, and
+  // the query that follows returns no rows for every group no verdict names.
   if (deps.config.honourRefusals && candidates.some((candidate) => candidate.groupCount === 1)) {
     const refused = await readFormationRefusals(deps.db, group.groupId);
     if (refused.size > 0) {

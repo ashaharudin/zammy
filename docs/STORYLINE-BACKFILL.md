@@ -187,8 +187,9 @@ pacer knows nothing about the server's, so half the ceiling each —
 `--label-rate=15` today, `=7` at the old 15/min — keeps the two under one
 ceiling on a shared key.
 
-`--restart` is the only flag that discards state — and `--ignore-refusals` is
-the only one that discards evidence. See "What a rebuild remembers" below.
+`--restart` is the only flag that discards state. `--ignore-refusals` discards
+nothing — the refusal rows survive it untouched, as they survive everything; it
+declines to READ them. See "What a rebuild remembers" below.
 
 `--groups` is for the one failure the resume cursor cannot see. Progress is a
 keyset over `(group_published, group_id)`: a run starts AFTER the last linked
@@ -291,21 +292,35 @@ is a named act:
 
     pnpm backfill:storylines --restart --ignore-refusals   # pure token evidence
 
-and either way the run says which it is doing on its first line, because the
-two produce identical reports and the difference is 66 hand-verified subjects.
+and a linking run announces which it is doing before it starts, under the
+threshold banner, because the two produce identical reports and the difference is
+66 hand-verified subjects:
+
+```
+resuming · anchor 0.002 · mass 20 · K=2 · labels: skipped
+honouring 264 recorded formation refusals
+```
+
+`--labels-only` prints neither line and honours nothing, because it links
+nothing.
 
 ### Why the backfill still does not gate
 
 Two reasons, and the first is structural rather than a matter of budget.
 
-**A gated backfill would build nothing.** `coherenceGate` does not refuse a
+**A gated backfill would not gate.** `coherenceGate` does not refuse a
 formation, it DEFERS one — handing back a `pendingFormation` for
 `resolvePendingFormations` to judge. That resolver lives on the ingest tail and
 the nightly sweep, both of which reach it through `labelLinkedStorylines`.
-`backfillStorylines` reads `attached` and `merged` off each outcome and drops
-the rest, so a gated run would withhold every formation in the archive, resolve
-none, and report it as an ordinary pass. It now refuses to start instead
-(`assertNoUnresolvableGate`).
+`backfillStorylines` reads `attached` and `merged` off each outcome and drops the
+rest, so every withheld formation is simply lost. What that looks like depends on
+the run, and the resume is the worse case: a `--restart` reaches two groups
+nowhere and builds nothing, which is at least obvious, but a RESUME keeps
+attaching to storylines that are already real — `mayRefuseFormation` fires only
+at a promotion whose winner held one group — and produces an ordinary-looking
+report with every formation silently missing from it. The linking pass now
+refuses to start (`assertNoUnresolvableGate`); `--labels-only`, which links
+nothing, is unaffected.
 
 **Wiring a resolver in would buy a bad trade at scale.** The old rationale in
 this command — "thousands of calls against a ceiling of 500 a day" — is stale:
@@ -315,8 +330,9 @@ archive earns ~5,000 formations; at 30/min that is ~3 hours of calls drawn from
 the same per-key allowance the live labeler uses, and a manual campaign paced to
 30/min has already been measured pushing 37 organic promotions onto bigram
 fallbacks. And the thing being bought is the gate's measured trade at the
-two-group moment — **0.88 declined piles caught per real arc destroyed** — on a
-figure measured before the archive's composition drifted under it. Re-measure
+two-group moment — **0.88 declined piles caught per real arc destroyed**
+(docs/STORYLINE-LINKING.md, "The rerun the section above is owed") — on a figure
+measured before the archive's composition drifted under it. Re-measure
 (`pnpm measure:storyline-coherence`) before anyone reconsiders; the rerun is
 bounded by rate and wall clock now, not by quota.
 

@@ -521,6 +521,41 @@ rerun: one model call per candidate against a 500/day/model free-tier ceiling
 is `gemma-4-26b-a4b-it` at 14,400/day, so the rerun is bounded by rate (30/min)
 and wall clock rather than by quota.
 
+#### The rerun the section above is owed (2026-08-2x, after PR #106)
+
+`readCoherenceReply` was replaced twice after the matrix was produced, and PR
+#106's fix — reading paraphrased refusals — is the one that moved both columns.
+A fresh `measure:storyline-coherence` run over **123 answered candidates** came
+back:
+
+| set | catch / destroy |
+| --- | --- |
+| declined | **39.5%** caught |
+| named | **20.0%** destroyed |
+
+That is **0.88 declined piles caught per real arc destroyed** — a trade the
+operator judged not worth taking, and the reason `STORYLINE_COHERENCE_GATE` is
+`false` in dev (since 2026-08-21) and in production (since 2026-09-11).
+
+Three cautions, because this number now carries weight the 85.2%/31.4% table
+used to:
+
+- **It is not comparable to the table above**, which was a different reader over
+  a different sample. It supersedes it as the current estimate; it does not
+  correct it in place.
+- **The named-set contamination argument still applies.** ~26% of two-group
+  *named* storylines were found to be piles, so some fraction of that 20.0% is
+  the gate being right about a storyline the campaign was wrong about. Nobody has
+  adjudicated these 123 the way the original 27 were read one by one.
+- **It is already stale in the direction that matters.** The declined pool grew
+  from 21 to 40 storylines between consecutive-day runs; archive composition
+  moves faster than this figure is re-measured, and it dates from before the
+  2026-08-27 model change and the relabel campaign. **Re-measure before deciding
+  anything on it.** The run is bounded by rate and wall clock now, not by quota.
+
+These figures were reported into the 2026-09-11 backfill work rather than
+re-derived by it; no measurement run was made in that change.
+
 **Second-order finding, the more important one.** If ~26% of the sampled
 two-group *named* storylines are piles, the reported failure is materially
 **larger than 382** — and `NAMED-INTACT` preserves a set that itself contains
@@ -674,7 +709,7 @@ do with the table — silently meant "and forget every verdict". Re-measured in
 dev on 2026-09-11: **167 of the 264 refused pairs (63%) are back in a shared
 storyline**, across 160 storylines, 44 of them exactly-2-group piles.
 
-Two second-order consequences worth recording:
+Three second-order consequences worth recording:
 
 - **An ungated rebuild is the dominant pile-creating event in this archive's
   history** — not a drift, not the live path, one command.
