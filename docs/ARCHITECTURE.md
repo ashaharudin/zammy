@@ -1179,9 +1179,9 @@ keywords in, timeline out.
   banner with data still behind it. All four keep every card in place on purpose, so without this
   the rail is indistinguishable from one that is idle. Over an EMPTY rail — where a reader is most
   likely to pull, since a search that found nothing is the one they retry — the beacon lights ALONE
-  above the empty-state message: there is no rail to charge, and ghost slots there would promise
-  cards on the path that reaches this state most often, which is `refetchOnMount` over a topic the
-  reader already knows is empty rather than a pull at all.
+  above the empty-state message, out of the flow so nothing already on screen moves: there is no
+  rail to charge, and ghost slots there would promise cards — including on the `refetchOnMount`
+  path, which reaches this state without the reader touching anything.
   The ghost slots wait for `ingesting` because they stand for a queue with a COUNT in it and a
   refetch in flight has not been told one yet; a refetch is not work-free — §6.4 has a stale read
   enqueueing a top-up — it just cannot say how much until it answers. Paging is deliberately NOT

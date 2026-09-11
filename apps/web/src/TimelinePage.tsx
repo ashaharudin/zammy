@@ -408,20 +408,31 @@ function Rail({
       </p>
     );
     if (!refreshing) return message;
-    // An empty rail is where a reader is MOST likely to pull — a search that
-    // found nothing is the one they retry — so it needs the mark most. It gets
-    // the beacon ALONE, and the message stays where it was.
+    // An empty rail is where a reader is most likely to pull — a search that
+    // found nothing is the one they retry — so it needs the mark. It gets the
+    // beacon ALONE, and the message does not move at all.
     //
-    // Not the skeleton, which was the first answer here and was worse than the
-    // gap it closed: three ghost slots promise cards, and the commonest way
-    // into this state is not a pull at all but `refetchOnMount` over an empty
-    // topic the reader already knows is empty — so a stale remount would swap
-    // a settled message for 15rem of phantom rows and then collapse it again.
-    // Nor the spine: there is no rail here to charge.
+    // Both halves of that took a try to get right. Not the skeleton, which was
+    // the first answer here and was worse than the gap it closed: three ghost
+    // slots promise cards, and this state is also reached by `refetchOnMount`
+    // over an empty topic without the reader touching anything — so a stale
+    // remount would swap a settled message for 15rem of phantom rows and then
+    // collapse it again. Nor the spine: there is no rail here to charge.
+    //
+    // And the beacon is positioned OUT of the flow rather than stacked above
+    // the message, because the second answer wrapped the message in the
+    // RAIL_INSET padding the beacon's `markerLeft` is measured from — which
+    // re-centred a centred paragraph inside a narrower box and slid it 72px
+    // sideways (measured; 52px below the 760px breakpoint, since the inset is
+    // token-derived) on top of pushing it down. The wrapper below adds no
+    // padding, so the paragraph centres in exactly the box it centred in
+    // before, and the beacon rides in the 3rem margin above it.
     return (
-      <div style={{ position: "relative", paddingLeft: RAIL_INSET }}>
+      <div style={{ position: "relative" }}>
         <IngestStatus pendingJobs={null} />
-        <IngestBeacon />
+        <div style={{ position: "absolute", top: 0, left: RAIL_INSET, right: 0 }}>
+          <IngestBeacon />
+        </div>
         {message}
       </div>
     );
