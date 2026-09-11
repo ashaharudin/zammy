@@ -32,16 +32,18 @@ import type { SummarizerDeps } from "./storyline-summary-service.js";
  * defaults, `storylineBar(overrides)` applies a named divergence to them, and
  * `createLinkerConfig` is `storylineBar(linkerBarFromEnv(config))`. That is
  * what makes the rule above enforceable rather than merely stated — the leverage
- * of this module was two callers, while the same fourteen fields were written
+ * of this module was two callers, while the same fifteen fields were written
  * out at nineteen sites, `test-support.ts` among them as a whole second default.
  *
  * Both operator CLIs go through it too, and that is the same argument rather
  * than an exception to it: `regroup` disables the linker outright and
  * `backfill:storylines` deliberately differs (no coherence gate, its own
  * `--label-rate`), which is a divergence of TWO fields — and each of them
- * spelled it as a fourteen-field copy, the drift this header predicts. What
+ * spelled it as a fifteen-field copy, the drift this header predicts. What
  * they legitimately differ on now sits beside the reason it differs, and the
- * twelve fields they never differed on follow the live path.
+ * rest follow the live path. (`backfill:storylines` also NAMES `honourRefusals`
+ * without differing on it by default, because the two were one field until
+ * 2026-09-11 and stating both is how they stay apart — `backfillBar`.)
  *
  * `createLabeler` **is** what the CLIs use, as of the operator-command
  * refactor, and that is the same argument rather than an exception to it. Five
@@ -137,11 +139,14 @@ export function maxBridgingQualifiers(config: Config): number | undefined {
  * Exported because the two operator CLIs whose divergence this module's header
  * sanctions still need the CONFIGURED bar to diverge from — `regroup` disables
  * the linker and `backfill:storylines` drops the coherence gate, and neither is
- * a licence to also re-declare the twelve fields it does not differ on. That
+ * a licence to also re-declare the thirteen fields it does not differ on. That
  * re-declaration is what both of them used to be.
  *
- * Every field of the bar appears here except `enabled`, which is structural
- * (`STORYLINE_BAR`) rather than configured.
+ * Every field of the bar appears here except two, and both exceptions are
+ * deliberate: `enabled` is structural (`STORYLINE_BAR`) rather than configured,
+ * and `honourRefusals` is evidence rather than policy — replaying a verdict a
+ * person has already read is not a thing a deployment tunes, and the one caller
+ * that may decline says so on the command line. `wiring.test.ts` asserts both.
  */
 export function linkerBarFromEnv(config: Config): StorylineBarOverrides {
   return {

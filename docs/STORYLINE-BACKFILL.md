@@ -177,6 +177,7 @@ pnpm backfill:storylines --max-groups=500   # rehearse on a slice
 pnpm backfill:storylines --labels-only --relabel   # re-name everything
 pnpm backfill:storylines --label-rate=8     # model calls per minute; slower only
 pnpm backfill:storylines --groups=1,2,3     # link exactly these; cursor ignored
+pnpm backfill:storylines --ignore-refusals  # rebuild refused formations too
 ```
 
 `--label-rate` defaults to `GEMINI_MAX_RPM` (30 since 2026-08-27; 15 before)
@@ -186,7 +187,9 @@ pacer knows nothing about the server's, so half the ceiling each —
 `--label-rate=15` today, `=7` at the old 15/min — keeps the two under one
 ceiling on a shared key.
 
-`--restart` is the only flag that discards state.
+`--restart` is the only flag that discards state. `--ignore-refusals` discards
+nothing — the refusal rows survive it untouched, as they survive everything; it
+declines to READ them. See "What a rebuild remembers" below.
 
 `--groups` is for the one failure the resume cursor cannot see. Progress is a
 keyset over `(group_published, group_id)`: a run starts AFTER the last linked
@@ -239,6 +242,109 @@ calls. The spacing is politeness, not the guarantee: the Gemini client paces
 the key itself and sees the retries this pass cannot (docs/STORYLINE-LABELS.md,
 "The rate limit"). Both the ordinary pass and a relabel campaign are resumable
 — the first via the drift clock, the second via provenance.
+
+## What a rebuild remembers, and what it forgot
+
+A backfill **replays recorded formation refusals** and asks for no new
+verdicts. Those are two decisions, they used to be one, and the day they were
+one cost the archive every retroactive cleanup it had.
+
+### The event (2026-08-19 → 21)
+
+`dissolve:storyline-piles --apply` judged the hand-verified declined set on
+2026-08-19 and dissolved **66** two-group piles, recording a
+`storyline_formation_refusals` row for each — the table whose own migration says
+it exists so "the next backfill does not rebuild the pile".
+
+`backfill:storylines --restart` ran on 2026-08-21. Measured on 2026-09-11,
+**every storyline in both the dev and the production archive dates from that day
+or later** — 14,215 in dev, 14,179 in prod, nothing before the floor — and all
+66 subjects are gone from `zammy`, `zammy_pre_g6` and `zammy_preg6` alike.
+
+The production half of that is second-hand and worth labelling as such, since
+this page also says no laptop reaches that database: the dev figures were run
+here, and the prod figure is an operator's paste of the same query from the
+Supabase SQL editor on 2026-09-11 — grouping `min(storyline_groups.attached_at)`
+per storyline by day. `min(attached_at)` dates the last mass RE-ATTACHMENT
+rather than a storyline's birth, which is exactly why the floor reads so sharp,
+and it is the reason the floor is evidence of a rebuild rather than of an
+archive that began that morning.
+
+The `--restart` was not the cause. Refusals key on GROUPS precisely so they
+survive storyline churn, and they did: 264 rows written between 2026-08-18 and
+2026-08-21 are still there. The cause was that the linker read that table
+**inside the coherence gate's own `if`**, so `coherenceGate: false` — the
+backfill's setting, for budget reasons that had nothing to do with the
+refusals — meant "discard every verdict ever paid for" as well.
+
+What that rebuilt, in dev, today:
+
+| | |
+| --- | --- |
+| refusals recorded | 264 |
+| pairs back in a shared storyline | **167 (63%)** |
+| storylines holding one | 160 |
+| …of which are exactly-2-group piles | 44 |
+
+### The fix
+
+`LinkerConfig` now carries **`honourRefusals`** beside `coherenceGate`, and the
+split is the point:
+
+| field | question | cost |
+| --- | --- | --- |
+| `coherenceGate` | may this run WITHHOLD a formation and buy a verdict? | one model call per formation |
+| `honourRefusals` | may this run replay verdicts already bought? | one indexed read per formation-shaped decision |
+
+`honourRefusals` ships ON for every caller, including the backfill. Opting out
+is a named act:
+
+    pnpm backfill:storylines --restart --ignore-refusals   # pure token evidence
+
+and a linking run announces which it is doing before it starts, under the
+threshold banner, because the two produce identical reports and the difference is
+66 hand-verified subjects:
+
+```
+resuming · anchor 0.002 · mass 20 · K=2 · labels: skipped
+honouring 264 recorded formation refusals
+```
+
+The threshold banner prints on every run; only the refusals line is conditional,
+so `--labels-only` prints the first and not the second — it links nothing, so
+there is nothing for it to honour.
+
+### Why the backfill still does not gate
+
+Two reasons, and the first is structural rather than a matter of budget.
+
+**A gated backfill would not gate.** `coherenceGate` does not refuse a
+formation, it DEFERS one — handing back a `pendingFormation` for
+`resolvePendingFormations` to judge. That resolver lives on the ingest tail and
+the nightly sweep, both of which reach it through `labelLinkedStorylines`.
+`backfillStorylines` reads `attached` and `merged` off each outcome and drops the
+rest, so every withheld formation is simply lost. What that looks like depends on
+the run, and the resume is the worse case: a `--restart` reaches two groups
+nowhere and builds nothing, which is at least obvious, but a RESUME keeps
+attaching to storylines that are already real — `mayRefuseFormation` fires only
+at a promotion whose winner held one group — and produces an ordinary-looking
+report with every formation silently missing from it. The linking pass now
+refuses to start (`assertNoUnresolvableGate`); `--labels-only`, which links
+nothing, is unaffected.
+
+**Wiring a resolver in would buy a bad trade at scale.** The old rationale in
+this command — "thousands of calls against a ceiling of 500 a day" — is stale:
+the configured model publishes 14,400/day since 2026-08-27, so the daily cap
+binds nothing. What binds is RATE and what it collides with. A replay of the dev
+archive earns ~5,000 formations; at 30/min that is ~3 hours of calls drawn from
+the same per-key allowance the live labeler uses, and a manual campaign paced to
+30/min has already been measured pushing 37 organic promotions onto bigram
+fallbacks. And the thing being bought is the gate's measured trade at the
+two-group moment — **0.88 declined piles caught per real arc destroyed**
+(docs/STORYLINE-LINKING.md, "The rerun the section above is owed") — on a figure
+measured before the archive's composition drifted under it. Re-measure
+(`pnpm measure:storyline-coherence`) before anyone reconsiders; the rerun is
+bounded by rate and wall clock now, not by quota.
 
 ### It refuses to run against an empty trailing corpus
 

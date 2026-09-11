@@ -77,7 +77,11 @@ previous step just changed:
    `storylineDormancyDays` (~90, ADR-0011). Reads the same knob the linker's gate reads, so the
    column cannot disagree with the bar.
 2. [`runBridgeSweepChore`](../apps/api/src/chores.ts).
-3. [`runLateCandidateChore`](../apps/api/src/chores.ts) — **gated off by default.** It is behind
+3. [`runLateCandidateChore`](../apps/api/src/chores.ts) — **gated off by default.** Being off is
+   also why the 2026-09-11 refusal-replay fix repaired no damage here: a re-offer is the live path
+   that would have rebuilt refused formations, and this one has never run (docs/STORYLINE-LINKING.md,
+   "…and erased two days later"). When it is enabled it honours recorded refusals without a model
+   call, whatever `STORYLINE_COHERENCE_GATE` says. It is behind
    `STORYLINE_LATE_CANDIDATE_SWEEP` / `--late-candidates` because correcting a `CANDIDATE_LIMIT`
    bug exposed a runaway in it; with the gate off the whole pass fits the 300 s ceiling with room to
    spare. A skipped sweep still reports a zero tally rather than being absent, because "ran and

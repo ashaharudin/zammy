@@ -78,10 +78,45 @@ export interface LinkerConfig {
    *
    * The caller decides, because whether a gate exists is not the linker's
    * business: the server sets this only when a model is actually configured, and
-   * the backfill sets it false because replaying the archive through the gate is
-   * thousands of calls against a 500-a-day ceiling.
+   * the backfill sets it false because it has no tail to resolve what a gate
+   * defers — a gated replay would withhold every formation in the archive and
+   * form nothing (`assertNoUnresolvableGate`). That is a structural reason, not
+   * the budget one this comment used to give: the old "500 a day" ceiling became
+   * 14,400 on 2026-08-27, and what binds a replay now is rate and the live
+   * labeler it would contend with.
+   *
+   * It is NOT permission to ignore verdicts already recorded. See
+   * `honourRefusals` below, which is that permission and defaults the other way.
    */
   coherenceGate: boolean;
+  /**
+   * Replay the formation refusals already recorded — skip a candidate a verdict
+   * has ALREADY refused this group against (`storyline_formation_refusals`).
+   *
+   * A separate field from `coherenceGate`, and the separation is the whole
+   * point: that one is permission to SPEND (withhold a formation and buy a
+   * verdict), this one is permission to READ evidence already bought. They were
+   * one field until 2026-09-11, and what that cost is recorded once, in
+   * docs/STORYLINE-BACKFILL.md ("What a rebuild remembers") — 63% of every
+   * refusal ever made, rebuilt by a single command.
+   *
+   * On in `STORYLINE_BAR` for every caller, with no environment variable to
+   * turn it off, and that asymmetry with `STORYLINE_COHERENCE_GATE` is
+   * deliberate. A gate needs a kill switch because it SPENDS and it WITHHOLDS
+   * on a live verdict that may be wrong. This only ever removes candidates from
+   * a list, so its worst failure is a group standing alone for a night — the
+   * pre-gate world's ordinary outcome — and it acts on verdicts a person has
+   * already read. The one caller with a reason to decline is an operator
+   * rebuilding on pure token evidence, and it says so on the command line
+   * (`backfill:storylines --ignore-refusals`), where the decision is visible in
+   * the shell history rather than inferred from a deployment's environment.
+   *
+   * `coherenceGate: true` with this OFF is incoherent and nothing constructs it:
+   * it would buy a verdict for a pair it had already refused, every night, which
+   * is the loop migration 0015 exists to close. `wiring.test.ts` pins that no
+   * environment produces the pair.
+   */
+  honourRefusals: boolean;
   /**
    * Probe candidate retrieval with the anchor-eligible subset and cap it at
    * 4,000 rows, rather than the whole profile capped at 200
@@ -300,7 +335,12 @@ export async function linkGroup(
   // it says these two singletons are not a story between them, not that one may
   // never join the other's arc once that arc is real and wide. The gate is
   // measurably wrong about mature coverage, so its verdicts do not reach there.
-  if (deps.config.coherenceGate && candidates.some((candidate) => candidate.groupCount === 1)) {
+  //
+  // `honourRefusals`, NOT `coherenceGate`: replaying a verdict already paid for
+  // is not the same permission as buying a new one. The `some()` is in memory
+  // and runs first, so a group with no singleton candidate costs nothing, and
+  // the query that follows returns no rows for every group no verdict names.
+  if (deps.config.honourRefusals && candidates.some((candidate) => candidate.groupCount === 1)) {
     const refused = await readFormationRefusals(deps.db, group.groupId);
     if (refused.size > 0) {
       const keep: typeof candidates = [];

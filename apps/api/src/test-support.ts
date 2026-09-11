@@ -145,7 +145,7 @@ async function createEphemeralDb(): Promise<{
  * that passes only with the feature disabled has not tested the planner.
  *
  * The linker's bar is `storylineBar()`, which is the bar production runs and no
- * longer a second copy of it. This function used to re-declare all fourteen
+ * longer a second copy of it. This function used to re-declare all fifteen
  * fields, so it was free to drift from `createLinkerConfig` without a test going
  * red — and a harness test asserting formation behaviour against a drifted bar
  * is the failure `wiring.ts`'s header is about, arriving through the test suite

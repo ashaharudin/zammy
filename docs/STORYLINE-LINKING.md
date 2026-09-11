@@ -497,7 +497,8 @@ week-ahead columns).
 #### The matrix above predates the current reader (2026-08-21)
 
 Both cells were produced by a `readCoherenceReply` that has since been
-**replaced twice**: once to read paraphrased refusals (issue #98), and once
+**replaced twice**: once to read paraphrased refusals (issue #98, fixed by PR
+#106 — the rerun below is of that reader), and once
 again to test the declines BEFORE `validateLabel`. The numbers therefore
 describe a reader that no longer exists, and a rerun is owed before either
 figure is quoted as current.
@@ -527,6 +528,59 @@ two-group *named* storylines are piles, the reported failure is materially
 piles. It remains the right metric for comparing settings, since the
 contamination is constant across them; it is not clean ground truth, and no
 future reader should treat it as one.
+
+#### The rerun the section above is owed (date not recorded; after PR #106, which merged 2026-08-21)
+
+**The date of this run is not recorded anywhere and is not reconstructed here.**
+It post-dates PR #106 — the fix for issue #98, the same change the section above
+credits under the issue number — and it was reported into the 2026-09-11 backfill
+work. Nothing narrows it further, and a figure this load-bearing deserves better
+provenance than that; whoever re-measures should date the run in this section.
+
+A `measure:storyline-coherence` run over **123 answered candidates** came back:
+
+| set | catch / destroy |
+| --- | --- |
+| declined | **39.5%** caught |
+| named | **20.0%** destroyed |
+
+That is **0.88 declined piles caught per real arc destroyed** — a trade the
+operator judged not worth taking, and the reason `STORYLINE_COHERENCE_GATE` is
+`false` in dev (since 2026-08-21) and in production (since 2026-09-11).
+
+**It is not re-derivable from the table as printed.** 123 is the answered total;
+the per-set denominators were not carried over, so 39.5% and 20.0% cannot be
+turned back into counts here, and 0.88 is their ratio rather than something a
+reader can check. Recover them from the transcript before quoting any of the
+three.
+
+Four cautions, because this number now carries weight the 85.2%/31.4% table
+used to:
+
+- **The direction is the opposite of what this document predicted, and nobody
+  has explained why.** The section above expects the corrected reader to RAISE
+  both columns — "the fix does not flatter the gate" — and the catch rate instead
+  falls 85.2% → 39.5%. The two are not strictly comparable (that prediction was
+  about correcting four mislabelled rows in the OLD sample; this is a different,
+  larger sample read by a twice-replaced reader), but "not strictly comparable"
+  is an explanation of why the numbers may differ, not of why they differ THIS
+  way. Treat the reversal as an open question, and as the strongest single reason
+  to re-measure rather than to reason from either figure.
+- **It is not comparable to the table above**, which was a different reader over
+  a different sample. It supersedes it as the current estimate; it does not
+  correct it in place.
+- **The named-set contamination argument still applies.** ~26% of two-group
+  *named* storylines were found to be piles, so some fraction of that 20.0% is
+  the gate being right about a storyline the campaign was wrong about. Nobody has
+  adjudicated these 123 the way the original 27 were read one by one.
+- **It is already stale in the direction that matters.** The declined pool grew
+  from 21 to 40 storylines between consecutive-day runs; archive composition
+  moves faster than this figure is re-measured, and it dates from before the
+  2026-08-27 model change and the relabel campaign. **Re-measure before deciding
+  anything on it.** The run is bounded by rate and wall clock now, not by quota.
+
+These figures were reported into the 2026-09-11 backfill work rather than
+re-derived by it; no measurement run was made in that change.
 
 ### …and on mature arcs it must never run
 
@@ -602,10 +656,14 @@ Three more properties, each measured or argued above:
   naming nothing. A refusal bars only that FORMATION, not the group from later
   joining the arc once it is real and wide — a different question the gate is
   bad at.
-- **The backfill does not gate.** A budget decision, not a doubt: replaying the
-  archive is thousands of formations at one call each. It rebuilds what the
-  token evidence says and leaves verdicts to the live path; refusals survive
-  it, being keyed on groups.
+- **The backfill does not gate, but it does remember.** Not gating is now a
+  structural fact before it is a budget one: the gate DEFERS a formation to
+  `resolvePendingFormations`, which the backfill has no tail to run, so a gated
+  replay would withhold every formation in the archive and form nothing —
+  `assertNoUnresolvableGate` refuses such a run. Replaying refusals already
+  recorded is a separate permission (`honourRefusals`) and is ON everywhere,
+  because it costs an indexed read rather than a model call. The two were one
+  field until 2026-09-11, and the cost of that is measured below.
 
 The sweep is deliberately unchanged and still measures the **token** decision.
 It has no model and cannot have one — 30 settings over 23,000 groups is
@@ -654,6 +712,57 @@ Two things this did NOT touch, both deliberate:
 - **The ~26% of model-named two-group storylines the validation found are
   piles.** A real target and a bad first one: no hand-checked ground truth
   stands behind them.
+
+### …and erased two days later (2026-08-21), measured 2026-09-11
+
+All 49 dissolutions above, and the 66 subjects they were selected from, are gone
+from the archive. `backfill:storylines --restart` ran on 2026-08-21 and every
+storyline in dev (14,215) and prod (14,179) dates from that day or later — a
+hard floor with nothing behind it.
+
+The refusals themselves survived exactly as designed: 264 rows, keyed on groups,
+still present. What did not survive is any reading of them. The linker consulted
+`storyline_formation_refusals` **inside `coherenceGate`'s own `if`**, so the
+backfill's `coherenceGate: false` — set for budget reasons that had nothing to
+do with the table — silently meant "and forget every verdict". Re-measured in
+dev on 2026-09-11: **167 of the 264 refused pairs (63%) are back in a shared
+storyline**, across 160 storylines, 44 of them exactly-2-group piles.
+
+Three second-order consequences worth recording:
+
+- **An ungated rebuild is the dominant pile-creating event in this archive's
+  history** — not a drift, not the live path, one command.
+- **The live exposure is LATENT, not running.** An earlier draft of this section
+  claimed the nightly late-candidate sweep had been re-forming refused pairs in
+  production night after night. That is false and is corrected here: the sweep is
+  behind `STORYLINE_LATE_CANDIDATE_SWEEP`, which defaults to `false`, is `false`
+  in `.env.example`, is documented as "gated off by default" in docs/chores.md,
+  and is absent from the production environment — it has not run.
+
+  The coupling only bites where an EXISTING group is re-offered to `linkGroup`,
+  because a refusal names two group ids and a newly seeded group is in no
+  refusal. Three paths do that, and their status is the whole answer: the
+  backfill (which is how the archive was actually rebuilt), the late-candidate
+  sweep (off), and the join re-offer behind `STORYLINE_REOFFER_JOINED_GROUPS`
+  (also `false` by default and in `.env.example`). Ordinary ingest of a new group
+  is not exposed at all. So the damage done is the backfill's, and the other two
+  are exposures that would have opened the day either flag was turned on —
+  `honourRefusals` closes them in advance, without a flag change and without a
+  model call.
+
+  Whether the production archive even holds refusal rows is unverified: prod was
+  seeded from the 2026-08-26 dump, and no laptop can reach that database.
+- **The retroactive half has lost its selector.** `dissolve:storyline-piles`
+  scopes to `label_source = 'bigram'` at two groups; the relabel campaign has
+  since model-named nearly everything, so that query now returns **2** rows in
+  dev against 879 model-named two-group storylines. Re-running the cleanup needs
+  a scope that is not provenance, and that scope does not exist yet.
+
+The fix is `honourRefusals` (docs/STORYLINE-BACKFILL.md, "What a rebuild
+remembers"): the next rebuild replays all 264 verdicts for free. It does not
+restore the 66 — those storylines were re-minted under new UUIDs and the
+dissolutions would have to be re-judged — but it stops the next rebuild doing it
+again.
 
 A pre-existing gap surfaced while verifying, unrelated to any of this: **7
 groups (9 articles, last seen 2026-07-31) hold no storyline at all**, so they

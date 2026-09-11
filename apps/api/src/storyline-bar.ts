@@ -7,7 +7,7 @@ import type { LinkerConfig } from "./storyline-linker.js";
  * the thing `wiring.ts`'s header asks for and could not deliver on its own.
  *
  * `createLinkerConfig` fixed the bar for the two PRODUCTION entrypoints and
- * nothing else, so the same fourteen fields were written out again at nineteen
+ * nothing else, so the same fifteen fields were written out again at nineteen
  * sites: two operator CLIs, a second default in `test-support.ts`, and ~18 more
  * across 13 test files. Re-measuring a threshold was a nineteen-file change,
  * and — worse — a test asserting formation behaviour was asserting against a
@@ -61,6 +61,18 @@ export const STORYLINE_BAR: LinkerConfig = Object.freeze({
    * `storylineBar({ coherenceGate: true })`.
    */
   coherenceGate: false,
+  /**
+   * ON, and unlike the gate above it does not depend on a model being
+   * configured — the verdicts are already bought.
+   *
+   * A refusal is durable, hand-checked evidence keyed on GROUPS, so it outlives
+   * the storylines it was about and costs one indexed read to honour. The one
+   * caller that may turn it off says so on the command line
+   * (`backfill:storylines --ignore-refusals`), which is the only shape in which
+   * "rebuild from pure token evidence" is a decision someone made rather than a
+   * side effect of having no API key.
+   */
+  honourRefusals: true,
   // The shipped default: the whole profile capped at 200, not the
   // anchor-eligible subset capped at 4,000.
   narrowRetrieval: false,
@@ -100,10 +112,23 @@ export interface StorylineBarOverrides
  * every field it says nothing about tracks production automatically.
  */
 export function storylineBar(overrides: StorylineBarOverrides = {}): LinkerConfig {
-  return {
+  const bar: LinkerConfig = {
     ...STORYLINE_BAR,
     ...overrides,
     rules: { ...STORYLINE_BAR.rules, ...overrides.rules },
     storyDf: { ...STORYLINE_BAR.storyDf, ...overrides.storyDf },
   };
+  // Buying a verdict while discarding the ones already bought: the gate would
+  // spend a model call re-asking a pair it had already refused, every night,
+  // which is the loop migration 0015 exists to close. Refused here because this
+  // is the sanctioned way to build a bar and every production path uses it — a
+  // test constructing by spread bypasses this deliberately, and is welcome to.
+  if (bar.coherenceGate && !bar.honourRefusals) {
+    throw new Error(
+      "coherenceGate with honourRefusals off would buy a verdict for a pair " +
+        "already refused, every night. Refusals are free to replay; only new " +
+        "verdicts cost anything.",
+    );
+  }
+  return bar;
 }

@@ -1,20 +1,23 @@
 import { randomBytes } from "node:crypto";
 import { sql } from "kysely";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { migrateToLatest } from "./migrator.js";
 import {
   attachGroup,
   countBridges,
+  countFormationRefusals,
   createProvisionalStoryline,
   dissolveFormation,
   mergeStorylines,
   recordBridge,
   promoteStoryline,
+  readFormationRefusals,
   readGroupStorylines,
   readStoryline,
   readStorylineDays,
   readStorylineLanguage,
   readStorylineStats,
+  recordFormationRefusal,
   refreshStoryline,
   resolveStoryline,
   setStorylineLabel,
@@ -819,6 +822,53 @@ describe("storylines in storage", () => {
       expect(
         await countBridges(harness.db, { storylineA: kept, storylineB: otherStoryline.id }),
       ).toBe(1);
+    });
+  });
+
+  describe("formation refusals", () => {
+    /**
+     * The durable half of the coherence gate: a verdict, keyed on GROUPS so it
+     * outlives the storylines it was about (migration 0015).
+     *
+     * `countFormationRefusals` exists for one job — letting a backfill say out
+     * loud how many verdicts it is about to honour — and a count that silently
+     * returns 0 would make a rebuild that has forgotten every refusal look
+     * exactly like one that has none to remember. That is the failure this
+     * covers.
+     */
+    beforeEach(async () => {
+      await sql`truncate storyline_formation_refusals`.execute(harness.db);
+    });
+
+    it("counts nothing before anything is refused", async () => {
+      expect(await countFormationRefusals(harness.db)).toBe(0);
+    });
+
+    it("counts each refused PAIR once, whichever way round it arrived", async () => {
+      await recordFormationRefusal(harness.db, { groupA: "4001", groupB: "4002" });
+      await recordFormationRefusal(harness.db, { groupA: "4003", groupB: "4004" });
+      // The same pair from the other side is the same fact, not a new one — the
+      // canonical (lo, hi) ordering is what makes that true.
+      await recordFormationRefusal(harness.db, { groupA: "4002", groupB: "4001" });
+
+      expect(await countFormationRefusals(harness.db)).toBe(2);
+      expect([...(await readFormationRefusals(harness.db, "4001"))]).toEqual(["4002"]);
+    });
+
+    it("keeps counting a refusal whose groups no longer share a storyline", async () => {
+      // The point of the table. A refusal is not a fact about a storyline, so
+      // nothing that happens to storylines — a merge, a rebuild, a --restart —
+      // may take it away.
+      const a = await group("2026-08-09T15:00:00.000Z", ["fatally", "shot", "lounge"]);
+      const b = await group("2026-08-12T09:00:00.000Z", ["fatally", "shot", "ice"]);
+      await recordFormationRefusal(harness.db, { groupA: a, groupB: b });
+
+      await sql`truncate storylines, storyline_groups, storyline_days cascade`.execute(
+        harness.db,
+      );
+
+      expect(await countFormationRefusals(harness.db)).toBe(1);
+      expect((await readFormationRefusals(harness.db, a)).has(b)).toBe(true);
     });
   });
 

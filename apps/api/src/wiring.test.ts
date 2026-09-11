@@ -125,7 +125,7 @@ describe("the bar a group is judged at", () => {
   /**
    * The bar a TEST asserts against is the bar production ships.
    *
-   * This is the assertion the fourteen-field copies made impossible. Every one
+   * This is the assertion the fifteen-field copies made impossible. Every one
    * of them was written out by hand — `test-support.ts` as a whole second
    * default, ~18 more across 13 test files, and two operator CLIs — so a test
    * asserting formation behaviour was asserting against a bar free to drift from
@@ -173,11 +173,44 @@ describe("the bar a group is judged at", () => {
       },
       mergeBridges: 3,
       coherenceGate: true,
+      // Not env-derived and deliberately so: replaying a verdict already
+      // recorded is not a knob an operator tunes per deployment. The one caller
+      // that may decline says it on the command line (`--ignore-refusals`).
+      honourRefusals: true,
       narrowRetrieval: true,
       maxBridgingQualifiers: 2,
       storyDf: { windowDays: 21, timeZone: "America/Edmonton" },
       timeZone: "America/Edmonton",
     });
+  });
+
+  it("never buys a verdict while discarding the ones already bought", () => {
+    // `coherenceGate: true` with `honourRefusals: false` is incoherent: it would
+    // spend a model call re-asking a pair a verdict has already refused, every
+    // night, which is the loop migration 0015 exists to close. No environment
+    // may produce it — `honourRefusals` is not env-derived at all, which is the
+    // property this pins.
+    const envs: Record<string, string>[] = [
+      {},
+      { STORYLINE_COHERENCE_GATE: "true", GEMINI_API_KEY: "a-key" },
+      { STORYLINE_COHERENCE_GATE: "false", GEMINI_API_KEY: "a-key" },
+      { STORYLINE_COHERENCE_GATE: "true" },
+    ];
+    for (const env of envs) {
+      expect(createLinkerConfig(config(env)).honourRefusals).toBe(true);
+    }
+    // The gate DOES move with the environment, so the pairing is a real
+    // question rather than one `honourRefusals: true` answers by itself.
+    expect(
+      createLinkerConfig(config({ STORYLINE_COHERENCE_GATE: "true", GEMINI_API_KEY: "a-key" }))
+        .coherenceGate,
+    ).toBe(true);
+    // And the pair is refused at the sanctioned construction site, not merely
+    // unreachable from the environment — `storylineBar` is what every
+    // production path builds through.
+    expect(() => storylineBar({ coherenceGate: true, honourRefusals: false })).toThrow(
+      /already refused/,
+    );
   });
 
   it("holds the gate to a key, whichever way the flag is set", () => {

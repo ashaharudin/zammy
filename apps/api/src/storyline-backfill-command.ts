@@ -1,7 +1,9 @@
-import { readStorylineStats } from "@zammy/storage";
+import type { Config } from "@zammy/config";
+import { countFormationRefusals, readStorylineStats } from "@zammy/storage";
 import {
   EXIT_FAILED,
   POSITIVE_INTEGER,
+  type Args,
   type CommandSpec,
 } from "./operator-command.js";
 import { backfillStorylines } from "./storyline-backfill.js";
@@ -11,8 +13,54 @@ import { storylineBar } from "./storyline-bar.js";
 import { linkerBarFromEnv } from "./wiring.js";
 
 /**
+ * The bar a BACKFILL judges at: the configured one (`wiring.ts`), diverging on
+ * `coherenceGate` always and on `honourRefusals` only when the operator asks.
+ *
+ * Everything else is the live path's by construction, and the reasons that used
+ * to be written beside each copied field were all the same reason: a rebuild is
+ * where the whole archive's evidence is written, so a backfill that retrieved or
+ * bridged differently from the live path would leave an archive nothing has
+ * measured and a graph whose standing pairs no arrival can reproduce. `enabled`
+ * is not a divergence either — the flag gates the LIVE write path, and
+ * `STORYLINE_BAR` ships it on, which is right for the process that has to run
+ * first.
+ *
+ * It takes the parsed `Args` rather than a boolean, and that is the whole
+ * defence against the one typo that would undo this branch in silence:
+ * `honourRefusals: ignoreRefusals` type-checks, passes every linker and backfill
+ * test, and rebuilds every pile a verdict ever refused. With the flag read here,
+ * `storyline-backfill-command.test.ts` exercises the real mapping — flag name,
+ * negation and all — rather than a copy of it that could agree with a broken
+ * original. What it still cannot see is `run` calling something else entirely.
+ *
+ * **`coherenceGate` is false unconditionally**, and that is structural before it
+ * is budget: the gate DEFERS a formation to a tail `backfillStorylines` does not
+ * have, so a gated replay forms nothing (a rebuild) or silently drops every
+ * formation from an ordinary-looking report (a resume).
+ * `assertNoUnresolvableGate` refuses such a run rather than letting this line be
+ * the only thing preventing it.
+ *
+ * **`honourRefusals` is true unless the operator says otherwise**, and nothing
+ * about replaying a verdict is a budget decision: a refusal is keyed on GROUPS,
+ * survives any amount of storyline churn, and costs one indexed read per
+ * formation-shaped decision. It used to be unreachable — the linker read the
+ * refusals table inside the gate's own `if` — and what that cost is recorded in
+ * docs/STORYLINE-BACKFILL.md ("What a rebuild remembers"), along with the
+ * arithmetic for why buying NEW verdicts here is still not worth it — measured
+ * in docs/STORYLINE-LINKING.md ("The rerun the section above is owed").
+ */
+export function backfillBar(config: Config, args: Args): LinkerConfig {
+  return storylineBar({
+    ...linkerBarFromEnv(config),
+    coherenceGate: false,
+    honourRefusals: !args.boolean("ignore-refusals"),
+  });
+}
+
+/**
  * `pnpm backfill:storylines [--restart] [--labels-only] [--no-labels]
- *  [--relabel] [--relabel-all] [--max-groups=N] [--max-labels=N] [--label-rate=N] [--batch=N]`
+ *  [--relabel] [--relabel-all] [--ignore-refusals] [--max-groups=N] [--max-labels=N]
+ *  [--label-rate=N] [--batch=N]`
  *
  * The ADR-0011 rollout command (S5): replay the linker over the whole archive
  * chronologically, then label what got promoted.
@@ -39,7 +87,8 @@ export const spec: CommandSpec = {
   name: "backfill:storylines",
   synopsis:
     "[--restart] [--groups=1,2,3] [--labels-only] [--no-labels] [--relabel] " +
-    "[--relabel-all] [--max-groups=N] [--max-labels=N] [--label-rate=N] [--batch=N]",
+    "[--relabel-all] [--ignore-refusals] [--max-groups=N] [--max-labels=N] " +
+    "[--label-rate=N] [--batch=N]",
   flags: {
     restart: { kind: "boolean", describe: "discard storyline state and rebuild from scratch" },
     groups: {
@@ -54,6 +103,10 @@ export const spec: CommandSpec = {
       describe: "re-label everything the configured model has not named yet",
     },
     "relabel-all": { kind: "boolean", describe: "re-name everything — a prompt change" },
+    "ignore-refusals": {
+      kind: "boolean",
+      describe: "rebuild refused formations too — pure token evidence, no verdicts",
+    },
     "max-groups": { kind: "value", placeholder: "N", describe: "stop after linking N groups" },
     "max-labels": { kind: "value", placeholder: "N", describe: "stop after N model calls" },
     "label-rate": {
@@ -89,6 +142,7 @@ export const spec: CommandSpec = {
     const skipLabels = args.boolean("no-labels");
     const relabel = args.boolean("relabel");
     const relabelAll = args.boolean("relabel-all");
+    const ignoreRefusals = args.boolean("ignore-refusals");
 
     // Ctrl-C stops at the next group boundary rather than mid-write. A backfill
     // killed between a storyline's birth and its bridges is exactly what the
@@ -110,30 +164,22 @@ export const spec: CommandSpec = {
         `labels: ${skipLabels ? "skipped" : labeler.generator ? config.GEMINI_MODEL : "fallback only (no GEMINI_API_KEY)"}`,
     );
 
-    /**
-     * The configured bar (`wiring.ts`), diverging on the ONE field this command
-     * has a reason to.
-     *
-     * Everything else is the live path's by construction, and the reasons that
-     * used to be written beside each copied field were all the same reason: a
-     * rebuild is where the whole archive's evidence is written, so a backfill
-     * that retrieved or bridged differently from the live path would leave an
-     * archive nothing has measured and a graph whose standing pairs no arrival
-     * can reproduce. `enabled` is not a divergence either — the flag gates the
-     * LIVE write path, and `STORYLINE_BAR` ships it on, which is right for the
-     * process that has to run first.
-     */
-    const linkerConfig: LinkerConfig = storylineBar({
-      ...linkerBarFromEnv(config),
-      // The backfill does NOT gate formations, and that is a budget decision rather
-      // than a doubt: replaying the archive produces thousands of them, one model
-      // call each, against a ceiling of 500 a day. It rebuilds what the token
-      // evidence says and leaves the verdicts to the live path — which is also why
-      // a backfill does not erase existing refusals, since those are keyed on GROUPS
-      // and survive any amount of storyline churn.
-      coherenceGate: false,
-    });
+    const linkerConfig = backfillBar(config, args);
     const log = { warn: (obj: object, msg: string) => console.warn(msg, JSON.stringify(obj)) };
+
+    // Said out loud, because the run reports identically either way and the
+    // difference is 66 hand-verified subjects. A rebuild that ignores refusals
+    // re-mints every pile a verdict has ever refused; that it is doing so should
+    // not have to be inferred from a flag the operator typed minutes ago.
+    if (!labelsOnly) {
+      const refusals = await countFormationRefusals(db);
+      console.log(
+        ignoreRefusals
+          ? `IGNORING ${refusals} recorded formation refusals — ` +
+              `piles a verdict already refused will be rebuilt`
+          : `honouring ${refusals} recorded formation refusals`,
+      );
+    }
 
     const batch = args.number("batch", POSITIVE_INTEGER);
     const maxGroups = args.number("max-groups", POSITIVE_INTEGER);

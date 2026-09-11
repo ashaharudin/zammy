@@ -54,8 +54,11 @@ import { selectLabelMembers } from "./storyline-label.js";
  * ## Operating it
  *
  * Resumable through the same transcript trick as `measure:storyline-coherence`,
- * and for the same reason — the free tier's ceiling is 500 requests per day per
- * model, and this is 88 of them.
+ * and for the same reason — a per-day ceiling the campaign can exhaust, and this
+ * is 88 requests of it. (500/day when this was written; the configured model
+ * publishes 14,400/day since 2026-08-27, so today the binding cost is the
+ * per-minute rate and what it collides with, not the daily cap. The resume is
+ * worth having either way: an answered question should not be re-bought.)
  *
  *   pnpm dissolve:storyline-piles              # dry run, the whole set
  *   pnpm dissolve:storyline-piles --limit=10   # dry run, a taste
@@ -187,9 +190,12 @@ export const spec: CommandSpec = {
         };
 
         if (reply.kind === "unusable") {
-          // Never acts. The archive's key has a 500-a-day ceiling, and a cleanup
-          // that read silence as a refusal would dissolve on quota rather than on
-          // evidence — the same rule the live gate lives by.
+          // Never acts. A cleanup that read silence as a refusal would dissolve
+          // on quota rather than on evidence — the same rule the live gate lives
+          // by. The ceiling has moved out (500/day when this was written,
+          // 14,400/day since 2026-08-27) without touching the argument: "out of
+          // quota" is still not "these are not one story", and a rate limit
+          // produces the same silence a daily cap does.
           tally.unusable += 1;
           consecutiveFailures += 1;
           appendFileSync(transcript, `${JSON.stringify(row)}\n`);
@@ -207,7 +213,7 @@ export const spec: CommandSpec = {
 
       // Persist every usable verdict, whichever way it went, and BEFORE acting on
       // it. A `named` row is a question permanently answered — re-asking it on the
-      // next run buys the same answer for another slice of a 500-a-day ceiling —
+      // next run buys the same answer for another slice of the day's quota —
       // and a dry run's transcript is meant to be a valid input to `--apply`.
       if (!alreadyRecorded.has(target.id)) appendFileSync(transcript, `${JSON.stringify(row)}\n`);
 
