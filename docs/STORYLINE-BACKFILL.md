@@ -261,6 +261,15 @@ it exists so "the next backfill does not rebuild the pile".
 or later** — 14,215 in dev, 14,179 in prod, nothing before the floor — and all
 66 subjects are gone from `zammy`, `zammy_pre_g6` and `zammy_preg6` alike.
 
+The production half of that is second-hand and worth labelling as such, since
+this page also says no laptop reaches that database: the dev figures were run
+here, and the prod figure is an operator's paste of the same query from the
+Supabase SQL editor on 2026-09-11 — grouping `min(storyline_groups.attached_at)`
+per storyline by day. `min(attached_at)` dates the last mass RE-ATTACHMENT
+rather than a storyline's birth, which is exactly why the floor reads so sharp,
+and it is the reason the floor is evidence of a rebuild rather than of an
+archive that began that morning.
+
 The `--restart` was not the cause. Refusals key on GROUPS precisely so they
 survive storyline churn, and they did: 264 rows written between 2026-08-18 and
 2026-08-21 are still there. The cause was that the linker read that table
