@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Article, TimelineEntry } from "@zammy/shared";
 import { isTerminalPage } from "@zammy/shared";
 import { ApiError, type TopicQuery } from "./api.js";
@@ -15,7 +16,7 @@ import {
 } from "./format.js";
 import { mergeMemberships, rowMembership, type PageMemberships } from "./memberships.js";
 import { railActivity } from "./railActivity.js";
-import { railAnnouncement, SILENT } from "./railAnnouncement.js";
+import { railAnnouncement } from "./railAnnouncement.js";
 import { braidOnRule, StorylineBraid } from "./StorylineBraid.js";
 import { storylineQualifiers, visibleStorylines } from "./storylineLabels.js";
 import { collapseCopies, outletLinks } from "./relatedRows.js";
@@ -79,18 +80,30 @@ export function TimelinePage({
     ingestState: latest?.meta.ingest.state,
   });
   const terminal = latest !== undefined && !timeline.hasNextPage && isTerminalPage(latest);
-  // The one sentence the whole view speaks, derived where both halves of the
-  // rail's state are already in hand. Out of this file for the same reason
+  // The words the empty rail shows, resolved HERE rather than inside `Rail`,
+  // because the announcement has to speak the same ones and two copies of a
+  // sentence are two sentences waiting to disagree.
+  const emptyMessage = terminal
+    ? storylineView
+      ? "This storyline has no coverage to show."
+      : `No articles yet for “${topic.q}”.`
+    : "Nothing here yet.";
+  // Exactly `Rail`'s own condition for drawing that message (its `items` are
+  // these `visible` ones), so the region never announces an empty rail the
+  // reader is not looking at.
+  const isEmpty = latest !== undefined && visible.length === 0 && !ingesting;
+  // The one sentence the whole view speaks, derived where every part of the
+  // rail's state is already in hand. Out of this file for the same reason
   // `railActivity` is: which fact outranks which, and whether a count may be
   // spoken at all, is the part that can be silently wrong, and `apps/web` has
-  // no renderer to catch it. `pendingJobs` defaults to 0 before a response —
-  // `railAnnouncement` reads it only under `ingesting`, which cannot be true
-  // without one.
+  // no renderer to catch it.
   const announcement = railAnnouncement({
     isPending: timeline.isPending,
+    isError: timeline.isError,
+    isEmpty,
+    emptyMessage,
     ingesting,
     refreshing,
-    pendingJobs: latest?.meta.ingest.pendingJobs ?? 0,
   });
 
   // Plain refetch(), same as ErrorState's retry: v5 dropped per-page refetch
@@ -107,10 +120,11 @@ export function TimelinePage({
   return (
     <>
       {/*
-        Outside every conditional below on purpose, and first so it is obvious
-        that nothing can unmount it: this node has to outlive the skeleton, the
-        rail, the empty state and the error state, or it announces nothing at
-        all. See `RailAnnouncer`.
+        Renders nothing here: it portals one sentence into the live region that
+        `index.html` already put in the document. Outside every conditional
+        below all the same, because the sentence has to go on being updated
+        across the skeleton, the rail, the empty state and the error state.
+        See `RailAnnouncer`.
       */}
       <RailAnnouncer message={announcement} />
       <CommandBar
@@ -147,11 +161,7 @@ export function TimelinePage({
             refreshing={refreshing}
             pendingJobs={latest.meta.ingest.pendingJobs}
             terminal={terminal}
-            emptyLabel={
-              storylineView
-                ? "This storyline has no coverage to show."
-                : `No articles yet for “${topic.q}”.`
-            }
+            emptyMessage={emptyMessage}
             hasNextPage={timeline.hasNextPage}
             isFetchingNextPage={timeline.isFetchingNextPage}
             onLoadOlder={() => void timeline.fetchNextPage()}
@@ -375,7 +385,7 @@ function Rail({
   refreshing,
   pendingJobs,
   terminal,
-  emptyLabel,
+  emptyMessage,
   hasNextPage,
   isFetchingNextPage,
   onLoadOlder,
@@ -393,7 +403,8 @@ function Rail({
   refreshing: boolean;
   pendingJobs: number;
   terminal: boolean;
-  emptyLabel: string;
+  /** Already resolved by `TimelinePage`, which also speaks it (`railAnnouncement`). */
+  emptyMessage: string;
   hasNextPage: boolean;
   isFetchingNextPage: boolean;
   onLoadOlder: () => void;
@@ -425,7 +436,7 @@ function Rail({
   if (items.length === 0 && !ingesting) {
     const message = (
       <p style={{ color: "var(--fg-faint)", textAlign: "center", marginTop: "3rem" }}>
-        {terminal ? emptyLabel : "Nothing here yet."}
+        {emptyMessage}
       </p>
     );
     if (!refreshing) return message;
@@ -1535,80 +1546,69 @@ function IngestGhosts({ pendingJobs }: { pendingJobs: number }) {
 }
 
 /**
- * How long the region is held empty after it mounts, before the first sentence
- * is allowed into it.
- *
- * A number picked off published guidance rather than measured here, because
- * what it waits for is not observable from the page: the delay between a node
- * being committed to the DOM and the platform accessibility API having taken it
- * up as a live region worth watching. The range the accessibility literature
- * gives for a region added dynamically is 150–500ms, and one source says two
- * full seconds. This takes the FLOOR of that range on purpose — every extra
- * millisecond is a millisecond of rail activity the reader is not being told
- * about, and the region here mounts with `TimelinePage` itself, which on a cold
- * load is many hundreds of milliseconds ahead of the first response.
- *
- * If a reader ever reports the first sentence going missing on their AT, this
- * constant is the dial: raising it costs latency on the first announcement and
- * nothing else.
+ * The id of the empty live region that `apps/web/index.html` puts in the
+ * document's original markup. Not created here, and that is the entire design.
  */
-const LIVE_REGION_REGISTRATION_MS = 150;
+const RAIL_STATUS_ID = "rail-status";
 
 /**
  * What the animation cannot say. Motion is invisible to a screen reader, and
  * §8.1 asks the UI to be honest about freshness — so the state the rail shows
- * in teal is announced here, including the count the text row used to print.
+ * in teal is announced here too.
  *
- * ONE region, mounted unconditionally for the life of the view, and it exists
- * in this shape because the obvious shape does not work. From #214 until this
- * change the file had TWO of these — one inside `SkeletonRail`, one inside
- * `Rail` — each rendered conditionally and each therefore CREATED already
- * holding its sentence. A screen reader announces a live region's contents when they change
- * inside a region it is already tracking; a region that arrives in the DOM with
- * its text already in it presents no change to anything, and the major AT
- * announce nothing at all for it. Measured on this app with a MutationObserver
- * installed ahead of React: on a cold load of `/?q=…` every one of these nodes
- * was inserted with `textContent` already set, and across a full first paint,
- * an ingest and a poll there was not one text mutation inside an existing
- * region. So the view has been silent on EVERY path, not just the cold-load one
- * — a reader who typed the search in-app was no better off.
+ * ONE region, and this component does not render it: it PORTALS the sentence
+ * into a node that was already in the document before React existed. The shape
+ * looks roundabout and the direct one does not work.
  *
- * Two things are therefore required together, and each is useless alone:
+ * A screen reader announces a live region's contents when they change inside a
+ * region it is already tracking. A region that arrives in the DOM with its text
+ * already in it presents no change to anything, and is generally announced by
+ * nothing — "generally" because this varies by AT and browser, and `role=alert`
+ * is a documented exception; what is NOT safe is relying on it. From #214 until
+ * this change the file had TWO such regions, one inside `SkeletonRail` and one
+ * inside `Rail`, each rendered conditionally and so each created already
+ * holding its sentence. Measured on this app with a MutationObserver installed
+ * ahead of React: on a cold load of `/?q=…` every one of those nodes was
+ * inserted with `textContent` already set, and across a full first paint, an
+ * ingest and a poll there was not one text mutation inside an existing region.
+ * On the AT that ignore such an insertion — the common case — the view was
+ * silent on EVERY path rather than only the cold-load one, and a reader who
+ * typed the search in-app was no better off. On AT that do announce it, the
+ * same pair had the opposite fault the review of #214 predicted: moving from a
+ * populated topic to an empty one swapped one subtree for another carrying the
+ * same words, which reads as fresh news. One persistent region is right under
+ * either behaviour, and the two faults are why it has to be persistent AND
+ * pre-existing.
  *
- * - **The region never unmounts.** That is what makes a later sentence a
- *   mutation rather than a new node, and it is also what stops a topic switch
- *   from re-announcing: React writes no DOM for an unchanged string, so moving
- *   between two equally-busy rails now says nothing where the old pair of
- *   components said the same words twice.
- * - **The region is born EMPTY and stays empty for a moment.** Position alone
- *   cannot fix the cold load, which is the case this was opened for: at the
- *   first commit there is no already-tracked region to mutate, no matter how
- *   high in the tree the node sits, so a message present at mount is a message
- *   nobody hears. Hoisting this to `App` was considered for the continuity
- *   across the hero↔timeline transition and rejected — it does not remove the
- *   need for the delay, and it would buy that continuity with a context
- *   carrying `TimelinePage`'s state up to a component that has no other use for
- *   it. The delay re-arms on that transition instead, which costs 150ms nobody
- *   can perceive against a network fetch.
+ * Putting the node in `index.html` is what makes the delay disappear. React
+ * cannot win the cold load by position alone, however high in the tree it
+ * mounts: at the first commit there is no already-tracked region to mutate, so
+ * a message present at mount is a message nobody hears. The earlier answer here
+ * was to mount an empty region and hold it empty on a `setTimeout` — which
+ * works, but only for as long as the constant is right, and what it waits for
+ * (the platform accessibility API adopting the node) is not observable from the
+ * page, so the number could only ever be a guess dressed up as a citation. MDN
+ * asks for the region in the original markup instead. That is exact rather than
+ * probabilistic, it deletes the constant, and it removes the two holes the
+ * timer had: a state that began and ended inside the window was never announced
+ * at all, and the window re-armed on every hero↔timeline transition.
  *
  * `role="status"` is kept alongside `aria-live="polite"` for the `aria-atomic`
- * it implies: the sentence is read whole, rather than the reader hearing only
- * the digits that changed when a count ticks down.
+ * it implies: the sentence is read whole rather than in fragments. That is also
+ * why `railAnnouncement` speaks no counts — see point 3 there.
  */
 function RailAnnouncer({ message }: { message: string }) {
-  const [registered, setRegistered] = useState(false);
-  useEffect(() => {
-    const timer = window.setTimeout(() => setRegistered(true), LIVE_REGION_REGISTRATION_MS);
-    return () => window.clearTimeout(timer);
-  }, []);
-  // `SILENT` renders no text node at all, which is what the region has to hold
-  // when there is nothing to say — an empty region is silent, whereas a region
-  // holding a space is a region that has been changed.
-  return (
-    <p className="sr-only" role="status" aria-live="polite">
-      {registered ? message : SILENT}
-    </p>
-  );
+  const host = document.getElementById(RAIL_STATUS_ID);
+  // Loud rather than silent, and deliberately the same call `main.tsx` makes
+  // about `#root`. A missing node here costs nothing visible and breaks only
+  // the screen reader's half of the view — exactly the failure that went
+  // unnoticed long enough to need this change — so it may not be allowed to
+  // degrade quietly.
+  if (!host) throw new Error(`#${RAIL_STATUS_ID} not found`);
+  // An empty `message` (`railAnnouncement`'s `SILENT`) puts no text node in the
+  // region at all, which is what it has to hold when there is nothing to say: a
+  // region holding a space is a region that has just been changed.
+  return createPortal(message, host);
 }
 
 /**

@@ -6,6 +6,27 @@
     <title>Zammy</title>
   </head>
   <body>
+    <!--
+      The rail's live region, empty and in the ORIGINAL MARKUP rather than
+      rendered by React, which is the whole point of it being here.
+
+      A screen reader announces a live region's contents when they change inside
+      a region it is already tracking, so the region has to exist before the
+      first message lands in it. React cannot provide that on a cold load: it
+      mounts the region and the message in one commit, and a region born holding
+      its text presents no change to anything. Rendering it here instead means
+      it is present when the browser first parses the document and builds the
+      accessibility tree — MDN's own recommendation — so there is no window to
+      get wrong and no delay to guess at. `RailAnnouncer` in `TimelinePage.tsx`
+      portals the sentence into it; see that comment for the rest.
+
+      Empty on purpose, and it must stay empty: text here would be text the
+      reader never hears, because it would be back to arriving with the node.
+      `.sr-only` is defined in `index.css`, which `main.tsx` imports above its
+      render call — ES module evaluation order puts the stylesheet in the
+      document before React can put any text in here, so this never flashes.
+    -->
+    <p id="rail-status" class="sr-only" role="status" aria-live="polite"></p>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

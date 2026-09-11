@@ -1157,26 +1157,44 @@ keywords in, timeline out.
   and often not — steps 1 and 2 serve a cache or a covered, fresh window with no upstream call, and
   the storyline view answers `complete` / `pendingJobs: 0` unconditionally because it never fetches.
 - **What the rail says out loud** — motion is invisible to a screen reader, so the state the rail
-  shows in teal is also announced, as ONE sentence from `apps/web/src/railAnnouncement.ts`: the first
-  paint's "Loading the timeline", the ingest's "Gathering articles from upstream" with its count
-  where there is one, a bare refetch's "Checking for new articles", and silence on a settled rail.
-  A count of zero under `in_progress` drops the clause rather than printing "0 jobs pending" — a
-  reader who lost the single-flight lock is watching a peer's ingest and has queued nothing of their
-  own (§12) — and the wording lives in a pure function for the same reason `railActivity` does.
-  It is delivered through a SINGLE `aria-live` region that mounts with `TimelinePage`, outlives the
-  skeleton, the rail, the empty state and the error state, and is born EMPTY. Both halves are
-  required and neither works alone. A live region is announced when its contents change inside a
-  region the assistive technology is already tracking; one that arrives in the DOM already holding
-  its text presents no change and is announced by nothing. Conditionally-rendered regions — which is
-  what this view carried at first, one inside the skeleton and one inside the rail — are therefore
-  silent on every path, not merely on a cold load of a shared `?q=` link, and they re-announce the
-  same words as fresh news whenever a topic switch swaps one subtree for the other. Keeping the node
-  mounted fixes the second; it cannot fix the first, because at the first commit there is no tracked
-  region to mutate however high in the tree the node sits. So the region is also held empty for
-  `LIVE_REGION_REGISTRATION_MS` after mount, long enough for the platform accessibility API to take
-  it up, and the first sentence lands as a mutation. Verified on a cold load with a MutationObserver
-  installed ahead of React: before, two insertions carrying their own text and not one mutation;
-  after, one empty insertion followed by a mutation per state change.
+  shows in teal is also announced, as ONE sentence derived by `apps/web/src/railAnnouncement.ts`:
+  the first paint's "Loading the timeline", the ingest's "Gathering articles from upstream", a bare
+  refetch's "Checking for new articles", "The timeline could not be loaded" for the error state, and
+  the empty state's own words — in the spelling it is displaying, resolved once in `TimelinePage`
+  and handed to both, since two copies of a sentence are two sentences waiting to disagree. The
+  wording lives in a pure function for the reason `railActivity` does. Two of those states exist to
+  RESOLVE the first paint's promise: while the view was silent throughout, an unannounced error or
+  empty result cost nothing, but a reader who is told a load began and then told nothing is left
+  waiting on a screen that has already finished — beside, in the error case, a retry button they
+  have no reason to go looking for. A rail that loads SUCCESSFULLY resolves to silence instead, and
+  that is a choice: the cards are the resolution, and a result count would re-announce every time
+  paging or the poll appended a row.
+  No count is spoken, though `IngestGhosts` still draws one. `pendingJobs` is a live queue depth —
+  recomputed per request, spliced onto the newest page by the poll every 1.5s for up to 60s — so a
+  draining queue would mint a new sentence around forty times per window, and `role="status"`
+  implies `aria-atomic`, so each one re-reads the sentence whole. A polite live region is a
+  notification channel rather than a readout. Latching the count at the start of the episode was the
+  alternative and was rejected: a queue depth is worth less than the state it would take to keep
+  honest, and it is frequently 0 for a reader watching a peer's ingest (§12).
+  The sentence is delivered into a SINGLE `aria-live` region that `apps/web/index.html` carries in
+  the document's original markup, empty; `RailAnnouncer` portals text into it and never renders one.
+  A live region is announced when its contents change inside a region the assistive technology is
+  already tracking, so one that arrives in the DOM already holding its text presents no change and
+  is generally announced by nothing — "generally" because this varies by AT and browser. That is why
+  the region cannot be rendered by React at all: on a cold load of a shared `?q=` link, React commits
+  the region and its message together, and no position in the tree changes that. Holding a
+  React-rendered region empty on a timer does work, and was the first answer here; it was replaced
+  because what the timer waits for — the platform accessibility API adopting the node — is not
+  observable from the page, so the delay could only be a guess, and because a state that began and
+  ended inside the window was never announced at all. Markup placement is exact instead.
+  The two conditionally-rendered regions this view carried at first, one in the skeleton and one in
+  the rail, had whichever fault their reader's AT implied: silent on every path for AT that ignore
+  an insertion carrying text, and re-announcing the same words as fresh news on a topic switch for
+  AT that do not. One persistent, pre-existing region is correct under both.
+  What was measured, with a MutationObserver installed ahead of React on a cold load: before, two
+  insertions carrying their own text and not one mutation inside an existing region; after, one
+  pre-existing empty region and a mutation per state change. That is the PRECONDITION an
+  announcement needs, not proof of one — no screen reader has been exercised against this view.
 
 ### 8.2 Behaviour
 
@@ -1211,7 +1229,8 @@ keywords in, timeline out.
   what it finds. Both gates live in `apps/web/src/railActivity.ts` as one pure function, because
   `apps/web` has no renderer in its tests and a gate left in the component is guarded by nothing.
   The sentence a screen reader is given for the same state is derived by `railAnnouncement.ts`, on
-  the same reasoning and out of the same inputs (§8.1, "What the rail says out loud").
+  the same reasoning and downstream of the same gates — it takes `railActivity`'s output, plus what
+  the animation has no way to express (§8.1, "What the rail says out loud").
 - The "no more history" terminal state renders only when `hasMore === false && ingest.state ===
   "complete"` (§6.1).
 - The sentinel and its "Load older" fallback are gated on `hasNextPage` **alone**. ANDing them with
