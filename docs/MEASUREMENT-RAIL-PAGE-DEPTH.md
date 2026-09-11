@@ -238,7 +238,7 @@ further and lowers the sustained rate).
 Both episodes are the same reader on the same topic minutes apart, so they are
 barely independent.
 
-### 3.5 An anomaly this surfaced and did not resolve
+### 3.5 An anomaly this surfaced and did not resolve — since resolved
 
 `RATE_LIMIT_PER_MINUTE` is **not set in production** (`vercel env ls production`
 lists 21 variables and it is not among them), so it takes its default of **60**
@@ -256,6 +256,15 @@ it because it means **the per-IP ceiling is not doing what it is written to do
 for at least this shape of traffic**, and a single reader's ingest poll is
 enough to expose that — which is worth its own issue.
 
+**Resolved 2026-09-11 — see `docs/MEASUREMENT-RATE-LIMIT-FAIL-OPEN.md`.** The
+paragraph above is left as written, because its inference is the part that was
+wrong. Driven directly, the limiter enforces exactly as specified (429 on
+request 61, one shared bucket, a stable key). It is not decorative; it is
+*non-deterministic* — an instance whose Redis client is unusable fails open
+silently, and one of the two instances that served this session logged exactly
+that at boot. Replaying these timestamps through the plugin's own algorithm:
+all-counted gives 22 × 429, either instance alone gives 0.
+
 ---
 
 ## 4. What this means for option 3
@@ -268,7 +277,18 @@ The arithmetic, using the measured depths:
 |---|---|---|
 | before #212 (measured) | **75–100** over ~46–60s | 75–100 |
 | after #212 (one page per tick) | 17–23 | 17–23 |
+| **after #212 (measured in production)** | **27** | **27** |
 | option 3 (wait hint / SSE) | ~1–2 | ~1–2 |
+
+**The "after #212" row is low, and the measured row above it is the one to
+quote** — `docs/MEASUREMENT-RATE-LIMIT-FAIL-OPEN.md` §4.1, driven against
+production once #212 had landed: **27 requests, 26/min peak**, all of them page
+one with not a single cursored page re-fetched. The 17–23 row reuses the
+measured *tick counts* as request counts, but §3.3 above records that those
+ticks were stretched to a median 2.32–2.69s **by the fan-out's own duration** —
+so deleting the fan-out makes the ticks faster and more numerous. The verdict is
+unaffected: 27 invocations is still not worth a protocol change, so option 3
+stays unbuilt.
 
 #212 removes **69% of episode B's cost and 83% of episode A's**, and it is
 already written and reviewed. The remaining ~20 invocations per cold-topic read
@@ -384,11 +404,12 @@ then the number is live and unbounded and nothing else watches it.
   interacts with screen height and card density; a taller window fires the
   sentinel more often and should reach a deeper rail. Nothing in the logs
   records it, and I did not add anything that would.
-- **The rate-limit anomaly (§3.5) is unexplained.** I did not reproduce it, did
-  not inspect Redis, and did not check `x-ratelimit-remaining` on a live
-  response, because that would have meant issuing production reads — which
-  trigger refresh-on-read, enqueue ingest and spend Currents quota. Read-only
-  against the logs was the whole brief.
+- **The rate-limit anomaly (§3.5) is resolved.** I did not reproduce it here —
+  no live reads, no Redis inspection, no `x-ratelimit-remaining` — because
+  read-only against the logs was the whole brief. A follow-up session did
+  (`docs/MEASUREMENT-RATE-LIMIT-FAIL-OPEN.md`): the limiter is enforced but
+  fails open per-instance, and production is now pinned to
+  `RATE_LIMIT_PER_MINUTE=120` rather than the accidental default of 60.
 - **No production database access**, by design: every production env var is
   marked Sensitive, so `sightings` / `topics` could not be consulted to
   corroborate that an ingest was genuinely running during either episode. The
