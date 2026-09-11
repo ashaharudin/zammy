@@ -167,12 +167,13 @@ So the sole live tell is `x-ratelimit-remaining: 60` on a response nobody reads.
 
 ## 4. What this means for `RATE_LIMIT_PER_MINUTE`
 
-**60 survives #212, but with ~1.3× headroom rather than the margin the
-pre-fix arithmetic implied. Pin it; do not assume it is generous.**
+**Measured post-#212: one reader costs 26/min, 43% of the ceiling. 60 holds for
+one reader and not for two behind one IP. Set it to 120.**
 
 *Updated after #212 (`60b2692`) and #213 landed on `main` and production
-redeployed. The conditional this section used to carry is resolved, and the
-number it resolved to is not the one that was projected — see §4.1.*
+redeployed, then measured against production — see §4.1. Both earlier figures
+in this file's history were wrong in opposite directions; the measurement
+replaces them.*
 
 The rail-depth measurement is the relevant input: one ordinary reader, polling
 during ingest, sustained **131 requests a minute** with a per-tick fan-out of 6–8
@@ -189,54 +190,63 @@ building on this evidence") stands** — nothing here argues for the wait hint o
 SSE. But the cost it leaves behind is larger than the projection, for a reason
 the rail-depth measurement itself supplies.
 
-### 4.1 The 17–23 figure does not survive the fix that produced it
+### 4.1 Measured, not computed
 
-That number is the pre-fix **tick count** — 17 ticks in 46 s, 23 in 59 s — used
-as a stand-in for requests once each tick costs one request. It cannot be
-carried across the fix, because §3.3 of the rail-depth measurement already
-recorded why those ticks were so few:
+Driven against production 2026-09-11 20:46 UTC on a cold topic (`q=glacier`),
+one browser, no scrolling. The client's own `fetch` was instrumented and the
+result cross-checked against `vercel logs`; **the two agree exactly at 27.**
 
-> the observed tick period is therefore **1.5s + the fan-out's own duration**:
-> median 2.32s at depth 4, 2.69s at depth 6–7, against the 1.5s §8.2 specifies.
+```
+timeline requests : 27   (1 initial load + 26 poll ticks)
+                         27 page-one, 0 cursored — the fan-out is gone
+span              : 77.8s   (poll window ~59s of it)
+steady tick gap   : median 2.00s over 22 ticks
+PEAK rolling 60s  : 26 requests/min   = 43% of the 60/min ceiling
+429s              : none
+```
 
-The fan-out was *throttling its own poll*. Remove it and the throttle goes with
-it. `ingestPoll.ts` reschedules after the fetch resolves
-(`if (!controller.signal.aborted) schedule()`), so the period is now
-`INGEST_POLL_INTERVAL_MS` (1500, unchanged by #212) plus one page-one fetch —
-0.05–0.06 s in the archived `TIMELINE_READ_MESSAGE` rows. About **1.56 s**, so a
-full `INGEST_POLL_WINDOW_MS` (60 s, also unchanged) is **~38 ticks, not 17–23**.
+**#212 is confirmed in production.** Every request was page one; not one
+cursored page was re-fetched. Before it, the same shape cost 100 requests and
+131/min.
 
-Add the reader's own paging, which #212 does not touch — it stopped the *poll*
-from re-fetching loaded pages, while the initial load of each page is still a
-request, and #210's sentinel drove episode A's rail to 7–8 pages. So one reader,
-one cold topic, one ingest window:
+Two corrections fall out, and this file has now been wrong in both directions:
 
-| | per cold-topic read | per minute |
-|---|---|---|
-| before #212 (measured) | 75–100 | 131 |
-| after #212 (projected in §4) | 17–23 | ~22–30 |
-| **after #212 (this arithmetic)** | **~38 poll + ~7 paging ≈ 45** | **~45** |
+- **17–23 was too low.** It reused the pre-fix *tick counts*, and §3.3 of the
+  rail-depth measurement records that those ticks were stretched to 2.32–2.69s
+  by the fan-out's own duration. Removing the fan-out removes the stretch.
+- **~38 was too high.** That used `INGEST_POLL_INTERVAL_MS` (1500) plus the
+  *server-side* `seconds: 0.05` from `TIMELINE_READ_MESSAGE`. But the loop
+  reschedules after the fetch **resolves in the browser**, so the term that
+  matters is the whole client round trip — TLS, network, queueing — measured
+  here at ~500ms, not 60ms. Hence a 2.00s tick, ~30/min, not 1.56s and ~38/min.
 
-**This is arithmetic, not an observation** — the same kind of arithmetic that
-was wrong the first time, and it should be replaced by a measurement the next
-time a cold-topic read happens in production with logs still retained. What it
-is enough to establish is the shape: 45 of a 60/min ceiling is ~75%, so the
-ceiling holds for one reader and has no room for two visible tabs on different
-topics, or for a reader who pages while polling.
+**The tick rate is latency-dependent, and faster readers cost more.** That is
+the part worth carrying forward: the gap is `1500ms + round trip`, so it is
+bounded below by ~1.56s for a reader sitting next to `iad1` (~38/min) and was
+2.00s from here (~30/min). Size the ceiling for the fastest reader, not the
+average. Add the reader's own paging, which #212 deliberately does not
+touch — #210's sentinel drove episode A's rail to 7–8 pages, and each of those
+is still one request:
+
+| | poll | + paging | vs 60/min |
+|---|---|---|---|
+| measured here (no scrolling) | 26 | 26 | 43% |
+| measured here + episode A's paging | 26 | ~34 | 57% |
+| low-latency reader + paging | ~38 | ~46 | 77% |
 
 The three levers, in the order they should be decided:
 
-1. **Pin the limit explicitly.** #212 has landed, so the fan-out is gone and the
-   ~240–300/min branch is off the table. What remains is a choice between 60 and
-   something with real headroom. 60 is defensible — one reader fits, at ~75% of
-   it — and pinning it costs nothing: the default is currently load-bearing in
-   production by accident, and `x-ratelimit-limit: 60` is the only place the
-   number is written down. **120 is the better number** if §4.1's arithmetic is
-   even roughly right, because 1.3× is not headroom for a ceiling whose failure
-   mode is 429ing a real reader mid-ingest, and 120 is still two orders of
-   magnitude below what novel-fingerprint spam would need to matter against
-   `PER_TOPIC_DAILY_CALL_CAP` (20) and `INTERACTIVE_RESERVE` (250). Measure a
-   post-#212 cold read before committing to 60.
+1. **Set `RATE_LIMIT_PER_MINUTE=120` explicitly.** #212 has landed, so the
+   240–300/min branch is off the table; the choice is 60 or 120. One reader fits
+   under 60 — 43% measured, 77% for a low-latency reader who also pages — so 60
+   is not broken. It breaks on **two**: the limit is per-IP, and two readers
+   behind one NAT, or one reader with two visible windows, land at 52–92/min and
+   start taking 429s during ingest, which is exactly when the rail is filling.
+   120 covers that, and is still two orders of magnitude below what
+   novel-fingerprint spam would need to matter against
+   `PER_TOPIC_DAILY_CALL_CAP` (20) and `INTERACTIVE_RESERVE` (250). Pin it
+   either way: the default is currently load-bearing in production by accident,
+   and `x-ratelimit-limit: 60` is the only place the number is written down.
 2. **Repair the Redis seam**, so the ceiling is the number chosen rather than
    that number divided by the healthy fraction of the fleet. Sequencing matters:
    this is the lever that makes the limit bite, so it should land *after* 1 has
