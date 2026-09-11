@@ -61,6 +61,18 @@ export const STORYLINE_BAR: LinkerConfig = Object.freeze({
    * `storylineBar({ coherenceGate: true })`.
    */
   coherenceGate: false,
+  /**
+   * ON, and unlike the gate above it does not depend on a model being
+   * configured — the verdicts are already bought.
+   *
+   * A refusal is durable, hand-checked evidence keyed on GROUPS, so it outlives
+   * the storylines it was about and costs one indexed read to honour. The one
+   * caller that may turn it off says so on the command line
+   * (`backfill:storylines --ignore-refusals`), which is the only shape in which
+   * "rebuild from pure token evidence" is a decision someone made rather than a
+   * side effect of having no API key.
+   */
+  honourRefusals: true,
   // The shipped default: the whole profile capped at 200, not the
   // anchor-eligible subset capped at 4,000.
   narrowRetrieval: false,

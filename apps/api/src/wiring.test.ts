@@ -173,6 +173,10 @@ describe("the bar a group is judged at", () => {
       },
       mergeBridges: 3,
       coherenceGate: true,
+      // Not env-derived and deliberately so: replaying a verdict already
+      // recorded is not a knob an operator tunes per deployment. The one caller
+      // that may decline says it on the command line (`--ignore-refusals`).
+      honourRefusals: true,
       narrowRetrieval: true,
       maxBridgingQualifiers: 2,
       storyDf: { windowDays: 21, timeZone: "America/Edmonton" },

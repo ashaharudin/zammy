@@ -602,10 +602,14 @@ Three more properties, each measured or argued above:
   naming nothing. A refusal bars only that FORMATION, not the group from later
   joining the arc once it is real and wide — a different question the gate is
   bad at.
-- **The backfill does not gate.** A budget decision, not a doubt: replaying the
-  archive is thousands of formations at one call each. It rebuilds what the
-  token evidence says and leaves verdicts to the live path; refusals survive
-  it, being keyed on groups.
+- **The backfill does not gate, but it does remember.** Not gating is now a
+  structural fact before it is a budget one: the gate DEFERS a formation to
+  `resolvePendingFormations`, which the backfill has no tail to run, so a gated
+  replay would withhold every formation in the archive and form nothing —
+  `assertNoUnresolvableGate` refuses such a run. Replaying refusals already
+  recorded is a separate permission (`honourRefusals`) and is ON everywhere,
+  because it costs an indexed read rather than a model call. The two were one
+  field until 2026-09-11, and the cost of that is measured below.
 
 The sweep is deliberately unchanged and still measures the **token** decision.
 It has no model and cannot have one — 30 settings over 23,000 groups is
@@ -654,6 +658,44 @@ Two things this did NOT touch, both deliberate:
 - **The ~26% of model-named two-group storylines the validation found are
   piles.** A real target and a bad first one: no hand-checked ground truth
   stands behind them.
+
+### …and erased two days later (2026-08-21), measured 2026-09-11
+
+All 49 dissolutions above, and the 66 subjects they were selected from, are gone
+from the archive. `backfill:storylines --restart` ran on 2026-08-21 and every
+storyline in dev (14,215) and prod (14,179) dates from that day or later — a
+hard floor with nothing behind it.
+
+The refusals themselves survived exactly as designed: 264 rows, keyed on groups,
+still present. What did not survive is any reading of them. The linker consulted
+`storyline_formation_refusals` **inside `coherenceGate`'s own `if`**, so the
+backfill's `coherenceGate: false` — set for budget reasons that had nothing to
+do with the table — silently meant "and forget every verdict". Re-measured in
+dev on 2026-09-11: **167 of the 264 refused pairs (63%) are back in a shared
+storyline**, across 160 storylines, 44 of them exactly-2-group piles.
+
+Two second-order consequences worth recording:
+
+- **An ungated rebuild is the dominant pile-creating event in this archive's
+  history** — not a drift, not the live path, one command.
+- **The live path had the same hole, and still has it running.** The nightly
+  late-candidate sweep re-offers unhomed groups through `linkGroup` at the
+  configured bar, and `STORYLINE_COHERENCE_GATE` has been `false` in dev since
+  2026-08-21 and in PROD since 2026-09-11 — so under the old coupling the sweep
+  was not merely declining to buy verdicts, it was re-forming pairs a verdict
+  had already refused, ungated, night after night. `honourRefusals` closes that
+  without a flag change and without a model call.
+- **The retroactive half has lost its selector.** `dissolve:storyline-piles`
+  scopes to `label_source = 'bigram'` at two groups; the relabel campaign has
+  since model-named nearly everything, so that query now returns **2** rows in
+  dev against 879 model-named two-group storylines. Re-running the cleanup needs
+  a scope that is not provenance, and that scope does not exist yet.
+
+The fix is `honourRefusals` (docs/STORYLINE-BACKFILL.md, "What a rebuild
+remembers"): the next rebuild replays all 264 verdicts for free. It does not
+restore the 66 — those storylines were re-minted under new UUIDs and the
+dissolutions would have to be re-judged — but it stops the next rebuild doing it
+again.
 
 A pre-existing gap surfaced while verifying, unrelated to any of this: **7
 groups (9 articles, last seen 2026-07-31) hold no storyline at all**, so they

@@ -1558,6 +1558,23 @@ export async function recordFormationRefusal(
 }
 
 /**
+ * How many formations a verdict has refused, archive-wide.
+ *
+ * One number, for one job: saying out loud what a rebuild is honouring. A
+ * backfill that replays refusals and a backfill that ignores them produce the
+ * same report otherwise, and the difference between them is 66 hand-verified
+ * subjects — which is exactly how the 2026-08-21 rebuild erased them without a
+ * line of output to notice.
+ */
+export async function countFormationRefusals(db: Kysely<Database>): Promise<number> {
+  const row = await db
+    .selectFrom("storyline_formation_refusals")
+    .select((eb) => eb.fn.countAll<string>().as("n"))
+    .executeTakeFirst();
+  return Number(row?.n ?? 0);
+}
+
+/**
  * Every group this one has been refused a formation with — either side of the
  * pair.
  *

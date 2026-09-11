@@ -1,4 +1,4 @@
-import { readStorylineStats } from "@zammy/storage";
+import { countFormationRefusals, readStorylineStats } from "@zammy/storage";
 import {
   EXIT_FAILED,
   POSITIVE_INTEGER,
@@ -12,7 +12,8 @@ import { linkerBarFromEnv } from "./wiring.js";
 
 /**
  * `pnpm backfill:storylines [--restart] [--labels-only] [--no-labels]
- *  [--relabel] [--relabel-all] [--max-groups=N] [--max-labels=N] [--label-rate=N] [--batch=N]`
+ *  [--relabel] [--relabel-all] [--ignore-refusals] [--max-groups=N] [--max-labels=N]
+ *  [--label-rate=N] [--batch=N]`
  *
  * The ADR-0011 rollout command (S5): replay the linker over the whole archive
  * chronologically, then label what got promoted.
@@ -39,7 +40,8 @@ export const spec: CommandSpec = {
   name: "backfill:storylines",
   synopsis:
     "[--restart] [--groups=1,2,3] [--labels-only] [--no-labels] [--relabel] " +
-    "[--relabel-all] [--max-groups=N] [--max-labels=N] [--label-rate=N] [--batch=N]",
+    "[--relabel-all] [--ignore-refusals] [--max-groups=N] [--max-labels=N] " +
+    "[--label-rate=N] [--batch=N]",
   flags: {
     restart: { kind: "boolean", describe: "discard storyline state and rebuild from scratch" },
     groups: {
@@ -54,6 +56,10 @@ export const spec: CommandSpec = {
       describe: "re-label everything the configured model has not named yet",
     },
     "relabel-all": { kind: "boolean", describe: "re-name everything — a prompt change" },
+    "ignore-refusals": {
+      kind: "boolean",
+      describe: "rebuild refused formations too — pure token evidence, no verdicts",
+    },
     "max-groups": { kind: "value", placeholder: "N", describe: "stop after linking N groups" },
     "max-labels": { kind: "value", placeholder: "N", describe: "stop after N model calls" },
     "label-rate": {
@@ -89,6 +95,7 @@ export const spec: CommandSpec = {
     const skipLabels = args.boolean("no-labels");
     const relabel = args.boolean("relabel");
     const relabelAll = args.boolean("relabel-all");
+    const ignoreRefusals = args.boolean("ignore-refusals");
 
     // Ctrl-C stops at the next group boundary rather than mid-write. A backfill
     // killed between a storyline's birth and its bridges is exactly what the
@@ -111,8 +118,11 @@ export const spec: CommandSpec = {
     );
 
     /**
-     * The configured bar (`wiring.ts`), diverging on the ONE field this command
-     * has a reason to.
+     * The configured bar (`wiring.ts`), diverging on `coherenceGate` always and
+     * on `honourRefusals` only when the operator asks — the shipped value is
+     * what a plain run leaves standing. Both are stated here rather than one,
+     * because they used to BE one field, and that is what cost the archive every
+     * refusal it had ever recorded (see below).
      *
      * Everything else is the live path's by construction, and the reasons that
      * used to be written beside each copied field were all the same reason: a
@@ -125,15 +135,63 @@ export const spec: CommandSpec = {
      */
     const linkerConfig: LinkerConfig = storylineBar({
       ...linkerBarFromEnv(config),
-      // The backfill does NOT gate formations, and that is a budget decision rather
-      // than a doubt: replaying the archive produces thousands of them, one model
-      // call each, against a ceiling of 500 a day. It rebuilds what the token
-      // evidence says and leaves the verdicts to the live path — which is also why
-      // a backfill does not erase existing refusals, since those are keyed on GROUPS
-      // and survive any amount of storyline churn.
+      /**
+       * The backfill does NOT ask for new verdicts, and there are two reasons —
+       * one structural, one measured. The structural one is decisive:
+       * `coherenceGate` DEFERS a formation rather than refusing it, and
+       * `backfillStorylines` has no tail to resolve what it defers, so a gated
+       * run would withhold every formation in the archive and form nothing.
+       * `assertNoUnresolvableGate` refuses such a run rather than letting this
+       * line be the only thing standing between an operator and that outcome.
+       *
+       * The measured one says the wiring is not worth building either. The
+       * budget argument this comment used to make — "thousands of calls against
+       * a ceiling of 500 a day" — is stale: the configured model publishes
+       * 14,400/day since 2026-08-27, so the daily cap binds nothing. What binds
+       * is RATE and what it collides with. A replay of the dev archive earns
+       * ~5,000 formations; at the 30/min ceiling that is ~3 hours of calls on
+       * the SAME per-key allowance the live labeler is drawing from, and a
+       * manual campaign paced to 30/min has already been measured pushing 37
+       * organic promotions onto bigram fallbacks. Buying that contention would
+       * buy the gate's measured trade at archive scale: 0.88 declined piles
+       * caught per real arc destroyed, on a figure that is itself a month old
+       * (docs/STORYLINE-LINKING.md). Re-measure before anyone reconsiders.
+       */
       coherenceGate: false,
+      /**
+       * Refusals already recorded ARE replayed, and this is the line the
+       * 2026-08-21 rebuild needed and did not have.
+       *
+       * It used to be unreachable: the linker read the refusals table inside the
+       * gate's own `if`, so `coherenceGate: false` here silently meant "discard
+       * every verdict ever paid for" as well. It cost 66 hand-verified subjects
+       * — `dissolve:storyline-piles --apply` cleaned them on 2026-08-19, a
+       * `--restart` re-minted them on 2026-08-21 — and 167 of the 264 recorded
+       * pairs (63%) are back in a shared storyline in the dev archive today.
+       *
+       * Nothing about replaying them is a budget decision: a refusal is keyed on
+       * GROUPS, survives any amount of storyline churn, and costs one indexed
+       * read per formation-shaped decision. `--ignore-refusals` is how an
+       * operator asks for the old behaviour deliberately — a rebuild on pure
+       * token evidence — rather than inheriting it from a missing API key.
+       */
+      honourRefusals: !ignoreRefusals,
     });
     const log = { warn: (obj: object, msg: string) => console.warn(msg, JSON.stringify(obj)) };
+
+    // Said out loud, because the run reports identically either way and the
+    // difference is 66 hand-verified subjects. A rebuild that ignores refusals
+    // re-mints every pile a verdict has ever refused; that it is doing so should
+    // not have to be inferred from a flag the operator typed minutes ago.
+    if (!labelsOnly) {
+      const refusals = await countFormationRefusals(db);
+      console.log(
+        ignoreRefusals
+          ? `IGNORING ${refusals} recorded formation refusals — ` +
+              `piles a verdict already refused will be rebuilt`
+          : `honouring ${refusals} recorded formation refusals`,
+      );
+    }
 
     const batch = args.number("batch", POSITIVE_INTEGER);
     const maxGroups = args.number("max-groups", POSITIVE_INTEGER);

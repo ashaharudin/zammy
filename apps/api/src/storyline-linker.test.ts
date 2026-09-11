@@ -840,6 +840,87 @@ describe("the coherence gate (ADR-0011's amendment)", () => {
   });
 });
 
+describe("recorded refusals, with no gate running", () => {
+  /**
+   * The backfill's bar: no model, no new verdicts — and, until 2026-09-11, no
+   * memory of the old ones either, because the refusals table was read inside
+   * the gate's own `if`.
+   *
+   * That coupling is what `backfill:storylines --restart` on 2026-08-21 rode
+   * through the whole archive: it re-minted 167 of the 264 recorded pairs,
+   * including all 66 subjects `dissolve:storyline-piles --apply` had cleaned two
+   * days earlier. Replaying a verdict costs one indexed read; buying one costs a
+   * model call. These tests pin them apart.
+   */
+  const UNGATED: LinkerConfig = storylineBar({ coherenceGate: false });
+  /** The named escape hatch — `backfill:storylines --ignore-refusals`. */
+  const FORGETFUL: LinkerConfig = storylineBar({
+    coherenceGate: false,
+    honourRefusals: false,
+  });
+
+  it("does not re-form a pair a verdict already refused", async () => {
+    await seedCorpus({ rare: STORY });
+    const first = await group({ tokens: STORY });
+    const second = await group({ tokens: STORY });
+    await linkGroup(deps(UNGATED), first);
+    await recordFormationRefusal(db, { groupA: first.groupId, groupB: second.groupId });
+
+    const outcome = await linkGroup(deps(UNGATED), second);
+
+    // The token evidence is identical to the ungated formation two describes
+    // up, which attaches and promotes. The verdict is the only difference.
+    expect(outcome.attached).toBe(false);
+    expect(outcome.promoted).toEqual([]);
+    const homes = await readGroupStorylines(db, second.groupId);
+    expect(homes).toHaveLength(1);
+    expect(homes[0]).not.toBe(outcome.pendingFormation?.winnerId);
+    const partner = await readGroupStorylines(db, first.groupId);
+    expect(partner[0]).not.toBe(homes[0]);
+  });
+
+  it("still forms the pair when the operator asks for pure token evidence", async () => {
+    await seedCorpus({ rare: STORY });
+    const first = await group({ tokens: STORY });
+    const second = await group({ tokens: STORY });
+    await linkGroup(deps(FORGETFUL), first);
+    await recordFormationRefusal(db, { groupA: first.groupId, groupB: second.groupId });
+
+    const outcome = await linkGroup(deps(FORGETFUL), second);
+
+    // `--ignore-refusals` is the pre-2026-09-11 behaviour, reachable only by
+    // naming it. Without this the flag would be inert and the test above would
+    // pass for a bar nobody could opt out of.
+    expect(outcome.attached).toBe(true);
+    expect(outcome.promoted).toEqual([outcome.storylineId]);
+  });
+
+  it("bars only the refused pair, so the group still links elsewhere", async () => {
+    // The filter drops CANDIDATES, not the group. Two disjoint stories, so
+    // neither singleton can see the other, and one arrival that covers both:
+    // refused against the first, it must land on the second rather than nowhere.
+    const OTHER = ["kalgoorlie", "nickel", "smelter", "tailings", "wyalkatchem"];
+    await seedCorpus({ rare: [...STORY, ...OTHER] });
+    const refusedPartner = await group({ tokens: STORY });
+    const available = await group({ tokens: OTHER });
+    await linkGroup(deps(UNGATED), refusedPartner);
+    const alone = await linkGroup(deps(UNGATED), available);
+    expect(alone.attached).toBe(false);
+
+    const arriving = await group({ tokens: [...STORY, ...OTHER] });
+    await recordFormationRefusal(db, {
+      groupA: refusedPartner.groupId,
+      groupB: arriving.groupId,
+    });
+    const outcome = await linkGroup(deps(UNGATED), arriving);
+
+    expect(outcome.attached).toBe(true);
+    const homes = await readGroupStorylines(db, arriving.groupId);
+    const refusedHome = await readGroupStorylines(db, refusedPartner.groupId);
+    expect(homes).not.toContain(refusedHome[0]);
+  });
+});
+
 describe("STORYLINE_NARROW_RETRIEVAL", () => {
   /** The narrowed mode: anchor-eligible probe, cap 4,000. `CONFIG` is the off one. */
   const NARROWED: LinkerConfig = { ...CONFIG, narrowRetrieval: true };

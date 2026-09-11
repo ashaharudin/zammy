@@ -1,6 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { sql } from "kysely";
-import { readGroupStorylines, readStorylineStats } from "@zammy/storage";
+import {
+  readGroupStorylines,
+  readStorylineStats,
+  recordFormationRefusal,
+} from "@zammy/storage";
 import { createTestHarness, type TestHarness } from "./test-support.js";
 import { storylineBar } from "./storyline-bar.js";
 import type { LinkerConfig } from "./storyline-linker.js";
@@ -38,7 +42,8 @@ afterAll(async () => {
 beforeEach(async () => {
   await sql`
     truncate storylines, storyline_groups, storyline_days, storyline_bridges,
-             story_token_days, story_corpus_days, articles cascade
+             storyline_formation_refusals, story_token_days, story_corpus_days,
+             articles cascade
   `.execute(db);
   nextArticle = 0;
 });
@@ -307,6 +312,98 @@ describe("the backfill", () => {
       // Every group linked again, from nothing — same world, rebuilt.
       expect(report.linked).toBe(8);
       expect(await shape()).toEqual(before);
+    });
+  });
+
+  describe("what a rebuild remembers", () => {
+    /**
+     * The 2026-08-21 event, in miniature.
+     *
+     * `dissolve:storyline-piles --apply` recorded 264 refusals over
+     * 2026-08-18..21 and the rebuild two days later re-minted 167 of those pairs
+     * (63%), including all 66 subjects the cleanup had hand-verified. The cause
+     * was not the `--restart`: refusals key on GROUPS and survived it intact. It
+     * was that the linker read them inside the coherence gate's own `if`, so a
+     * backfill built without a model forgot every verdict a model had ever
+     * given.
+     */
+
+    /**
+     * A story exactly TWO groups cover, plus three on an unrelated one.
+     *
+     * Two and not five on purpose. A refusal bars the FORMATION and nothing
+     * else, so where a third group covers the same story it may legitimately
+     * form the arc and then absorb both refused groups as ordinary joins — the
+     * design's own rule (`mayRefuseFormation`), and an assertion that the pair
+     * never shares a storyline would be asserting against it. With no third
+     * group there is no such path, and the refusal is the only thing that can
+     * keep them apart.
+     */
+    async function seedOnePair(): Promise<{ seed: string; joiner: string }> {
+      await seedCorpus({ rare: [...STORY, ...OTHER] });
+      const seed = await article({ tokens: STORY, publishedAt: `${DAY}T09:00:00Z` });
+      const joiner = await article({ tokens: STORY, publishedAt: `${DAY}T09:01:00Z` });
+      for (let i = 0; i < 3; i += 1) {
+        await article({ tokens: OTHER, publishedAt: `${DAY}T10:0${i}:00Z` });
+      }
+      return { seed, joiner };
+    }
+
+    it("does not rebuild a formation a verdict refused", async () => {
+      const { seed, joiner } = await seedOnePair();
+      await backfillStorylines(deps(), { skipLabels: true });
+      // The pile the token evidence builds, and the one the verdict refused.
+      expect(await readGroupStorylines(db, seed)).toEqual(
+        await readGroupStorylines(db, joiner),
+      );
+
+      await recordFormationRefusal(db, { groupA: seed, groupB: joiner });
+      await backfillStorylines(deps(), { skipLabels: true, restart: true });
+
+      // Rebuilt from nothing, and the refused pair is apart — in any storyline,
+      // by any path.
+      const seedHomes = await readGroupStorylines(db, seed);
+      const joinerHomes = await readGroupStorylines(db, joiner);
+      expect(seedHomes.filter((home) => joinerHomes.includes(home))).toEqual([]);
+      // Both still HOMED, though: a refusal costs a formation, never coverage.
+      expect(seedHomes).toHaveLength(1);
+      expect(joinerHomes).toHaveLength(1);
+    });
+
+    it("rebuilds it anyway when the operator asks for pure token evidence", async () => {
+      // `--ignore-refusals`. Without this the test above would be asserting a
+      // bar nobody can opt out of, and the flag would be decoration.
+      const { seed, joiner } = await seedOnePair();
+      await backfillStorylines(deps(), { skipLabels: true });
+      await recordFormationRefusal(db, { groupA: seed, groupB: joiner });
+
+      await backfillStorylines(
+        { db, config: storylineBar({ honourRefusals: false }) },
+        { skipLabels: true, restart: true },
+      );
+
+      expect(await readGroupStorylines(db, seed)).toEqual(
+        await readGroupStorylines(db, joiner),
+      );
+    });
+
+    it("refuses to run gated at all, because it cannot resolve what a gate defers", async () => {
+      // `coherenceGate` DEFERS a formation to a tail this module does not have
+      // (`resolvePendingFormations`), so a gated run would withhold every
+      // formation in the archive, form nothing, and report it as an ordinary
+      // pass. One config field away from any operator who decides the backfill
+      // ought to gate — so the refusal is a guard, not a comment.
+      await seedArchive();
+
+      await expect(
+        backfillStorylines(
+          { db, config: storylineBar({ coherenceGate: true }) },
+          { skipLabels: true },
+        ),
+      ).rejects.toThrow(/cannot resolve a withheld formation/);
+
+      // And nothing was written on the way to refusing.
+      expect((await readStorylineStats(db)).linkedGroups).toBe(0);
     });
   });
 

@@ -138,9 +138,19 @@ that can name the story has thereby said it is one. Only an explicit refusal
 acts; an unavailable, slow, out-of-quota or contract-breaking model performs
 the withheld merge and falls back to bigrams — the pre-gate outcome exactly.
 `STORYLINE_COHERENCE_GATE` can stop it without a deploy, and it is inert with
-no `GEMINI_API_KEY`. The backfill does not gate — thousands of formations
-against a 500-a-day ceiling — so it rebuilds what the token evidence says and
-leaves verdicts to the live path.
+no `GEMINI_API_KEY`. The backfill does not gate — it has no tail to resolve a
+deferred formation, so a gated replay would withhold every formation in the
+archive and form nothing — and it rebuilds what the token evidence says.
+
+**Amended 2026-09-11.** "Does not gate" was implemented as "does not read the
+refusals table either", because the linker consulted that table inside the
+gate's own condition. A `backfill:storylines --restart` on 2026-08-21 therefore
+re-minted 63% of every formation a verdict had ever refused, including all 66
+subjects of the retroactive cleanup two days earlier. Buying a verdict and
+replaying one already bought are separate permissions — `coherenceGate` and
+`honourRefusals` — and only the first costs a model call. Durable refusals are
+worth nothing to a process that does not read them
+(docs/STORYLINE-BACKFILL.md, "What a rebuild remembers").
 
 ## Labels
 
