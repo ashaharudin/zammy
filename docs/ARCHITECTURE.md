@@ -1167,10 +1167,10 @@ keywords in, timeline out.
   poll every ~1.5s while `meta.ingest.state === "in_progress"`, stopping on `complete` or when the
   60s poll window closes (§6.5). The poll asks for the FIRST page only, however many the reader has
   loaded, and refreshes it in place; §6.5 point 4 has why that takes code rather than a
-  `refetchInterval`. Two to four ghost slots sit below the real cards so a short first paint reads
-  as "more coming" (`IngestGhosts`; the `.shimmer` rows this once described are gone, though the
-  CSS class outlived them). No full-page spinner once any content exists, and no spinner *replacing*
-  content on refetch — content only grows downward.
+  `refetchInterval`. One to four ghost slots sit below the real cards so a short first paint reads
+  as "more coming" — `IngestGhosts`, floored at one and capped at four, since the tail shows that
+  work is outstanding rather than plotting the queue. No full-page spinner once any content exists,
+  and no spinner *replacing* content on refetch — content only grows downward.
 - **"N new articles" pill** when refresh-on-read surfaces items newer than the top of the view;
   prepends only on click, so the reading position never jumps.
 - **A plain refetch lights the same head of the animation** — the charged spine and the beacon, but
@@ -1178,7 +1178,10 @@ keywords in, timeline out.
   refetch a remount of an already-loaded topic runs, `refetchOnReconnect`, and a retry over an error
   banner with data still behind it. All four keep every card in place on purpose, so without this
   the rail is indistinguishable from one that is idle. Over an EMPTY rail — where a reader is most
-  likely to pull — there is no spine to charge, so it shows the skeleton instead.
+  likely to pull, since a search that found nothing is the one they retry — the beacon lights ALONE
+  above the empty-state message: there is no rail to charge, and ghost slots there would promise
+  cards on the path that reaches this state most often, which is `refetchOnMount` over a topic the
+  reader already knows is empty rather than a pull at all.
   The ghost slots wait for `ingesting` because they stand for a queue with a COUNT in it and a
   refetch in flight has not been told one yet; a refetch is not work-free — §6.4 has a stale read
   enqueueing a top-up — it just cannot say how much until it answers. Paging is deliberately NOT

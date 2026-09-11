@@ -402,15 +402,28 @@ function Rail({
   const working = ingesting || refreshing;
 
   if (items.length === 0 && !ingesting) {
-    // An empty rail has no spine to charge, and it is also where a reader is
-    // MOST likely to pull — a search that found nothing is the one they retry.
-    // So the pull gets the same answer the first paint gives: there is no
-    // content either way, and something is in flight.
-    if (refreshing) return <SkeletonRail />;
-    return (
+    const message = (
       <p style={{ color: "var(--fg-faint)", textAlign: "center", marginTop: "3rem" }}>
         {terminal ? emptyLabel : "Nothing here yet."}
       </p>
+    );
+    if (!refreshing) return message;
+    // An empty rail is where a reader is MOST likely to pull — a search that
+    // found nothing is the one they retry — so it needs the mark most. It gets
+    // the beacon ALONE, and the message stays where it was.
+    //
+    // Not the skeleton, which was the first answer here and was worse than the
+    // gap it closed: three ghost slots promise cards, and the commonest way
+    // into this state is not a pull at all but `refetchOnMount` over an empty
+    // topic the reader already knows is empty — so a stale remount would swap
+    // a settled message for 15rem of phantom rows and then collapse it again.
+    // Nor the spine: there is no rail here to charge.
+    return (
+      <div style={{ position: "relative", paddingLeft: RAIL_INSET }}>
+        <IngestStatus pendingJobs={null} />
+        <IngestBeacon />
+        {message}
+      </div>
     );
   }
 
@@ -1504,15 +1517,25 @@ function IngestGhosts({ pendingJobs }: { pendingJobs: number }) {
  * articles from upstream" there would announce an ingest that may not be
  * running — and would announce it AGAIN, in place, at the moment a poll flips
  * `ingesting` off under a refetch that is still in flight.
+ *
+ * Zero with `ingesting` true is NOT a contradiction and not a race: a reader
+ * who loses the single-flight lock reads a peer's fetch as their own
+ * `in_progress` and queues nothing of their own (`coverage-fill.ts`,
+ * `lockLostToPeer` — §12's invariant that a reader never queues on someone
+ * else's ingest). So it drops the clause rather than printing "0 jobs
+ * pending", which would contradict both the animation and the single ghost
+ * slot `IngestGhosts` floors that count at.
  */
 function IngestStatus({ pendingJobs }: { pendingJobs: number | null }) {
   return (
     <p className="sr-only" role="status" aria-live="polite">
       {pendingJobs === null
         ? "Checking for new articles."
-        : `Gathering articles from upstream — ${pendingJobs} job${
-            pendingJobs === 1 ? "" : "s"
-          } pending.`}
+        : pendingJobs === 0
+          ? "Gathering articles from upstream."
+          : `Gathering articles from upstream — ${pendingJobs} job${
+              pendingJobs === 1 ? "" : "s"
+            } pending.`}
     </p>
   );
 }
