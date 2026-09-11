@@ -497,7 +497,13 @@ function Rail({
         );
       })}
       {ingesting && <IngestGhosts pendingJobs={pendingJobs} />}
-      {!ingesting && hasNextPage && (
+      {/*
+        `hasNextPage` ALONE — the state model at the top of this file, not a
+        second copy of its argument. ANDing it with `!ingesting` hid the whole
+        tail for the minutes `in_progress` can last, leaving a reader at the
+        first page with the rest a cursor away (§8.2).
+      */}
+      {hasNextPage && (
         <RailEntry marker="↓">
           <LoadOlder loading={isFetchingNextPage} onLoadOlder={onLoadOlder} />
         </RailEntry>

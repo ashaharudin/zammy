@@ -364,10 +364,10 @@ export function parseIngestJob(payload: unknown): IngestJob | null {
  * At five minutes the invariant was violated, and the cost was not the one the
  * fail-open story would suggest. The prune fired at 300 s with the second
  * delivery still 5 s away, and the web client had stopped polling 240 s earlier
- * (`INGEST_POLL_MAX`, ~60 s), so no spinner was ever cut short. What saw it was
- * `timeline-read`'s cache gate, which writes only a `complete` page: a pruned
- * count reads complete, so an incomplete page was cached as settled — for up to
- * 24 hours on the historical freshness tier.
+ * (the client's ~60 s poll window, §6.5), so no spinner was ever cut short.
+ * What saw it was `timeline-read`'s cache gate, which writes only a `complete`
+ * page: a pruned count reads complete, so an incomplete page was cached as
+ * settled — for up to 24 hours on the historical freshness tier.
  *
  * So this constant errs in the OPPOSITE direction to the rest of the Redis
  * degradation story (§3.4's quota governor, §3.5's rate limit, and
