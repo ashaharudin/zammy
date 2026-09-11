@@ -263,9 +263,17 @@ The three levers, in the order they should be decided:
    a minute per instance and carrying a `failOpen` running total so a sustained
    outage is legible from one line. It reads the limiter's own response headers
    rather than the plugin's internals — `remaining === limit` is the arithmetic
-   the counted path cannot produce — so it names the consequence and not the
-   cause; the cause is the client's own `redis error` line alongside it. Levers
-   1 and 2 are untouched by it.
+   the counted path cannot produce — so it names the consequence rather than the
+   cause. It also carries `redisStatus`, because building it surfaced something
+   this file got wrong: **§2.1's fail-open rate is two mechanisms, not one.** The
+   rare one is §3.2's blind instance. The common one is a cold start — the client
+   is `lazyConnect` with the connect deliberately un-awaited, so a request inside
+   the handshake window fails open on a perfectly healthy client and emits no
+   `redis error` at all. Against a local Redis with nothing wrong with it, 4 of 5
+   runs of `server.test.ts`'s first case logged the line. That is very likely
+   most of the 2-of-76 and 1-of-24 measured above, which means **§2.1's rate is
+   an upper bound on the thing worth worrying about, not a measurement of it.**
+   Levers 1 and 2 are untouched.
 
 ---
 

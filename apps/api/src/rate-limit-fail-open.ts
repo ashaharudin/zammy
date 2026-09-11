@@ -17,11 +17,31 @@ import type { FastifyInstance, FastifyReply } from "fastify";
  * }
  * ```
  *
- * No log, no hook, no counter — so an instance holding an unusable Redis client
- * serves every request uncounted and says nothing. §3.2 is what that costs:
- * two long-lived instances, one of them blind, an effective ceiling of
- * `max ÷ (healthy fraction of the fleet)`, and 22 missing 429s that took
- * replaying archived log rows through the plugin's own Lua to find.
+ * No log, no hook, no counter — so an instance serves requests uncounted and
+ * says nothing. §3.2 is what that costs: two long-lived instances, one of them
+ * blind, an effective ceiling of `max ÷ (healthy fraction of the fleet)`, and 22
+ * missing 429s that took replaying archived log rows through the plugin's own
+ * Lua to find.
+ *
+ * ## Two mechanisms reach this path, and only one of them is an incident
+ *
+ * §3.2's blind instance is the expensive one and the rare one. The COMMON one is
+ * a cold start: `buildServices` connects `lazyConnect` and does not await it, by
+ * design — `redis-ready.ts` argues the request path must not wait on a cache,
+ * and Upstash's handshake is ~800ms. A request arriving inside that window meets
+ * a perfectly healthy client that is merely not ready yet, the command throws,
+ * and the limiter fails open exactly as it would for an outage.
+ *
+ * Measured rather than assumed: against a local Redis with nothing wrong with
+ * it, 4 of 5 runs of `server.test.ts`'s first case logged this line, with no
+ * `redis error` anywhere in the run. `server.test.ts`'s own rate-limit case has
+ * documented that race since #215 for a different reason. It is very likely most
+ * of the 2-of-76 and 1-of-24 baseline §2.1 measured and attributed simply to
+ * "the store threw".
+ *
+ * The headers cannot tell the two apart, which is what `redisStatus` below is
+ * for: `connecting` is a cold start finishing normally, `reconnecting` or `end`
+ * is the fleet losing its ceiling for as long as it lasts.
  *
  * ## Why the response headers rather than the plugin's internals
  *
@@ -38,11 +58,18 @@ import type { FastifyInstance, FastifyReply } from "fastify";
  * paths. The alternatives both buy the underlying error's name at the cost of
  * that coupling: wrapping the ioredis client to intercept the `rateLimit`
  * command binds us to a command name `RedisStore` chose, and a custom `store`
- * means reimplementing Lua the package does not export. The cause is one grep
- * away in the platform log either way (`buildServices` logs `redis error`, and
- * §3.3 names `Stream isn't writeable …` as the shape to expect); the
- * *consequence* is what nothing recorded, and the consequence is exactly what
- * the headers state.
+ * means reimplementing Lua the package does not export.
+ *
+ * What (c) gives up is the underlying error's NAME, and that is worth being
+ * exact about rather than waving at. For a sustained outage the cause is one
+ * grep away — `buildServices` logs `redis error` from the client's own error
+ * event, and §3.3 names `Stream isn't writeable …` as the shape to expect. For
+ * the cold-start race above it is NOT: the connection then succeeds, no error
+ * event is ever emitted, and this line stands alone. Hence `redisStatus`, which
+ * reads the client's own public property rather than anything the plugin owns —
+ * it separates the two mechanisms without buying back the coupling (c) exists to
+ * avoid. The *consequence* is what nothing recorded at all, and the consequence
+ * is exactly what the headers state.
  *
  * `reset` is carried as a field rather than tested. `remaining === max` is
  * already exact, and a second conjunct that cannot independently be false is a
@@ -83,10 +110,25 @@ export interface FailOpenLogger {
   warn(fields: object, message: string): void;
 }
 
+/**
+ * The narrowest view of the shared client this needs. `status` is ioredis' own
+ * public property rather than a command, so reading it cannot itself throw on a
+ * client that is down — which is the only state it is interesting in.
+ */
+export interface ClientStatus {
+  readonly status: string;
+}
+
 export interface FailOpenWatchOptions {
   /** Defaults to the instance's own logger. */
   log?: FailOpenLogger;
   now?: () => number;
+  /**
+   * The client the limiter was handed, for the one field that separates a cold
+   * start from an outage. Optional: without it the line still names the
+   * consequence, which is the half nothing recorded.
+   */
+  redis?: ClientStatus;
 }
 
 /**
@@ -134,6 +176,7 @@ export function watchRateLimitFailOpen(
 ): void {
   const log = options.log ?? app.log;
   const now = options.now ?? Date.now;
+  const redis = options.redis;
 
   /** Cumulative for the life of this instance, so a resumed line says how bad it got. */
   let failOpen = 0;
@@ -159,6 +202,12 @@ export function watchRateLimitFailOpen(
         reset: reply.getHeader("x-ratelimit-reset"),
         method: request.method,
         url: request.url,
+        // Read AFTER the response, so a cold start that completed mid-request
+        // reads `ready` — best-effort, and the reason this is a field and not a
+        // branch. What it reliably separates is the sustained case: an instance
+        // sitting in `reconnecting` or `end` is §3.2's blind one, and is costing
+        // the deployment its ceiling for as long as it stays there.
+        redisStatus: redis?.status,
         // How many requests this instance has served uncounted since boot,
         // INCLUDING the ones the throttle above kept out of the log — the
         // number that says whether this is a blip or half the traffic.

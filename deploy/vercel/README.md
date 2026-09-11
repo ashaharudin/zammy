@@ -552,15 +552,22 @@ nobody merging a PR reads those.
   - `rate limit fail-open; this instance is not counting requests against the ceiling` — the per-IP
     limiter admitted a request without counting it, so the deployment-wide ceiling is
     `RATE_LIMIT_PER_MINUTE ÷ the healthy fraction of the fleet` rather than the number configured.
-    The line carries `failOpen`, a per-instance running total since boot: a 1 is a blip, a 300 is
-    half your traffic. Throttled to one line a minute per instance, so the total is the number to
-    read, not the line count.
+    Throttled to one line a minute per instance, so read the fields, not the line count:
+    - `redisStatus` is the one that says whether this is an incident. **`connecting` is routine**
+      and not worth acting on: the client is built `lazyConnect` and the connect is deliberately
+      not awaited, so a request landing inside Upstash's ~800 ms handshake fails open on a client
+      with nothing wrong with it, and no `redis error` accompanies it. `reconnecting` or `end` is
+      the one to chase — that instance is blind for as long as it stays there.
+    - `failOpen` is a per-instance count of uncounted requests since boot, including the ones the
+      throttle kept out of the log. It is an absolute number, not a rate: to turn it into a
+      fraction, compare it with that instance's request count over the same window.
   - `shared burst window unavailable; counting in-process` — the quota governor on the same client.
 
   The underlying signal is unchanged and still visible from outside: `x-ratelimit-remaining` coming
-  back at the full limit, a value `INCR` cannot produce. Measured on the Phase 3 deploy, a
-  24-request burst that forced scale-out took the fail-open path **7 times**, with
-  `connect ETIMEDOUT` on the cold instances' Upstash handshake; production measured ~3% on an
+  back at the full limit, a value `INCR` cannot produce — but it cannot tell the two mechanisms
+  apart, which is why `redisStatus` is in the line. Measured on the Phase 3 deploy, a 24-request
+  burst that forced scale-out took the fail-open path **7 times**, with `connect ETIMEDOUT` on the
+  cold instances' Upstash handshake; production measured ~3% on an
   ordinary day and roughly half the traffic during one 8.5-minute episode
   ([MEASUREMENT-RATE-LIMIT-FAIL-OPEN](../../docs/MEASUREMENT-RATE-LIMIT-FAIL-OPEN.md) §3). A burst
   is exactly when the guard matters, so read a clean `x-ratelimit-remaining` sequence as the healthy

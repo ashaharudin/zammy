@@ -456,7 +456,10 @@ export async function buildApp(
     // nobody reads. MEASUREMENT-RATE-LIMIT-FAIL-OPEN §3.2 is what that cost —
     // an episode whose explanation needed archived log rows replayed through
     // the plugin's own Lua — and §4's third lever is this line.
-    watchRateLimitFailOpen(app);
+    // The client is handed in for one field: `redisStatus` separates the cold
+    // start that fails open harmlessly on its way to `ready` from the instance
+    // stuck in `reconnecting`, which is §3.2's and is costing us the ceiling.
+    watchRateLimitFailOpen(app, { redis: services.redis });
 
     app.decorate("currents", services.currents);
     registerHealthRoutes(app, {

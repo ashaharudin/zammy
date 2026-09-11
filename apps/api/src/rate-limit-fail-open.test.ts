@@ -66,7 +66,7 @@ interface Harness {
 
 async function build(
   answer: () => StoreAnswer,
-  options: { max?: number } = {},
+  options: { max?: number; redis?: { status: string } } = {},
 ): Promise<Harness> {
   const app = Fastify({ logger: false });
   const lines: Line[] = [];
@@ -85,6 +85,7 @@ async function build(
   watchRateLimitFailOpen(app, {
     log: { warn: (fields, message) => lines.push({ fields: fields as Record<string, unknown>, message }) },
     now: () => nowMs,
+    redis: options.redis,
   });
   app.get("/api/v1/reference", async () => ({ ok: true }));
   app.get("/healthz", async () => ({ ok: true }));
@@ -205,7 +206,11 @@ describe("watchRateLimitFailOpen", () => {
     for (let i = 0; i < 3; i += 1) await get(harness.app, "/api/v1/reference");
     expect(harness.lines).toHaveLength(1);
 
-    harness.clock.advance(FAIL_OPEN_LOG_INTERVAL_MS - 1);
+    // LITERAL, not `FAIL_OPEN_LOG_INTERVAL_MS - 1`: the symbolic form moves with
+    // the constant, so shortening the interval to 5s would leave this green
+    // while `deploy/vercel/README.md` went on promising an operator "one line a
+    // minute per instance". The number is operator-facing, so it is pinned.
+    harness.clock.advance(59_999);
     await get(harness.app, "/api/v1/reference");
     expect(harness.lines).toHaveLength(1);
 
@@ -214,6 +219,36 @@ describe("watchRateLimitFailOpen", () => {
     expect(harness.lines).toHaveLength(2);
     // 5 uncounted requests so far, only 2 of them logged.
     expect(harness.lines[1]?.fields.failOpen).toBe(5);
+    expect(FAIL_OPEN_LOG_INTERVAL_MS).toBe(60_000);
+  });
+
+  /**
+   * The field that separates the two mechanisms that reach this path. A cold
+   * start — `lazyConnect`, connect not awaited, ~800ms of Upstash handshake —
+   * fails open on a client with nothing wrong with it, and is by far the more
+   * common of the two; §3.2's blind instance sits in `reconnecting` for its
+   * whole life and is the one that costs the deployment its ceiling. The
+   * headers are identical for both, so without this the log cannot tell an
+   * operator which one they are looking at.
+   */
+  it("carries the client's status, so a cold start is distinguishable from an outage", async () => {
+    for (const status of ["connecting", "reconnecting"]) {
+      harness = await build(() => ({ error: UNWRITEABLE }), { redis: { status } });
+      await get(harness.app, "/api/v1/reference");
+      expect(harness.lines[0]?.fields.redisStatus).toBe(status);
+      await harness.app.close();
+      harness = null;
+    }
+  });
+
+  /** Optional, and its absence costs the consequence nothing. */
+  it("still names the consequence with no client handed in", async () => {
+    harness = await build(() => ({ error: UNWRITEABLE }));
+
+    await get(harness.app, "/api/v1/reference");
+
+    expect(harness.lines[0]?.message).toBe(RATE_LIMIT_FAIL_OPEN);
+    expect(harness.lines[0]?.fields.redisStatus).toBeUndefined();
   });
 
   /**
