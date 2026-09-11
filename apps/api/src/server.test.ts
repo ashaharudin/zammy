@@ -293,6 +293,16 @@ describe("buildApp", () => {
         remaining: config.RATE_LIMIT_PER_MINUTE,
         url: "/api/v1/reference",
         failOpen: 1,
+        // The SHARED client's real status, and the reason this assertion is
+        // here rather than only in the unit suite: the unit tests inject a
+        // status by hand, so they pin the field but not the wiring. Without
+        // this, dropping `{ redis: services.redis }` from `buildApp` — or
+        // pinning it to a literal — leaves every unit test green while every
+        // production line loses the field, or reads `ready` forever and
+        // reports §3.2's blind instance as routine. A client pointed at a
+        // closed port is genuinely still broken when the hook looks, which is
+        // exactly what this field is for.
+        redisStatus: "reconnecting",
       });
     } finally {
       warn.mockRestore();

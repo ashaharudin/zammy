@@ -553,11 +553,22 @@ nobody merging a PR reads those.
     limiter admitted a request without counting it, so the deployment-wide ceiling is
     `RATE_LIMIT_PER_MINUTE ÷ the healthy fraction of the fleet` rather than the number configured.
     Throttled to one line a minute per instance, so read the fields, not the line count:
-    - `redisStatus` is the one that says whether this is an incident. **`connecting` is routine**
-      and not worth acting on: the client is built `lazyConnect` and the connect is deliberately
-      not awaited, so a request landing inside Upstash's ~800 ms handshake fails open on a client
-      with nothing wrong with it, and no `redis error` accompanies it. `reconnecting` or `end` is
-      the one to chase — that instance is blind for as long as it stays there.
+    - `redisStatus` answers **"was the client still broken when we looked?"**, not "why did it
+      throw?" — it is read after the response, so a fault that healed in the meantime shows as
+      healed. That is the point: the healed ones are the routine ones.
+      - **`ready` — routine, and by far the most common.** The client is built `lazyConnect` with
+        the connect deliberately not awaited, so a request landing inside the handshake fails open
+        on a client with nothing wrong with it, which then finishes connecting before the response
+        does. No `redis error` accompanies it because nothing errored. Measured locally at 10 of 16
+        cold starts, all reading `ready`. Not worth acting on.
+      - **`connecting` / `connect` / `wait` — also routine.** The same cold start, caught with the
+        first connection still in flight. Expected to be commoner in production than locally:
+        Upstash's handshake is ~800 ms against a ~15 ms loopback one.
+      - **`reconnecting` / `close` / `end` — chase this one.** The client was still unusable at the
+        moment we looked, which is the blind instance of
+        [MEASUREMENT-RATE-LIMIT-FAIL-OPEN](../../docs/MEASUREMENT-RATE-LIMIT-FAIL-OPEN.md) §3.2, and
+        it stays blind for as long as it stays there. One `end` at the tail of an instance's life is
+        an ordinary shutdown; a stream of any of these is not.
     - `failOpen` is a per-instance count of uncounted requests since boot, including the ones the
       throttle kept out of the log. It is an absolute number, not a rate: to turn it into a
       fraction, compare it with that instance's request count over the same window.

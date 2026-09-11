@@ -231,8 +231,13 @@ describe("watchRateLimitFailOpen", () => {
    * headers are identical for both, so without this the log cannot tell an
    * operator which one they are looking at.
    */
-  it("carries the client's status, so a cold start is distinguishable from an outage", async () => {
-    for (const status of ["connecting", "reconnecting"]) {
+  it("carries the client's status verbatim, whatever it is", async () => {
+    // Plumbing only: the status is injected, so this pins the field and not the
+    // claim in its name. That a REAL outage reads `reconnecting` is asserted in
+    // `server.test.ts` against a real client; that a real cold start reads
+    // `ready` rather than `connecting` is measured in the module comment, and is
+    // why `ready` is one of the values here.
+    for (const status of ["ready", "connecting", "reconnecting", "end"]) {
       harness = await build(() => ({ error: UNWRITEABLE }), { redis: { status } });
       await get(harness.app, "/api/v1/reference");
       expect(harness.lines[0]?.fields.redisStatus).toBe(status);

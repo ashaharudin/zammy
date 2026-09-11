@@ -33,15 +33,18 @@ import type { FastifyInstance, FastifyReply } from "fastify";
  * and the limiter fails open exactly as it would for an outage.
  *
  * Measured rather than assumed: against a local Redis with nothing wrong with
- * it, 4 of 5 runs of `server.test.ts`'s first case logged this line, with no
+ * it, 10 of 16 runs of `server.test.ts`'s first case logged this line, with no
  * `redis error` anywhere in the run. `server.test.ts`'s own rate-limit case has
- * documented that race since #215 for a different reason. It is very likely most
- * of the 2-of-76 and 1-of-24 baseline §2.1 measured and attributed simply to
- * "the store threw".
+ * documented that race since #215 for a different reason.
  *
- * The headers cannot tell the two apart, which is what `redisStatus` below is
- * for: `connecting` is a cold start finishing normally, `reconnecting` or `end`
- * is the fleet losing its ceiling for as long as it lasts.
+ * A third shape sits between them and is neither: a cold start that FAILS. The
+ * README's Phase 3 measurement names `connect ETIMEDOUT` on cold instances'
+ * Upstash handshakes, which is not routine and not a long-lived blind instance
+ * either. It lands in `reconnecting`, so the reading below routes it with the
+ * incidents, which is where it belongs.
+ *
+ * The headers cannot tell any of them apart. `redisStatus` can, but read what it
+ * actually answers rather than what it sounds like it answers — see below.
  *
  * ## Why the response headers rather than the plugin's internals
  *
@@ -67,9 +70,33 @@ import type { FastifyInstance, FastifyReply } from "fastify";
  * the cold-start race above it is NOT: the connection then succeeds, no error
  * event is ever emitted, and this line stands alone. Hence `redisStatus`, which
  * reads the client's own public property rather than anything the plugin owns —
- * it separates the two mechanisms without buying back the coupling (c) exists to
- * avoid. The *consequence* is what nothing recorded at all, and the consequence
- * is exactly what the headers state.
+ * so it separates them without buying back the coupling (c) exists to avoid. The
+ * *consequence* is what nothing recorded at all, and the consequence is exactly
+ * what the headers state.
+ *
+ * ## What `redisStatus` actually answers
+ *
+ * **"Was the client still broken when we looked?" — not "why did it throw?".**
+ * The status is read at `onResponse`, after the command threw and after the
+ * whole request, so a cold start that completed in the meantime reads `ready`.
+ * That is not a defect to work around; it is the honest reading, and it is the
+ * COMMON one: across 16 runs of the cold-start race above, every one of the 10
+ * fail-open lines read `ready` and none read `connecting`. A local handshake
+ * settles in ~15ms, far inside one request. Upstash's ~800ms may well leave
+ * `connecting` on the line in production, which is why that value is described
+ * too rather than assumed away.
+ *
+ * So the useful split is not `connecting` vs `reconnecting`:
+ *
+ *   - `ready` — already healed by the time the response finished. A cold start,
+ *     or a blip that closed. Routine, and by far the most common.
+ *   - `connecting` / `connect` / `wait` — the FIRST connection is still in
+ *     flight. Also a cold start; also routine.
+ *   - `reconnecting` / `close` / `end` — still unusable at the moment we looked.
+ *     This is §3.2's instance, and the one worth chasing. `end` is also an
+ *     ordinary shutdown status, so a request finishing during teardown can land
+ *     here; a single one at the end of an instance's life means nothing, and a
+ *     stream of them does.
  *
  * `reset` is carried as a field rather than tested. `remaining === max` is
  * already exact, and a second conjunct that cannot independently be false is a
@@ -202,11 +229,11 @@ export function watchRateLimitFailOpen(
         reset: reply.getHeader("x-ratelimit-reset"),
         method: request.method,
         url: request.url,
-        // Read AFTER the response, so a cold start that completed mid-request
-        // reads `ready` — best-effort, and the reason this is a field and not a
-        // branch. What it reliably separates is the sustained case: an instance
-        // sitting in `reconnecting` or `end` is §3.2's blind one, and is costing
-        // the deployment its ceiling for as long as it stays there.
+        // "Was it still broken when we looked?", per the header comment — NOT
+        // "why did it throw?". Read after the response, so the common cold-start
+        // case reads `ready` (measured: 10 of 10). `reconnecting`, `close` and
+        // `end` are the ones that mean the client was still unusable, which is
+        // §3.2's instance and the only shape worth chasing.
         redisStatus: redis?.status,
         // How many requests this instance has served uncounted since boot,
         // INCLUDING the ones the throttle above kept out of the log — the

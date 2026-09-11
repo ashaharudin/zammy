@@ -269,11 +269,20 @@ The three levers, in the order they should be decided:
    rare one is §3.2's blind instance. The common one is a cold start — the client
    is `lazyConnect` with the connect deliberately un-awaited, so a request inside
    the handshake window fails open on a perfectly healthy client and emits no
-   `redis error` at all. Against a local Redis with nothing wrong with it, 4 of 5
-   runs of `server.test.ts`'s first case logged the line. That is very likely
-   most of the 2-of-76 and 1-of-24 measured above, which means **§2.1's rate is
-   an upper bound on the thing worth worrying about, not a measurement of it.**
-   Levers 1 and 2 are untouched.
+   `redis error` at all. Against a local Redis with nothing wrong with it, 10 of
+   16 runs of `server.test.ts`'s first case logged the line.
+
+   **How much of §2.1's 2-of-76 is that? Unmeasured, and this file should not
+   guess.** The local rate is ~60% against a ~15ms loopback handshake; §2.1 is
+   ~3% against Upstash's ~800ms one, on a fleet whose instances were mostly
+   already warm. Those two numbers are not commensurable, and an earlier draft of
+   this paragraph asserted "very likely most" across a 50× gap in the regime —
+   which is the kind of claim §4.1 was written to stop making. What can be said
+   is narrower and still useful: **§2.1 counts two mechanisms, and only one of
+   them is worth acting on**, so it is an upper bound on the blind-instance rate
+   rather than an estimate of it. `redisStatus` is what would turn that into a
+   measurement, on the next production probe that catches one. Levers 1 and 2 are
+   untouched.
 
 ---
 
