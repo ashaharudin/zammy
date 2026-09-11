@@ -7,9 +7,15 @@ const GLYPH_CELLS = Array.from({ length: GLYPH_SIDE * GLYPH_SIDE }, (_, i) => ({
 }));
 
 /**
- * The app's one "still working" mark: a 4×4 relative of `SizeGlyph`
+ * The trending cloud's "still gathering" mark: a 4×4 relative of `SizeGlyph`
  * (StorylinePills) — same currentColor squares on a CSS grid — but animated
  * rather than a static fill level, since there is nothing yet to count.
+ *
+ * It was the whole app's once. The rail no longer uses it: a timeline still
+ * loading is an ingest with a request in flight, so it draws the ingest
+ * animation it will keep drawing once rows arrive (`TimelinePage.tsx`,
+ * `SkeletonRail`). The cloud has no such animation to inherit — nothing is
+ * queued for it and there are no slots to ghost — so this stays its own.
  *
  * Sizeless and colorless by default (`currentColor`, no positioning): callers
  * set `cell`/`gap` for the footprint they need and wrap it for placement,

@@ -116,25 +116,6 @@ select {
   outline-offset: 2px;
 }
 
-/* Skeleton/progressive-fill rows (ARCHITECTURE 8.2). */
-@keyframes shimmer {
-  0% {
-    opacity: 0.45;
-  }
-  50% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0.45;
-  }
-}
-
-.shimmer {
-  animation: shimmer 1.4s ease-in-out infinite;
-  background: var(--chip-bg);
-  border-radius: 8px;
-}
-
 /*
  * Ingest activity (ARCHITECTURE 8.2). While upstream is still fetching, the
  * rail says so in motion rather than in words — a beacon at the head, where
@@ -273,7 +254,6 @@ select {
 /* Motion is the whole message here, so the reduced-motion fallback has to hold
    every part still in a state that still reads as "something is pending". */
 @media (prefers-reduced-motion: reduce) {
-  .shimmer,
   .ingest-ring,
   .ingest-charge,
   .ingest-ghost-marker,
