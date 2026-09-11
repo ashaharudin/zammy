@@ -24,13 +24,13 @@ describe("pollStep", () => {
   // `refetchInterval` once per render and once per query state change, not once
   // per poll. A budget spent by evaluations is gone in seconds.
   it("spends nothing on repeated evaluation at the same instant", () => {
-    let window = pollClosed;
+    let open = pollClosed;
     for (let i = 0; i < 500; i += 1) {
-      const step = pollStep(window, true, 1_000);
+      const step = pollStep(open, true, 1_000);
       expect(step.interval).toBe(INGEST_POLL_INTERVAL_MS);
-      window = step.window;
+      open = step.window;
     }
-    expect(window.since).toBe(1_000);
+    expect(open.since).toBe(1_000);
   });
 
   it("polls right up to the window and stops after it", () => {
@@ -42,15 +42,15 @@ describe("pollStep", () => {
   });
 
   it("stays stopped once the window is spent", () => {
-    let window = pollStep(pollClosed, true, 1_000).window;
+    let open = pollStep(pollClosed, true, 1_000).window;
     for (const now of [61_000, 61_002, 120_000]) {
-      const step = pollStep(window, true, now);
+      const step = pollStep(open, true, now);
       expect(step.interval).toBe(false);
-      window = step.window;
+      open = step.window;
     }
     // Still the original opening instant — a spent window must not re-open
     // itself and poll forever in sixty-second instalments.
-    expect(window.since).toBe(1_000);
+    expect(open.since).toBe(1_000);
   });
 
   it("gives a fresh budget to ingest that starts again", () => {

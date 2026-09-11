@@ -648,9 +648,23 @@ its own in a part of the day above the reader, or take the headline of a card al
 re-requests the first page (~1.5s interval) and stops on `complete`. In TanStack Query that is a
 conditional `refetchInterval`. SSE would be smoother but adds long-lived connections, proxy
 buffering, and reconnect logic for a window typically 2–4 seconds long; the contract (`meta.ingest`)
-doesn't change, so SSE stays a contained upgrade. Bounded: the client gives up after
-`INGEST_POLL_MAX` attempts (default 8) and simply stops polling — no error, no manual retry
-affordance; the last page just stays at `ingest.state: "in_progress"`.
+doesn't change, so SSE stays a contained upgrade. Bounded: the client polls for a fixed WINDOW of
+wall-clock time — `INGEST_POLL_WINDOW_MS`, 60s ([ingestPoll.ts](../apps/web/src/ingestPoll.ts)) — and
+then simply stops polling: no error, no manual retry affordance; the last page just stays at
+`ingest.state: "in_progress"`.
+
+The bound is elapsed time and not a count of attempts, which is a correction rather than a
+preference. A count has to be spent somewhere, and the only place a conditional `refetchInterval`
+offers is the callback itself — which TanStack evaluates once per render of the component holding
+the query and once per query state change, not once per poll. A tick budget decremented there counts
+renders, and forty of them are gone in seconds. A window measured on the clock is idempotent under
+repeated evaluation, so how often React renders stops mattering.
+
+Deliberately far short of the fifteen minutes `meta.ingest.state` can hold `in_progress` for (an
+unsettled pending entry holds it until `STALE_PENDING_MS`), because the poll is not how a reader
+reaches the rest of the store — paging is. Rows already in Postgres are reached by cursor, and the
+rail's "Load older" is gated on `hasMore` ALONE for exactly that reason (§8.2); the poll covers only
+rows arriving while the reader watches.
 
 ---
 
@@ -1095,14 +1109,18 @@ keywords in, timeline out.
   back/forward works.
 - `staleTime` aligned to §6.4 tiers, so client and server agree on "fresh".
 - **Progressive fill (§6.5):** paint whatever the first response carries — often 6–15 cards — then
-  poll every ~1.5s while `meta.ingest.state === "in_progress"`, stopping on `complete` or after
-  `INGEST_POLL_MAX`. Two or three shimmer rows sit below the real cards so a short first paint reads
-  as "more coming". No full-page spinner once any content exists, and no spinner *replacing* content
-  on refetch — content only grows downward.
+  poll every ~1.5s while `meta.ingest.state === "in_progress"`, stopping on `complete` or when the
+  60s poll window closes (§6.5). Two or three shimmer rows sit below the real cards so a short first
+  paint reads as "more coming". No full-page spinner once any content exists, and no spinner
+  *replacing* content on refetch — content only grows downward.
 - **"N new articles" pill** when refresh-on-read surfaces items newer than the top of the view;
   prepends only on click, so the reading position never jumps.
 - The "no more history" terminal state renders only when `hasMore === false && ingest.state ===
   "complete"` (§6.1).
+- The sentinel and its "Load older" fallback are gated on `hasNextPage` **alone**. ANDing them with
+  `ingest.state !== "in_progress"` conflates §6.1's two questions and hides the whole tail of the
+  rail for as long as ingest runs — which is minutes, and progressive fill appends OLDER rows that
+  land on page two, so polling page one can never reveal them.
 
 ### 8.3 Design notes
 
@@ -1653,7 +1671,7 @@ apart see the same cloud.
 | Upstream 5xx / timeout | Retry per §5.3, then circuit-break; serve stale with `meta.degraded = "upstream"`. |
 | Segment returns a full 5 pages | Truncated by the 100-cap, **not** complete: record the fetched frontier as covered, enqueue the remainder (§6.3). Metric on this — a rising rate means dense windows are walking, not sprinting. |
 | First synchronous call fails on a cold topic | Nothing to show: normal error state with retry. The only case with no content to fall back on — why it gets the one guaranteed synchronous call. |
-| Deferred ingest job fails or stalls | Coverage is not extended; the gap remains and the next reader retries it. Client stops polling after `INGEST_POLL_MAX` — never an indefinite spinner, but no explicit timeout signal either; `meta.ingest.state` just stays `"in_progress"`. |
+| Deferred ingest job fails or stalls | Coverage is not extended; the gap remains and the next reader retries it. Client stops polling when the 60s poll window closes (§6.5) — never an indefinite spinner, but no explicit timeout signal either; `meta.ingest.state` just stays `"in_progress"`. Rows already stored stay reachable meanwhile: the rail's tail is gated on `hasMore` alone (§8.2). |
 | Ingest still running when user scrolls past loaded rows | `hasMore: false` with `ingest.state: "in_progress"` → "still gathering", **not** "end of results" (§6.1). |
 | Redis down | Skip cache and single-flight; serve from Postgres. The shared burst window (§5.4) and the per-IP rate limit (§9.4) both fall open to in-process counting — the ceilings degrade from once-per-deployment to once-per-instance, and no call is refused for want of a cache. Degraded, not down. |
 | Postgres down | `503` from `/readyz`; the API cannot honour its ordering guarantee without it. The one hard dependency. |

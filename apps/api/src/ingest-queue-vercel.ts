@@ -390,8 +390,8 @@ export class VercelIngestQueue implements IngestQueue {
    *
    * What it costs is `meta.ingest` under-reporting: a swallowed `count` returns
    * 0, so a topic with work outstanding reads `complete`. What that does NOT do
-   * is cut a poll loop short — `INGEST_POLL_MAX` stops the client after ~60 s
-   * whatever we report. What it reaches is `timeline-read`'s cache gate,
+   * is cut a poll loop short — the client's poll window (§6.5) stops it after
+   * ~60 s whatever we report. What it reaches is `timeline-read`'s cache gate,
    * which writes only a `complete` page, and the two failures land differently
    * there:
    *

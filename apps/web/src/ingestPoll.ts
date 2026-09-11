@@ -2,10 +2,10 @@
  * How long the progressive-fill poll (§6.5) stays on, as a pure step function.
  *
  * §8.2 asks for "poll every ~1.5s while `meta.ingest.state === 'in_progress'`,
- * stopping on `complete` or after `INGEST_POLL_MAX`" — a budget, so a topic
- * whose ingest never settles cannot poll a reader's browser forever. The
- * budget is spent in WALL-CLOCK TIME rather than in ticks, and that is the
- * whole reason this lives in a module of its own with a test.
+ * stopping on `complete` or when the 60s poll window closes" — a budget, so a
+ * topic whose ingest never settles cannot poll a reader's browser forever.
+ * §6.5 says that budget is spent in WALL-CLOCK TIME rather than in ticks, and
+ * that is the whole reason this lives in a module of its own with a test.
  *
  * The counter it replaces was spent by RENDERS. TanStack calls a function-form
  * `refetchInterval` from `QueryObserver.setOptions`, which React calls on every
@@ -61,9 +61,9 @@ export interface PollStep {
  * refresh-on-read top-up, say — gets a full budget rather than the remains of
  * the last one.
  */
-export function pollStep(window: PollWindow, ingesting: boolean, now: number): PollStep {
+export function pollStep(open: PollWindow, ingesting: boolean, now: number): PollStep {
   if (!ingesting) return { window: pollClosed, interval: false };
-  const since = window.since ?? now;
+  const since = open.since ?? now;
   if (now - since >= INGEST_POLL_WINDOW_MS) {
     // Keep `since` rather than closing: closing here would re-open on the very
     // next evaluation and poll forever in 60s instalments.
