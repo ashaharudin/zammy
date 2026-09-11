@@ -301,8 +301,9 @@ resuming · anchor 0.002 · mass 20 · K=2 · labels: skipped
 honouring 264 recorded formation refusals
 ```
 
-`--labels-only` prints neither line and honours nothing, because it links
-nothing.
+The threshold banner prints on every run; only the refusals line is conditional,
+so `--labels-only` prints the first and not the second — it links nothing, so
+there is nothing for it to honour.
 
 ### Why the backfill still does not gate
 

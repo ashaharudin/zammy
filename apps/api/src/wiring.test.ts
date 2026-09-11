@@ -190,16 +190,27 @@ describe("the bar a group is judged at", () => {
     // night, which is the loop migration 0015 exists to close. No environment
     // may produce it — `honourRefusals` is not env-derived at all, which is the
     // property this pins.
-    for (const env of [
+    const envs: Record<string, string>[] = [
       {},
       { STORYLINE_COHERENCE_GATE: "true", GEMINI_API_KEY: "a-key" },
       { STORYLINE_COHERENCE_GATE: "false", GEMINI_API_KEY: "a-key" },
       { STORYLINE_COHERENCE_GATE: "true" },
-    ]) {
-      const bar = createLinkerConfig(config(env));
-      expect(bar.honourRefusals).toBe(true);
-      expect(bar.coherenceGate && !bar.honourRefusals).toBe(false);
+    ];
+    for (const env of envs) {
+      expect(createLinkerConfig(config(env)).honourRefusals).toBe(true);
     }
+    // The gate DOES move with the environment, so the pairing is a real
+    // question rather than one `honourRefusals: true` answers by itself.
+    expect(
+      createLinkerConfig(config({ STORYLINE_COHERENCE_GATE: "true", GEMINI_API_KEY: "a-key" }))
+        .coherenceGate,
+    ).toBe(true);
+    // And the pair is refused at the sanctioned construction site, not merely
+    // unreachable from the environment — `storylineBar` is what every
+    // production path builds through.
+    expect(() => storylineBar({ coherenceGate: true, honourRefusals: false })).toThrow(
+      /already refused/,
+    );
   });
 
   it("holds the gate to a key, whichever way the flag is set", () => {

@@ -139,7 +139,7 @@ export function maxBridgingQualifiers(config: Config): number | undefined {
  * Exported because the two operator CLIs whose divergence this module's header
  * sanctions still need the CONFIGURED bar to diverge from — `regroup` disables
  * the linker and `backfill:storylines` drops the coherence gate, and neither is
- * a licence to also re-declare the twelve fields it does not differ on. That
+ * a licence to also re-declare the thirteen fields it does not differ on. That
  * re-declaration is what both of them used to be.
  *
  * Every field of the bar appears here except two, and both exceptions are

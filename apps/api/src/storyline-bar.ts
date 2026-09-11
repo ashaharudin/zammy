@@ -112,10 +112,23 @@ export interface StorylineBarOverrides
  * every field it says nothing about tracks production automatically.
  */
 export function storylineBar(overrides: StorylineBarOverrides = {}): LinkerConfig {
-  return {
+  const bar: LinkerConfig = {
     ...STORYLINE_BAR,
     ...overrides,
     rules: { ...STORYLINE_BAR.rules, ...overrides.rules },
     storyDf: { ...STORYLINE_BAR.storyDf, ...overrides.storyDf },
   };
+  // Buying a verdict while discarding the ones already bought: the gate would
+  // spend a model call re-asking a pair it had already refused, every night,
+  // which is the loop migration 0015 exists to close. Refused here because this
+  // is the sanctioned way to build a bar and every production path uses it — a
+  // test constructing by spread bypasses this deliberately, and is welcome to.
+  if (bar.coherenceGate && !bar.honourRefusals) {
+    throw new Error(
+      "coherenceGate with honourRefusals off would buy a verdict for a pair " +
+        "already refused, every night. Refusals are free to replay; only new " +
+        "verdicts cost anything.",
+    );
+  }
+  return bar;
 }

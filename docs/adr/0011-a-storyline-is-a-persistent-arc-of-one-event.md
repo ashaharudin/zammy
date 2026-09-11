@@ -142,7 +142,7 @@ no `GEMINI_API_KEY`. The backfill does not gate — it has no tail to resolve a
 deferred formation, so a gated replay would withhold every formation in the
 archive and form nothing — and it rebuilds what the token evidence says.
 
-**Amended 2026-09-11.** "Does not gate" was implemented as "does not read the
+**Amended 2026-09-11 (refusal replay).** "Does not gate" was implemented as "does not read the
 refusals table either", because the linker consulted that table inside the
 gate's own condition. A `backfill:storylines --restart` on 2026-08-21 therefore
 re-minted 63% of every formation a verdict had ever refused, including all 66

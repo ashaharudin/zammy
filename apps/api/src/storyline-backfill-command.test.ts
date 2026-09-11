@@ -26,11 +26,13 @@ const BASE = {
 const config = (env: Record<string, string> = {}) =>
   loadConfig({ ...BASE, ...env } as NodeJS.ProcessEnv);
 
-/** What the run body computes from `argv`, without running anything else. */
+/**
+ * Exactly what `run` computes, without running anything else: the same function
+ * over the same parsed `Args`. The flag name and its negation are inside
+ * `backfillBar`, so they are under test here rather than restated.
+ */
 const barFor = (argv: string[], env: Record<string, string> = {}) =>
-  backfillBar(config(env), {
-    ignoreRefusals: parseArgs(spec, argv).boolean("ignore-refusals"),
-  });
+  backfillBar(config(env), parseArgs(spec, argv));
 
 describe("the bar backfill:storylines judges at", () => {
   it("honours recorded refusals by default", () => {
@@ -46,11 +48,12 @@ describe("the bar backfill:storylines judges at", () => {
     // wherever a key is set, so "the environment cannot reach this field" is a
     // property worth pinning rather than assuming: a gated backfill defers every
     // formation to a tail that does not exist (`assertNoUnresolvableGate`).
-    for (const env of [
+    const envs: Record<string, string>[] = [
       {},
       { STORYLINE_COHERENCE_GATE: "true", GEMINI_API_KEY: "a-key" },
       { GEMINI_API_KEY: "a-key" },
-    ]) {
+    ];
+    for (const env of envs) {
       expect(barFor([], env).coherenceGate).toBe(false);
       expect(barFor(["--ignore-refusals"], env).coherenceGate).toBe(false);
     }

@@ -825,20 +825,6 @@ describe("storylines in storage", () => {
     });
   });
 
-  /**
-   * ADR-0011's percolation alarm, as the numbers the nightly pass now reports
-   * (VERCEL-PHASE-0-FINDINGS §2.7, action 3).
-   *
-   * The fixture is memberships inserted straight into `storyline_groups`, and
-   * that is deliberate: what is under test is the bucketing SQL, and reaching
-   * the 19/20 and 99/100 edges through the linker would take 376 real groups
-   * and make the fixture the subject. A synthetic membership is a legal row —
-   * `group_id` carries no foreign key by design (migration 0007) — and the
-   * distribution is a pure function of this table.
-   *
-   * Runs last in the file and truncates first, because it is the only test here
-   * whose subject is a count over EVERYTHING rather than one storyline.
-   */
   describe("formation refusals", () => {
     /**
      * The durable half of the coherence gate: a verdict, keyed on GROUPS so it
@@ -886,6 +872,20 @@ describe("storylines in storage", () => {
     });
   });
 
+  /**
+   * ADR-0011's percolation alarm, as the numbers the nightly pass now reports
+   * (VERCEL-PHASE-0-FINDINGS §2.7, action 3).
+   *
+   * The fixture is memberships inserted straight into `storyline_groups`, and
+   * that is deliberate: what is under test is the bucketing SQL, and reaching
+   * the 19/20 and 99/100 edges through the linker would take 376 real groups
+   * and make the fixture the subject. A synthetic membership is a legal row —
+   * `group_id` carries no foreign key by design (migration 0007) — and the
+   * distribution is a pure function of this table.
+   *
+   * Runs last in the file and truncates first, because it is the only test here
+   * whose subject is a count over EVERYTHING rather than one storyline.
+   */
   describe("the graph-shape report", () => {
     // One arc on each side of every bucket edge, so an off-by-one in any
     // `between` shows up as a bucket that is wrong by exactly one arc: 1 |

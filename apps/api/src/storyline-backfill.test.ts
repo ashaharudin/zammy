@@ -386,10 +386,12 @@ describe("the backfill", () => {
 
     it("refuses to run gated at all, because it cannot resolve what a gate defers", async () => {
       // `coherenceGate` DEFERS a formation to a tail this module does not have
-      // (`resolvePendingFormations`), so a gated run would withhold every
-      // formation in the archive, form nothing, and report it as an ordinary
-      // pass. One config field away from any operator who decides the backfill
-      // ought to gate — so the refusal is a guard, not a comment.
+      // (`resolvePendingFormations`), so a gated run withholds every formation it
+      // earns and resolves none. A rebuild then forms nothing; a RESUME goes on
+      // attaching to storylines that are already real and reports ordinarily,
+      // with every formation silently missing — the outcome no operator would
+      // catch. One config field away from anyone who decides the backfill ought
+      // to gate, so the refusal is a guard, not a comment.
       await seedArchive();
 
       await expect(

@@ -3,6 +3,7 @@ import { countFormationRefusals, readStorylineStats } from "@zammy/storage";
 import {
   EXIT_FAILED,
   POSITIVE_INTEGER,
+  type Args,
   type CommandSpec,
 } from "./operator-command.js";
 import { backfillStorylines } from "./storyline-backfill.js";
@@ -24,11 +25,13 @@ import { linkerBarFromEnv } from "./wiring.js";
  * `STORYLINE_BAR` ships it on, which is right for the process that has to run
  * first.
  *
- * A function at module scope rather than a literal inside `run`, because the
- * mapping from one flag to one field is the place a typo inverts the fix
- * silently: `honourRefusals: ignoreRefusals` type-checks, passes every linker
- * test, and rebuilds every pile a verdict ever refused.
- * `storyline-backfill-command.test.ts` pins both directions.
+ * It takes the parsed `Args` rather than a boolean, and that is the whole
+ * defence against the one typo that would undo this branch in silence:
+ * `honourRefusals: ignoreRefusals` type-checks, passes every linker and backfill
+ * test, and rebuilds every pile a verdict ever refused. With the flag read here,
+ * `storyline-backfill-command.test.ts` exercises the real mapping — flag name,
+ * negation and all — rather than a copy of it that could agree with a broken
+ * original. What it still cannot see is `run` calling something else entirely.
  *
  * **`coherenceGate` is false unconditionally**, and that is structural before it
  * is budget: the gate DEFERS a formation to a tail `backfillStorylines` does not
@@ -46,14 +49,11 @@ import { linkerBarFromEnv } from "./wiring.js";
  * arithmetic for why buying NEW verdicts here is still not worth it — measured
  * in docs/STORYLINE-LINKING.md ("The rerun the section above is owed").
  */
-export function backfillBar(
-  config: Config,
-  options: { ignoreRefusals: boolean },
-): LinkerConfig {
+export function backfillBar(config: Config, args: Args): LinkerConfig {
   return storylineBar({
     ...linkerBarFromEnv(config),
     coherenceGate: false,
-    honourRefusals: !options.ignoreRefusals,
+    honourRefusals: !args.boolean("ignore-refusals"),
   });
 }
 
@@ -164,7 +164,7 @@ export const spec: CommandSpec = {
         `labels: ${skipLabels ? "skipped" : labeler.generator ? config.GEMINI_MODEL : "fallback only (no GEMINI_API_KEY)"}`,
     );
 
-    const linkerConfig = backfillBar(config, { ignoreRefusals });
+    const linkerConfig = backfillBar(config, args);
     const log = { warn: (obj: object, msg: string) => console.warn(msg, JSON.stringify(obj)) };
 
     // Said out loud, because the run reports identically either way and the
