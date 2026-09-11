@@ -167,42 +167,46 @@ So the sole live tell is `x-ratelimit-remaining: 60` on a response nobody reads.
 
 ## 4. What this means for `RATE_LIMIT_PER_MINUTE`
 
-**Setting it explicitly is the smaller half of the decision. 60 is the wrong
-number, and the fail-open has been hiding that.**
+**Whether 60 is the right number depends on #212, so the two are one decision.**
 
 The rail-depth measurement is the relevant input: one ordinary reader, polling
 during ingest, sustained **131 requests a minute** with a per-tick fan-out of 6–8
 pages, against a ceiling of 60. #211's arithmetic bounds it at 160/min.
 
-So on a fleet where every instance can reach Redis, the measured traffic is
+So on a fleet where every instance can reach Redis, today's traffic shape is
 **a single reader being 429'd 22 times in 46 seconds** — during ingest, which is
-exactly when the rail is trying to fill. Repairing the fail-open without
-re-sizing the limit converts a silent gap into a visible product failure.
+exactly when the rail is trying to fill. Repairing the fail-open on its own, and
+leaving the fan-out where it is, converts a silent gap into a visible product
+failure.
+
+**§4 of the rail-depth measurement already removes that problem.** #212 polls
+page one and splices it into the infinite query's cache, taking a cold-topic
+read from 75–100 requests to 17–23 — **~22–30/min, comfortably under 60**. It is
+written and reviewed. That branch needs no re-size at all, which is also why
+that doc's verdict on #211 option 3 ("not worth building on this evidence")
+stands unchanged: nothing here argues for the wait hint or SSE.
 
 The three levers, in the order they should be decided:
 
-1. **Re-size.** A ceiling below the fan-out is not a ceiling, it is a bug with a
-   delay fuse. ~240–300/min accommodates a reader at the measured peak with
-   headroom, and still caps novel-fingerprint spam far below what the
-   `PER_TOPIC_DAILY_CALL_CAP` (20) and `INTERACTIVE_RESERVE` (250) already hold.
-   Set it explicitly either way: the default is currently load-bearing in
-   production by accident, and `x-ratelimit-limit: 60` is the only place it is
-   written down.
-2. **Remove the fan-out** — #211 option 3, the wait hint or SSE. This is what
-   makes a tight limit viable again: one poll tick costs one request, and 60/min
-   stops being adversarial to readers. **Decide 1 and 2 together**, because the
-   right number for `RATE_LIMIT_PER_MINUTE` depends on whether the fan-out is
-   still there.
+1. **Land #212, then set the limit explicitly.** With the fan-out gone, 60 is
+   generous rather than adversarial and should simply be pinned; the default is
+   currently load-bearing in production by accident, and `x-ratelimit-limit: 60`
+   is the only place the number is written down. **Only if #212 does not land**
+   does the ceiling have to move — ~240–300/min accommodates a reader at the
+   measured peak, still far below what `PER_TOPIC_DAILY_CALL_CAP` (20) and
+   `INTERACTIVE_RESERVE` (250) already hold. Do not re-size pre-emptively: a
+   ceiling raised for a fan-out that is about to be deleted is a ceiling four
+   times looser than the thing it guards needs.
+2. **Repair the Redis seam**, so the ceiling is the number chosen rather than
+   that number divided by the healthy fraction of the fleet. Sequencing matters:
+   this is the lever that makes the limit bite, so it should land *after* 1 has
+   settled what the limit is.
 3. **Make the fail-open observable.** Nothing here was diagnosable from the
    logs; it took replaying archived rows through the plugin's own algorithm.
    A one-line warn on the skipped path — the same shape and the same once-per
    -instance discipline the quota governor already uses — would have made §3.5 a
-   five-minute answer instead of an open question.
-
-Note the ordering hazard: fixing 3 alone is free, fixing the Redis seam alone
-makes the limit bite at 60, and fixing the limit alone leaves it
-non-deterministic. Only the combination gives a ceiling that is both real and
-the number you chose.
+   five-minute answer instead of an open question. Free, independent of the
+   other two, and worth doing whatever is decided about them.
 
 ---
 
