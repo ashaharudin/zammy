@@ -645,13 +645,41 @@ article a poll adds to a slot already on screen still reaches the rail, where it
 its own in a part of the day above the reader, or take the headline of a card already there.
 
 **4. Delivery is polling, not streaming.** While `ingest.state === "in_progress"` the client
-re-requests the first page (~1.5s interval) and stops on `complete`. In TanStack Query that is a
-conditional `refetchInterval`. SSE would be smoother but adds long-lived connections, proxy
-buffering, and reconnect logic for a window typically 2–4 seconds long; the contract (`meta.ingest`)
-doesn't change, so SSE stays a contained upgrade. Bounded: the client polls for a fixed WINDOW of
-wall-clock time — `INGEST_POLL_WINDOW_MS`, 60s ([ingestPoll.ts](../apps/web/src/ingestPoll.ts)) — and
-then simply stops polling: no error, no manual retry affordance; the last page just stays at
-`ingest.state: "in_progress"`.
+re-requests the first page (~1.5s interval) and stops on `complete`. SSE would be smoother but adds
+long-lived connections, proxy buffering, and reconnect logic for a window typically 2–4 seconds
+long; the contract (`meta.ingest`) doesn't change, so SSE stays a contained upgrade. Bounded: the
+client polls for a fixed WINDOW of wall-clock time — `INGEST_POLL_WINDOW_MS`, 60s
+([ingestPoll.ts](../apps/web/src/ingestPoll.ts)) — and then simply stops polling: no error, no
+manual retry affordance; the last page just stays at `ingest.state: "in_progress"`.
+
+**The first page and no others**, which is a thing the client has to be built to do rather than a
+thing it gets for free. The obvious spelling — a conditional `refetchInterval` on the infinite query
+— fans out: TanStack v5 dropped per-page refetch filtering, so a non-directional fetch loops over
+every loaded page and re-chains their cursors. On a long-lived server that is nearly free; on Vercel
+each page is an invocation plus a Postgres round trip through the pooler plus a Redis one, so a
+four-page rail pays four of each per tick — 160 over a 60s window, for one reader on one topic. That
+became the common path rather than the rare one when §8.2's sentinel stopped being gated on ingest:
+a short first paint puts the sentinel inside its 400px root margin immediately, so a reader pages
+while ingest runs. So the poll fetches page one on its own timer and `splicePolledPage`
+([ingestPoll.ts](../apps/web/src/ingestPoll.ts)) writes it into the cache the infinite query owns.
+Three facts make one response enough:
+
+- **`meta` describes the TOPIC, not a page** — `ingest`, `stale`, `degraded`, `servedFrom`, `asOf`
+  are all facts about the request — so the polled `meta` is written onto every loaded page. Without
+  that the rail reads `ingest.state` off a snapshot from whenever the reader paged, and the ingest
+  animation never stops.
+- **Page one keeps its window.** Its `nextCursor` is the boundary page two was fetched from, so the
+  polled items are trimmed to that window — inclusive of the boundary slot, which the cursor
+  excludes only for page two — and the old cursor is carried over. Re-deriving it would leave the
+  loaded tail hanging off a cursor nobody asked with: a gap, or a slot drawn twice.
+- **The tail is older rows, and progressive fill appends further back**, where paging reaches it.
+  That is the same fact §8.2 gates "Load older" on `hasMore` alone for.
+
+The cost of holding page one's window still: a slot whose `published` moves EARLIER than the
+boundary — an older article landing in a day already on screen — falls out of page one and is not in
+the already-loaded page two either, so it is missing until a pull-to-refresh or a reload re-chains
+the cursors. One slot, inside the ingest window. Pull-to-refresh re-runs every page deliberately and
+is where that repair lives.
 
 The bound is elapsed time and not a count of attempts, which is a correction rather than a
 preference. A count has to be spent somewhere, and the only place a conditional `refetchInterval`
@@ -1110,9 +1138,11 @@ keywords in, timeline out.
 - `staleTime` aligned to §6.4 tiers, so client and server agree on "fresh".
 - **Progressive fill (§6.5):** paint whatever the first response carries — often 6–15 cards — then
   poll every ~1.5s while `meta.ingest.state === "in_progress"`, stopping on `complete` or when the
-  60s poll window closes (§6.5). Two or three shimmer rows sit below the real cards so a short first
-  paint reads as "more coming". No full-page spinner once any content exists, and no spinner
-  *replacing* content on refetch — content only grows downward.
+  60s poll window closes (§6.5). The poll asks for the FIRST page only, however many the reader has
+  loaded, and refreshes it in place; §6.5 point 4 has why that takes code rather than a
+  `refetchInterval`. Two or three shimmer rows sit below the real cards so a short first paint reads
+  as "more coming". No full-page spinner once any content exists, and no spinner *replacing* content
+  on refetch — content only grows downward.
 - **"N new articles" pill** when refresh-on-read surfaces items newer than the top of the view;
   prepends only on click, so the reading position never jumps.
 - The "no more history" terminal state renders only when `hasMore === false && ingest.state ===

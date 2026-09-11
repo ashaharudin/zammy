@@ -672,9 +672,15 @@ knowing:
 ## 5. What the read path costs when polling is metered — worth measuring, not fixing
 
 Progressive delivery has the client poll up to **40 times over ~60 s**
-([useTimeline.ts:16](../apps/web/src/useTimeline.ts)) while background jobs land. On a long-lived
+([ingestPoll.ts](../apps/web/src/ingestPoll.ts)) while background jobs land. On a long-lived
 server those polls are nearly free. On Vercel each one is an invocation, a Postgres round trip
 through the pooler and a Redis round trip — so one cold-topic read can cost 40 of each.
+
+It was worse than that until the poll stopped going through `refetchInterval`. A non-directional
+fetch of a TanStack v5 infinite query re-runs EVERY loaded page, so a reader who had paged four deep
+paid four of each per tick — 160 over the window, on one topic. The poll now asks for page one alone
+and splices the response into the loaded pages (§6.5 point 4), so the numbers above are the numbers
+again regardless of how far a reader has scrolled.
 
 Hobby includes 1M invocations and 4 CPU-hrs of active CPU, so this is not a cost problem at personal
 scale; it is a *shape* change worth knowing before the first bill. Two cheap mitigations if it

@@ -72,8 +72,10 @@ export function TimelinePage({
 
   // Plain refetch(), same as ErrorState's retry: v5 dropped per-page refetch
   // filtering for infinite queries, so this re-runs every loaded page rather
-  // than just the newest — matching what the ingest poll already does on
-  // its own timer (useTimeline.ts refetchInterval).
+  // than just the newest. Deliberate here and only here — a pull is one
+  // gesture, and re-chaining every cursor is exactly what repairs a window the
+  // ingest poll held still (`splicePolledPage`). The poll itself no longer
+  // does this: forty of these a minute is the fan-out issue #211 named.
   usePullToRefresh(
     () => void timeline.refetch(),
     timeline.isPending || timeline.isFetching,

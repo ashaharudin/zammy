@@ -1,5 +1,6 @@
 /**
- * How long the progressive-fill poll (§6.5) stays on, as a pure step function.
+ * The progressive-fill poll (§6.5) as pure functions: how long it stays on,
+ * and what one response does to the pages a reader has loaded.
  *
  * §8.2 asks for "poll every ~1.5s while `meta.ingest.state === 'in_progress'`,
  * stopping on `complete` or when the 60s poll window closes" — a budget, so a
@@ -20,7 +21,24 @@
  * at the same instant must give the same answer and leave the same window.
  * Nothing but the clock closes it, which is what makes the budget mean the
  * thing §8.2 says it means.
+ *
+ * The poll no longer runs through `refetchInterval` at all — that spelling fans
+ * a tick out across every loaded page, which is what `splicePolledPage` below
+ * exists to stop — so `pollStep` is now asked once per tick by a `setTimeout`
+ * chain. The contract stands anyway: it is what makes the budget a fact about
+ * the clock rather than about its caller, and the next caller is not promised
+ * to be as well behaved as this one.
  */
+
+import type { InfiniteData } from "@tanstack/react-query";
+import type { TimelineEntry, TimelinePage } from "@zammy/shared";
+
+/**
+ * The infinite query's cache entry, named so the splice below is a pure
+ * function over it rather than a callback buried in a hook. The page param is
+ * the opaque keyset cursor, absent for page one.
+ */
+export type LoadedTimeline = InfiniteData<TimelinePage, string | undefined>;
 
 /** §8.2's ~1.5s cadence, fast enough that rows appear as jobs land. */
 export const INGEST_POLL_INTERVAL_MS = 1500;
@@ -70,4 +88,89 @@ export function pollStep(open: PollWindow, ingesting: boolean, now: number): Pol
     return { window: { since }, interval: false };
   }
   return { window: { since }, interval: INGEST_POLL_INTERVAL_MS };
+}
+
+/**
+ * What one poll response does to the pages a reader has loaded.
+ *
+ * A poll asks for the FIRST page and nothing else, which is what §6.5 point 4
+ * always said it did and what this function makes true. The obvious spelling —
+ * TanStack's own `refetchInterval` on the infinite query — is a fan-out: v5
+ * dropped per-page refetch filtering, so a non-directional fetch loops over
+ * every loaded page and re-chains their cursors. On a long-lived server that is
+ * nearly free; on Vercel each page is an invocation plus a Postgres round trip
+ * through the pooler plus a Redis one, so a four-page rail pays four of each,
+ * forty times over the poll window, for one reader on one topic.
+ *
+ * Three things make one response enough:
+ *
+ * **`meta` is a fact about the TOPIC, not about a page.** `ingest.state`,
+ * `pendingJobs`, `stale`, `degraded`, `servedFrom`, `asOf` all describe the
+ * request, so the polled response's `meta` is the freshest answer for every
+ * loaded page and is written onto all of them. Without that the rail reads
+ * `ingest.state` off `pages.at(-1)` — a snapshot from whenever the reader
+ * paged — and the ingest animation never stops.
+ *
+ * **Page one keeps its window.** Its `nextCursor` is the boundary page two was
+ * fetched from, so re-deriving it would leave the loaded tail hanging off a
+ * cursor nobody asked with — a gap, or worse a slot drawn twice under one React
+ * key. The polled items are trimmed to that window instead and the old
+ * `page` block is carried over: the poll may refresh what is INSIDE page one,
+ * never move where page one ends.
+ *
+ * **The tail is older rows, and progressive fill appends further back.** What
+ * the poll exists to reveal lands past the tail, where paging reaches it —
+ * which is why §8.2 gates "Load older" on `hasMore` alone. Re-fetching pages
+ * two onward buys the reader nothing the next `fetchNextPage` will not.
+ *
+ * The cost of holding page one's window still: a slot whose `published` moves
+ * EARLIER than the boundary — an older article landing in a day already on
+ * screen — drops out of page one and is not in the loaded page two either, so
+ * it is missing until a pull-to-refresh or a reload re-chains the cursors. One
+ * slot, inside the ingest window, and the alternative is the fan-out.
+ */
+export function splicePolledPage(
+  loaded: LoadedTimeline | undefined,
+  polled: TimelinePage,
+): LoadedTimeline | undefined {
+  if (!loaded || loaded.pages.length === 0) return loaded;
+  const [first, ...tail] = loaded.pages;
+  // A one-page rail is the whole of the old behaviour: nothing to fan out to,
+  // nothing to pin, so the response simply replaces what it refreshed.
+  if (tail.length === 0) return { pages: [polled], pageParams: loaded.pageParams };
+  return {
+    pages: [trimToWindow(first!, polled), ...tail.map((page) => ({ ...page, meta: polled.meta }))],
+    pageParams: loaded.pageParams,
+  };
+}
+
+/**
+ * The polled response as page one's window sees it.
+ *
+ * The boundary is page one's own last slot, which is exactly the tuple its
+ * `nextCursor` encodes — `(published, storylineId)`, the keyset axis of §7.3 —
+ * so this needs no cursor decoding and cannot drift from what the server did.
+ * The cursor is exclusive for page two, so the boundary slot belongs to page
+ * one and the comparison is inclusive.
+ *
+ * `memberships` and `storylines` come across whole rather than filtered to the
+ * kept slots: both are merged across pages by the rail, so a spare entry for a
+ * slot that fell out of the window is unread, not wrong.
+ */
+function trimToWindow(previous: TimelinePage, polled: TimelinePage): TimelinePage {
+  const boundary = previous.items.at(-1);
+  if (!boundary) return previous;
+  const items = polled.items.filter((item) => !isOlder(item, boundary));
+  // Every slot below the boundary would leave the rail headless. Keeping the
+  // previous page one is stale; showing nothing above the tail is broken.
+  if (items.length === 0) return previous;
+  return { ...polled, items, page: previous.page };
+}
+
+/** `(published, storylineId)` descending — §7.3's keyset order, in the browser. */
+function isOlder(item: TimelineEntry, boundary: TimelineEntry): boolean {
+  const at = Date.parse(item.published);
+  const edge = Date.parse(boundary.published);
+  if (at !== edge) return at < edge;
+  return item.storylineId < boundary.storylineId;
 }
