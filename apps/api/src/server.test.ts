@@ -2,11 +2,12 @@ import { randomUUID } from "node:crypto";
 import { createServer, type Server, type Socket } from "node:net";
 import pg from "pg";
 import { Redis } from "ioredis";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { type Config, loadConfig } from "@zammy/config";
 import { createDb, migrateToLatest } from "@zammy/storage";
 import { TimelinePage } from "@zammy/shared";
 import { RATE_LIMIT_NAMESPACE, buildApp, type App } from "./server.js";
+import { RATE_LIMIT_FAIL_OPEN } from "./rate-limit-fail-open.js";
 
 /**
  * The walking skeleton, end to end: real config loading, real Postgres, real
@@ -240,6 +241,64 @@ describe("buildApp", () => {
       await requestOnly.close();
     }
   });
+
+  it("says so in the log when the limiter fails open (MEASUREMENT §4 lever 3)", async () => {
+    // The wiring assertion for the fail-open warning. `rate-limit-fail-open.test.ts`
+    // owns the signature and the throttle against the real plugin; what only
+    // this suite can answer is whether `buildApp` actually registers the watch —
+    // and without this, deleting the one call in `server.ts` leaves every one of
+    // those tests green while production goes back to recording nothing.
+    //
+    // A CLOSED port, not the bare TCP server the boot-failure test uses: an
+    // accepting socket that never speaks leaves commands pending, while a
+    // refused connection puts ioredis in `reconnecting`, where every command
+    // throws instantly because `enableOfflineQueue` is off. That is
+    // MEASUREMENT-RATE-LIMIT-FAIL-OPEN §3.3's reproduction exactly, and it is
+    // the state the episode's blind instance was in.
+    const probe = createServer();
+    await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+    const closedPort = (probe.address() as { port: number }).port;
+    await new Promise((resolve) => probe.close(resolve));
+
+    const blind = await buildApp(
+      loadConfig({
+        NODE_ENV: "test",
+        LOG_LEVEL: "warn",
+        DATABASE_URL: config.DATABASE_URL,
+        REDIS_URL: `redis://127.0.0.1:${closedPort}`,
+        CURRENTS_MODE: "fixture",
+        CURRENTS_USER_AGENT: "zammy-tests/0.1",
+        FIXTURES_DIR,
+      }),
+      { consumer: false },
+    );
+    // The app's own logger, because that is what `watchRateLimitFailOpen`
+    // defaults to and the default is the thing being asserted. It carries the
+    // client's own `redis error` lines too, hence the filter on the message.
+    const warn = vi.spyOn(blind.app.log, "warn");
+    try {
+      const response = await blind.app.inject({ method: "GET", url: "/api/v1/reference" });
+
+      // Unchanged behaviour: `skipOnError` still serves the request. Only the
+      // silence is being fixed.
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["x-ratelimit-remaining"]).toBe(
+        response.headers["x-ratelimit-limit"],
+      );
+
+      const lines = warn.mock.calls.filter(([, message]) => message === RATE_LIMIT_FAIL_OPEN);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]?.[0]).toMatchObject({
+        limit: config.RATE_LIMIT_PER_MINUTE,
+        remaining: config.RATE_LIMIT_PER_MINUTE,
+        url: "/api/v1/reference",
+        failOpen: 1,
+      });
+    } finally {
+      warn.mockRestore();
+      await blind.close();
+    }
+  }, 20_000);
 
   it("releases the connections it already opened when boot fails", async () => {
     // A failed boot used to cost nothing, because the only caller was index.ts

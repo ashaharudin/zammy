@@ -258,6 +258,15 @@ The three levers, in the order they should be decided:
    five-minute answer instead of an open question. Free, independent of the
    other two, and worth doing whatever is decided about them.
 
+   **Built.** `apps/api/src/rate-limit-fail-open.ts` watches every reply for
+   §2.1's signature at `onResponse` and warns at level 40, throttled to one line
+   a minute per instance and carrying a `failOpen` running total so a sustained
+   outage is legible from one line. It reads the limiter's own response headers
+   rather than the plugin's internals — `remaining === limit` is the arithmetic
+   the counted path cannot produce — so it names the consequence and not the
+   cause; the cause is the client's own `redis error` line alongside it. Levers
+   1 and 2 are untouched by it.
+
 ---
 
 ## 5. Caveats

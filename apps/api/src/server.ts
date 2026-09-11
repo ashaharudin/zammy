@@ -24,6 +24,7 @@ import {
   createLinkerConfig,
 } from "./wiring.js";
 import { createQuotaGovernors } from "./quota-redis.js";
+import { watchRateLimitFailOpen } from "./rate-limit-fail-open.js";
 import { processSegmentJob } from "./coverage-fill.js";
 import { processDeepenJob } from "./storyline-deepening.js";
 import { processSampleJob, type TrendingDeps } from "./trending-service.js";
@@ -446,6 +447,16 @@ export async function buildApp(
       nameSpace: RATE_LIMIT_NAMESPACE,
       skipOnError: true,
     });
+
+    // ...and now it says so when it does. `skipOnError` above is unchanged and
+    // stays that way — failing closed would 429 real users over a cache blip —
+    // but the opening the comment describes was, until here, recorded nowhere:
+    // the plugin's catch is `if (!params.skipOnError) throw err` and nothing
+    // else, so the only live tell was `x-ratelimit-remaining` on a response
+    // nobody reads. MEASUREMENT-RATE-LIMIT-FAIL-OPEN §3.2 is what that cost —
+    // an episode whose explanation needed archived log rows replayed through
+    // the plugin's own Lua — and §4's third lever is this line.
+    watchRateLimitFailOpen(app);
 
     app.decorate("currents", services.currents);
     registerHealthRoutes(app, {
