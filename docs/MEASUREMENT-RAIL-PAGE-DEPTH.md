@@ -399,3 +399,49 @@ then the number is live and unbounded and nothing else watches it.
 - **I did not test #212's branch against production.** It is unmerged and under
   review elsewhere; the "after #212" row in §4 is arithmetic on the measured tick
   counts, not an observation.
+
+---
+
+## 7. Addendum — what the review rounds changed about §5.3
+
+*Added after the fact. Everything above was written against #212 as first
+pushed; three adversarial review rounds followed, and one of their findings
+bears directly on the recommendation in §5.3.*
+
+§5.3 argues against instrumentation on the grounds that after #212 the quantity
+worth watching is pinned at 1 by construction, so **"a meter on a number a test
+already holds at 1 is a meter for a regression that would fail CI first."** That
+is now only mostly true, and the exception is worth recording because it is the
+same shape as the thing this document measured.
+
+Review round 2 found that #212's first version had silently dropped a gate it
+was inheriting for free: TanStack fires a `refetchInterval` only when
+`refetchIntervalInBackground || focusManager.isFocused()`, and the flag was
+never set — so a reader who backgrounded the tab cost **nothing**, and a poll on
+a timer of its own took that zero to forty invocations per window. None of the
+198 requests in §2.4 could have revealed this, because the requests that
+demonstrate it are the ones that never happen. A cost regression can be
+invisible to a request log by construction.
+
+Review round 3 then mutation-tested the fix and found that while every guard
+inside `ingestPoll.ts` dies under mutation, several in the effect wiring
+(`apps/web/src/useTimeline.ts`) survive — including two that are silent cost
+regressions rather than visible bugs: an effect that drops its teardown leaks a
+timer chain per topic switch, and an effect that drops `ingesting` from its
+dependencies never stops polling. Both would ship green. Closing them needs
+jsdom and a renderer, which `apps/web` deliberately does not have.
+
+So the refinement:
+
+- **The recommendation stands.** Do not build the instrumentation. The residual
+  is narrow, and the request log would not see most of it anyway.
+- **But the reason is narrower than §5.3 claimed.** "A test holds it at 1" is
+  true of the splice and false of the wiring around it. What actually bounds the
+  risk is that the wiring is twelve lines long and changes almost never — not
+  that CI is watching it.
+- **And §5.2's option (3)** — a per-IP per-topic request counter rolled into the
+  nightly `chore_runs` record — is the one design here that WOULD have caught
+  both the visibility regression and the leaked-timer one, because it counts
+  what actually arrives rather than what the client believes it sent. It is
+  still not worth its few dozen lines today. It is worth remembering as the
+  answer if the poll is ever reworked a third time.
