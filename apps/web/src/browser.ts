@@ -32,3 +32,22 @@ export function readBrowser(): { locales: readonly string[]; timeZone: string | 
 export function readTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }
+
+/**
+ * Whether the reader can actually see the page.
+ *
+ * The progressive-fill poll asks this before every fetch. It used to get the
+ * answer for free: TanStack's `refetchInterval` fires the fetch only when
+ * `refetchIntervalInBackground || focusManager.isFocused()`
+ * (`queryObserver.js`), the flag was never set, and `isFocused()` is this same
+ * reading. Running the poll on a timer of its own meant inheriting the
+ * question, so it is asked here — the one place that touches globals — rather
+ * than inside the loop, which stays drivable by a test with no DOM.
+ *
+ * `visibilityState` and not `document.hasFocus()`: a tab the reader is looking
+ * at beside another window is visible, and a poll that stopped for it would
+ * stall the rail someone is watching.
+ */
+export function isPageVisible(): boolean {
+  return globalThis.document?.visibilityState !== "hidden";
+}

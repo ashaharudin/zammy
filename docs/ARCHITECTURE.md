@@ -645,20 +645,68 @@ article a poll adds to a slot already on screen still reaches the rail, where it
 its own in a part of the day above the reader, or take the headline of a card already there.
 
 **4. Delivery is polling, not streaming.** While `ingest.state === "in_progress"` the client
-re-requests the first page (~1.5s interval) and stops on `complete`. In TanStack Query that is a
-conditional `refetchInterval`. SSE would be smoother but adds long-lived connections, proxy
-buffering, and reconnect logic for a window typically 2–4 seconds long; the contract (`meta.ingest`)
-doesn't change, so SSE stays a contained upgrade. Bounded: the client polls for a fixed WINDOW of
-wall-clock time — `INGEST_POLL_WINDOW_MS`, 60s ([ingestPoll.ts](../apps/web/src/ingestPoll.ts)) — and
-then simply stops polling: no error, no manual retry affordance; the last page just stays at
-`ingest.state: "in_progress"`.
+re-requests the first page (~1.5s interval) and stops on `complete`. SSE would be smoother but adds
+long-lived connections, proxy buffering, and reconnect logic for a window typically 2–4 seconds
+long; the contract (`meta.ingest`) doesn't change, so SSE stays a contained upgrade. Bounded: the
+client polls for a fixed WINDOW of wall-clock time — `INGEST_POLL_WINDOW_MS`, 60s
+([ingestPoll.ts](../apps/web/src/ingestPoll.ts)) — and then simply stops polling: no error, no
+manual retry affordance; the last page just stays at `ingest.state: "in_progress"`.
+
+**The first page and no others**, which is a thing the client has to be built to do rather than a
+thing it gets for free. The obvious spelling — a conditional `refetchInterval` on the infinite query
+— fans out: TanStack v5 dropped per-page refetch filtering, so a non-directional fetch loops over
+every loaded page and re-chains their cursors. On a long-lived server that is nearly free; on Vercel
+each page is an invocation plus a Postgres round trip through the pooler plus a Redis one, so a
+four-page rail pays four of each per tick — 160 over a 60s window, for one reader on one topic. That
+became the common path rather than the rare one when §8.2's sentinel stopped being gated on ingest:
+a short first paint puts the sentinel inside its 400px root margin immediately, so a reader pages
+while ingest runs. So the poll fetches page one on its own timer and `splicePolledPage`
+([ingestPoll.ts](../apps/web/src/ingestPoll.ts)) writes it into the cache the infinite query owns.
+Three facts make one response enough:
+
+- **A response answers for the TOPIC as well as for its page**, and the two halves travel
+  differently. `meta`, `storylines` and `topic` are facts about the REQUEST — the server builds
+  `meta` from the queue and the fill, and both `storylines` and `topic` from the query's keywords
+  alone, never from the page's slots — so all three are written onto every loaded page. `items`,
+  `page` and `memberships` are that page's own and stay put. The rail reads `ingest.state` and the
+  surfaced-storyline pills off `pages.at(-1)`, so getting those wrong leaves a snapshot from
+  whenever the reader paged: the ingest animation never stops, and a storyline promoted mid-fill
+  never surfaces its pill. `topic` has no such symptom — nothing in the browser reads it today —
+  and travels because the contract puts it on that side, so the first thing to render
+  `topic.coverage` is right rather than subtly wrong.
+- **Page one keeps its window.** Its `nextCursor` is the boundary page two was fetched from, so the
+  polled items are trimmed to that window — inclusive of the boundary slot, which the cursor
+  excludes only for page two — and the old cursor is carried over. Re-deriving it would leave the
+  loaded tail hanging off a cursor nobody asked with: a gap, or a slot drawn twice.
+- **The tail is older rows, and progressive fill appends further back**, where paging reaches it.
+  That is the same fact §8.2 gates "Load older" on `hasMore` alone for.
+
+The cost of holding page one's window still is anything belonging INSIDE the loaded span that
+arrives below the boundary: a slot whose `published` moves earlier past it (an older article landing
+in a day already on screen), and equally a day slot that is simply new down there — a storyline
+gaining coverage on a day it had none, inside a span the reader has already paged. Neither is in the
+frozen page two either, so both wait for a re-chaining of the cursors; surfacing them is what the
+fan-out was buying. Pull-to-refresh re-runs every page deliberately and is where that repair lives.
+The direction that would be a rendering bug rather than an omission — a page-two slot rising ABOVE
+the boundary and being drawn twice under one React key — cannot happen, since a slot's `published`
+is its storyline-day's earliest article and a fill only moves it earlier.
+
+Two consequences of the poll no longer being the query's own fetch, both wanted and neither
+incidental. **Pull-to-refresh works during ingest**, where the fan-out used to hold the query's
+`isFetching` true through most of the window and disable it — which was the wrong way round, since
+the pull is the repair for the slot above. And **a failed poll no longer raises the error banner**:
+it used to move the query into `isError`, which the rail renders above content that is perfectly
+fine. A poll that fails now leaves the rail as it was and the next tick asks again.
 
 The bound is elapsed time and not a count of attempts, which is a correction rather than a
-preference. A count has to be spent somewhere, and the only place a conditional `refetchInterval`
-offers is the callback itself — which TanStack evaluates once per render of the component holding
-the query and once per query state change, not once per poll. A tick budget decremented there counts
-renders, and forty of them are gone in seconds. A window measured on the clock is idempotent under
-repeated evaluation, so how often React renders stops mattering.
+preference. A count has to be spent somewhere, and when the poll ran through a conditional
+`refetchInterval` the only place on offer was the callback itself — which TanStack evaluates once
+per render of the component holding the query and once per query state change, not once per poll. A
+tick budget decremented there counted renders, and forty of them are gone in seconds. The poll no
+longer runs through `refetchInterval` at all (see "The first page and no others" above), so the
+budget is now spent once per tick by a `setTimeout` chain and a count would work. It stays on the
+clock anyway: a window measured in wall-clock time is idempotent under repeated evaluation, which
+makes the bound a fact about the clock rather than about how carefully its caller is written.
 
 Deliberately far short of the fifteen minutes `meta.ingest.state` can hold `in_progress` for (an
 unsettled pending entry holds it until `STALE_PENDING_MS`), because the poll is not how a reader
@@ -1110,9 +1158,11 @@ keywords in, timeline out.
 - `staleTime` aligned to §6.4 tiers, so client and server agree on "fresh".
 - **Progressive fill (§6.5):** paint whatever the first response carries — often 6–15 cards — then
   poll every ~1.5s while `meta.ingest.state === "in_progress"`, stopping on `complete` or when the
-  60s poll window closes (§6.5). Two or three shimmer rows sit below the real cards so a short first
-  paint reads as "more coming". No full-page spinner once any content exists, and no spinner
-  *replacing* content on refetch — content only grows downward.
+  60s poll window closes (§6.5). The poll asks for the FIRST page only, however many the reader has
+  loaded, and refreshes it in place; §6.5 point 4 has why that takes code rather than a
+  `refetchInterval`. Two or three shimmer rows sit below the real cards so a short first paint reads
+  as "more coming". No full-page spinner once any content exists, and no spinner *replacing* content
+  on refetch — content only grows downward.
 - **"N new articles" pill** when refresh-on-read surfaces items newer than the top of the view;
   prepends only on click, so the reading position never jumps.
 - The "no more history" terminal state renders only when `hasMore === false && ingest.state ===
