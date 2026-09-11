@@ -561,14 +561,27 @@ nobody merging a PR reads those.
         on a client with nothing wrong with it, which then finishes connecting before the response
         does. No `redis error` accompanies it because nothing errored. Measured locally at 10 of 16
         cold starts, all reading `ready`. Not worth acting on.
-      - **`connecting` / `connect` / `wait` — also routine.** The same cold start, caught with the
-        first connection still in flight. Expected to be commoner in production than locally:
-        Upstash's handshake is ~800 ms against a ~15 ms loopback one.
       - **`reconnecting` / `close` / `end` — chase this one.** The client was still unusable at the
         moment we looked, which is the blind instance of
         [MEASUREMENT-RATE-LIMIT-FAIL-OPEN](../../docs/MEASUREMENT-RATE-LIMIT-FAIL-OPEN.md) §3.2, and
         it stays blind for as long as it stays there. One `end` at the tail of an instance's life is
         an ordinary shutdown; a stream of any of these is not.
+      - **`connecting` / `connect` / `wait` — ambiguous. Do NOT read this as routine.** It is both
+        a cold start still in its ~800 ms Upstash handshake *and* a handshake that is timing out and
+        never going to finish. Measured with the client's production options: a **timing-out**
+        handshake reads `connecting` **99.6%** of the time (n=275) and a refused connection reads
+        `reconnecting` **98.1%** (n=157) — both blind, both throwing on every command. The status
+        names whichever phase is long, not how bad the fault is: ECONNREFUSED fails in under a
+        millisecond so the retry backoff dominates, while ETIMEDOUT hangs for ioredis' full 10 s
+        `connectTimeout`. **The 7 `connect ETIMEDOUT` fail-opens recorded two bullets below would
+        every one of them log `connecting`.**
+
+        The obvious cross-check does not work in the moment: a timing-out handshake emits no
+        `redis error` event until `connectTimeout` expires (measured t=10.0 s, then t=20.1 s), so
+        for ten seconds it is indistinguishable from a healthy cold start on both signals. What to
+        do instead: look for a `redis error` on the **same instance about ten seconds later**, and
+        treat a *sustained run* of `connecting` from one instance as an incident — a benign cold
+        start resolves in about a second and cannot produce one.
     - `failOpen` is a per-instance count of uncounted requests since boot, including the ones the
       throttle kept out of the log. It is an absolute number, not a rate: to turn it into a
       fraction, compare it with that instance's request count over the same window.

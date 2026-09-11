@@ -278,11 +278,17 @@ The three levers, in the order they should be decided:
    already warm. Those two numbers are not commensurable, and an earlier draft of
    this paragraph asserted "very likely most" across a 50× gap in the regime —
    which is the kind of claim §4.1 was written to stop making. What can be said
-   is narrower and still useful: **§2.1 counts two mechanisms, and only one of
-   them is worth acting on**, so it is an upper bound on the blind-instance rate
-   rather than an estimate of it. `redisStatus` is what would turn that into a
-   measurement, on the next production probe that catches one. Levers 1 and 2 are
-   untouched.
+   is narrower and still useful: **§2.1 counts three mechanisms — a cold start
+   that succeeds, a cold start that times out, and §3.2's blind instance — and
+   only the first is benign**, so it is an upper bound on the blind-instance rate
+   rather than an estimate of it. `redisStatus` is most of what would turn that
+   into a measurement, with one gap worth knowing before anyone tries: it reads
+   `connecting` for BOTH cold-start shapes (a timing-out handshake sits there
+   99.6% of the time, because the status names the long phase and ETIMEDOUT's 10s
+   connect dwarfs the backoff a refused connection falls into). So a production
+   probe separates `ready` and `reconnecting` cleanly and has to resolve
+   `connecting` by whether a `redis error` follows on the same instance ~10s
+   later. Levers 1 and 2 are untouched.
 
 ---
 

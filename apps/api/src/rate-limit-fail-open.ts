@@ -37,14 +37,16 @@ import type { FastifyInstance, FastifyReply } from "fastify";
  * `redis error` anywhere in the run. `server.test.ts`'s own rate-limit case has
  * documented that race since #215 for a different reason.
  *
- * A third shape sits between them and is neither: a cold start that FAILS. The
- * README's Phase 3 measurement names `connect ETIMEDOUT` on cold instances'
- * Upstash handshakes, which is not routine and not a long-lived blind instance
- * either. It lands in `reconnecting`, so the reading below routes it with the
- * incidents, which is where it belongs.
+ * A third shape sits between them: a cold start that FAILS. The README's Phase 3
+ * measurement names `connect ETIMEDOUT` on cold instances' Upstash handshakes —
+ * seven fail-opens on one scale-out burst — and those instances were blind, not
+ * warming up. It is the shape this feature is most likely to meet in production,
+ * because a burst big enough to force scale-out is exactly the traffic the guard
+ * is for.
  *
- * The headers cannot tell any of them apart. `redisStatus` can, but read what it
- * actually answers rather than what it sounds like it answers — see below.
+ * The headers cannot tell any of the three apart. `redisStatus` mostly can, and
+ * the mostly is load-bearing — read what it actually answers rather than what it
+ * sounds like it answers, below.
  *
  * ## Why the response headers rather than the plugin's internals
  *
@@ -81,22 +83,52 @@ import type { FastifyInstance, FastifyReply } from "fastify";
  * whole request, so a cold start that completed in the meantime reads `ready`.
  * That is not a defect to work around; it is the honest reading, and it is the
  * COMMON one: across 16 runs of the cold-start race above, every one of the 10
- * fail-open lines read `ready` and none read `connecting`. A local handshake
- * settles in ~15ms, far inside one request. Upstash's ~800ms may well leave
+ * fail-open lines read `ready` and none read `connecting`. A local handshake is
+ * a median 3ms, far inside one request. Upstash's ~800ms may well leave
  * `connecting` on the line in production, which is why that value is described
  * too rather than assumed away.
  *
- * So the useful split is not `connecting` vs `reconnecting`:
+ *   - `ready` — healed by the time the response finished. A cold start, or a
+ *     blip that closed. **Routine**, and by far the most common.
+ *   - `reconnecting` / `close` / `end` — still unusable when we looked. §3.2's
+ *     instance, and worth chasing. `end` is also an ordinary shutdown status, so
+ *     a request finishing during teardown lands here; one at the tail of an
+ *     instance's life means nothing, a stream of them does.
+ *   - `connecting` / `connect` / `wait` — **ambiguous, and do not read it as
+ *     routine.** See below, because this is the one that matters.
  *
- *   - `ready` — already healed by the time the response finished. A cold start,
- *     or a blip that closed. Routine, and by far the most common.
- *   - `connecting` / `connect` / `wait` — the FIRST connection is still in
- *     flight. Also a cold start; also routine.
- *   - `reconnecting` / `close` / `end` — still unusable at the moment we looked.
- *     This is §3.2's instance, and the one worth chasing. `end` is also an
- *     ordinary shutdown status, so a request finishing during teardown can land
- *     here; a single one at the end of an instance's life means nothing, and a
- *     stream of them does.
+ * ## `connecting` does not mean "warming up"
+ *
+ * The status names whichever phase is LONG, not how bad the fault is. Measured
+ * with `buildServices`' exact options, sampling every 50ms:
+ *
+ * ```
+ * handshake TIMES OUT (unroutable IP, n=275)   connecting 99.6%   reconnecting  0.4%
+ * connection REFUSED  (closed port,   n=157)   connecting  1.9%   reconnecting 98.1%
+ * ```
+ *
+ * Both threw `Stream isn't writeable …` on every command; both were blind.
+ * ECONNREFUSED fails in under a millisecond, so the retry backoff dominates and
+ * the status reads `reconnecting`. ETIMEDOUT hangs for the whole
+ * `connectTimeout` — ioredis' default 10s, which `buildServices` does not
+ * override — while the backoff is ≤2s, so it reads `connecting` almost always.
+ *
+ * **So the Phase 3 production event above logs `connecting`, and it was an
+ * incident.** A benign cold start logs `connecting` too, for ~800ms. The value
+ * alone cannot separate them, which is why it is not filed under routine: an
+ * operator who reads it that way stops looking at the one cluster this feature
+ * exists to surface.
+ *
+ * **And the obvious disambiguator does not work in the moment.** It is tempting
+ * to say "`connecting` plus a `redis error` line is the bad one", since
+ * `buildServices` logs that event. A timing-out handshake emits NO error event
+ * until `connectTimeout` expires — measured at t=10.0s, then again at t=20.1s —
+ * so for the first ten seconds a failing cold start and a healthy one are
+ * identical on BOTH signals. The error line is evidence about that instance
+ * ~10s LATER, never beside the fail-open line. Read `connecting` as "unresolved,
+ * check whether a `redis error` followed on the same instance", and read a
+ * sustained run of `connecting` from one instance as an incident: a benign cold
+ * start resolves within a second and cannot produce one.
  *
  * `reset` is carried as a field rather than tested. `remaining === max` is
  * already exact, and a second conjunct that cannot independently be false is a
@@ -231,9 +263,11 @@ export function watchRateLimitFailOpen(
         url: request.url,
         // "Was it still broken when we looked?", per the header comment — NOT
         // "why did it throw?". Read after the response, so the common cold-start
-        // case reads `ready` (measured: 10 of 10). `reconnecting`, `close` and
-        // `end` are the ones that mean the client was still unusable, which is
-        // §3.2's instance and the only shape worth chasing.
+        // case reads `ready` (measured: 10 of 10). `reconnecting`/`close`/`end`
+        // mean still-unusable. `connecting` is AMBIGUOUS and must not be read as
+        // routine: a timing-out handshake sits there 99.6% of the time and is
+        // just as blind, because the status names the long phase and ETIMEDOUT's
+        // 10s connect dwarfs the ≤2s backoff that ECONNREFUSED falls into.
         redisStatus: redis?.status,
         // How many requests this instance has served uncounted since boot,
         // INCLUDING the ones the throttle above kept out of the log — the

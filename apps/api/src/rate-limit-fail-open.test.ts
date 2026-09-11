@@ -223,13 +223,23 @@ describe("watchRateLimitFailOpen", () => {
   });
 
   /**
-   * The field that separates the two mechanisms that reach this path. A cold
-   * start — `lazyConnect`, connect not awaited, ~800ms of Upstash handshake —
-   * fails open on a client with nothing wrong with it, and is by far the more
-   * common of the two; §3.2's blind instance sits in `reconnecting` for its
-   * whole life and is the one that costs the deployment its ceiling. The
-   * headers are identical for both, so without this the log cannot tell an
-   * operator which one they are looking at.
+   * Pinned for the same reason the interval above is: `deploy/vercel/README.md`
+   * quotes this string verbatim as the operator's grep target. Every other test
+   * compares against the exported constant, which is right — and leaves the
+   * constant itself free to drift away from the documentation that names it.
+   */
+  it("keeps the message an operator was told to grep for", () => {
+    expect(RATE_LIMIT_FAIL_OPEN).toBe(
+      "rate limit fail-open; this instance is not counting requests against the ceiling",
+    );
+  });
+
+  /**
+   * The field that narrows down which mechanism reached this path, the headers
+   * being identical for all of them. `ready` is a cold start that healed,
+   * `reconnecting`/`close`/`end` is an instance still unusable when we looked,
+   * and `connecting` is ambiguous between a handshake in flight and one timing
+   * out — see the module comment, which has the measurements.
    */
   it("carries the client's status verbatim, whatever it is", async () => {
     // Plumbing only: the status is injected, so this pins the field and not the
