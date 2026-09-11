@@ -2,18 +2,25 @@
 
 Plan A of [RESEARCH-VERCEL-SUPABASE](../../docs/RESEARCH-VERCEL-SUPABASE.md), adopted in
 [ADR-0015](../../docs/adr/0015-all-in-on-vercel-hobby-shaped.md) and phased in
-[VERCEL-ALL-IN-SCOPE §9](../../docs/VERCEL-ALL-IN-SCOPE.md). **Phases 1 and 2 are deployed to
-preview and verified**: the api serves as one Function, the ingest queue has a push-mode consumer
-that drains and redelivers, and `POST /api/drain` is the manual fallback. **Phase 3 (the Redis quota
-governor and rate-limit store) is deployed to preview**: the per-IP guard is verified shared across
-six instances, and the burst ceiling is deployed but unexercised, because a fixture-mode preview
-never calls the governor at all. **Phase 4 (the chores route, `chore_runs`, the pause guard) is
-built and tested but SCHEDULED NOWHERE** — [supabase-cron.sql](supabase-cron.sql) has not been run
-against any project, so no pass fires on a timer and nothing is keeping the database awake.
-**Phase 5 (cutover) is built and unprovisioned**: the migration CI jobs, the seed and the deploy
-script all exist, and there is no production Supabase project, no production Upstash database and no
-production deployment for them to act on. **Nothing here is serving production traffic yet**, and
-[provision-production.sh](provision-production.sh) is the twelve stages that would change that.
+[VERCEL-ALL-IN-SCOPE §9](../../docs/VERCEL-ALL-IN-SCOPE.md).
+
+**All five phases are provisioned and production is serving.** Cut over 2026-08-26. This paragraph
+described a preview-only deployment for sixteen days after that stopped being true, which is the
+failure mode this file is most prone to — everything below is written at the moment it was learned,
+and nothing was re-reading the summary. Verified 2026-09-11, and each claim here is something a
+command answered rather than something the repo asserts:
+
+- The `zammy` project's latest production URL is `https://www.zammy.info` (`vercel project ls`).
+- The Production environment carries **22 variables**, all marked Sensitive, including
+  `DATABASE_URL`, `REDIS_URL`, `INGEST_QUEUE_DRIVER`, `CURRENTS_MODE` and `CRON_SECRET`
+  (`vercel env ls production`). Sensitive means write-only: no laptop can read them back, so the
+  gitignored `deploy/vercel/.env.production` the wizard writes is the only copy.
+- `/readyz` answers `ready`, Postgres `ok`, and `chores.ok: true` with nothing overdue and nothing
+  stalled — `lastRunAt` was `2026-09-11T07:00:01.861Z`, which is `zammy-chores-summaries-3` firing
+  on its 07:00 UTC schedule. **The cron is running.**
+- `/api/v1/reference` answers 200 with `x-ratelimit-limit: 120`.
+
+What that leaves open is below, and it is a shorter list than it was.
 
 The configuration itself lives at the repository root, because that is where Vercel looks:
 [`vercel.json`](../../vercel.json), [`api/index.ts`](../../api/index.ts),
@@ -419,7 +426,7 @@ offers everything already captured as a default.
 | 8 | [seed-production.sh](seed-production.sh) — the corpus, then the migration-ledger check |
 | 9 | The three GitHub Actions secrets `ci.yml`'s migration jobs read |
 | 10 | [deploy.sh](deploy.sh) `--prod`, then `/readyz` twice, then the **stable production alias** |
-| 11 | [supabase-cron.sql](supabase-cron.sql) — the step that has never been run anywhere |
+| 11 | [supabase-cron.sql](supabase-cron.sql) — applied by hand against production 2026-08-26; all seven jobs are in `cron.job` and firing |
 | 12 | `zammy.info` at the registrar, then `CORS_ORIGIN` and a redeploy |
 
 **The three shapes it refuses at the prompt**, each of which has already cost a deploy cycle on the
@@ -525,27 +532,62 @@ nobody merging a PR reads those.
 
 ## What is still not done
 
-- **Nothing is in production.** Phase 2 is verified on *preview* only. Production has no seeded
-  corpus and no `INGEST_QUEUE_DRIVER`, so leaving it at the `bullmq` default there would publish to
-  a Redis queue nothing drains. Phase 5's code exists; the accounts it acts on do not.
+**Audited against the running deployment 2026-09-11.** Four of the six entries that stood here had
+been overtaken by the 2026-08-26 cutover and went on asserting the opposite for sixteen days. They
+are struck rather than deleted, because the measurement each one carries was true when it was taken
+and the history is the useful part. One entry is added, for the seam that is genuinely still open.
+
+- ~~**Nothing is in production.**~~ Cut over 2026-08-26. `INGEST_QUEUE_DRIVER` is set in the
+  Production environment (so nothing is left on the `bullmq` default publishing to a queue nothing
+  drains), and `https://www.zammy.info` serves: `/api/v1/reference` answers 200, and
+  `/api/v1/trending` answers with named storylines off the seeded corpus — so the seed, the
+  storyline layer and the labeller are all live, not merely deployed.
 - ~~**The drain has never run against a live deployment.**~~ It has now, and it **failed on the
-  first four attempts** — see below. Fixed and verified 2026-08-26. A real fill is still unproven:
-  every pass so far has answered `scanned: 0`, which is the healthy answer and not an exercise of
-  the fill path.
-- **The chores are built and nothing schedules them.** The route, the table and the pause guard all
-  exist as of Phase 4; [supabase-cron.sql](supabase-cron.sql) is written and **has not been run**.
-  Until it is, no pass fires on a timer and a deployed project's database is reachable only as long
-  as something else keeps it awake. It is stage 11 of the wizard.
-- **The production data plane does not exist.** No Supabase project, no Upstash database, and the
-  Production environment carries exactly one variable (`ENABLE_EXPERIMENTAL_COREPACK`). Stages 2–7.
-- **The quota governor has never governed anything on a deployment.** Phase 3 ships it and a
-  fixture-mode preview cannot exercise it: `CURRENTS_MODE=fixture` returns `FixtureCurrentsClient`,
-  which builds its own unmetered governor and ignores the injected one. `/readyz` reporting
-  `dailyRemaining: 1000, burstRemaining: 60, observed: false` is that unmetered governor answering,
-  not evidence the shared window works. Closing it needs `CURRENTS_MODE=live` and a key on the
-  preview, with `CURRENTS_BURST_CALL_LIMIT` temporarily lowered to ~3 so the probe costs a handful
-  of calls instead of 61 (VERCEL-ALL-IN-SCOPE, "Phase 3 as it stands"). Until then this stays the
-  reason not to leave a preview serving real traffic in `CURRENTS_MODE=live` for long.
+  first four attempts** — see below. Fixed and verified 2026-08-26. **Still open:** a real fill
+  remains unproven. `zammy-ingest-drain` has been firing every ten minutes since the cutover, and
+  every pass so far has answered `scanned: 0` — the healthy answer, and not an exercise of the fill
+  path. Nothing short of a genuine backlog will close this, so it is waiting on an incident rather
+  than on work.
+- ~~**The chores are built and nothing schedules them.**~~ [supabase-cron.sql](supabase-cron.sql)
+  was applied by hand against production on 2026-08-26 — stage 11 of the wizard, and the one stage
+  nothing in the app can perform. All **seven** jobs are in `cron.job`: three summaries passes, the
+  retention and storyline passes, the keepalive, and the ten-minute drain. `/readyz` confirms it
+  from outside — `chores.ok: true`, nothing overdue, nothing stalled, `lastRunAt`
+  `2026-09-11T07:00:01.861Z`, which is `zammy-chores-summaries-3` on time.
+  **Read `select jobname, schedule, active from cron.job order by jobname;` and not this file**:
+  #189 exists because the SQL being committed was once mistaken for the SQL being applied.
+- ~~**The production data plane does not exist.**~~ It does: a Supabase project, an Upstash
+  database, and **22** Production environment variables rather than the one
+  (`ENABLE_EXPERIMENTAL_COREPACK`) this bullet was counting. Stages 2–7 are done.
+- ~~**The quota governor has never governed anything on a deployment.**~~ It is governing now.
+  `/readyz` answers `observed: true` across consecutive probes of different instances, and that is
+  the whole of the evidence: a cold instance has no local observation, so `observed: true` can only
+  be the **shared** snapshot read back out of Redis — written by a different instance from a real
+  Currents response's `x-ratelimit-*` headers. The `observed: false` this bullet used to quote was
+  the unmetered `FixtureCurrentsClient` governor answering on a fixture-mode preview, and that
+  reading is no longer available anywhere: **the Preview environment was retired 2026-08-26**
+  (Upstash's free tier allows one database per project), so the closing method this bullet
+  prescribed — `CURRENTS_MODE=live` and a key *on the preview*, with `CURRENTS_BURST_CALL_LIMIT`
+  lowered to ~3 — cannot be run at all. It was closed by production instead.
+
+  **Still open, and unchanged by any of that: the day-rolling ledger is deliberately NOT shared.**
+  `peek` returns `dailyRemaining` from the in-process delegate by design, so the number `/readyz`
+  reports is this instance's count and not the deployment's — a cold instance reads the full 1000
+  whatever the fleet has spent. Currents self-corrects from headers one call after a cold start,
+  which is what makes that tolerable; GNews reports no headers at all, which is why
+  **enabling GNews requires building the Redis daily ledger first** (`quota-redis.ts`,
+  VERCEL-ALL-IN-SCOPE §3.4). The deferral and the `GNEWS_ENABLED=false` default are one decision.
+- **An instance can hold an unusable Redis client for its whole life, and nothing repairs it.**
+  Not the same entry as the one below, which is about the fail-open being *silent*; this is the
+  fault it fails open over. One of seven consecutive `/readyz` probes on 2026-09-11 came back
+  `degraded` with `redis: "Stream isn't writeable and enableOfflineQueue options is false"` while
+  Postgres was fine — the seam
+  [MEASUREMENT-RATE-LIMIT-FAIL-OPEN](../../docs/MEASUREMENT-RATE-LIMIT-FAIL-OPEN.md) §3.3
+  reproduces, observed live, and §4's lever 2. The client does keep retrying, but the instance is
+  frozen between invocations and the backoff timers freeze with it, so one that lost its connection
+  can stay in `reconnecting` across many invocations. While it does, its share of traffic is
+  uncounted and the effective per-IP ceiling is `RATE_LIMIT_PER_MINUTE ÷ the healthy fraction of the
+  fleet` rather than the 120 that is configured.
 - **Both guards fail OPEN on a Redis fault, and both now say so.** The posture is deliberate and
   unchanged — Redis down costs the ceiling, never the request — but it is no longer silent. Grep the
   function log for either warning:
@@ -588,7 +630,7 @@ nobody merging a PR reads those.
   - `shared burst window unavailable; counting in-process` — the quota governor on the same client.
 
   The underlying signal is unchanged and still visible from outside: `x-ratelimit-remaining` coming
-  back at the full limit, a value `INCR` cannot produce — but it cannot tell the two mechanisms
+  back at the full limit, a value `INCR` cannot produce — but it cannot tell the three mechanisms
   apart, which is why `redisStatus` is in the line. Measured on the Phase 3 deploy, a 24-request
   burst that forced scale-out took the fail-open path **7 times**, with `connect ETIMEDOUT` on the
   cold instances' Upstash handshake; production measured ~3% on an
