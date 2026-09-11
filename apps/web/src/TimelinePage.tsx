@@ -15,6 +15,7 @@ import {
 } from "./format.js";
 import { mergeMemberships, rowMembership, type PageMemberships } from "./memberships.js";
 import { railActivity } from "./railActivity.js";
+import { railAnnouncement, SILENT } from "./railAnnouncement.js";
 import { braidOnRule, StorylineBraid } from "./StorylineBraid.js";
 import { storylineQualifiers, visibleStorylines } from "./storylineLabels.js";
 import { collapseCopies, outletLinks } from "./relatedRows.js";
@@ -78,6 +79,19 @@ export function TimelinePage({
     ingestState: latest?.meta.ingest.state,
   });
   const terminal = latest !== undefined && !timeline.hasNextPage && isTerminalPage(latest);
+  // The one sentence the whole view speaks, derived where both halves of the
+  // rail's state are already in hand. Out of this file for the same reason
+  // `railActivity` is: which fact outranks which, and whether a count may be
+  // spoken at all, is the part that can be silently wrong, and `apps/web` has
+  // no renderer to catch it. `pendingJobs` defaults to 0 before a response —
+  // `railAnnouncement` reads it only under `ingesting`, which cannot be true
+  // without one.
+  const announcement = railAnnouncement({
+    isPending: timeline.isPending,
+    ingesting,
+    refreshing,
+    pendingJobs: latest?.meta.ingest.pendingJobs ?? 0,
+  });
 
   // Plain refetch(), same as ErrorState's retry: v5 dropped per-page refetch
   // filtering for infinite queries, so this re-runs every loaded page rather
@@ -92,6 +106,13 @@ export function TimelinePage({
 
   return (
     <>
+      {/*
+        Outside every conditional below on purpose, and first so it is obvious
+        that nothing can unmount it: this node has to outlive the skeleton, the
+        rail, the empty state and the error state, or it announces nothing at
+        all. See `RailAnnouncer`.
+      */}
+      <RailAnnouncer message={announcement} />
       <CommandBar
         topic={topic}
         page={latest}
@@ -429,7 +450,6 @@ function Rail({
     // before, and the beacon rides in the 3rem margin above it.
     return (
       <div style={{ position: "relative" }}>
-        <IngestStatus pendingJobs={null} />
         <div style={{ position: "absolute", top: 0, left: RAIL_INSET, right: 0 }}>
           <IngestBeacon />
         </div>
@@ -441,7 +461,6 @@ function Rail({
   return (
     <div style={{ position: "relative", paddingLeft: RAIL_INSET }}>
       <RailSpine charged={working} />
-      {working && <IngestStatus pendingJobs={ingesting ? pendingJobs : null} />}
       {working && <IngestBeacon />}
       {newCount > 0 && (
         <RailEntry marker="▲">
@@ -1516,37 +1535,78 @@ function IngestGhosts({ pendingJobs }: { pendingJobs: number }) {
 }
 
 /**
- * What the animation cannot say. Motion is invisible to a screen reader, and
- * §8.1 asks the UI to be honest about freshness — so the state the rail now
- * shows in teal is still announced here, including the count the text row used
- * to print.
+ * How long the region is held empty after it mounts, before the first sentence
+ * is allowed into it.
  *
- * TWO sentences, not one with a number missing, because the head of the
- * animation is lit by two different facts and only one of them is upstream
- * work. `null` is a refetch: the rail is asking the same question again and the
- * answer is not back, so nothing is known to be arriving yet. Saying "gathering
- * articles from upstream" there would announce an ingest that may not be
- * running — and would announce it AGAIN, in place, at the moment a poll flips
- * `ingesting` off under a refetch that is still in flight.
+ * A number picked off published guidance rather than measured here, because
+ * what it waits for is not observable from the page: the delay between a node
+ * being committed to the DOM and the platform accessibility API having taken it
+ * up as a live region worth watching. The range the accessibility literature
+ * gives for a region added dynamically is 150–500ms, and one source says two
+ * full seconds. This takes the FLOOR of that range on purpose — every extra
+ * millisecond is a millisecond of rail activity the reader is not being told
+ * about, and the region here mounts with `TimelinePage` itself, which on a cold
+ * load is many hundreds of milliseconds ahead of the first response.
  *
- * Zero with `ingesting` true is NOT a contradiction and not a race: a reader
- * who loses the single-flight lock reads a peer's fetch as their own
- * `in_progress` and queues nothing of their own (`coverage-fill.ts`,
- * `lockLostToPeer` — §12's invariant that a reader never queues on someone
- * else's ingest). So it drops the clause rather than printing "0 jobs
- * pending", which would contradict both the animation and the single ghost
- * slot `IngestGhosts` floors that count at.
+ * If a reader ever reports the first sentence going missing on their AT, this
+ * constant is the dial: raising it costs latency on the first announcement and
+ * nothing else.
  */
-function IngestStatus({ pendingJobs }: { pendingJobs: number | null }) {
+const LIVE_REGION_REGISTRATION_MS = 150;
+
+/**
+ * What the animation cannot say. Motion is invisible to a screen reader, and
+ * §8.1 asks the UI to be honest about freshness — so the state the rail shows
+ * in teal is announced here, including the count the text row used to print.
+ *
+ * ONE region, mounted unconditionally for the life of the view, and it exists
+ * in this shape because the obvious shape does not work. From #214 until this
+ * change the file had TWO of these — one inside `SkeletonRail`, one inside
+ * `Rail` — each rendered conditionally and each therefore CREATED already
+ * holding its sentence. A screen reader announces a live region's contents when they change
+ * inside a region it is already tracking; a region that arrives in the DOM with
+ * its text already in it presents no change to anything, and the major AT
+ * announce nothing at all for it. Measured on this app with a MutationObserver
+ * installed ahead of React: on a cold load of `/?q=…` every one of these nodes
+ * was inserted with `textContent` already set, and across a full first paint,
+ * an ingest and a poll there was not one text mutation inside an existing
+ * region. So the view has been silent on EVERY path, not just the cold-load one
+ * — a reader who typed the search in-app was no better off.
+ *
+ * Two things are therefore required together, and each is useless alone:
+ *
+ * - **The region never unmounts.** That is what makes a later sentence a
+ *   mutation rather than a new node, and it is also what stops a topic switch
+ *   from re-announcing: React writes no DOM for an unchanged string, so moving
+ *   between two equally-busy rails now says nothing where the old pair of
+ *   components said the same words twice.
+ * - **The region is born EMPTY and stays empty for a moment.** Position alone
+ *   cannot fix the cold load, which is the case this was opened for: at the
+ *   first commit there is no already-tracked region to mutate, no matter how
+ *   high in the tree the node sits, so a message present at mount is a message
+ *   nobody hears. Hoisting this to `App` was considered for the continuity
+ *   across the hero↔timeline transition and rejected — it does not remove the
+ *   need for the delay, and it would buy that continuity with a context
+ *   carrying `TimelinePage`'s state up to a component that has no other use for
+ *   it. The delay re-arms on that transition instead, which costs 150ms nobody
+ *   can perceive against a network fetch.
+ *
+ * `role="status"` is kept alongside `aria-live="polite"` for the `aria-atomic`
+ * it implies: the sentence is read whole, rather than the reader hearing only
+ * the digits that changed when a count ticks down.
+ */
+function RailAnnouncer({ message }: { message: string }) {
+  const [registered, setRegistered] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setRegistered(true), LIVE_REGION_REGISTRATION_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
+  // `SILENT` renders no text node at all, which is what the region has to hold
+  // when there is nothing to say — an empty region is silent, whereas a region
+  // holding a space is a region that has been changed.
   return (
     <p className="sr-only" role="status" aria-live="polite">
-      {pendingJobs === null
-        ? "Checking for new articles."
-        : pendingJobs === 0
-          ? "Gathering articles from upstream."
-          : `Gathering articles from upstream — ${pendingJobs} job${
-              pendingJobs === 1 ? "" : "s"
-            } pending.`}
+      {registered ? message : SILENT}
     </p>
   );
 }
@@ -1577,19 +1637,23 @@ const SKELETON_GHOSTS = 3;
  * storyline label is a primary path, so an animation that asserted "gathering
  * articles from upstream" there would be asserting something the server has
  * already said is false. The visual is honest as a LOADING mark either way, and
- * the sr-only line below says only that.
+ * what is announced beside it says only that.
  *
- * Which is why the status here is its own sentence rather than `IngestStatus`:
- * that component speaks for `meta.ingest`, and on the first paint there is no
- * `meta` yet.
+ * Which is why the first paint's sentence is its own clause in
+ * `railAnnouncement` rather than the ingest one: that sentence speaks for
+ * `meta.ingest`, and on the first paint there is no `meta` yet.
+ *
+ * The announcement is no longer made HERE, and that is the point. This
+ * component used to carry an sr-only region of its own, which is exactly why
+ * nothing was ever heard on a first paint: a live region that mounts already
+ * holding its message announces nothing (`RailAnnouncer`), and the skeleton
+ * mounts, by definition, once per topic — so its region could never be anything
+ * but brand new.
  */
 function SkeletonRail() {
   return (
     <div style={{ position: "relative", paddingLeft: RAIL_INSET }}>
       <RailSpine charged />
-      <p className="sr-only" role="status" aria-live="polite">
-        Loading the timeline.
-      </p>
       <IngestBeacon />
       <IngestGhosts pendingJobs={SKELETON_GHOSTS} />
     </div>
