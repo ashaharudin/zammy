@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TimelinePage } from "@zammy/shared";
 import { fetchReference, fetchTimeline, type TopicQuery } from "./api.js";
+import { isPageVisible } from "./browser.js";
 import { splicePolledPage, startIngestPoll, type LoadedTimeline } from "./ingestPoll.js";
 
 /**
@@ -59,7 +60,14 @@ export function useTimeline(topic: TopicQuery | null) {
  * `startIngestPoll`'s, where they can be driven by a test instead of by a
  * renderer this package does not have.
  *
- * Two things a reader could notice, changed because the poll no longer moves
+ * What did NOT change, and took code to keep: a hidden tab is not polled.
+ * `refetchInterval` fires only when `refetchIntervalInBackground ||
+ * focusManager.isFocused()`, and the flag was never set here — so a
+ * backgrounded reader cost nothing, and a timer that did not inherit the gate
+ * would have taken that zero to forty invocations per window. `isPageVisible`
+ * carries it over.
+ *
+ * Two things a reader CAN notice, changed because the poll no longer moves
  * the query's own flags, and both wanted:
  *
  * - **Pull-to-refresh works during ingest again.** Its busy guard is
@@ -91,6 +99,7 @@ function useIngestPoll(topic: TopicQuery | null, ingesting: boolean) {
       fetchFirstPage: (signal) => fetchTimeline(topic, undefined, signal),
       write: (polled) =>
         client.setQueryData<LoadedTimeline>(key, (loaded) => splicePolledPage(loaded, polled)),
+      isVisible: isPageVisible,
     });
     // `topic` rides on `topicKey` rather than on itself: a fresh object every
     // render would tear the poll down and restart it on every one of them.

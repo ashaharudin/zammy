@@ -365,14 +365,16 @@ describe("startIngestPoll", () => {
   function harness(respond: (n: number) => Promise<TimelinePage> = () => Promise.resolve(page([], null))) {
     const asked: AbortSignal[] = [];
     const wrote: TimelinePage[] = [];
+    const visible = { now: true };
     const stop = startIngestPoll({
       fetchFirstPage: (signal) => {
         asked.push(signal);
         return respond(asked.length);
       },
       write: (polled) => void wrote.push(polled),
+      isVisible: () => visible.now,
     });
-    return { asked, wrote, stop };
+    return { asked, wrote, visible, stop };
   }
 
   /** Let the timers fire AND the promise chain each tick hangs off settle. */
@@ -430,12 +432,59 @@ describe("startIngestPoll", () => {
   // writing it would resurrect a poll the caller has already ended.
   it("does not write a response that arrives after it stopped", async () => {
     let settle: (page: TimelinePage) => void = () => {};
-    const { wrote, stop } = harness(() => new Promise((resolve) => (settle = resolve)));
+    const { asked, wrote, stop } = harness(() => new Promise((resolve) => (settle = resolve)));
     await advance(INGEST_POLL_INTERVAL_MS);
     stop();
     settle(page([], null));
     await advance(0);
     expect(wrote).toHaveLength(0);
+    // And the tick it was in the middle of must not reschedule on its way out.
+    // Without this line a bare `schedule()` at the tail of `tick` survives every
+    // other test here: they all stop at a quiescent moment, so nothing reaches
+    // the guard that a stop DURING a request is what exercises.
+    await advance(INGEST_POLL_INTERVAL_MS * 5);
+    expect(asked).toHaveLength(1);
+  });
+
+  /**
+   * The gate `refetchInterval` gave away for free, and the reason the whole
+   * change is not a saving without it: a reader who switches tabs to wait out a
+   * cold search cost NOTHING before, because TanStack fires an interval only
+   * when `refetchIntervalInBackground || focusManager.isFocused()` and the flag
+   * was never set. A bare timer takes that zero to forty invocations, forty
+   * Postgres round trips and forty Redis ones per window.
+   */
+  it("asks for nothing while the tab is hidden", async () => {
+    const { asked, visible, stop } = harness();
+    visible.now = false;
+    await advance(INGEST_POLL_INTERVAL_MS * 10);
+    expect(asked).toHaveLength(0);
+    stop();
+  });
+
+  // The tick has to keep firing, or "hidden" would END the poll rather than
+  // pause it — and the rail would never resume when the reader came back.
+  it("resumes asking when the tab comes back, having spent the clock meanwhile", async () => {
+    const { asked, visible, stop } = harness();
+    visible.now = false;
+    await advance(INGEST_POLL_INTERVAL_MS * 4);
+    expect(asked).toHaveLength(0);
+    visible.now = true;
+    await advance(INGEST_POLL_INTERVAL_MS * 2);
+    expect(asked).toHaveLength(2);
+    stop();
+  });
+
+  // The window is wall-clock, so time behind another tab is spent, exactly as
+  // it was when TanStack owned the interval.
+  it("does not bank the window while hidden", async () => {
+    const { asked, visible, stop } = harness();
+    visible.now = false;
+    await advance(INGEST_POLL_WINDOW_MS);
+    visible.now = true;
+    await advance(INGEST_POLL_INTERVAL_MS * 5);
+    expect(asked).toHaveLength(0);
+    stop();
   });
 
   it("keeps polling after a failed tick", async () => {

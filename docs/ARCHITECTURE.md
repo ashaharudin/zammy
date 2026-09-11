@@ -697,7 +697,8 @@ preference. A count has to be spent somewhere, and when the poll ran through a c
 `refetchInterval` the only place on offer was the callback itself — which TanStack evaluates once
 per render of the component holding the query and once per query state change, not once per poll. A
 tick budget decremented there counted renders, and forty of them are gone in seconds. The poll no
-longer runs through `refetchInterval` at all (see below), so the budget is now spent once per tick
+longer runs through `refetchInterval` at all (see "The first page and no others" above), so the
+budget is now spent once per tick
 by a `setTimeout` chain and a count would work. It stays on the clock anyway: a window measured in
 wall-clock time is idempotent under repeated evaluation, which makes the bound a fact about the
 clock rather than about how carefully its caller is written.

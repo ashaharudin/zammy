@@ -682,6 +682,16 @@ paid four of each per tick — 160 over the window, on one topic. The poll now a
 and splices the response into the loaded pages (§6.5 point 4), so the numbers above are the numbers
 again regardless of how far a reader has scrolled.
 
+**A hidden tab is still zero**, and that took code rather than coming for free. `refetchInterval`
+fires only when `refetchIntervalInBackground || focusManager.isFocused()`, and the flag was never
+set — so a reader who switched tabs to wait out a cold search cost nothing at all. A poll on a timer
+of its own inherits none of that, and would have turned that zero into forty invocations, forty
+Postgres round trips and forty Redis ones per window: a regression in the very currency this change
+exists to spend less of, wearing the costume of a saving. `isPageVisible` carries the gate over, and
+`ingestPoll.test.ts` pins it. Worth remembering if the poll is ever reworked again — it is the one
+part of the cost that is invisible from the request logs, because the requests are the ones that
+never happen.
+
 Hobby includes 1M invocations and 4 CPU-hrs of active CPU, so this is not a cost problem at personal
 scale; it is a *shape* change worth knowing before the first bill. Two cheap mitigations if it
 bites: raise the poll interval, or have the poll response carry a hint about how long to wait.

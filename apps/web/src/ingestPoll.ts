@@ -112,12 +112,18 @@ export function pollStep(open: PollWindow, ingesting: boolean, now: number): Pol
  * polled response is the freshest answer for all of them on every loaded page,
  * and `topicFacts` writes them onto all of them. `items`, `page` and
  * `memberships` are the page's own — `memberships` is read over that page's
- * groups specifically — and those stay where they are. Get the line wrong in
- * either direction and something goes quietly stale: the rail reads
- * `ingest.state`, the surfaced-storyline pills and the topic's coverage off
- * `pages.at(-1)`, which without this is a snapshot from whenever the reader
- * paged — so the ingest animation never stops and a storyline promoted mid-fill
- * never surfaces.
+ * groups specifically — so those are never carried ACROSS pages. Page one takes
+ * the polled response's own three, of course: its rows were just refreshed, so
+ * its memberships were too. Get the line wrong in either direction and
+ * something goes quietly stale: the rail reads `ingest.state`, the
+ * surfaced-storyline pills and the topic's coverage off `pages.at(-1)`, which
+ * without this is a snapshot from whenever the reader paged — so the ingest
+ * animation never stops and a storyline promoted mid-fill never surfaces.
+ *
+ * The storyline view never reaches any of this, and not by anything here:
+ * `readStorylineView` builds its `storylines` from the page rather than the
+ * query, which would put it on the wrong side of the line — but it also answers
+ * `ingest.state: "complete"` always, so the poll never starts there.
  *
  * **Page one keeps its window.** Its `nextCursor` is the boundary page two was
  * fetched from, so re-deriving it would leave the loaded tail hanging off a
@@ -204,6 +210,8 @@ export interface PollDeps {
   readonly fetchFirstPage: (signal: AbortSignal) => Promise<TimelinePage>;
   /** Hand a response to the cache. Called once per successful tick. */
   readonly write: (polled: TimelinePage) => void;
+  /** Whether the reader can see the page; a hidden tab is not asked for. */
+  readonly isVisible: () => boolean;
 }
 
 /**
@@ -231,6 +239,18 @@ export interface PollDeps {
  * exactly as it was, which is the state the reader was already looking at —
  * never an error banner over content that is fine. The next tick asks again and
  * the window is what ends it.
+ *
+ * **A hidden tab is not asked for, and the clock runs anyway.** This came free
+ * from `refetchInterval`, which fires only when
+ * `refetchIntervalInBackground || focusManager.isFocused()` and never had the
+ * flag set — so a backgrounded reader cost NOTHING, and a poll on a timer of
+ * its own that did not inherit the gate would have taken that zero to forty:
+ * a regression in the exact currency this change exists to spend less of, and
+ * one that would have shipped looking like a saving. The tick still fires and
+ * the window is still spent while hidden, which is also what TanStack did — so
+ * a reader who hides a tab for the whole window comes back to a rail that has
+ * stopped polling, exactly as before. Resuming instead is a nicer behaviour and
+ * a different change.
  */
 export function startIngestPoll(deps: PollDeps): () => void {
   const controller = new AbortController();
@@ -246,10 +266,15 @@ export function startIngestPoll(deps: PollDeps): () => void {
 
   const tick = async () => {
     try {
-      const polled = await deps.fetchFirstPage(controller.signal);
-      // The abort may have landed while the request was in flight; a write
-      // after `stop` would resurrect a poll the caller has already ended.
-      if (!controller.signal.aborted) deps.write(polled);
+      // Skips the FETCH, not the tick — an early return here would exit `tick`
+      // before it reschedules and end the poll for good rather than pause it.
+      // The budget is wall-clock, so a window spent behind another tab is spent.
+      if (deps.isVisible()) {
+        const polled = await deps.fetchFirstPage(controller.signal);
+        // The abort may have landed while the request was in flight; a write
+        // after `stop` would resurrect a poll the caller has already ended.
+        if (!controller.signal.aborted) deps.write(polled);
+      }
     } catch {
       // See above: an un-refreshed page is the status quo, never a reader's
       // problem. Includes the abort, which throws out of `fetch`.
