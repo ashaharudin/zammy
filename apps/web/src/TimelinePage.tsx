@@ -497,7 +497,17 @@ function Rail({
         );
       })}
       {ingesting && <IngestGhosts pendingJobs={pendingJobs} />}
-      {!ingesting && hasNextPage && (
+      {/*
+        Gated on `hasNextPage` ALONE, as this component's own state model says:
+        `page.hasMore` and `meta.ingest.state` answer different questions (§6.1),
+        and pages already in our store are reachable whatever upstream is still
+        doing. ANDing the two hid the whole tail of the rail for as long as
+        ingest ran — and `meta.ingest.state` holds `in_progress` until the
+        pending entry settles or expires, up to fifteen minutes — so a reader
+        sat at the first twenty slots with thirty more a cursor away, and
+        reloading the page was the only way out.
+      */}
+      {hasNextPage && (
         <RailEntry marker="↓">
           <LoadOlder loading={isFetchingNextPage} onLoadOlder={onLoadOlder} />
         </RailEntry>
