@@ -1178,19 +1178,24 @@ keywords in, timeline out.
   argument is the "N new articles" pill (§6.5): held arrivals are the one thing the rail does not
   put on the page, so nothing announces that the button appeared.
   No count is spoken, and none is drawn either — `IngestGhosts` clamps `pendingJobs` to one-to-four
-  ghost slots, a shape rather than a plot of the queue. `pendingJobs` is a live queue depth,
-  recomputed per request and spliced onto the newest page by the poll every 1.5s for up to 60s, so a
-  draining queue would mint a new sentence once per distinct depth it passed through, up to the
-  window's forty ticks — and `role="status"` implies `aria-atomic`, so each one re-reads the
-  sentence whole. A polite live region is a
-  notification channel rather than a readout. Latching the count at the start of the episode was the
-  alternative and was rejected: a queue depth is worth less than the state it would take to keep
-  honest, and it is frequently 0 for a reader watching a peer's ingest (§12).
+  ghost slots, a shape rather than a plot of the queue, so no number ever reached a sighted reader.
+  One did reach a screen reader: the line this replaced printed it and stayed mounted, so a count
+  that moved was announced. Removing it therefore takes something away from exactly one audience,
+  and the reason is that audience's own cost rather than parity. `pendingJobs` is a live queue
+  depth, recomputed per request and spliced onto the newest page by the poll every 1.5s for up to
+  60s, so a draining queue would mint a new sentence once per distinct depth it passed through, up
+  to the window's forty ticks — and `role="status"` implies `aria-atomic`, so each one re-reads the
+  sentence whole. A polite live region is a notification channel rather than a readout. Latching
+  the count at the start of the episode was the alternative and was rejected: a queue depth is
+  worth less than the state it would take to keep honest, and it is frequently 0 for a reader
+  watching a peer's ingest (§12).
   The sentence is delivered into a SINGLE `aria-live` region that `apps/web/index.html` carries in
   the document's original markup, empty; `RailAnnouncer` portals text into it and never renders one.
   That splits the invariant across two languages — delete the node and every announcement stops with
   the types still checking — so `railAnnouncer.test.ts` reads `index.html` and fails if the node is
-  not there, empty, and carrying `role="status"`, `aria-live="polite"` and `.sr-only`. It is what
+  not there exactly once, empty, outside `#root` (which React empties on its first commit), and
+  carrying `role="status"`, `aria-live="polite"` and `.sr-only`. It shares `RAIL_STATUS_ID` with the
+  code rather than retyping it, since a copy made it a check of the markup against itself. It is what
   lets `RailAnnouncer` return null instead of throwing when the node is missing: there is no error
   boundary above it, so a throw would tear down the whole view over an sr-only paragraph.
   A live region is announced when its contents change inside a region the assistive technology is

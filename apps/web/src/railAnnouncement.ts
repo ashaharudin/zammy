@@ -47,6 +47,21 @@ export interface RailAnnouncementState extends RailActivity {
 export const SILENT = "";
 
 /**
+ * The id of the empty live region `apps/web/index.html` carries in the
+ * document's original markup, which `RailAnnouncer` portals the sentence into.
+ *
+ * Exported from HERE, a module with no JSX in it, so that `TimelinePage` and
+ * `railAnnouncer.test.ts` can share one spelling without a node test having to
+ * import a React component. Sharing it is the whole point: while each held its
+ * own copy of the string, renaming this one in `TimelinePage` alone silenced
+ * every announcement in the application with the types checking and all 214
+ * tests green — which is precisely the failure `railAnnouncer.test.ts` exists to
+ * catch, and it could not catch it, because it was checking `index.html`
+ * against itself rather than against the code that reads it.
+ */
+export const RAIL_STATUS_ID = "rail-status";
+
+/**
  * Precedence, and why it is this way round:
  *
  * 1. **The first paint wins.** `isPending` means no response has been read, so
@@ -71,9 +86,13 @@ export const SILENT = "";
  *
  * 3. **NO COUNT.** `pendingJobs` is deliberately absent from the spoken
  *    sentence, and this is the one decision here worth arguing with. Note that
- *    nothing else prints it either — `IngestGhosts` clamps it to one-to-four
+ *    nothing else DRAWS it either — `IngestGhosts` clamps it to one-to-four
  *    ghost slots, a SHAPE saying work is outstanding rather than a plot of the
- *    queue — so the count has never actually been shown to anyone. It is a LIVE
+ *    queue — so no number ever reached a sighted reader. It did reach a screen
+ *    reader, though: the `IngestStatus` line this replaced printed it, and that
+ *    region stayed mounted, so a count that moved was announced. Removing it
+ *    takes something away from exactly one audience, which is why the reasoning
+ *    below is about that audience's cost rather than about parity. It is a LIVE
  *    queue depth: `timeline-read.ts`
  *    recomputes it per request from `queue.pendingCount`, `splicePolledPage`
  *    copies the polled `meta` onto every loaded page, and the poll runs every

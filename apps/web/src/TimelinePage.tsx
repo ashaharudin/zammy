@@ -16,7 +16,7 @@ import {
 } from "./format.js";
 import { mergeMemberships, rowMembership, type PageMemberships } from "./memberships.js";
 import { railActivity } from "./railActivity.js";
-import { railAnnouncement } from "./railAnnouncement.js";
+import { railAnnouncement, RAIL_STATUS_ID } from "./railAnnouncement.js";
 import { braidOnRule, StorylineBraid } from "./StorylineBraid.js";
 import { storylineQualifiers, visibleStorylines } from "./storylineLabels.js";
 import { collapseCopies, outletLinks } from "./relatedRows.js";
@@ -407,9 +407,19 @@ function Rail({
   /** A refetch of what is already here, as opposed to upstream still arriving. */
   refreshing: boolean;
   /**
-   * Nothing to draw and nothing on the way. Decided by `TimelinePage` because
-   * the announcement is decided there too (`railAnnouncement`), and the two
-   * must never disagree about which state the reader is in.
+   * Nothing to draw, and no ingest that would change that. Decided by
+   * `TimelinePage` because the announcement is decided there too
+   * (`railAnnouncement`), and the two must never disagree about which state the
+   * reader is in.
+   *
+   * NOT the same as "no articles": it is measured on the VISIBLE slots, so a
+   * refreshed page whose every slot is newer than the held anchor reads as
+   * empty while `useHeldNewItems` sits on the lot. The branch below returns
+   * before the "N new articles" pill renders, so the reader is told the rail is
+   * empty with no control offered to reveal what is behind it. Pre-existing —
+   * `main` tested the same list the same way — but the announcement is what
+   * makes it audible, and closing it belongs with the pill's own gap (see
+   * `railAnnouncement`, point 6).
    */
   isEmpty: boolean;
   pendingJobs: number;
@@ -1557,56 +1567,35 @@ function IngestGhosts({ pendingJobs }: { pendingJobs: number }) {
 }
 
 /**
- * The id of the empty live region that `apps/web/index.html` puts in the
- * document's original markup. Not created here, and that is the entire design.
- */
-const RAIL_STATUS_ID = "rail-status";
-
-/**
  * What the animation cannot say. Motion is invisible to a screen reader, and
  * §8.1 asks the UI to be honest about freshness — so the state the rail shows
  * in teal is announced here too.
  *
  * ONE region, and this component does not render it: it PORTALS the sentence
- * into a node that was already in the document before React existed. The shape
- * looks roundabout and the direct one does not work.
+ * into a node `index.html` already had. The shape looks roundabout and the
+ * direct one does not work.
  *
- * A screen reader announces a live region's contents when they change inside a
+ * A screen reader announces a live region's contents when they CHANGE inside a
  * region it is already tracking. A region that arrives in the DOM with its text
  * already in it presents no change to anything, and is generally announced by
- * nothing — "generally" because this varies by AT and browser, and `role=alert`
- * is a documented exception; what is NOT safe is relying on it. From #214 until
- * this change the file had TWO such regions, one inside `SkeletonRail` and one
- * inside `Rail`, each rendered conditionally and so each created already
- * holding its sentence. Measured on this app with a MutationObserver installed
- * ahead of React: on a cold load of `/?q=…` every one of those nodes was
- * inserted with `textContent` already set, and on those runs no text ever
- * mutated inside a region that already existed. That last part is about the
- * runs, not about the old code in general — `IngestStatus` stayed mounted
- * inside `Rail` for as long as `working` held, so a `pendingJobs` that MOVED
- * did mutate it in place, and the measured queues happened not to move. The
- * finding that does generalise is the insertion: every first sentence arrived
- * with its node. So on the AT that ignore such an insertion — the common case —
- * the view was silent on EVERY path rather than only the cold-load one, and a
- * reader who typed the search in-app was no better off. On AT that do announce it, the
- * same pair had the opposite fault the review of #214 predicted: moving from a
- * populated topic to an empty one swapped one subtree for another carrying the
- * same words, which reads as fresh news. One persistent region is right under
- * either behaviour, and the two faults are why it has to be persistent AND
- * pre-existing.
+ * nothing — "generally" because it varies by AT and browser, and `role=alert`
+ * is a documented exception; what is not safe is relying on it. React cannot
+ * clear that bar by position: at the first commit there is no tracked region to
+ * mutate, however high in the tree the node sits, so a message present at mount
+ * is a message nobody hears — and a cold load of `/?q=…` is exactly that case.
+ * Markup placement is what MDN asks for and is exact rather than probabilistic.
  *
- * Putting the node in `index.html` is what makes the delay disappear. React
- * cannot win the cold load by position alone, however high in the tree it
- * mounts: at the first commit there is no already-tracked region to mutate, so
- * a message present at mount is a message nobody hears. The earlier answer here
- * was to mount an empty region and hold it empty on a `setTimeout` — which
- * works, but only for as long as the constant is right, and what it waits for
- * (the platform accessibility API adopting the node) is not observable from the
- * page, so the number could only ever be a guess dressed up as a citation. MDN
- * asks for the region in the original markup instead. That is exact rather than
- * probabilistic, it deletes the constant, and it removes the two holes the
- * timer had: a state that began and ended inside the window was never announced
- * at all, and the window re-armed on every hero↔timeline transition.
+ * The rejected alternative was to render an empty region here and hold it empty
+ * on a `setTimeout`. It works while the constant is right, and what the constant
+ * waits for — the accessibility API adopting the node — is not observable from
+ * the page, so it could only ever be a guess. It also lost any state that began
+ * and ended inside the window, and re-armed on every hero↔timeline transition.
+ *
+ * §8.1 ("What the rail says out loud") carries the rest: what the two
+ * conditionally-rendered regions this replaced did on which AT, what the
+ * MutationObserver actually measured, and what that does and does not prove.
+ * It is written down once, there, because this comment and that section had to
+ * be corrected in lockstep the last time it was written down twice.
  *
  * `role="status"` is kept alongside `aria-live="polite"` for the `aria-atomic`
  * it implies: the sentence is read whole rather than in fragments. That is also

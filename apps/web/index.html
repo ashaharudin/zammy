@@ -10,10 +10,12 @@
     <!--
       The rail's live region: empty, and in the original markup rather than
       rendered by React, which is the whole point. See `RailAnnouncer` in
-      apps/web/src/TimelinePage.tsx for why, and railAnnouncer.test.ts, which
-      fails if this node stops being here, empty, with these attributes.
+      apps/web/src/TimelinePage.tsx for why.
 
-      It must stay empty. Text here is text the reader never hears.
+      It must stay empty: text here is text the reader never hears. It must also
+      stay OUT of #root, which React empties on its first commit. Both, plus the
+      attributes and the id, are checked by railAnnouncer.test.ts — which reads
+      this file and shares the id with the code rather than retyping it.
     -->
     <p id="rail-status" class="sr-only" role="status" aria-live="polite"></p>
     <script type="module" src="/src/main.tsx"></script>
