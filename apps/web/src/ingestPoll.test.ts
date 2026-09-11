@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InfiniteQueryObserver, QueryClient } from "@tanstack/react-query";
 import type { Article, TimelineEntry, TimelinePage } from "@zammy/shared";
 import {
@@ -7,6 +7,7 @@ import {
   pollClosed,
   pollStep,
   splicePolledPage,
+  startIngestPoll,
   type LoadedTimeline,
 } from "./ingestPoll.js";
 
@@ -174,6 +175,41 @@ describe("splicePolledPage", () => {
    * `pages.at(-1)` — a snapshot from whenever the reader paged — and the
    * ingest animation runs until the poll window closes.
    */
+  /**
+   * The regression this nearly shipped with. The rail reads `storylines` and
+   * `topic` off `pages.at(-1)` exactly as it reads `meta` there, and all three
+   * are built by the server from the query alone — `findSurfacedStorylines`
+   * never looks at the page's slots. Fan out only `meta` and a reader who paged
+   * during a short first paint keeps a page-two snapshot of the other two: a
+   * storyline promoted while the fill ran never surfaces its pill, and the
+   * topic's coverage freezes, for the rest of the session.
+   */
+  it("carries every topic-level fact onto the page the rail reads them from", () => {
+    const early = page([A, B], "cursor-b");
+    const paged = page([C, D], null);
+    const loaded = { pages: [early, paged], pageParams: [undefined, "cursor-b"] };
+
+    const promoted = page([A, B], "cursor-b", "complete");
+    promoted.storylines = [
+      { id: "s-1", label: "Nepal Flash Floods", from: A.published, to: A.published, size: 4, dormant: false },
+    ];
+    promoted.topic = {
+      fingerprint: "0".repeat(64),
+      keywords: ["nepal", "floods"],
+      coverage: { from: D.published, to: A.published },
+    };
+
+    const latest = splicePolledPage(loaded, promoted)!.pages.at(-1)!;
+    expect(latest.meta.ingest.state).toBe("complete");
+    expect(latest.storylines).toEqual(promoted.storylines);
+    expect(latest.topic).toEqual(promoted.topic);
+    // The page's OWN facts are not the topic's, and must not travel: the
+    // server reads memberships over that page's groups specifically.
+    expect(latest.items).toBe(paged.items);
+    expect(latest.memberships).toBe(paged.memberships);
+    expect(latest.page).toBe(paged.page);
+  });
+
   it("carries the polled meta onto every loaded page", () => {
     const loaded = {
       pages: [page([A, B], "cursor-b"), page([C, D], null)],
@@ -224,7 +260,23 @@ describe("splicePolledPage", () => {
     const first = page([A, B], "cursor-b");
     const loaded = { pages: [first, page([C], null)], pageParams: [undefined, "cursor-b"] };
     const spliced = splicePolledPage(loaded, page([C, D], "cursor-d", "complete"))!;
-    expect(spliced.pages[0]).toBe(first);
+    expect(spliced.pages[0]!.items).toEqual(first.items);
+    expect(spliced.pages[0]!.page).toEqual(first.page);
+    // The rows could not be refreshed; the topic facts still were, and they are
+    // what the rail reads its ingest state and its pills off.
+    expect(spliced.pages[0]!.meta.ingest.state).toBe("complete");
+  });
+
+  /**
+   * A page one with no items carries no `nextCursor`, so nothing could have
+   * fetched a page two and this cache cannot arise. Pinned so the branch is a
+   * decision rather than dead code: an impossible cache is left ALONE, not
+   * guessed at — replacing page one here would drop the boundary the loaded
+   * tail was fetched from.
+   */
+  it("leaves a cache alone when page one has no boundary to pin", () => {
+    const loaded = { pages: [page([], "cursor-b"), page([C, D], null)], pageParams: [undefined, "cursor-b"] };
+    expect(splicePolledPage(loaded, page([A, B], "cursor-b", "complete"))).toBe(loaded);
   });
 });
 
@@ -293,5 +345,115 @@ describe("the poll against a live query cache", () => {
     // And paging still works off the last page's own cursor.
     expect(observer.getCurrentResult().hasNextPage).toBe(true);
     unsubscribe();
+  });
+});
+
+/**
+ * The loop, driven by a fake clock rather than by a renderer.
+ *
+ * This is the half of the change that replaced a battle-tested TanStack
+ * mechanism with a `setTimeout` chain of our own, and while it lived inside a
+ * `useEffect` nothing could reach it: a mutant that removed both the abort
+ * guard and the whole teardown — leaking a timer chain on every topic switch
+ * and polling forever — passed the entire suite.
+ */
+describe("startIngestPoll", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  /** A poll wired to a fetch that resolves on demand, and a log of both sides. */
+  function harness(respond: (n: number) => Promise<TimelinePage> = () => Promise.resolve(page([], null))) {
+    const asked: AbortSignal[] = [];
+    const wrote: TimelinePage[] = [];
+    const stop = startIngestPoll({
+      fetchFirstPage: (signal) => {
+        asked.push(signal);
+        return respond(asked.length);
+      },
+      write: (polled) => void wrote.push(polled),
+    });
+    return { asked, wrote, stop };
+  }
+
+  /** Let the timers fire AND the promise chain each tick hangs off settle. */
+  async function advance(ms: number) {
+    await vi.advanceTimersByTimeAsync(ms);
+  }
+
+  it("asks for nothing until the first interval has passed", async () => {
+    const { asked, stop } = harness();
+    await advance(INGEST_POLL_INTERVAL_MS - 1);
+    expect(asked).toHaveLength(0);
+    await advance(1);
+    expect(asked).toHaveLength(1);
+    stop();
+  });
+
+  it("asks once per interval and writes every response", async () => {
+    const { asked, wrote, stop } = harness();
+    await advance(INGEST_POLL_INTERVAL_MS * 5);
+    expect(asked).toHaveLength(5);
+    expect(wrote).toHaveLength(5);
+    stop();
+  });
+
+  it("stops when the window is spent, and stays stopped", async () => {
+    const { asked, stop } = harness();
+    await advance(INGEST_POLL_WINDOW_MS);
+    const spent = asked.length;
+    // 40 × 1.5s, less whatever the last partial interval cannot fit.
+    expect(spent).toBeGreaterThan(30);
+    await advance(INGEST_POLL_WINDOW_MS * 3);
+    expect(asked).toHaveLength(spent);
+    stop();
+  });
+
+  // The mutation that used to survive: drop the teardown and the loop runs on.
+  it("fetches nothing more once stopped", async () => {
+    const { asked, stop } = harness();
+    await advance(INGEST_POLL_INTERVAL_MS * 2);
+    expect(asked).toHaveLength(2);
+    stop();
+    await advance(INGEST_POLL_INTERVAL_MS * 10);
+    expect(asked).toHaveLength(2);
+  });
+
+  it("aborts the request it has in flight", async () => {
+    const { asked, stop } = harness(() => new Promise(() => {}));
+    await advance(INGEST_POLL_INTERVAL_MS);
+    expect(asked[0]!.aborted).toBe(false);
+    stop();
+    expect(asked[0]!.aborted).toBe(true);
+  });
+
+  // A response that lands after the caller stopped must not reach the cache:
+  // writing it would resurrect a poll the caller has already ended.
+  it("does not write a response that arrives after it stopped", async () => {
+    let settle: (page: TimelinePage) => void = () => {};
+    const { wrote, stop } = harness(() => new Promise((resolve) => (settle = resolve)));
+    await advance(INGEST_POLL_INTERVAL_MS);
+    stop();
+    settle(page([], null));
+    await advance(0);
+    expect(wrote).toHaveLength(0);
+  });
+
+  it("keeps polling after a failed tick", async () => {
+    const { asked, wrote, stop } = harness((n) =>
+      n === 1 ? Promise.reject(new Error("offline")) : Promise.resolve(page([], null)),
+    );
+    await advance(INGEST_POLL_INTERVAL_MS * 3);
+    expect(asked).toHaveLength(3);
+    expect(wrote).toHaveLength(2);
+    stop();
+  });
+
+  it("is idempotent on stop", async () => {
+    const { asked, stop } = harness();
+    await advance(INGEST_POLL_INTERVAL_MS);
+    stop();
+    stop();
+    await advance(INGEST_POLL_INTERVAL_MS * 5);
+    expect(asked).toHaveLength(1);
   });
 });

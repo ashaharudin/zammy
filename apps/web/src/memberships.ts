@@ -27,9 +27,19 @@ export interface PageMemberships {
  * a slot from page one must still find its group's arcs after page four has
  * arrived.
  *
- * Later pages win a collision, and it does not matter which way that goes: the
- * two entries are the same storyline read a few seconds apart, differing at
- * most in a size that has grown.
+ * Later pages win a collision — a group in two storylines fans out to two slots
+ * (ADR-0011), and those can land on different pages.
+ *
+ * That used to be the same thing as "the freshest wins", because pages were
+ * fetched in order and refetched together. Neither is true now: the ingest poll
+ * refreshes PAGE ONE alone (`ingestPoll.ts`), so during a fill page one is the
+ * freshest page and the tail is whenever the reader paged — and this prefers
+ * the tail. What it costs is one crossing: an arc a group joined mid-fill,
+ * discovered on page one, does not draw its tick until a pull-to-refresh or a
+ * reload. Left as it is rather than reversed, because reversing it is wrong the
+ * rest of the time, and "which page is freshest" is not a question this
+ * function can answer — membership is a fact about a GROUP (ADR-0025), so the
+ * repair, if it is ever worth making, is to stop resolving it by page at all.
  */
 export function mergeMemberships(
   pages: readonly Pick<TimelinePage, "memberships">[],

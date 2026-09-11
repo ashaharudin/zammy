@@ -664,10 +664,14 @@ while ingest runs. So the poll fetches page one on its own timer and `splicePoll
 ([ingestPoll.ts](../apps/web/src/ingestPoll.ts)) writes it into the cache the infinite query owns.
 Three facts make one response enough:
 
-- **`meta` describes the TOPIC, not a page** — `ingest`, `stale`, `degraded`, `servedFrom`, `asOf`
-  are all facts about the request — so the polled `meta` is written onto every loaded page. Without
-  that the rail reads `ingest.state` off a snapshot from whenever the reader paged, and the ingest
-  animation never stops.
+- **A response answers for the TOPIC as well as for its page**, and the two halves travel
+  differently. `meta`, `storylines` and `topic` are facts about the REQUEST — the server builds
+  `meta` from the queue and the fill, and both `storylines` and `topic` from the query's keywords
+  alone, never from the page's slots — so all three are written onto every loaded page. `items`,
+  `page` and `memberships` are that page's own and stay put. The rail reads all three topic facts
+  off `pages.at(-1)`, so getting the line wrong leaves a snapshot from whenever the reader paged:
+  the ingest animation never stops, a storyline promoted mid-fill never surfaces its pill, and the
+  topic's coverage freezes.
 - **Page one keeps its window.** Its `nextCursor` is the boundary page two was fetched from, so the
   polled items are trimmed to that window — inclusive of the boundary slot, which the cursor
   excludes only for page two — and the old cursor is carried over. Re-deriving it would leave the
@@ -681,12 +685,22 @@ the already-loaded page two either, so it is missing until a pull-to-refresh or 
 the cursors. One slot, inside the ingest window. Pull-to-refresh re-runs every page deliberately and
 is where that repair lives.
 
+Two consequences of the poll no longer being the query's own fetch, both wanted and neither
+incidental. **Pull-to-refresh works during ingest**, where the fan-out used to hold the query's
+`isFetching` true through most of the window and disable it — which was the wrong way round, since
+the pull is the repair for the slot above. And **a failed poll no longer raises the error banner**:
+it used to move the query into `isError`, which the rail renders above content that is perfectly
+fine. A poll that fails now leaves the rail as it was and the next tick asks again.
+
 The bound is elapsed time and not a count of attempts, which is a correction rather than a
-preference. A count has to be spent somewhere, and the only place a conditional `refetchInterval`
-offers is the callback itself — which TanStack evaluates once per render of the component holding
-the query and once per query state change, not once per poll. A tick budget decremented there counts
-renders, and forty of them are gone in seconds. A window measured on the clock is idempotent under
-repeated evaluation, so how often React renders stops mattering.
+preference. A count has to be spent somewhere, and when the poll ran through a conditional
+`refetchInterval` the only place on offer was the callback itself — which TanStack evaluates once
+per render of the component holding the query and once per query state change, not once per poll. A
+tick budget decremented there counted renders, and forty of them are gone in seconds. The poll no
+longer runs through `refetchInterval` at all (see below), so the budget is now spent once per tick
+by a `setTimeout` chain and a count would work. It stays on the clock anyway: a window measured in
+wall-clock time is idempotent under repeated evaluation, which makes the bound a fact about the
+clock rather than about how carefully its caller is written.
 
 Deliberately far short of the fifteen minutes `meta.ingest.state` can hold `in_progress` for (an
 unsettled pending entry holds it until `STALE_PENDING_MS`), because the poll is not how a reader
