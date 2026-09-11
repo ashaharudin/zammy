@@ -21,6 +21,15 @@ export interface RailAnnouncementState extends RailActivity {
   isPending: boolean;
   /** The query is in its error state, with or without stale data behind it. */
   isError: boolean;
+  /**
+   * A page has been read for this topic, so there is a rail on screen whatever
+   * else is true. It is what separates a load that FAILED from an update that
+   * failed over a timeline the reader is looking at, and `query-core`'s reducer
+   * is why the difference has to be drawn here: it sets `status: "error"`
+   * unconditionally, background errors over live data included, so `isError`
+   * alone cannot tell the two apart.
+   */
+  hasLoaded: boolean;
   /** Settled with nothing to show: `ErrorState`'s sibling, not its cousin. */
   isEmpty: boolean;
   /**
@@ -61,12 +70,16 @@ export const SILENT = "";
  *    heard — and when it succeeds the rail speaks for itself.
  *
  * 3. **NO COUNT.** `pendingJobs` is deliberately absent from the spoken
- *    sentence even though `IngestGhosts` draws it, and this is the one decision
- *    here worth arguing with. It is a LIVE queue depth: `timeline-read.ts`
+ *    sentence, and this is the one decision here worth arguing with. Note that
+ *    nothing else prints it either — `IngestGhosts` clamps it to one-to-four
+ *    ghost slots, a SHAPE saying work is outstanding rather than a plot of the
+ *    queue — so the count has never actually been shown to anyone. It is a LIVE
+ *    queue depth: `timeline-read.ts`
  *    recomputes it per request from `queue.pendingCount`, `splicePolledPage`
  *    copies the polled `meta` onto every loaded page, and the poll runs every
  *    1.5s for up to 60s (`ingestPoll.ts`). So a draining queue would mint a new
- *    distinct string roughly forty times per ingest window — and because
+ *    string once per distinct depth it passes through, up to the window's forty
+ *    ticks — the measured stub walked 5, 4, 3 — and because
  *    `role="status"` implies `aria-atomic="true"`, each one re-reads the WHOLE
  *    sentence rather than the digits that changed. A polite live region is a
  *    notification channel, not a readout; forty serialised re-reads of a
@@ -94,19 +107,48 @@ export const SILENT = "";
  *    finished — and in the error case, waiting beside a retry button they have
  *    no reason to go looking for.
  *
+ *    The error speaks in two spellings because `isError` covers two different
+ *    events. With no page read, the load failed and there is nothing there.
+ *    With one read, the timeline is ON SCREEN and what failed is an attempt to
+ *    move it — a pull, a reconnect, or a "Load older" whose rows never came
+ *    (paging is excluded from `refreshing` deliberately, so its failure is the
+ *    only thing about it this region ever says). Announcing "could not be
+ *    loaded" over a rail full of cards would describe the opposite of what the
+ *    reader has in front of them.
+ *
  * 6. **A SUCCESSFUL load resolves to silence, and that is a choice rather than
- *    an oversight.** The rail itself is the resolution: the cards are on the
- *    page, under day and segment headings, and a reader navigates to them. The
- *    obvious alternative — announcing a result count — was rejected because it
- *    does not stay still. Paging appends rows and the poll splices them, so a
- *    count would re-announce on every append, which is the storm point 3 exists
- *    to avoid, one loop further out.
+ *    an oversight.** It is the weakest clause here, so the argument is worth
+ *    stating in full. The rail itself is the resolution: unlike the error and
+ *    the empty rail, which leave a static sentence and nothing to move through,
+ *    a loaded rail puts navigable content on the page — day headings, segment
+ *    headings, card links — and the reader's next keystroke lands in it.
+ *
+ *    Two alternatives were weighed. A result COUNT does not stay still: paging
+ *    appends rows and the poll splices them, so it would re-announce on every
+ *    append, which is point 3's storm one loop further out. A countless
+ *    sentence ("the timeline is up to date") survives that objection, and was
+ *    rejected on a different one — it never leaves. SILENT empties the region,
+ *    so the steady state of every page is an empty node; a success sentence
+ *    would make the steady state a stray sr-only paragraph that every reader
+ *    meets in browse mode, on every topic, forever, saying something no longer
+ *    news. That cost is paid continuously and the benefit is paid once.
+ *
+ *    KNOWN GAP, not covered by the argument above: the "N new articles" pill.
+ *    Held arrivals (§6.5) are the one thing the rail does NOT put on the page —
+ *    they sit behind a button, so "navigate to the content" is not available,
+ *    and nothing here announces that the button appeared. A stable sentence
+ *    gated on `newCount > 0` would close it; a sentence carrying N would not,
+ *    since N climbs with every arrival and that is the storm again.
  */
 export function railAnnouncement(state: RailAnnouncementState): string {
   if (state.isPending) return "Loading the timeline.";
   if (state.ingesting) return "Gathering articles from upstream.";
   if (state.refreshing) return "Checking for new articles.";
-  if (state.isError) return "The timeline could not be loaded.";
+  if (state.isError) {
+    return state.hasLoaded
+      ? "The timeline could not be updated."
+      : "The timeline could not be loaded.";
+  }
   if (state.isEmpty) return state.emptyMessage;
   return SILENT;
 }

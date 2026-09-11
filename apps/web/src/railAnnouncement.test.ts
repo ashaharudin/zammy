@@ -5,6 +5,7 @@ import { railAnnouncement, SILENT, type RailAnnouncementState } from "./railAnno
 const settled: RailAnnouncementState = {
   isPending: false,
   isError: false,
+  hasLoaded: true,
   isEmpty: false,
   emptyMessage: "No articles yet for “climate”.",
   ingesting: false,
@@ -57,8 +58,18 @@ describe("railAnnouncement", () => {
   });
 
   it("announces a failed load, so the first paint's promise resolves", () => {
-    expect(railAnnouncement({ ...settled, isError: true })).toBe(
+    expect(railAnnouncement({ ...settled, isError: true, hasLoaded: false })).toBe(
       "The timeline could not be loaded.",
+    );
+  });
+
+  it("says the UPDATE failed when there is already a rail on screen", () => {
+    // `query-core` sets `status: "error"` for a background error too, so a
+    // failed pull — or a "Load older" whose rows never arrived — reaches this
+    // function with the timeline still in front of the reader. Announcing
+    // "could not be loaded" there describes the opposite of what they have.
+    expect(railAnnouncement({ ...settled, isError: true })).toBe(
+      "The timeline could not be updated.",
     );
   });
 
@@ -83,6 +94,22 @@ describe("railAnnouncement", () => {
     // would contradict the ghost slots below it.
     expect(railAnnouncement({ ...settled, isEmpty: true, ingesting: true })).toBe(
       "Gathering articles from upstream.",
+    );
+  });
+
+  it("announces the refetch over an empty rail, not the emptiness under it", () => {
+    // Reachable and load-bearing: `Rail` has a whole branch for a pull over an
+    // empty rail (the beacon alone above the message), because a search that
+    // found nothing is the one a reader retries. Without this precedence the
+    // pull would be silent.
+    expect(railAnnouncement({ ...settled, isEmpty: true, refreshing: true })).toBe(
+      "Checking for new articles.",
+    );
+  });
+
+  it("announces a failure over an empty rail rather than repeating the emptiness", () => {
+    expect(railAnnouncement({ ...settled, isEmpty: true, isError: true })).toBe(
+      "The timeline could not be updated.",
     );
   });
 

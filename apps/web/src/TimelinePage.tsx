@@ -88,9 +88,11 @@ export function TimelinePage({
       ? "This storyline has no coverage to show."
       : `No articles yet for “${topic.q}”.`
     : "Nothing here yet.";
-  // Exactly `Rail`'s own condition for drawing that message (its `items` are
-  // these `visible` ones), so the region never announces an empty rail the
-  // reader is not looking at.
+  // The condition, like the message, has ONE definition: `Rail` takes it as a
+  // prop rather than recomputing it. Hoisting the words out and leaving the test
+  // behind would have been half the job — two copies of "is the rail empty" can
+  // disagree exactly as easily as two copies of what to say about it, and the
+  // announcement would then describe a state the rail is not drawing.
   const isEmpty = latest !== undefined && visible.length === 0 && !ingesting;
   // The one sentence the whole view speaks, derived where every part of the
   // rail's state is already in hand. Out of this file for the same reason
@@ -100,6 +102,7 @@ export function TimelinePage({
   const announcement = railAnnouncement({
     isPending: timeline.isPending,
     isError: timeline.isError,
+    hasLoaded: latest !== undefined,
     isEmpty,
     emptyMessage,
     ingesting,
@@ -159,6 +162,7 @@ export function TimelinePage({
             onReveal={reveal}
             ingesting={ingesting}
             refreshing={refreshing}
+            isEmpty={isEmpty}
             pendingJobs={latest.meta.ingest.pendingJobs}
             terminal={terminal}
             emptyMessage={emptyMessage}
@@ -383,6 +387,7 @@ function Rail({
   memberships,
   ingesting,
   refreshing,
+  isEmpty,
   pendingJobs,
   terminal,
   emptyMessage,
@@ -401,6 +406,12 @@ function Rail({
   ingesting: boolean;
   /** A refetch of what is already here, as opposed to upstream still arriving. */
   refreshing: boolean;
+  /**
+   * Nothing to draw and nothing on the way. Decided by `TimelinePage` because
+   * the announcement is decided there too (`railAnnouncement`), and the two
+   * must never disagree about which state the reader is in.
+   */
+  isEmpty: boolean;
   pendingJobs: number;
   terminal: boolean;
   /** Already resolved by `TimelinePage`, which also speaks it (`railAnnouncement`). */
@@ -433,7 +444,7 @@ function Rail({
   // response that says how much, which is `ingesting`.
   const working = ingesting || refreshing;
 
-  if (items.length === 0 && !ingesting) {
+  if (isEmpty) {
     const message = (
       <p style={{ color: "var(--fg-faint)", textAlign: "center", marginTop: "3rem" }}>
         {emptyMessage}
@@ -1569,11 +1580,15 @@ const RAIL_STATUS_ID = "rail-status";
  * inside `Rail`, each rendered conditionally and so each created already
  * holding its sentence. Measured on this app with a MutationObserver installed
  * ahead of React: on a cold load of `/?q=…` every one of those nodes was
- * inserted with `textContent` already set, and across a full first paint, an
- * ingest and a poll there was not one text mutation inside an existing region.
- * On the AT that ignore such an insertion — the common case — the view was
- * silent on EVERY path rather than only the cold-load one, and a reader who
- * typed the search in-app was no better off. On AT that do announce it, the
+ * inserted with `textContent` already set, and on those runs no text ever
+ * mutated inside a region that already existed. That last part is about the
+ * runs, not about the old code in general — `IngestStatus` stayed mounted
+ * inside `Rail` for as long as `working` held, so a `pendingJobs` that MOVED
+ * did mutate it in place, and the measured queues happened not to move. The
+ * finding that does generalise is the insertion: every first sentence arrived
+ * with its node. So on the AT that ignore such an insertion — the common case —
+ * the view was silent on EVERY path rather than only the cold-load one, and a
+ * reader who typed the search in-app was no better off. On AT that do announce it, the
  * same pair had the opposite fault the review of #214 predicted: moving from a
  * populated topic to an empty one swapped one subtree for another carrying the
  * same words, which reads as fresh news. One persistent region is right under
@@ -1599,12 +1614,19 @@ const RAIL_STATUS_ID = "rail-status";
  */
 function RailAnnouncer({ message }: { message: string }) {
   const host = document.getElementById(RAIL_STATUS_ID);
-  // Loud rather than silent, and deliberately the same call `main.tsx` makes
-  // about `#root`. A missing node here costs nothing visible and breaks only
-  // the screen reader's half of the view — exactly the failure that went
-  // unnoticed long enough to need this change — so it may not be allowed to
-  // degrade quietly.
-  if (!host) throw new Error(`#${RAIL_STATUS_ID} not found`);
+  // Degrade rather than throw, which is NOT the call `main.tsx` makes about
+  // `#root` and is a different situation. That throw runs at bootstrap, with
+  // nothing rendered yet to lose; this one would run inside a live tree with no
+  // error boundary above it anywhere, so React would tear the whole root down
+  // and a missing sr-only paragraph would take the rail, the command bar and
+  // the reader's search off the screen with it. Losing the announcements is
+  // bad; losing the application to protect them is worse.
+  //
+  // Silence is only tolerable because the invariant is guarded elsewhere:
+  // `railAnnouncer.test.ts` reads `index.html` and fails if the node is not
+  // there, empty, and carrying its role. That is the check that would otherwise
+  // have had to be a runtime explosion.
+  if (!host) return null;
   // An empty `message` (`railAnnouncement`'s `SILENT`) puts no text node in the
   // region at all, which is what it has to hold when there is nothing to say: a
   // region holding a space is a region that has just been changed.

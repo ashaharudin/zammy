@@ -196,7 +196,9 @@ ADR-0013's two channels were built to escape.
   nothing and the arc surfaces as a pill, the rail reads "No articles yet for
   'jason arday'" with the storyline offered directly above it. Accurate, and
   wrong in emphasis — the reader has somewhere to go and the copy does not say
-  it. A `Rail` `emptyLabel` that names the surfaced storylines would close it;
+  it. An empty-state message that names the surfaced storylines would close it
+  (`emptyMessage`, resolved in `TimelinePage` since the screen reader speaks the
+  same words — it was `Rail`'s own `emptyLabel` when this was written);
   out of scope here, where the pill's existence was the thing that was missing.
 - **`searchPlaceholder` offers `query` too.** It was suggesting readers type
   labels — that is, suggesting they type searches that return nothing.

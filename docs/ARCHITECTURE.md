@@ -1159,7 +1159,10 @@ keywords in, timeline out.
 - **What the rail says out loud** — motion is invisible to a screen reader, so the state the rail
   shows in teal is also announced, as ONE sentence derived by `apps/web/src/railAnnouncement.ts`:
   the first paint's "Loading the timeline", the ingest's "Gathering articles from upstream", a bare
-  refetch's "Checking for new articles", "The timeline could not be loaded" for the error state, and
+  refetch's "Checking for new articles", the error state's "The timeline could not be loaded" — or
+  "could not be updated", when a page has already been read and what failed was a pull, a reconnect
+  or a "Load older", since `query-core` sets `status: "error"` for a background error too and
+  announcing a failed load over a rail full of cards describes the opposite of what is there — and
   the empty state's own words — in the spelling it is displaying, resolved once in `TimelinePage`
   and handed to both, since two copies of a sentence are two sentences waiting to disagree. The
   wording lives in a pure function for the reason `railActivity` does. Two of those states exist to
@@ -1167,17 +1170,29 @@ keywords in, timeline out.
   empty result cost nothing, but a reader who is told a load began and then told nothing is left
   waiting on a screen that has already finished — beside, in the error case, a retry button they
   have no reason to go looking for. A rail that loads SUCCESSFULLY resolves to silence instead, and
-  that is a choice: the cards are the resolution, and a result count would re-announce every time
-  paging or the poll appended a row.
-  No count is spoken, though `IngestGhosts` still draws one. `pendingJobs` is a live queue depth —
-  recomputed per request, spliced onto the newest page by the poll every 1.5s for up to 60s — so a
-  draining queue would mint a new sentence around forty times per window, and `role="status"`
-  implies `aria-atomic`, so each one re-reads the sentence whole. A polite live region is a
+  that is a choice with two alternatives weighed against it: unlike those states, a loaded rail puts
+  NAVIGABLE content on the page, so the reader's next keystroke lands in it. A result count would
+  re-announce every time paging or the poll appended a row; a countless "up to date" survives that
+  but never leaves, making the steady state of every page a stray sr-only paragraph saying something
+  that is no longer news, a cost paid continuously for a benefit paid once. The known gap in that
+  argument is the "N new articles" pill (§6.5): held arrivals are the one thing the rail does not
+  put on the page, so nothing announces that the button appeared.
+  No count is spoken, and none is drawn either — `IngestGhosts` clamps `pendingJobs` to one-to-four
+  ghost slots, a shape rather than a plot of the queue. `pendingJobs` is a live queue depth,
+  recomputed per request and spliced onto the newest page by the poll every 1.5s for up to 60s, so a
+  draining queue would mint a new sentence once per distinct depth it passed through, up to the
+  window's forty ticks — and `role="status"` implies `aria-atomic`, so each one re-reads the
+  sentence whole. A polite live region is a
   notification channel rather than a readout. Latching the count at the start of the episode was the
   alternative and was rejected: a queue depth is worth less than the state it would take to keep
   honest, and it is frequently 0 for a reader watching a peer's ingest (§12).
   The sentence is delivered into a SINGLE `aria-live` region that `apps/web/index.html` carries in
   the document's original markup, empty; `RailAnnouncer` portals text into it and never renders one.
+  That splits the invariant across two languages — delete the node and every announcement stops with
+  the types still checking — so `railAnnouncer.test.ts` reads `index.html` and fails if the node is
+  not there, empty, and carrying `role="status"`, `aria-live="polite"` and `.sr-only`. It is what
+  lets `RailAnnouncer` return null instead of throwing when the node is missing: there is no error
+  boundary above it, so a throw would tear down the whole view over an sr-only paragraph.
   A live region is announced when its contents change inside a region the assistive technology is
   already tracking, so one that arrives in the DOM already holding its text presents no change and
   is generally announced by nothing — "generally" because this varies by AT and browser. That is why
@@ -1191,10 +1206,13 @@ keywords in, timeline out.
   the rail, had whichever fault their reader's AT implied: silent on every path for AT that ignore
   an insertion carrying text, and re-announcing the same words as fresh news on a topic switch for
   AT that do not. One persistent, pre-existing region is correct under both.
-  What was measured, with a MutationObserver installed ahead of React on a cold load: before, two
-  insertions carrying their own text and not one mutation inside an existing region; after, one
-  pre-existing empty region and a mutation per state change. That is the PRECONDITION an
-  announcement needs, not proof of one — no screen reader has been exercised against this view.
+  What was measured, with a MutationObserver installed ahead of React on a cold load: before, every
+  first sentence arrived already inside its node; after, one pre-existing empty region and a mutation
+  per state change. The insertion is the part that generalises — the old `IngestStatus` stayed
+  mounted for as long as `working` held, so a `pendingJobs` that moved did mutate it in place, and
+  the measured queues happened not to move. And a mutation inside a pre-existing region is the
+  PRECONDITION an announcement needs, not proof of one: no screen reader has been exercised against
+  this view.
 
 ### 8.2 Behaviour
 
