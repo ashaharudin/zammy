@@ -1148,12 +1148,14 @@ keywords in, timeline out.
   (ADR-0011, amended).
 - **Freshness banner** — renders `meta.asOf` / `meta.stale` / `meta.degraded` honestly.
 - **States** — skeleton cards on first load, distinct empty states ("no articles yet for X" vs "no
-  more history"), and an error state with retry. The skeleton is the rail's OWN ingest animation
-  (§8.2) rather than a loading mark of its own: the request that has not answered yet is the one
-  planning the fill and queueing the jobs behind it (§6.3), so the first paint and progressive fill
-  are the same event and are drawn the same way — charged spine, beacon at the top, ghost slots
-  where the articles will land. The arrival is then a resolve rather than one object being replaced
-  by another.
+  more history"), and an error state with retry. The skeleton is drawn in the rail's OWN ingest
+  language (§8.2) rather than as a loading mark of its own — charged spine, beacon at the top, ghost
+  slots where the cards will land — so the arrival is one object resolving rather than two objects
+  swapping, and so a reader watching the first paint and a reader watching progressive fill read one
+  vocabulary instead of two. It does NOT claim an ingest is running, and the sr-only line beside it
+  says only "Loading the timeline": a first request is often a fill being planned (§6.3 steps 3–6)
+  and often not — steps 1 and 2 serve a cache or a covered, fresh window with no upstream call, and
+  the storyline view answers `complete` / `pendingJobs: 0` unconditionally because it never fetches.
 
 ### 8.2 Behaviour
 
@@ -1165,18 +1167,25 @@ keywords in, timeline out.
   poll every ~1.5s while `meta.ingest.state === "in_progress"`, stopping on `complete` or when the
   60s poll window closes (§6.5). The poll asks for the FIRST page only, however many the reader has
   loaded, and refreshes it in place; §6.5 point 4 has why that takes code rather than a
-  `refetchInterval`. Two or three shimmer rows sit below the real cards so a short first paint reads
-  as "more coming". No full-page spinner once any content exists, and no spinner *replacing* content
-  on refetch — content only grows downward.
+  `refetchInterval`. Two to four ghost slots sit below the real cards so a short first paint reads
+  as "more coming" (`IngestGhosts`; the `.shimmer` rows this once described are gone, though the
+  CSS class outlived them). No full-page spinner once any content exists, and no spinner *replacing*
+  content on refetch — content only grows downward.
 - **"N new articles" pill** when refresh-on-read surfaces items newer than the top of the view;
   prepends only on click, so the reading position never jumps.
 - **A plain refetch lights the same head of the animation** — the charged spine and the beacon, but
-  not the ghost slots, which stand for queued upstream work a refetch has none of. It is the one
-  fetch a reader has no other way to see: pull-to-refresh and the refetch a remount of an
-  already-loaded topic runs both keep every card in place on purpose, so without this the rail is
-  indistinguishable from one that is idle. Paging is deliberately NOT included even though it raises
-  the same `isFetching`: its rows land at the tail, where "Load older" already says so, and the
-  beacon sits at the top, where refresh-on-read puts what it finds.
+  not the ghost slots. It is the class of fetch a reader has no other way to see: a pull, the
+  refetch a remount of an already-loaded topic runs, `refetchOnReconnect`, and a retry over an error
+  banner with data still behind it. All four keep every card in place on purpose, so without this
+  the rail is indistinguishable from one that is idle. Over an EMPTY rail — where a reader is most
+  likely to pull — there is no spine to charge, so it shows the skeleton instead.
+  The ghost slots wait for `ingesting` because they stand for a queue with a COUNT in it and a
+  refetch in flight has not been told one yet; a refetch is not work-free — §6.4 has a stale read
+  enqueueing a top-up — it just cannot say how much until it answers. Paging is deliberately NOT
+  included in either direction even though it raises the same `isFetching`: its rows land at the
+  tail, where "Load older" already says so, and the head sits at the top, where refresh-on-read puts
+  what it finds. Both gates live in `apps/web/src/railActivity.ts` as one pure function, because
+  `apps/web` has no renderer in its tests and a gate left in the component is guarded by nothing.
 - The "no more history" terminal state renders only when `hasMore === false && ingest.state ===
   "complete"` (§6.1).
 - The sentinel and its "Load older" fallback are gated on `hasNextPage` **alone**. ANDing them with
