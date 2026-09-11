@@ -16,7 +16,6 @@ import {
 import { mergeMemberships, rowMembership, type PageMemberships } from "./memberships.js";
 import { braidOnRule, StorylineBraid } from "./StorylineBraid.js";
 import { storylineQualifiers, visibleStorylines } from "./storylineLabels.js";
-import { LoadingGlyph } from "./LoadingGlyph.js";
 import { collapseCopies, outletLinks } from "./relatedRows.js";
 import { MONO } from "./theme.js";
 import { CommandBar } from "./CommandBar.js";
@@ -69,6 +68,20 @@ export function TimelinePage({
   const storylineView = topic.q === "" && topic.storyline !== undefined;
   const ingesting = latest?.meta.ingest.state === "in_progress";
   const terminal = latest !== undefined && !timeline.hasNextPage && isTerminalPage(latest);
+  // A fetch the reader did not ask for and otherwise cannot see: the refetch a
+  // remount of an already-loaded topic runs, and the one a pull fires. Content
+  // deliberately stays put through both (§8.2 — no spinner ever replaces
+  // cards), so without a mark of its own the rail is indistinguishable from one
+  // that is simply idle. It lights the SAME spine and beacon `ingesting` does,
+  // because it is the same event from the reader's side — the timeline is being
+  // brought up to date — and the pair already reads as that.
+  //
+  // Paging is excluded rather than forgotten: `fetchNextPage` raises
+  // `isFetching` too, and its rows land at the TAIL, where `LoadOlder` already
+  // says so. Lighting the beacon for it would point at the top of the rail and
+  // describe the wrong end.
+  const refreshing =
+    timeline.isFetching && !timeline.isPending && !timeline.isFetchingNextPage;
 
   // Plain refetch(), same as ErrorState's retry: v5 dropped per-page refetch
   // filtering for infinite queries, so this re-runs every loaded page rather
@@ -114,6 +127,7 @@ export function TimelinePage({
             newCount={newCount}
             onReveal={reveal}
             ingesting={ingesting ?? false}
+            refreshing={refreshing}
             pendingJobs={latest.meta.ingest.pendingJobs}
             terminal={terminal}
             emptyLabel={
@@ -302,6 +316,37 @@ function markerLeft(width: string) {
   return `calc(${RAIL_CENTER} - ${RAIL_INSET} - ${width} / 2)`;
 }
 
+/**
+ * The rail's spine, straddling RAIL_CENTER over the full height of whatever
+ * contains it — so a container has to be `position: relative` and carry the
+ * RAIL_INSET padding every marker's offset is measured from.
+ *
+ * `charged` swaps the flat line for the ingest animation's scrolling gradient;
+ * the class owns the background in that state, which is why the inline one is
+ * conditional rather than a base the class paints over.
+ *
+ * Its own component because the skeleton draws the same spine as the loaded
+ * rail and the two must not drift: the first paint is supposed to be the rail
+ * arriving, not a different object being replaced by it.
+ */
+function RailSpine({ charged }: { charged: boolean }) {
+  return (
+    <div
+      aria-hidden="true"
+      className={charged ? "ingest-charge" : undefined}
+      style={{
+        position: "absolute",
+        left: `calc(${RAIL_CENTER} - ${RAIL_WIDTH} / 2)`,
+        top: 0,
+        bottom: 0,
+        width: RAIL_WIDTH,
+        background: charged ? undefined : "var(--rail)",
+        borderRadius: "2px",
+      }}
+    />
+  );
+}
+
 function Rail({
   items,
   newCount,
@@ -310,6 +355,7 @@ function Rail({
   qualifiers,
   memberships,
   ingesting,
+  refreshing,
   pendingJobs,
   terminal,
   emptyLabel,
@@ -326,6 +372,8 @@ function Rail({
   /** Which storylines each group on the page is filed in (ADR-0025). */
   memberships: PageMemberships;
   ingesting: boolean;
+  /** A refetch of what is already here, as opposed to upstream still arriving. */
+  refreshing: boolean;
   pendingJobs: number;
   terminal: boolean;
   emptyLabel: string;
@@ -349,6 +397,12 @@ function Rail({
   const todayKey = readerDayKey(now, timeZone);
   const days = useMemo(() => groupByDay(items, now, timeZone), [items, timeZone, todayKey]);
 
+  // The head of the animation answers one question — is the rail being brought
+  // up to date right now — and both flags are a yes. Only the TAIL distinguishes
+  // them: ghost slots stand for queued upstream work, which a refetch has none
+  // of, so they stay on `ingesting` alone.
+  const working = ingesting || refreshing;
+
   if (items.length === 0 && !ingesting) {
     return (
       <p style={{ color: "var(--fg-faint)", textAlign: "center", marginTop: "3rem" }}>
@@ -359,23 +413,9 @@ function Rail({
 
   return (
     <div style={{ position: "relative", paddingLeft: RAIL_INSET }}>
-      <div
-        aria-hidden="true"
-        // The spine carries the ingest animation's charge while a fetch is in
-        // flight; the class owns the background in that state.
-        className={ingesting ? "ingest-charge" : undefined}
-        style={{
-          position: "absolute",
-          left: `calc(${RAIL_CENTER} - ${RAIL_WIDTH} / 2)`,
-          top: 0,
-          bottom: 0,
-          width: RAIL_WIDTH,
-          background: ingesting ? undefined : "var(--rail)",
-          borderRadius: "2px",
-        }}
-      />
-      {ingesting && <IngestStatus pendingJobs={pendingJobs} />}
-      {ingesting && <IngestBeacon />}
+      <RailSpine charged={working} />
+      {working && <IngestStatus pendingJobs={ingesting ? pendingJobs : null} />}
+      {working && <IngestBeacon />}
       {newCount > 0 && (
         <RailEntry marker="▲">
           <button
@@ -1453,29 +1493,47 @@ function IngestGhosts({ pendingJobs }: { pendingJobs: number }) {
  * §8.1 asks the UI to be honest about freshness — so the state the rail now
  * shows in teal is still announced here, including the count the text row used
  * to print.
+ *
+ * `null` is the count being unknown rather than zero, which is the first paint
+ * and a plain refetch: no response has been read yet, or the fetch in flight is
+ * not queued work at all. Printing "0 jobs pending" for either would contradict
+ * the animation beside it.
  */
-function IngestStatus({ pendingJobs }: { pendingJobs: number }) {
+function IngestStatus({ pendingJobs }: { pendingJobs: number | null }) {
   return (
     <p className="sr-only" role="status" aria-live="polite">
-      Gathering articles from upstream — {pendingJobs} job
-      {pendingJobs === 1 ? "" : "s"} pending.
+      Gathering articles from upstream
+      {pendingJobs === null ? "." : ` — ${pendingJobs} job${pendingJobs === 1 ? "" : "s"} pending.`}
     </p>
   );
 }
 
-/** Same mark as the trending cloud's own "still gathering" state (§8.2). */
+/** Ghost slots to stand in for a page nothing is yet known about (§8.1). */
+const SKELETON_GHOSTS = 3;
+
+/**
+ * First load (§8.1: "skeleton cards on first load").
+ *
+ * The wait IS an ingest — the request that has not answered yet is the one
+ * planning the fill and queueing the jobs behind it (§6.3, §9.1) — so it is
+ * drawn with the rail's own ingest animation rather than a separate loading
+ * mark: the same charged spine, the same radar beacon at the top where
+ * refresh-on-read puts what it finds, and the same ghost slots standing where
+ * the articles will land. A reader watching the first paint and a reader
+ * watching progressive fill are being told the same thing and now see the same
+ * thing, and the arrival is a resolve rather than one object replacing another.
+ *
+ * The ghost count is a constant here and `pendingJobs` once a response exists:
+ * before the first one there is no queue to read, and guessing a number the
+ * server has not said would be the one part of this mark that could be wrong.
+ */
 function SkeletonRail() {
   return (
-    <div
-      aria-label="Loading timeline"
-      style={{
-        display: "flex",
-        justifyContent: "center",
-        padding: "3rem 0",
-        color: "var(--fg-faint)",
-      }}
-    >
-      <LoadingGlyph />
+    <div style={{ position: "relative", paddingLeft: RAIL_INSET }}>
+      <RailSpine charged />
+      <IngestStatus pendingJobs={null} />
+      <IngestBeacon />
+      <IngestGhosts pendingJobs={SKELETON_GHOSTS} />
     </div>
   );
 }

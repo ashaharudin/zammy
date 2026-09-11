@@ -1148,7 +1148,12 @@ keywords in, timeline out.
   (ADR-0011, amended).
 - **Freshness banner** — renders `meta.asOf` / `meta.stale` / `meta.degraded` honestly.
 - **States** — skeleton cards on first load, distinct empty states ("no articles yet for X" vs "no
-  more history"), and an error state with retry.
+  more history"), and an error state with retry. The skeleton is the rail's OWN ingest animation
+  (§8.2) rather than a loading mark of its own: the request that has not answered yet is the one
+  planning the fill and queueing the jobs behind it (§6.3), so the first paint and progressive fill
+  are the same event and are drawn the same way — charged spine, beacon at the top, ghost slots
+  where the articles will land. The arrival is then a resolve rather than one object being replaced
+  by another.
 
 ### 8.2 Behaviour
 
@@ -1165,6 +1170,13 @@ keywords in, timeline out.
   on refetch — content only grows downward.
 - **"N new articles" pill** when refresh-on-read surfaces items newer than the top of the view;
   prepends only on click, so the reading position never jumps.
+- **A plain refetch lights the same head of the animation** — the charged spine and the beacon, but
+  not the ghost slots, which stand for queued upstream work a refetch has none of. It is the one
+  fetch a reader has no other way to see: pull-to-refresh and the refetch a remount of an
+  already-loaded topic runs both keep every card in place on purpose, so without this the rail is
+  indistinguishable from one that is idle. Paging is deliberately NOT included even though it raises
+  the same `isFetching`: its rows land at the tail, where "Load older" already says so, and the
+  beacon sits at the top, where refresh-on-read puts what it finds.
 - The "no more history" terminal state renders only when `hasMore === false && ingest.state ===
   "complete"` (§6.1).
 - The sentinel and its "Load older" fallback are gated on `hasNextPage` **alone**. ANDing them with
