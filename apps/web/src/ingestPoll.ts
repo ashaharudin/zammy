@@ -114,11 +114,17 @@ export function pollStep(open: PollWindow, ingesting: boolean, now: number): Pol
  * `memberships` are the page's own — `memberships` is read over that page's
  * groups specifically — so those are never carried ACROSS pages. Page one takes
  * the polled response's own three, of course: its rows were just refreshed, so
- * its memberships were too. Get the line wrong in either direction and
- * something goes quietly stale: the rail reads `ingest.state`, the
- * surfaced-storyline pills and the topic's coverage off `pages.at(-1)`, which
- * without this is a snapshot from whenever the reader paged — so the ingest
- * animation never stops and a storyline promoted mid-fill never surfaces.
+ * its memberships were too.
+ *
+ * Two of the three have a symptom you can watch. The rail reads `ingest.state`
+ * and the surfaced-storyline pills off `pages.at(-1)`, so without this they are
+ * a snapshot from whenever the reader paged: the ingest animation never stops,
+ * and a storyline promoted mid-fill never surfaces. `topic` has NO symptom —
+ * nothing in the browser reads the response's `topic` field today, coverage
+ * included. It travels because the contract puts it on this side of the line,
+ * so that whoever first renders `topic.coverage` is right rather than subtly
+ * wrong, and it is worth being plain that this one is reasoned from the API
+ * rather than observed.
  *
  * The storyline view never reaches any of this, and not by anything here:
  * `readStorylineView` builds its `storylines` from the page rather than the
@@ -137,11 +143,19 @@ export function pollStep(open: PollWindow, ingesting: boolean, now: number): Pol
  * which is why §8.2 gates "Load older" on `hasMore` alone. Re-fetching pages
  * two onward buys the reader nothing the next `fetchNextPage` will not.
  *
- * The cost of holding page one's window still: a slot whose `published` moves
- * EARLIER than the boundary — an older article landing in a day already on
- * screen — drops out of page one and is not in the loaded page two either, so
- * it is missing until a pull-to-refresh or a reload re-chains the cursors. One
- * slot, inside the ingest window, and the alternative is the fan-out.
+ * The cost of holding page one's window still is anything that belongs INSIDE
+ * the loaded span but arrives below the boundary: a slot whose `published`
+ * moves earlier past it (an older article landing in a day already on screen),
+ * and equally a day slot that is simply new down there — a storyline gaining
+ * coverage on a day it had none, inside a span the reader has already paged.
+ * Neither is in the frozen page two either, so both wait for a pull-to-refresh
+ * or a reload to re-chain the cursors. The fan-out surfaced them by re-fetching
+ * page two from its cursor with a fresh limit, and that is what it was buying.
+ *
+ * The direction that would be a rendering bug rather than an omission — a
+ * page-two slot rising ABOVE the boundary and being drawn twice under one React
+ * key — cannot happen: a slot's `published` is its storyline-day's EARLIEST
+ * article, so a fill can only ever move it earlier.
  */
 export function splicePolledPage(
   loaded: LoadedTimeline | undefined,

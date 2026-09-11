@@ -90,17 +90,25 @@ const page = (items: TimelineEntry[], nextCursor: string | null): TimelinePage =
   },
 });
 
+/** The instant the crafted uuid ties share; the block runs from index 29 to 43. */
+const TIE_INSTANT = "2026-09-02T12:00:00.000Z";
+
 describe("page one's window, against Postgres's own ordering", () => {
   const all = CORPUS.rows.map(entry);
 
   it("still holds the corpus the cases below are indexed against", () => {
-    expect(all.length).toBeGreaterThan(400);
+    // The sizes below are INDICES into this corpus, so its length and the
+    // position of the tie block are both load-bearing. A regenerated fixture
+    // that kept the crafted rows but moved them would slide every tested
+    // boundary back onto a distinct timestamp, and the tie-break would stop
+    // being the deciding comparison anywhere — silently, with everything green.
+    expect(all).toHaveLength(409);
+    expect(all.findIndex((i) => i.published === TIE_INSTANT)).toBe(29);
+    expect(all.filter((i) => i.published === TIE_INSTANT)).toHaveLength(15);
     // Named, not counted. A regenerated all-random fixture that happened to
     // collide seven times at this instant would pass a count and quietly drop
     // the rows the boundary sizes were chosen to land on.
-    const ties = all
-      .filter((i) => i.published === "2026-09-02T12:00:00.000Z")
-      .map((i) => i.storylineId);
+    const ties = all.filter((i) => i.published === TIE_INSTANT).map((i) => i.storylineId);
     for (const crafted of [
       "00000000-0000-4000-8000-000000000000",
       "0fffffff-ffff-4fff-bfff-ffffffffffff",

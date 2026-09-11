@@ -668,10 +668,12 @@ Three facts make one response enough:
   differently. `meta`, `storylines` and `topic` are facts about the REQUEST — the server builds
   `meta` from the queue and the fill, and both `storylines` and `topic` from the query's keywords
   alone, never from the page's slots — so all three are written onto every loaded page. `items`,
-  `page` and `memberships` are that page's own and stay put. The rail reads all three topic facts
-  off `pages.at(-1)`, so getting the line wrong leaves a snapshot from whenever the reader paged:
-  the ingest animation never stops, a storyline promoted mid-fill never surfaces its pill, and the
-  topic's coverage freezes.
+  `page` and `memberships` are that page's own and stay put. The rail reads `ingest.state` and the
+  surfaced-storyline pills off `pages.at(-1)`, so getting those wrong leaves a snapshot from
+  whenever the reader paged: the ingest animation never stops, and a storyline promoted mid-fill
+  never surfaces its pill. `topic` has no such symptom — nothing in the browser reads it today —
+  and travels because the contract puts it on that side, so the first thing to render
+  `topic.coverage` is right rather than subtly wrong.
 - **Page one keeps its window.** Its `nextCursor` is the boundary page two was fetched from, so the
   polled items are trimmed to that window — inclusive of the boundary slot, which the cursor
   excludes only for page two — and the old cursor is carried over. Re-deriving it would leave the
@@ -679,11 +681,15 @@ Three facts make one response enough:
 - **The tail is older rows, and progressive fill appends further back**, where paging reaches it.
   That is the same fact §8.2 gates "Load older" on `hasMore` alone for.
 
-The cost of holding page one's window still: a slot whose `published` moves EARLIER than the
-boundary — an older article landing in a day already on screen — falls out of page one and is not in
-the already-loaded page two either, so it is missing until a pull-to-refresh or a reload re-chains
-the cursors. One slot, inside the ingest window. Pull-to-refresh re-runs every page deliberately and
-is where that repair lives.
+The cost of holding page one's window still is anything belonging INSIDE the loaded span that
+arrives below the boundary: a slot whose `published` moves earlier past it (an older article landing
+in a day already on screen), and equally a day slot that is simply new down there — a storyline
+gaining coverage on a day it had none, inside a span the reader has already paged. Neither is in the
+frozen page two either, so both wait for a re-chaining of the cursors; surfacing them is what the
+fan-out was buying. Pull-to-refresh re-runs every page deliberately and is where that repair lives.
+The direction that would be a rendering bug rather than an omission — a page-two slot rising ABOVE
+the boundary and being drawn twice under one React key — cannot happen, since a slot's `published`
+is its storyline-day's earliest article and a fill only moves it earlier.
 
 Two consequences of the poll no longer being the query's own fetch, both wanted and neither
 incidental. **Pull-to-refresh works during ingest**, where the fan-out used to hold the query's
@@ -698,10 +704,9 @@ preference. A count has to be spent somewhere, and when the poll ran through a c
 per render of the component holding the query and once per query state change, not once per poll. A
 tick budget decremented there counted renders, and forty of them are gone in seconds. The poll no
 longer runs through `refetchInterval` at all (see "The first page and no others" above), so the
-budget is now spent once per tick
-by a `setTimeout` chain and a count would work. It stays on the clock anyway: a window measured in
-wall-clock time is idempotent under repeated evaluation, which makes the bound a fact about the
-clock rather than about how carefully its caller is written.
+budget is now spent once per tick by a `setTimeout` chain and a count would work. It stays on the
+clock anyway: a window measured in wall-clock time is idempotent under repeated evaluation, which
+makes the bound a fact about the clock rather than about how carefully its caller is written.
 
 Deliberately far short of the fifteen minutes `meta.ingest.state` can hold `in_progress` for (an
 unsettled pending entry holds it until `STALE_PENDING_MS`), because the poll is not how a reader
