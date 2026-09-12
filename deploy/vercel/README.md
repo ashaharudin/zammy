@@ -546,10 +546,53 @@ nobody merging a PR reads those.
   preview, with `CURRENTS_BURST_CALL_LIMIT` temporarily lowered to ~3 so the probe costs a handful
   of calls instead of 61 (VERCEL-ALL-IN-SCOPE, "Phase 3 as it stands"). Until then this stays the
   reason not to leave a preview serving real traffic in `CURRENTS_MODE=live` for long.
-- **Both guards fail OPEN on a Redis fault, and that is silent by design.** The rate limiter's
-  signal is `x-ratelimit-remaining` coming back at the full limit — a value `INCR` cannot produce —
-  and the governor's is the `shared burst window unavailable; counting in-process` warning in the
-  function log. Measured on the Phase 3 deploy: a 24-request burst that forced scale-out took the
-  fail-open path **7 times**, with `connect ETIMEDOUT` on the cold instances' Upstash handshake. A
-  burst is exactly when the guard matters, so read a clean `x-ratelimit-remaining` sequence as the
-  healthy case and a full-limit one as "Redis was not there for that request".
+- **Both guards fail OPEN on a Redis fault, and both now say so.** The posture is deliberate and
+  unchanged — Redis down costs the ceiling, never the request — but it is no longer silent. Grep the
+  function log for either warning:
+  - `rate limit fail-open; this instance is not counting requests against the ceiling` — the per-IP
+    limiter admitted a request without counting it, so the deployment-wide ceiling is
+    `RATE_LIMIT_PER_MINUTE ÷ the healthy fraction of the fleet` rather than the number configured.
+    Throttled to one line a minute per instance, so read the fields, not the line count:
+    - `redisStatus` answers **"was the client still broken when we looked?"**, not "why did it
+      throw?" — it is read after the response, so a fault that healed in the meantime shows as
+      healed. That is the point: the healed ones are the routine ones.
+      - **`ready` — routine, and by far the most common.** The client is built `lazyConnect` with
+        the connect deliberately not awaited, so a request landing inside the handshake fails open
+        on a client with nothing wrong with it, which then finishes connecting before the response
+        does. No `redis error` accompanies it because nothing errored. Measured locally at 10 of 16
+        cold starts, all reading `ready`. Not worth acting on.
+      - **`reconnecting` / `close` / `end` — chase this one.** The client was still unusable at the
+        moment we looked, which is the blind instance of
+        [MEASUREMENT-RATE-LIMIT-FAIL-OPEN](../../docs/MEASUREMENT-RATE-LIMIT-FAIL-OPEN.md) §3.2, and
+        it stays blind for as long as it stays there. One `end` at the tail of an instance's life is
+        an ordinary shutdown; a stream of any of these is not.
+      - **`connecting` / `connect` / `wait` — ambiguous. Do NOT read this as routine.** It is both
+        a cold start still in its ~800 ms Upstash handshake *and* a handshake that is timing out and
+        never going to finish. Measured with the client's production options: a **timing-out**
+        handshake reads `connecting` **99.6%** of the time (n=275) and a refused connection reads
+        `reconnecting` **98.1%** (n=157) — both blind, both throwing on every command. The status
+        names whichever phase is long, not how bad the fault is: ECONNREFUSED fails in under a
+        millisecond so the retry backoff dominates, while ETIMEDOUT hangs for ioredis' full 10 s
+        `connectTimeout`. **The 7 `connect ETIMEDOUT` fail-opens recorded two bullets below would
+        every one of them log `connecting`.**
+
+        The obvious cross-check does not work in the moment: a timing-out handshake emits no
+        `redis error` event until `connectTimeout` expires (measured t=10.0 s, then t=20.1 s), so
+        for ten seconds it is indistinguishable from a healthy cold start on both signals. What to
+        do instead: look for a `redis error` on the **same instance about ten seconds later**, and
+        treat a *sustained run* of `connecting` from one instance as an incident — a benign cold
+        start resolves in about a second and cannot produce one.
+    - `failOpen` is a per-instance count of uncounted requests since boot, including the ones the
+      throttle kept out of the log. It is an absolute number, not a rate: to turn it into a
+      fraction, compare it with that instance's request count over the same window.
+  - `shared burst window unavailable; counting in-process` — the quota governor on the same client.
+
+  The underlying signal is unchanged and still visible from outside: `x-ratelimit-remaining` coming
+  back at the full limit, a value `INCR` cannot produce — but it cannot tell the two mechanisms
+  apart, which is why `redisStatus` is in the line. Measured on the Phase 3 deploy, a 24-request
+  burst that forced scale-out took the fail-open path **7 times**, with `connect ETIMEDOUT` on the
+  cold instances' Upstash handshake; production measured ~3% on an
+  ordinary day and roughly half the traffic during one 8.5-minute episode
+  ([MEASUREMENT-RATE-LIMIT-FAIL-OPEN](../../docs/MEASUREMENT-RATE-LIMIT-FAIL-OPEN.md) §3). A burst
+  is exactly when the guard matters, so read a clean `x-ratelimit-remaining` sequence as the healthy
+  case and a full-limit one as "Redis was not there for that request".

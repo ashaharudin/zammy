@@ -258,6 +258,38 @@ The three levers, in the order they should be decided:
    five-minute answer instead of an open question. Free, independent of the
    other two, and worth doing whatever is decided about them.
 
+   **Built.** `apps/api/src/rate-limit-fail-open.ts` watches every reply for
+   §2.1's signature at `onResponse` and warns at level 40, throttled to one line
+   a minute per instance and carrying a `failOpen` running total so a sustained
+   outage is legible from one line. It reads the limiter's own response headers
+   rather than the plugin's internals — `remaining === limit` is the arithmetic
+   the counted path cannot produce — so it names the consequence rather than the
+   cause. It also carries `redisStatus`, because building it surfaced something
+   this file got wrong: **§2.1's fail-open rate is two mechanisms, not one.** The
+   rare one is §3.2's blind instance. The common one is a cold start — the client
+   is `lazyConnect` with the connect deliberately un-awaited, so a request inside
+   the handshake window fails open on a perfectly healthy client and emits no
+   `redis error` at all. Against a local Redis with nothing wrong with it, 10 of
+   16 runs of `server.test.ts`'s first case logged the line.
+
+   **How much of §2.1's 2-of-76 is that? Unmeasured, and this file should not
+   guess.** The local rate is ~60% against a ~15ms loopback handshake; §2.1 is
+   ~3% against Upstash's ~800ms one, on a fleet whose instances were mostly
+   already warm. Those two numbers are not commensurable, and an earlier draft of
+   this paragraph asserted "very likely most" across a 50× gap in the regime —
+   which is the kind of claim §4.1 was written to stop making. What can be said
+   is narrower and still useful: **§2.1 counts three mechanisms — a cold start
+   that succeeds, a cold start that times out, and §3.2's blind instance — and
+   only the first is benign**, so it is an upper bound on the blind-instance rate
+   rather than an estimate of it. `redisStatus` is most of what would turn that
+   into a measurement, with one gap worth knowing before anyone tries: it reads
+   `connecting` for BOTH cold-start shapes (a timing-out handshake sits there
+   99.6% of the time, because the status names the long phase and ETIMEDOUT's 10s
+   connect dwarfs the backoff a refused connection falls into). So a production
+   probe separates `ready` and `reconnecting` cleanly and has to resolve
+   `connecting` by whether a `redis error` follows on the same instance ~10s
+   later. Levers 1 and 2 are untouched.
+
 ---
 
 ## 5. Caveats
