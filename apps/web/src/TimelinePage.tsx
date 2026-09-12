@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Article, TimelineEntry } from "@zammy/shared";
 import { isTerminalPage } from "@zammy/shared";
 import { ApiError, type TopicQuery } from "./api.js";
@@ -15,6 +16,7 @@ import {
 } from "./format.js";
 import { mergeMemberships, rowMembership, type PageMemberships } from "./memberships.js";
 import { railActivity } from "./railActivity.js";
+import { railAnnouncement, RAIL_STATUS_ID } from "./railAnnouncement.js";
 import { braidOnRule, StorylineBraid } from "./StorylineBraid.js";
 import { storylineQualifiers, visibleStorylines } from "./storylineLabels.js";
 import { collapseCopies, outletLinks } from "./relatedRows.js";
@@ -78,6 +80,34 @@ export function TimelinePage({
     ingestState: latest?.meta.ingest.state,
   });
   const terminal = latest !== undefined && !timeline.hasNextPage && isTerminalPage(latest);
+  // The words the empty rail shows, resolved HERE rather than inside `Rail`,
+  // because the announcement has to speak the same ones and two copies of a
+  // sentence are two sentences waiting to disagree.
+  const emptyMessage = terminal
+    ? storylineView
+      ? "This storyline has no coverage to show."
+      : `No articles yet for “${topic.q}”.`
+    : "Nothing here yet.";
+  // The condition, like the message, has ONE definition: `Rail` takes it as a
+  // prop rather than recomputing it. Hoisting the words out and leaving the test
+  // behind would have been half the job — two copies of "is the rail empty" can
+  // disagree exactly as easily as two copies of what to say about it, and the
+  // announcement would then describe a state the rail is not drawing.
+  const isEmpty = latest !== undefined && visible.length === 0 && !ingesting;
+  // The one sentence the whole view speaks, derived where every part of the
+  // rail's state is already in hand. Out of this file for the same reason
+  // `railActivity` is: which fact outranks which, and whether a count may be
+  // spoken at all, is the part that can be silently wrong, and `apps/web` has
+  // no renderer to catch it.
+  const announcement = railAnnouncement({
+    isPending: timeline.isPending,
+    isError: timeline.isError,
+    hasLoaded: latest !== undefined,
+    isEmpty,
+    emptyMessage,
+    ingesting,
+    refreshing,
+  });
 
   // Plain refetch(), same as ErrorState's retry: v5 dropped per-page refetch
   // filtering for infinite queries, so this re-runs every loaded page rather
@@ -92,6 +122,14 @@ export function TimelinePage({
 
   return (
     <>
+      {/*
+        Renders nothing here: it portals one sentence into the live region that
+        `index.html` already put in the document. Outside every conditional
+        below all the same, because the sentence has to go on being updated
+        across the skeleton, the rail, the empty state and the error state.
+        See `RailAnnouncer`.
+      */}
+      <RailAnnouncer message={announcement} />
       <CommandBar
         topic={topic}
         page={latest}
@@ -124,13 +162,10 @@ export function TimelinePage({
             onReveal={reveal}
             ingesting={ingesting}
             refreshing={refreshing}
+            isEmpty={isEmpty}
             pendingJobs={latest.meta.ingest.pendingJobs}
             terminal={terminal}
-            emptyLabel={
-              storylineView
-                ? "This storyline has no coverage to show."
-                : `No articles yet for “${topic.q}”.`
-            }
+            emptyMessage={emptyMessage}
             hasNextPage={timeline.hasNextPage}
             isFetchingNextPage={timeline.isFetchingNextPage}
             onLoadOlder={() => void timeline.fetchNextPage()}
@@ -352,9 +387,10 @@ function Rail({
   memberships,
   ingesting,
   refreshing,
+  isEmpty,
   pendingJobs,
   terminal,
-  emptyLabel,
+  emptyMessage,
   hasNextPage,
   isFetchingNextPage,
   onLoadOlder,
@@ -370,9 +406,26 @@ function Rail({
   ingesting: boolean;
   /** A refetch of what is already here, as opposed to upstream still arriving. */
   refreshing: boolean;
+  /**
+   * Nothing to draw, and no ingest that would change that. Decided by
+   * `TimelinePage` because the announcement is decided there too
+   * (`railAnnouncement`), and the two must never disagree about which state the
+   * reader is in.
+   *
+   * NOT the same as "no articles": it is measured on the VISIBLE slots, so a
+   * refreshed page whose every slot is newer than the held anchor reads as
+   * empty while `useHeldNewItems` sits on the lot. The branch below returns
+   * before the "N new articles" pill renders, so the reader is told the rail is
+   * empty with no control offered to reveal what is behind it. Pre-existing —
+   * `main` tested the same list the same way — but the announcement is what
+   * makes it audible, and closing it belongs with the pill's own gap (see
+   * `railAnnouncement`, point 6).
+   */
+  isEmpty: boolean;
   pendingJobs: number;
   terminal: boolean;
-  emptyLabel: string;
+  /** Already resolved by `TimelinePage`, which also speaks it (`railAnnouncement`). */
+  emptyMessage: string;
   hasNextPage: boolean;
   isFetchingNextPage: boolean;
   onLoadOlder: () => void;
@@ -401,10 +454,10 @@ function Rail({
   // response that says how much, which is `ingesting`.
   const working = ingesting || refreshing;
 
-  if (items.length === 0 && !ingesting) {
+  if (isEmpty) {
     const message = (
       <p style={{ color: "var(--fg-faint)", textAlign: "center", marginTop: "3rem" }}>
-        {terminal ? emptyLabel : "Nothing here yet."}
+        {emptyMessage}
       </p>
     );
     if (!refreshing) return message;
@@ -429,7 +482,6 @@ function Rail({
     // before, and the beacon rides in the 3rem margin above it.
     return (
       <div style={{ position: "relative" }}>
-        <IngestStatus pendingJobs={null} />
         <div style={{ position: "absolute", top: 0, left: RAIL_INSET, right: 0 }}>
           <IngestBeacon />
         </div>
@@ -441,7 +493,6 @@ function Rail({
   return (
     <div style={{ position: "relative", paddingLeft: RAIL_INSET }}>
       <RailSpine charged={working} />
-      {working && <IngestStatus pendingJobs={ingesting ? pendingJobs : null} />}
       {working && <IngestBeacon />}
       {newCount > 0 && (
         <RailEntry marker="▲">
@@ -1517,38 +1568,58 @@ function IngestGhosts({ pendingJobs }: { pendingJobs: number }) {
 
 /**
  * What the animation cannot say. Motion is invisible to a screen reader, and
- * §8.1 asks the UI to be honest about freshness — so the state the rail now
- * shows in teal is still announced here, including the count the text row used
- * to print.
+ * §8.1 asks the UI to be honest about freshness — so the state the rail shows
+ * in teal is announced here too.
  *
- * TWO sentences, not one with a number missing, because the head of the
- * animation is lit by two different facts and only one of them is upstream
- * work. `null` is a refetch: the rail is asking the same question again and the
- * answer is not back, so nothing is known to be arriving yet. Saying "gathering
- * articles from upstream" there would announce an ingest that may not be
- * running — and would announce it AGAIN, in place, at the moment a poll flips
- * `ingesting` off under a refetch that is still in flight.
+ * ONE region, and this component does not render it: it PORTALS the sentence
+ * into a node `index.html` already had. The shape looks roundabout and the
+ * direct one does not work.
  *
- * Zero with `ingesting` true is NOT a contradiction and not a race: a reader
- * who loses the single-flight lock reads a peer's fetch as their own
- * `in_progress` and queues nothing of their own (`coverage-fill.ts`,
- * `lockLostToPeer` — §12's invariant that a reader never queues on someone
- * else's ingest). So it drops the clause rather than printing "0 jobs
- * pending", which would contradict both the animation and the single ghost
- * slot `IngestGhosts` floors that count at.
+ * A screen reader announces a live region's contents when they CHANGE inside a
+ * region it is already tracking. A region that arrives in the DOM with its text
+ * already in it presents no change to anything, and is generally announced by
+ * nothing — "generally" because it varies by AT and browser, and `role=alert`
+ * is a documented exception; what is not safe is relying on it. React cannot
+ * clear that bar by position: at the first commit there is no tracked region to
+ * mutate, however high in the tree the node sits, so a message present at mount
+ * is a message nobody hears — and a cold load of `/?q=…` is exactly that case.
+ * Markup placement is what MDN asks for and is exact rather than probabilistic.
+ *
+ * The rejected alternative was to render an empty region here and hold it empty
+ * on a `setTimeout`. It works while the constant is right, and what the constant
+ * waits for — the accessibility API adopting the node — is not observable from
+ * the page, so it could only ever be a guess. It also lost any state that began
+ * and ended inside the window, and re-armed on every hero↔timeline transition.
+ *
+ * §8.1 ("What the rail says out loud") carries the rest: what the two
+ * conditionally-rendered regions this replaced did on which AT, what the
+ * MutationObserver actually measured, and what that does and does not prove.
+ * It is written down once, there, because this comment and that section had to
+ * be corrected in lockstep the last time it was written down twice.
+ *
+ * `role="status"` is kept alongside `aria-live="polite"` for the `aria-atomic`
+ * it implies: the sentence is read whole rather than in fragments. That is also
+ * why `railAnnouncement` speaks no counts — see point 3 there.
  */
-function IngestStatus({ pendingJobs }: { pendingJobs: number | null }) {
-  return (
-    <p className="sr-only" role="status" aria-live="polite">
-      {pendingJobs === null
-        ? "Checking for new articles."
-        : pendingJobs === 0
-          ? "Gathering articles from upstream."
-          : `Gathering articles from upstream — ${pendingJobs} job${
-              pendingJobs === 1 ? "" : "s"
-            } pending.`}
-    </p>
-  );
+function RailAnnouncer({ message }: { message: string }) {
+  const host = document.getElementById(RAIL_STATUS_ID);
+  // Degrade rather than throw, which is NOT the call `main.tsx` makes about
+  // `#root` and is a different situation. That throw runs at bootstrap, with
+  // nothing rendered yet to lose; this one would run inside a live tree with no
+  // error boundary above it anywhere, so React would tear the whole root down
+  // and a missing sr-only paragraph would take the rail, the command bar and
+  // the reader's search off the screen with it. Losing the announcements is
+  // bad; losing the application to protect them is worse.
+  //
+  // Silence is only tolerable because the invariant is guarded elsewhere:
+  // `railAnnouncer.test.ts` reads `index.html` and fails if the node is not
+  // there, empty, and carrying its role. That is the check that would otherwise
+  // have had to be a runtime explosion.
+  if (!host) return null;
+  // An empty `message` (`railAnnouncement`'s `SILENT`) puts no text node in the
+  // region at all, which is what it has to hold when there is nothing to say: a
+  // region holding a space is a region that has just been changed.
+  return createPortal(message, host);
 }
 
 /**
@@ -1577,19 +1648,23 @@ const SKELETON_GHOSTS = 3;
  * storyline label is a primary path, so an animation that asserted "gathering
  * articles from upstream" there would be asserting something the server has
  * already said is false. The visual is honest as a LOADING mark either way, and
- * the sr-only line below says only that.
+ * what is announced beside it says only that.
  *
- * Which is why the status here is its own sentence rather than `IngestStatus`:
- * that component speaks for `meta.ingest`, and on the first paint there is no
- * `meta` yet.
+ * Which is why the first paint's sentence is its own clause in
+ * `railAnnouncement` rather than the ingest one: that sentence speaks for
+ * `meta.ingest`, and on the first paint there is no `meta` yet.
+ *
+ * The announcement is no longer made HERE, and that is the point. This
+ * component used to carry an sr-only region of its own, which is exactly why
+ * nothing was ever heard on a first paint: a live region that mounts already
+ * holding its message announces nothing (`RailAnnouncer`), and the skeleton
+ * mounts, by definition, once per topic — so its region could never be anything
+ * but brand new.
  */
 function SkeletonRail() {
   return (
     <div style={{ position: "relative", paddingLeft: RAIL_INSET }}>
       <RailSpine charged />
-      <p className="sr-only" role="status" aria-live="polite">
-        Loading the timeline.
-      </p>
       <IngestBeacon />
       <IngestGhosts pendingJobs={SKELETON_GHOSTS} />
     </div>
