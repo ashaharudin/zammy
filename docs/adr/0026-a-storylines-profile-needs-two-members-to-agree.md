@@ -128,7 +128,8 @@ so the sweep grew a label-free alarm (`chained`) for this decision and for the o
   swing that was unmeasured until review, and if the deepening yield drops, grounding against
   the union while retrieving against the consensus is the lever to reach for — a split with
   its own measurement, not a line to add here.
-  At three members and up the gate is unmoved (324 of 2,488 ungrounded before and after).
+  At three members and up the gate is unmoved: 389 of 4,002 ungrounded before, and the same
+  389 after.
 - **An empty profile is now reachable, where `cloudQuery` documented it as impossible.** A
   two-group arc whose members share nothing has no consensus, so it has no profile. Linking
   cannot build one — a group joins by overlapping the profile it is judged against — and 0 of

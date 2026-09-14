@@ -365,6 +365,13 @@ export async function readStorylinePage(
  * the day slots are a function of membership, which a rule change does not move,
  * and re-deriving 17,000 of them to fix a column they do not touch is work whose
  * only possible outcome is a mistake.
+ *
+ * It does NOT `markStorylinesLinkDirty` either, and that one is a judgement
+ * rather than an omission. The marker exists so a WIDENED profile re-offers the
+ * old groups it can now reach (migration 0017); ADR-0026's floor only ever
+ * narrows, so there is no new reach to go and find. A pass under a rule that
+ * could widen would have to mark — which is what the `widened` and `swapped`
+ * counters in `backfillStorylineProfiles` are watching for.
  */
 export async function refreshStorylineProfile(
   db: Kysely<Database>,

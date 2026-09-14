@@ -28,7 +28,8 @@ export interface MockStoryline {
   /** Identity is the UUID; the label is presentation and non-unique. */
   id: string;
   label: string | null;
-  /** Tokens carried by at least half the member groups. Search matches these. */
+  /** Tokens carried by at least half the member groups, and no fewer than two
+   * of them (ADR-0026). Search matches these. */
   profileTokens: string[];
   status: "active" | "dormant";
   span: { from: string; to: string };

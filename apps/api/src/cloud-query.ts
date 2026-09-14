@@ -88,7 +88,10 @@ export const CLOUD_QUERY_TERMS = 2;
  * The one place the fold still reaches a reader is the profile-only fallback
  * below, which has no surface to offer. See it.
  *
- * Two fallbacks, in order, and both are for storylines that should not exist:
+ * Two fallbacks, in order. Both were for storylines that should not exist, and
+ * ADR-0026 made the first one ordinary — 149 of 892 labelled two-group arcs on
+ * the dev archive land in it, because a label word only one of two members says
+ * is no longer in the profile:
  *
  *  - **No label word survives** — the label shares nothing with the coverage it
  *    names. Search the profile's own tokens instead: headline words with no
@@ -116,9 +119,14 @@ export const CLOUD_QUERY_TERMS = 2;
  *
  *    What that costs is worth stating, because the label is the input ADR-0014
  *    measured as the WORST one: `canonicalize` splits it on whitespace and
- *    upstream ANDs the terms, so a four-word label returns nothing at all. The
- *    arc also stops matching `findSurfacedStorylines`' containment, so its pill
- *    goes with it.
+ *    upstream ANDs the terms, so a four-word label returns nothing at all.
+ *
+ *    The arc's PILL survives, which is worth stating too because the obvious
+ *    reading is that it does not: `findSurfacedStorylines` tests each keyword
+ *    against `profile_tokens @> [k] OR label_words @> [k]`
+ *    (`storyline-timeline.ts`), and the keywords minted here are the label's own
+ *    words folded, so the label side matches every one of them. An empty profile
+ *    costs the fetch, not the surfacing.
  *
  *    LINKING cannot produce such an arc — a group joins by sharing tokens with
  *    the profile it is judged against, so the two always overlap — and 0 of the
@@ -157,9 +165,9 @@ export function cloudQuery(input: {
         // `convince keep`. Ugly rather than wrong: the arc has no consensus
         // vocabulary its own name is in, and these two tokens at least keep
         // `findSurfacedStorylines`' containment, so its pill still appears.
-        // Fixing it needs a
-        // surface corpus on the request path (`story_tokens`), which is the cost
-        // ADR-0014 declined for the ordering question and would decline again.
+        // Fixing the SPELLING needs a surface corpus on the request path
+        // (`story_tokens`), which is the cost ADR-0014 declined for the ordering
+        // question and would decline again.
         [...new Set(input.profileTokens)];
   return terms.length > 0 ? terms.slice(0, CLOUD_QUERY_TERMS).join(" ") : input.label;
 }
