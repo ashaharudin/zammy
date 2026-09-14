@@ -94,4 +94,16 @@ so the sweep grew a label-free alarm (`chained`) for this decision and for the o
   the arc does — so the nightly late-candidate sweep reaches an old group one arrival later
   than it used to.
 - The cloud's query narrows with the profile: `cloudQuery` grounds a label against
-  `profile_tokens`, so a two-group arc searches the words both members say.
+  `profile_tokens`, so a two-group arc searches the words both members say. That can strip a
+  **naming** word — if only one of the two members' headlines says "Hurricane", the query for
+  "Hurricane Fausto Hawaii Landfall" becomes `fausto hawaii` rather than `fausto hurricane`. The
+  words that survive are the ones the coverage agrees on, which is the trade this rule makes
+  everywhere else too.
+- **An empty profile is now reachable, where `cloudQuery` documented it as impossible.** A
+  two-group arc whose members share nothing has no consensus, so it has no profile. Linking
+  cannot build one — a group joins by overlapping the profile it is judged against — and 0 of
+  the dev archive's 1,005 two-group arcs are empty. The label-agreement merge can, because it
+  fuses arcs on their names and asks nothing about their vocabulary. Such an arc falls to
+  `cloudQuery`'s last fallback and searches its raw label, which ADR-0014 measured as the input
+  that returns nothing. Excluding empty-profile arcs from the trending read would close it;
+  that is a decision with its own measurement, and this ADR only names it.

@@ -1138,7 +1138,8 @@ keywords in, timeline out.
   set. The bar's bottom edge hides the row; the collapsed state persists.
   **A storyline speaks in two vocabularies and a keyword may be found in either** (ADR-0011,
   amended): its `profile_tokens`, and its LABEL — the majority rule drops a word only a minority of
-  member groups use, even when that word is the one the model chose to name the event by, and the
+  member groups use (and, since ADR-0026, a word only ONE of two members uses), even when that
+  word is the one the model chose to name the event by, and the
   label is a name the reader was just shown in the cloud or the gutter. Containment is per keyword
   across the two together, so "fausto pacific" may take one word from each. The label side reads
   `label_words`, written beside the label by `setStorylineLabel` and folded by `normalizeLabel` —

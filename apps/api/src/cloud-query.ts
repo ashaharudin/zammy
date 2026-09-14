@@ -106,11 +106,28 @@ export const CLOUD_QUERY_TERMS = 2;
  *    profile tokens keep the containment that makes the arc's pill appear. If a
  *    salient pair is ever wanted, `story_token_df` rarity is the ranking this
  *    ADR declined, at the cost of the trailing corpus on the request path.
- *  - **An empty profile** — `refreshProfileTokens` keeps a labelled, promoted
- *    storyline's profile non-empty, and a merged-away one is excluded upstream
- *    of here, so this is unreachable rather than merely unlikely. It returns the
- *    label, which is ADR-0013's behaviour: no better answer exists, and an empty
- *    query would be a 400 from `canonicalize` on a word the reader can see.
+ *  - **An empty profile** — this used to be unreachable, and ADR-0026 made it
+ *    reachable. `refreshProfileTokens` now requires two member groups to carry a
+ *    token, so a TWO-GROUP arc whose members share nothing has no profile at
+ *    all, which is the intended answer to "what does this arc say": nothing the
+ *    two of them agree on. It returns the label, which is ADR-0013's behaviour:
+ *    no better answer exists on a row with no vocabulary, and an empty query
+ *    would be a 400 from `canonicalize` on a word the reader can see.
+ *
+ *    What that costs is worth stating, because the label is the input ADR-0014
+ *    measured as the WORST one: `canonicalize` splits it on whitespace and
+ *    upstream ANDs the terms, so a four-word label returns nothing at all. The
+ *    arc also stops matching `findSurfacedStorylines`' containment, so its pill
+ *    goes with it.
+ *
+ *    LINKING cannot produce such an arc — a group joins by sharing tokens with
+ *    the profile it is judged against, so the two always overlap — and 0 of the
+ *    dev archive's 1,005 two-group arcs are empty. What can is the
+ *    label-agreement merge (`storyline-label-merge.ts`), which fuses two arcs on
+ *    their NAMES and asks nothing about their vocabulary, and article churn
+ *    under it. Rare, and no longer impossible; a trending read that excluded
+ *    empty-profile arcs from the cloud would close it, and that is a decision
+ *    with its own measurement rather than a line to add here.
  */
 export function cloudQuery(input: {
   label: string;

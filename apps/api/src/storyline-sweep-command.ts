@@ -293,17 +293,19 @@ export const spec: CommandSpec = {
     const chained = (result: ReplayResult): string => {
       let arcs = 0;
       let groupsHeld = 0;
-      let pairsDisjoint = 0;
-      let pairsTotal = 0;
       for (const storyline of result.built) {
         if (storyline.groupIds.length < 2) continue;
-        const profiles = storyline.groupIds.map(
-          (groupId) => new Set(groupProfileOf(groupId)),
-        );
-        let hit = false;
-        for (let i = 0; i < profiles.length; i += 1) {
-          for (let j = i + 1; j < profiles.length; j += 1) {
-            pairsTotal += 1;
+        const profiles = storyline.groupIds.map((groupId) => new Set(groupProfileOf(groupId)));
+        // The first disjoint pair settles the arc, so this stops at it. The
+        // cross-product is O(g²) and `g` is the quantity printed beside this on
+        // the LARGEST line: the sweep's loose corner (share=0.02, mass=8) builds
+        // arcs of 4,540 groups, which is 10.3M pair probes for a boolean that
+        // the first hit already answered. A pair CENSUS was the first version of
+        // this and had to force the whole product to report a denominator; the
+        // arc count is what the ADR quotes and what the alarm is read by.
+        let disjoint = false;
+        for (let i = 0; i < profiles.length && !disjoint; i += 1) {
+          for (let j = i + 1; j < profiles.length && !disjoint; j += 1) {
             let shares = false;
             for (const token of profiles[i]!) {
               if (profiles[j]!.has(token)) {
@@ -311,13 +313,10 @@ export const spec: CommandSpec = {
                 break;
               }
             }
-            if (!shares) {
-              pairsDisjoint += 1;
-              hit = true;
-            }
+            if (!shares) disjoint = true;
           }
         }
-        if (hit) {
+        if (disjoint) {
           arcs += 1;
           groupsHeld += storyline.groupIds.length;
         }
@@ -326,8 +325,7 @@ export const spec: CommandSpec = {
         whole === 0 ? "n/a" : `${((100 * part) / whole).toFixed(1)}%`;
       return (
         `${arcs} of ${result.promoted} multi-group arcs (${pct(arcs, result.promoted)}) hold a ` +
-        `group pair sharing NO token, over ${groupsHeld} groups; ` +
-        `${pairsDisjoint} of ${pairsTotal} member pairs (${pct(pairsDisjoint, pairsTotal)}) are disjoint`
+        `group pair sharing NO token, over ${groupsHeld} groups`
       );
     };
 
@@ -1026,9 +1024,15 @@ export const spec: CommandSpec = {
     // `variant` rather than `GRID_VARIANT`: the grids above describe the deployed
     // decision on purpose, but this is the run an operator READS, and a variant
     // it did not model is a variant nobody can look at. With no `--variant` the
-    // two are the same object — `configuredCap` falls back to the configured
+    // two hold the same values — `configuredCap` falls back to the configured
     // bound — so an unqualified run prints exactly what it always printed, and a
     // qualified one says so in the header below.
+    //
+    // The grids do NOT follow, here or for `days`/`domains`/`birth-bridges`, so a
+    // qualified run without `--focus-only` prints grid rows that model the
+    // deployed decision and a focus block that models the variant. That is the
+    // intended reading — the grids are the bar, the focus is the candidate — and
+    // the header is what keeps the two legible side by side.
     const focused = replayLinker(groups, corpusAt, { ...BASE, ...focus }, 2, NARROW, {}, variant);
 
     // What the grid above does NOT model: the service cuts the candidate set at a
@@ -1039,7 +1043,9 @@ export const spec: CommandSpec = {
     console.log(
       `\ncandidate cap: ${focused.cappedGroups} of ${groups.length} groups exceeded the ` +
         `${NARROW ? "4,000" : "200"}-row limit the service would apply` +
-        `${focused.cappedGroups > 0 ? " — the grid above is NOT what production judges" : ""}`,
+        // Counted on the FOCUS run, which follows `--variant`, so under a variant
+        // this reports the candidate's truncation and not the grid's.
+        `${focused.cappedGroups > 0 ? " — this run is NOT what production judges" : ""}`,
     );
 
     // The focus, as numbers, because `--focus-only` otherwise prints arcs to read

@@ -334,9 +334,12 @@ export async function readLabelledStorylinePage(
  * because a profile is a fact about membership rather than about naming and a
  * provisional storyline-of-one has one too.
  *
- * Aliases are excluded: `merged_into` rows keep an emptied profile on purpose
- * (`mergeStorylines`), and re-deriving one would put a dead arc's vocabulary
- * back into the retrieval index.
+ * Aliases are excluded because nothing reads their profile: `mergeStorylines`
+ * empties it on the same write that sets `merged_into`, and every read resolves
+ * the alias first. Re-deriving one would be harmless rather than wrong — the
+ * merge deletes the loser's `storyline_groups` before aliasing it, so the
+ * derivation would find no members and write `'{}'` over `'{}'` — but a backfill
+ * that touches 17,000 rows should touch the ones that mean something.
  */
 export async function readStorylinePage(
   db: Kysely<Database>,
