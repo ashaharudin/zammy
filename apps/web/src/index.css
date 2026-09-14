@@ -315,6 +315,63 @@ select {
   }
 }
 
+/*
+ * A surfaced storyline's pill, arriving and leaving (StorylinePills).
+ *
+ * The row is ordered by size, so a search that changes the set changes the
+ * order too, and a row that simply swapped its contents would give the reader
+ * no way to tell a pill that moved from a pill that was replaced. So each of
+ * the three things a pill can do is drawn: the leavers fade out where they
+ * stand, the survivors slide (the FLIP in `StorylinePills`, which is the only
+ * one of the three with a distance to measure), and the arrivals fade in.
+ *
+ * Scale rather than a slide, unlike the cards: a pill has no column to arrive
+ * along, and a chip that grows into place reads as one settling rather than as
+ * one pushed.
+ */
+.storyline-pill-enter {
+  animation: storyline-pill-enter 220ms ease-out backwards;
+}
+@keyframes storyline-pill-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+}
+
+/* `forwards`, and here it is right where `.article-enter` needed `backwards`:
+   the pill holds its slot until the row settles, and must stay invisible for
+   that beat rather than snapping back at the end of the fade. The stacking
+   context the fill forces lasts exactly as long as the element does.
+
+   The duration comes from `PILL_EXIT_MS` via the row's inline custom property,
+   because the timer that unmounts the pill is the same number: a fade that
+   outlived its slot would end with a pill blinking out at full opacity. */
+.storyline-pill-exit {
+  animation: storyline-pill-exit var(--pill-exit-ms, 180ms) ease-in forwards;
+}
+@keyframes storyline-pill-exit {
+  to {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Like the cards: the motion carries nothing the pills do not say by being
+     where they are. The arrivals simply appear, and the leavers simply go —
+     still holding their slot for the beat the row takes to settle, since that
+     is layout rather than motion. The slide is skipped in `StorylinePills`,
+     which builds it in script where this query cannot reach it. */
+  .storyline-pill-enter {
+    animation: none;
+  }
+  .storyline-pill-exit {
+    animation: none;
+    opacity: 0;
+  }
+}
+
 /* Visually hidden but present for assistive tech (ARCHITECTURE 10.5). Reveals
    itself when a keyboard user tabs into it, so focus is never invisible. */
 .sr-only {

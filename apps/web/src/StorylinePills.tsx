@@ -1,7 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { StorylineSummary } from "@zammy/shared";
 import { MONO } from "./theme.js";
 import { pillDetail, sizeBucket, SIZE_STEPS } from "./storylineLabels.js";
+import {
+  EMPTY_PILL_ROW,
+  exitedPills,
+  PILL_EXIT_MS,
+  PILL_MOVE_MS,
+  pillMoveKeyframes,
+  receivePills,
+  type PillRow,
+} from "./storylinePillMotion.js";
 
 /**
  * Storylines a search surfaced, as pills in the command bar — S8's variant E,
@@ -13,6 +22,12 @@ import { pillDetail, sizeBucket, SIZE_STEPS } from "./storylineLabels.js";
  * result set, which is the thing this is not. The bar is already sticky, so the
  * pills are reachable at any scroll depth without occluding a single row of
  * timeline.
+ *
+ * Biggest storyline first, and the row changes by moving rather than by being
+ * replaced: `storylinePillMotion` owns both — which pill is drawn where, and
+ * which of them is arriving, resting or leaving. What is here is the one thing
+ * that cannot be pure: measuring where the pills actually landed, so a pill
+ * that changed place slides there from where it was.
  */
 
 /** The reader's answer to "not what I am here for", kept across searches. */
@@ -37,12 +52,18 @@ export function StorylinePills({
     globalThis.localStorage?.setItem(COLLAPSED_KEY, collapsed ? "1" : "0");
   }, [collapsed]);
 
-  if (storylines.length === 0) return null;
+  const row = usePillRow(storylines);
+  const rowRef = usePillFlip();
+
+  // Nothing matched and nothing is still fading out of the last search that
+  // did: no row, and no handle to open an empty one with.
+  if (storylines.length === 0 && (collapsed || row.slots.length === 0)) return null;
 
   return (
     <>
-      {!collapsed && (
+      {!collapsed && row.slots.length > 0 && (
         <div
+          ref={rowRef}
           style={{
             maxWidth: "var(--page-max)",
             margin: "0 auto",
@@ -51,14 +72,19 @@ export function StorylinePills({
             flexWrap: "wrap",
             gap: "0.35rem",
             padding: "0 1rem 0.45rem",
+            // One source of truth for how long a leaving pill fades: the timer
+            // that unmounts it is the same constant (see `usePillRow`).
+            ["--pill-exit-ms" as string]: `${PILL_EXIT_MS}ms`,
           }}
         >
-          {storylines.map((storyline) => (
+          {row.slots.map((slot) => (
             <StorylinePill
-              key={storyline.id}
-              storyline={storyline}
-              qualifier={qualifiers.get(storyline.id) ?? null}
-              onOpen={() => onOpen(storyline.id, storyline.label)}
+              key={slot.storyline.id}
+              storyline={slot.storyline}
+              qualifier={qualifiers.get(slot.storyline.id) ?? null}
+              leaving={slot.leaving}
+              entering={slot.entering}
+              onOpen={() => onOpen(slot.storyline.id, slot.storyline.label)}
             />
           ))}
         </div>
@@ -66,6 +92,119 @@ export function StorylinePills({
       <Handle collapsed={collapsed} count={storylines.length} onToggle={() => setCollapsed(!collapsed)} />
     </>
   );
+}
+
+/**
+ * The row the response asks for, with the pills the last one left behind still
+ * fading out of it.
+ *
+ * Derived during render rather than in an effect, and deliberately: the bar
+ * re-renders on every progressive-fill page, and an effect keyed on the
+ * storylines array — a fresh `[]` on any page that has none — would feed
+ * itself. `receivePills` returns the SAME row when nothing changed, which is
+ * what makes the render-phase update terminate.
+ */
+function usePillRow(storylines: readonly StorylineSummary[]): PillRow {
+  const [row, setRow] = useState<PillRow>(EMPTY_PILL_ROW);
+  const received = useRef<readonly StorylineSummary[] | null>(null);
+
+  if (received.current !== storylines) {
+    received.current = storylines;
+    const next = receivePills(row, storylines);
+    if (next !== row) setRow(next);
+  }
+
+  const exiting = row.pending !== null;
+  useEffect(() => {
+    if (!exiting) return;
+    // The leavers hold their slots for exactly as long as they fade; then the
+    // row takes the shape the response asked for, and the survivors slide.
+    const timer = setTimeout(() => setRow((current) => exitedPills(current)), PILL_EXIT_MS);
+    return () => clearTimeout(timer);
+  }, [exiting]);
+
+  return row;
+}
+
+/**
+ * FLIP: a pill that changed place starts the frame where it used to be and
+ * travels to where it now is.
+ *
+ * Positions are read relative to the ROW, not the viewport — the bar is sticky
+ * and the reader may have scrolled between two commits, and a viewport
+ * measurement would read that scroll as movement and animate every pill.
+ *
+ * The move is a Web Animations call rather than a CSS class, because the path
+ * is only known at the moment it is measured — `pillMoveKeyframes` bows it in
+ * the direction the pill is travelling; `index.css` keeps the fades, which have
+ * nothing to measure. Reduced motion is checked here for the same reason — an
+ * animation built in script is not covered by the media query the stylesheet
+ * honours.
+ */
+function usePillFlip() {
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const places = useRef(new Map<string, { x: number; y: number }>());
+
+  // No dependency array, deliberately: what makes a remembered position wrong
+  // is any commit that relaid the row out — a new set of pills, but also a
+  // qualifier appearing on one of them and pushing its neighbours along. Nine
+  // rects inside one container, after the layout the browser has already done,
+  // is not a cost worth a stale-position bug.
+  useLayoutEffect(() => {
+    measurePills(rowRef.current, places.current, { animate: true });
+  });
+
+  useEffect(() => {
+    // A resize relays the row out — it wraps at a different pill — without
+    // rendering anything, so nothing above runs and every remembered position
+    // is now wrong. Re-measured without animating: the pills did not move, the
+    // window did, and the next real move must start from where they actually
+    // are rather than sliding in from the old width.
+    const onResize = () => measurePills(rowRef.current, places.current, { animate: false });
+    globalThis.addEventListener?.("resize", onResize);
+    return () => globalThis.removeEventListener?.("resize", onResize);
+  }, []);
+
+  return rowRef;
+}
+
+function measurePills(
+  container: HTMLDivElement | null,
+  places: Map<string, { x: number; y: number }>,
+  options: { animate: boolean },
+): void {
+  if (!container) {
+    // Collapsed, or nothing matched: the places remembered here are about to be
+    // wrong, and a row that opens again should not slide in from them.
+    places.clear();
+    return;
+  }
+  const origin = container.getBoundingClientRect();
+  const reduced = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  const drawn = new Set<string>();
+
+  for (const pill of container.querySelectorAll<HTMLElement>("[data-storyline-id]")) {
+    const id = pill.dataset.storylineId;
+    if (!id) continue;
+    drawn.add(id);
+    const box = pill.getBoundingClientRect();
+    const next = { x: box.left - origin.left, y: box.top - origin.top };
+    const previous = places.get(id);
+    places.set(id, next);
+    if (!previous || !options.animate || reduced || typeof pill.animate !== "function") continue;
+    const dx = previous.x - next.x;
+    const dy = previous.y - next.y;
+    // Sub-pixel drift is layout noise, not a move.
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+    // Bubbles rather than slides: `pillMoveKeyframes` bows the path out of the
+    // row in the direction the pill is going, so two pills trading places pass
+    // around each other instead of through each other.
+    pill.animate(pillMoveKeyframes(dx, dy), { duration: PILL_MOVE_MS, easing: "ease-in-out" });
+  }
+
+  for (const id of [...places.keys()]) {
+    if (!drawn.has(id)) places.delete(id);
+  }
 }
 
 /**
@@ -116,10 +255,16 @@ function Handle({
 function StorylinePill({
   storyline,
   qualifier,
+  leaving,
+  entering,
   onOpen,
 }: {
   storyline: StorylineSummary;
   qualifier: string | null;
+  /** On its way out: fading, still holding its slot, no longer a thing to press. */
+  leaving: boolean;
+  /** On its way in: this search surfaced it and the last one did not. */
+  entering: boolean;
   onOpen: () => void;
 }) {
   const label = storyline.label ?? "unlabelled storyline";
@@ -127,6 +272,16 @@ function StorylinePill({
   return (
     <button
       onClick={onOpen}
+      // The row's FLIP finds its pills by this, rather than through a ref per
+      // pill: a ref callback is re-attached on every render, and the positions
+      // remembered across renders are the one thing that must survive them.
+      data-storyline-id={storyline.id}
+      className={leaving ? "storyline-pill-exit" : entering ? "storyline-pill-enter" : undefined}
+      // A pill fading out is a pill the reader can still see and must not be
+      // able to reach: `inert` takes it out of the tab order, out of the
+      // accessibility tree, and out of range of a click aimed at whatever is
+      // about to take its place.
+      inert={leaving}
       // The exact count and the dormancy live here, where they cost no width:
       // the glyph answers "how big", the muting answers "still running", and
       // anyone who needs the words can still reach them.
