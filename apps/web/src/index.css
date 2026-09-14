@@ -278,6 +278,43 @@ select {
   }
 }
 
+/*
+ * A card's entrance (ARCHITECTURE 8.3). Articles fade in as they mount — the
+ * first paint of a search, the rows a reveal prepends, the older page the
+ * sentinel pulls in, the day a reader expands — each a beat behind the one
+ * above it. `articleEnter.ts` owns the beat; this owns the motion.
+ *
+ * Only a `from`: the resting state is the card's own style, so nothing here can
+ * leave a card looking different from one that never animated.
+ *
+ * `backwards` rather than `both`, and that is load-bearing rather than tidy. An
+ * animation of opacity or transform forces a stacking context on its element
+ * while it runs OR fills, and `both` fills forever — every card on the rail
+ * would become a permanent stacking context, and the braid's popover, which the
+ * marker box lifts over the cards below it on a z-index (TimelinePage,
+ * markerStyle), would go back to being painted over by the next card down.
+ * `backwards` covers the delay, which is all the stagger needs, and lets go the
+ * moment the fade is done.
+ */
+.article-enter {
+  animation: article-enter 320ms ease-out backwards;
+}
+@keyframes article-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Unlike the ingest marks above, the motion here carries nothing the card
+     does not: it is the same card, arriving. So the fallback is the card, at
+     rest — no fade, no stagger, and no state to hold it in. */
+  .article-enter {
+    animation: none;
+  }
+}
+
 /* Visually hidden but present for assistive tech (ARCHITECTURE 10.5). Reveals
    itself when a keyboard user tabs into it, so focus is never invisible. */
 .sr-only {

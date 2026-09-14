@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import type { Article, TimelineEntry } from "@zammy/shared";
 import { isTerminalPage } from "@zammy/shared";
 import { ApiError, type TopicQuery } from "./api.js";
+import { enterDelayMs } from "./articleEnter.js";
 import { readTimeZone } from "./browser.js";
 import { isCollapsed, nothingCollapsed, segmentKey, toggle } from "./dayCollapse.js";
 import {
@@ -598,7 +599,7 @@ function Rail({
                       />
                     )}
                     {!partCollapsed &&
-                      part.items.map((slot) => (
+                      part.items.map((slot, index) => (
                         <GroupCard
                           // NOT `storylineId` alone, and no longer the slot's
                           // time either: `key` is unique per slot AND per part
@@ -606,6 +607,12 @@ function Rail({
                           // more than one of them.
                           key={slot.key}
                           entry={slot}
+                          // The card's place in the run it fades in with
+                          // (`articleEnter.ts`). Its place under THIS heading,
+                          // not on the rail: a run is what mounts together —
+                          // one expand, one appended page, one first paint of a
+                          // day — and each cascades from its own start.
+                          index={index}
                           onOpenStorylineView={onOpenStorylineView}
                           qualifiers={qualifiers}
                           memberships={memberships}
@@ -707,6 +714,7 @@ function LoadOlder({ loading, onLoadOlder }: { loading: boolean; onLoadOlder: ()
  */
 function GroupCard({
   entry,
+  index,
   onOpenStorylineView,
   qualifiers,
   memberships,
@@ -714,6 +722,8 @@ function GroupCard({
   relatedLevel,
 }: {
   entry: RailSlot;
+  /** This card's place in the run of cards under its heading (`articleEnter.ts`). */
+  index: number;
   onOpenStorylineView: (storylineId: string, label: string | null) => void;
   /** storyline id → the date that separates it from its namesakes on screen. */
   qualifiers: Map<string, string>;
@@ -725,6 +735,12 @@ function GroupCard({
   relatedLevel: "h3" | "h4";
 }) {
   const [showRelated, setShowRelated] = useState(false);
+  // Frozen at mount, which is the whole point of the ref: the delay describes
+  // this card's ARRIVAL, not where it sits now. Revealing newer articles above
+  // it shifts its index without remounting it, and a delay that moved under a
+  // finished animation would rewind it back into the transparent part of
+  // itself — a settled card blinking out because a newer one landed above.
+  const enterDelay = useRef(enterDelayMs(index)).current;
   // Asked of THIS CARD's headline group, not the slot's lead: the rail cuts a
   // slot into parts of the reader's day, and a card cut out of a later part is
   // headed by a different group with memberships of its own (`format.ts`).
@@ -737,6 +753,10 @@ function GroupCard({
 
   return (
     <RailEntry
+      // The whole entry fades in, marker included: the dot is this card's mark
+      // on the spine, and a glyph that arrived ahead of the card it points at
+      // would be pointing at nothing.
+      enterDelay={enterDelay}
       // A slot that crosses nothing keeps the ○ the rail has always drawn and
       // costs the reader nothing, which is the whole of why this treatment went
       // on the spine rather than into the gutter (S9's verdict).
@@ -1375,6 +1395,7 @@ function RailEntry({
   big,
   toggle,
   head,
+  enterDelay,
   children,
 }: {
   marker: React.ReactNode;
@@ -1408,6 +1429,14 @@ function RailEntry({
    * Omit it and the marker centres on the entry as a whole.
    */
   head?: React.ReactNode;
+  /**
+   * Fade this entry in as it mounts, this many milliseconds after the run it
+   * belongs to started (`articleEnter.ts`). Articles take it; the rail's own
+   * furniture does not — a day heading, the "N new" pill, the tail's controls
+   * and the terminus are the frame the cards arrive INTO, and a frame that
+   * faded in with them would read as the page loading twice.
+   */
+  enterDelay?: number;
   children: React.ReactNode;
 }) {
   // Decorative for every other entry; a real button only where it does something,
@@ -1471,7 +1500,14 @@ function RailEntry({
   );
 
   return (
-    <div style={{ position: "relative", padding: big ? "1.5rem 0 0.5rem" : "0.35rem 0" }}>
+    <div
+      className={enterDelay === undefined ? undefined : "article-enter"}
+      style={{
+        position: "relative",
+        padding: big ? "1.5rem 0 0.5rem" : "0.35rem 0",
+        ...(enterDelay === undefined ? {} : { animationDelay: `${enterDelay}ms` }),
+      }}
+    >
       {head === undefined ? (
         glyph
       ) : (

@@ -1268,6 +1268,25 @@ width ~720px. Dark and light via `prefers-color-scheme`. Images lazy-loaded with
 Accessibility is not deferred: real landmarks, visible focus rings, `aria-live` on result-count
 changes, full keyboard reachability, AA contrast in both themes.
 
+**Articles fade in as they mount** — a short rise and fade per card, each a beat behind the one
+above it, so a run of cards arrives as a cascade rather than as a slab. The beat is
+`apps/web/src/articleEnter.ts` (a module, for §8.2's reason: `apps/web` has no renderer in its
+tests) and the motion is `.article-enter` in `index.css`; the split is the one the ingest marks
+already keep. Three things it deliberately is:
+
+- **Per RUN, not per rail.** A card's delay comes from its place under its own heading, because a
+  run is what mounts together — one first paint, one day a reader expands, one older page the
+  sentinel appends, one reveal of what refresh-on-read found. The stagger is capped a few cards in,
+  since a busy day carries dozens and the last of them must not be held back after the rail has
+  otherwise settled.
+- **Frozen at the card's arrival.** The delay describes when a card LANDED, not where it sits now:
+  revealing newer articles above one shifts its index without remounting it, and a delay that moved
+  under a finished animation would rewind it back into the transparent part of itself.
+- **Articles only.** Day headings, the "N new articles" pill, the tail's controls and the ■ terminus
+  are the frame the cards arrive into; a frame that faded in with them would read as the page
+  loading twice. Under `prefers-reduced-motion` the fade drops entirely — unlike the ingest marks,
+  the motion here carries nothing the card does not, so the fallback is simply the card, at rest.
+
 ---
 
 ## 9. Component 5 — Background job consumer (`apps/worker`)
