@@ -10,7 +10,7 @@ import {
   type ReplayResult,
   type ReplayVariant,
 } from "./storyline-replay.js";
-import type { Corpus, LinkRules } from "./storyline-link.js";
+import { groupProfile, type Corpus, type LinkRules } from "./storyline-link.js";
 import { readJudgedStorylines, scoreJudged, type JudgedStoryline } from "./storyline-judged.js";
 import { maxBridgingQualifiers } from "./wiring.js";
 
@@ -38,7 +38,7 @@ export const spec: CommandSpec = {
     mass: { kind: "value", placeholder: "N", describe: "the focus mass threshold (default 16)" },
     variant: {
       kind: "value",
-      placeholder: "base,cap:N,days|domains,birth-bridges",
+      placeholder: "base,cap:N,days|domains,birth-bridges,min-support:N",
       describe: "what the replay models, comma-separated",
     },
     reoffer: {
@@ -263,6 +263,74 @@ export const spec: CommandSpec = {
     const headline = new Map<string, string>();
     for (const row of rows) if (!headline.has(row.group_id)) headline.set(row.group_id, row.title);
 
+    /**
+     * CHAINED arcs: storylines holding two member groups that share no token at
+     * all. A pair like that cannot have linked to each other — whatever holds
+     * them in one arc is a third group that overlapped both — so this counts
+     * percolation directly, from the archive's own vocabulary and with no
+     * judgement attached.
+     *
+     * It exists because the hand-judged `declined` set no longer answers. That
+     * set is `label_source = 'bigram'`, and the relabel campaign converted
+     * almost all of it: 2 declined against 4,892 named on this archive, so the
+     * PILES-FORMED column has no power left. This needs no labels and cannot be
+     * relabelled away.
+     *
+     * A chained arc is not automatically wrong — a long-running story acquires
+     * vocabulary its earliest coverage never used, and two ends of a three-week
+     * arc may genuinely share nothing. So this is an ALARM in the sense
+     * `largestShare` is one: read the direction it moves, not the absolute.
+     */
+    const profileCache = new Map<string, readonly string[]>();
+    const groupProfileOf = (groupId: string): readonly string[] => {
+      const held = profileCache.get(groupId);
+      if (held !== undefined) return held;
+      const derived = groupProfile(byGroup.get(groupId)?.memberTokens ?? []);
+      profileCache.set(groupId, derived);
+      return derived;
+    };
+
+    const chained = (result: ReplayResult): string => {
+      let arcs = 0;
+      let groupsHeld = 0;
+      let pairsDisjoint = 0;
+      let pairsTotal = 0;
+      for (const storyline of result.built) {
+        if (storyline.groupIds.length < 2) continue;
+        const profiles = storyline.groupIds.map(
+          (groupId) => new Set(groupProfileOf(groupId)),
+        );
+        let hit = false;
+        for (let i = 0; i < profiles.length; i += 1) {
+          for (let j = i + 1; j < profiles.length; j += 1) {
+            pairsTotal += 1;
+            let shares = false;
+            for (const token of profiles[i]!) {
+              if (profiles[j]!.has(token)) {
+                shares = true;
+                break;
+              }
+            }
+            if (!shares) {
+              pairsDisjoint += 1;
+              hit = true;
+            }
+          }
+        }
+        if (hit) {
+          arcs += 1;
+          groupsHeld += storyline.groupIds.length;
+        }
+      }
+      const pct = (part: number, whole: number): string =>
+        whole === 0 ? "n/a" : `${((100 * part) / whole).toFixed(1)}%`;
+      return (
+        `${arcs} of ${result.promoted} multi-group arcs (${pct(arcs, result.promoted)}) hold a ` +
+        `group pair sharing NO token, over ${groupsHeld} groups; ` +
+        `${pairsDisjoint} of ${pairsTotal} member pairs (${pct(pairsDisjoint, pairsTotal)}) are disjoint`
+      );
+    };
+
     /** The largest arcs, printed to be READ. A table cannot judge coherence. */
     const readArcs = (result: ReplayResult, count: number, headlines: number): void => {
       for (const storyline of result.built.slice(0, count)) {
@@ -289,6 +357,17 @@ export const spec: CommandSpec = {
     const parts = variantName.split(",");
     const cap = parts.find((part) => part.startsWith("cap:"));
     const independence = parts.find((part) => part === "days" || part === "domains");
+    // `min-support:N` — how many member groups must carry a token for it to
+    // enter a storyline's profile. Never defaulted from configuration because
+    // there is no flag to default it from: the rule is `refreshProfileTokens`'
+    // SQL and `storylineProfile`'s floor, both of which say 2 (ADR-0026). So an
+    // unqualified run models the deployed rule, exactly as it does for the
+    // retrieval and the bridge bound, and `min-support:1` prices what ran before
+    // ADR-0026 — the union-at-two this variant was written to measure.
+    const support = parts.find((part) => part.startsWith("min-support:"));
+    if (support !== undefined && !/^min-support:[1-9]\d*$/.test(support)) {
+      throw new UsageError(`--variant min-support must be a positive integer, got \`${support}\``);
+    }
     // `cap:N` overrides the configured bound; with no `cap:` part the run models
     // whatever `STORYLINE_MAX_BRIDGING_QUALIFIERS` is set to, so an unqualified
     // `--variant=base` describes the deployed mode rather than a hypothetical.
@@ -302,6 +381,7 @@ export const spec: CommandSpec = {
       ...(configuredCap !== undefined ? { maxBridgingQualifiers: configuredCap } : {}),
       ...(independence !== undefined ? { independence: independence as "days" | "domains" } : {}),
       ...(parts.includes("birth-bridges") ? { bridgeOffers: "first" as const } : {}),
+      ...(support !== undefined ? { minGroupSupport: Number(support.slice(12)) } : {}),
     };
     const unknown = parts.filter(
       (part) =>
@@ -309,7 +389,8 @@ export const spec: CommandSpec = {
         part !== "birth-bridges" &&
         part !== "days" &&
         part !== "domains" &&
-        !part.startsWith("cap:"),
+        !part.startsWith("cap:") &&
+        !part.startsWith("min-support:"),
     );
     if (unknown.length > 0) {
       throw new UsageError(`unknown --variant part(s): ${unknown.join(", ")}`);
@@ -942,7 +1023,13 @@ export const spec: CommandSpec = {
     // evidence, and ADR-0009's own history is the argument: the 1,179-group
     // swallow was found by looking at what a storyline had absorbed, not by
     // noticing a number had moved.
-    const focused = replayLinker(groups, corpusAt, { ...BASE, ...focus }, 2, NARROW, {}, GRID_VARIANT);
+    // `variant` rather than `GRID_VARIANT`: the grids above describe the deployed
+    // decision on purpose, but this is the run an operator READS, and a variant
+    // it did not model is a variant nobody can look at. With no `--variant` the
+    // two are the same object — `configuredCap` falls back to the configured
+    // bound — so an unqualified run prints exactly what it always printed, and a
+    // qualified one says so in the header below.
+    const focused = replayLinker(groups, corpusAt, { ...BASE, ...focus }, 2, NARROW, {}, variant);
 
     // What the grid above does NOT model: the service cuts the candidate set at a
     // row limit and this harness does not, so a non-zero count here means the
@@ -953,6 +1040,21 @@ export const spec: CommandSpec = {
       `\ncandidate cap: ${focused.cappedGroups} of ${groups.length} groups exceeded the ` +
         `${NARROW ? "4,000" : "200"}-row limit the service would apply` +
         `${focused.cappedGroups > 0 ? " — the grid above is NOT what production judges" : ""}`,
+    );
+
+    // The focus, as numbers, because `--focus-only` otherwise prints arcs to read
+    // and nothing to compare two runs BY. Every column is `ReplayResult`'s; the
+    // variant is named on the line so a candidate run cannot be mistaken for the
+    // deployed one when two outputs sit side by side.
+    console.log(
+      `\n=== the focus: share=${focus.anchorMaxShare}, mass=${focus.massThreshold}, K=2, ` +
+        `variant ${variantName} ===\n` +
+        `storylines ${focused.storylines}  promoted ${focused.promoted}  ` +
+        `attached ${focused.attached}  merges ${focused.merges}\n` +
+        `LARGEST ${focused.largestStoryline} groups (${(focused.largestShare * 100).toFixed(2)}% ` +
+        `of all groups)  p50 ${focused.p50}  p99 ${focused.p99}  daySlots ${focused.daySlots}\n` +
+        `judged: ${JUDGED_HEADER.trim()} -> ${judgedColumns(focused).trim()}\n` +
+        `chained: ${chained(focused)}`,
     );
 
     console.log(`\n=== the ${Math.min(8, focused.built.length)} largest storylines at the focus ===`);

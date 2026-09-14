@@ -204,9 +204,14 @@ describe("what a click asks for", () => {
     // "Hurricane Fausto Hawaii Landfall" grounded against the profile and
     // capped at two (`cloudQuery`, ADR-0014) — label order, so the naming words
     // win and "landfall" (which the headlines do not say) never enters.
+    //
+    // "hurricane" does not enter either, and that is ADR-0026 reaching the
+    // cloud: only the first of the two headlines says it, so it is no longer in
+    // a profile that is what BOTH member groups carry. The query is grounded in
+    // the arc's consensus coverage rather than in one member's wording.
     expect(outcome.status).toBe("queued");
     if (outcome.status !== "queued") return;
-    expect(outcome.keywords).toEqual(["fausto", "hurricane"]); // canonical form: sorted
+    expect(outcome.keywords).toEqual(["fausto", "hawaii"]); // canonical form: sorted
     expect(outcome.storylineId).toBe(storylineId);
   });
 
@@ -218,7 +223,7 @@ describe("what a click asks for", () => {
 
     // §9.1: a queued segment carries only the fingerprint.
     const topic = await readTopic(db, outcome.fingerprint);
-    expect(topic?.keywords).toEqual(["fausto", "hurricane"]);
+    expect(topic?.keywords).toEqual(["fausto", "hawaii"]);
     expect(topic?.language).toBe("en");
   });
 

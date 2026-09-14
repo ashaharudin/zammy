@@ -335,18 +335,49 @@ describe("groupProfile / storylineProfile", () => {
   it("applies the same rule one level up, which is the percolation damper", () => {
     // A growing storyline's consensus vocabulary TIGHTENS: the more groups
     // join, the more a token must be shared to survive in the profile.
-    const two = storylineProfile([
-      ["fausto", "hawaii"],
-      ["fausto", "surf"],
-    ]);
     const four = storylineProfile([
       ["fausto", "hawaii"],
       ["fausto", "surf"],
       ["fausto", "swell"],
       ["fausto", "genevieve"],
     ]);
-    expect(two).toEqual(["fausto", "hawaii", "surf"]);
     expect(four).toEqual(["fausto"]);
+  });
+
+  it("does not degenerate to a union at two groups (ADR-0026)", () => {
+    // The majority is 1 of 2, so this used to return everything either group
+    // said and hand the second group's whole vocabulary to the arc's identity.
+    // The floor of two makes it the consensus the name promises.
+    expect(
+      storylineProfile([
+        ["fausto", "hawaii"],
+        ["fausto", "surf"],
+      ]),
+    ).toEqual(["fausto"]);
+  });
+
+  it("prices the pre-ADR-0026 rule at minGroupSupport 1, which is what the sweep replays", () => {
+    expect(
+      storylineProfile(
+        [
+          ["fausto", "hawaii"],
+          ["fausto", "surf"],
+        ],
+        1,
+      ),
+    ).toEqual(["fausto", "hawaii", "surf"]);
+  });
+
+  it("keeps a storyline-of-one whole: the floor cannot exceed the member count", () => {
+    // An empty profile is not a stricter storyline, it is one no group can ever
+    // retrieve — `profile_tokens` is what candidate retrieval overlaps against.
+    expect(storylineProfile([["fausto", "hawaii"]])).toEqual(["fausto", "hawaii"]);
+  });
+
+  it("two groups sharing nothing have no profile, so nothing can chain through them", () => {
+    // Prod 49002d0e: a stolen ambulance and an energy-policy piece, held
+    // together by a bridge whose vocabulary the union handed to the arc.
+    expect(storylineProfile([["ambulance", "antigonish"], ["greenhouse", "epa"]])).toEqual([]);
   });
 
   it("is empty for no members rather than throwing", () => {

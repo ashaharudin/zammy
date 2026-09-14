@@ -141,18 +141,21 @@ const changedSet = async () =>
 
 describe("what marks an arc as changed", () => {
   it("is membership, not a profile diff — the 1→2 transition that changes nothing visible", async () => {
-    // §4's trap. With two member groups the majority rule needs support from
-    // ONE, so a token only the newcomer carries — or only the incumbent — still
-    // passes, and `profile_tokens` can come out byte-identical. That transition
-    // is exactly the one that un-blocks a coherence refusal (`groupCount === 1`
-    // is what the linker filters on), so a marker predicated on "the profile
-    // tokens diffed" would silently miss the entire refusal-unblocking class.
+    // §4's trap. A newcomer that says everything the incumbent says leaves
+    // `profile_tokens` byte-identical — under ADR-0026 the profile is what both
+    // carry, and the newcomer's own extra words are a minority of one. That
+    // transition is exactly the one that un-blocks a coherence refusal
+    // (`groupCount === 1` is what the linker filters on), so a marker predicated
+    // on "the profile tokens diffed" would silently miss the entire
+    // refusal-unblocking class. Before ADR-0026 the same trap was sprung by the
+    // union instead — a token only ONE side carried still passed — so the shape
+    // of the miss changed and the marker's reason for being a column did not.
     const incumbent = await group(["fausto", "hawaii"]);
     const arc = await createProvisionalStoryline(db, { groupId: incumbent, ...TZ });
     expect(await dirtyAt(arc.id)).toBeNull();
     const before = await profileOf(arc.id);
 
-    const newcomer = await group(["fausto"]);
+    const newcomer = await group(["fausto", "hawaii", "swell"]);
     await attachGroup(db, { storylineId: arc.id, groupId: newcomer, ...TZ });
 
     expect(await profileOf(arc.id)).toEqual(before);
@@ -301,11 +304,22 @@ describe("the filter's reach", () => {
     expect((await changedSet()).groupIds).not.toContain(old);
     await clearStorylineLinkDirty(db, [{ id: arc.id, dirtyAt: new Date() }]);
 
-    // The widening: a second group carrying the old group's vocabulary. With two
-    // members the majority needs one, so the profile becomes the union.
+    // The widening, and under ADR-0026 it takes TWO groups rather than one: a
+    // profile is what a majority of members carry with a floor of two, so one
+    // newcomer's vocabulary is a minority of one however much it brings. The
+    // first arrival therefore leaves the profile where it was —
     const widener = await group(["fausto", "hawaii", "genevieve", "swell"]);
     await attachGroup(db, { storylineId: arc.id, groupId: widener, ...TZ });
     await promoteStoryline(db, { storylineId: arc.id });
+    expect(await profileOf(arc.id)).toEqual(["genevieve", "swell"]);
+    await clearStorylineLinkDirty(db, [{ id: arc.id, dirtyAt: new Date() }]);
+
+    // — and the SECOND corroborates it, which is what admits the old group's
+    // words to the arc's identity. That this now needs corroboration is the
+    // point of the rule; that the sweep must still reach the old group
+    // afterwards is the point of this test, and it is unchanged.
+    const corroborator = await group(["fausto", "hawaii", "genevieve"]);
+    await attachGroup(db, { storylineId: arc.id, groupId: corroborator, ...TZ });
     expect(await profileOf(arc.id)).toEqual(["fausto", "genevieve", "hawaii", "swell"]);
 
     return { arc: arc.id, old };
@@ -332,7 +346,9 @@ describe("the filter's reach", () => {
       changedOnly: true,
     });
     expect(narrow.changedArcs).toBe(1);
-    expect(narrow.offered).toBe(3);
+    // The arc's own three member groups plus the one old group its widened
+    // profile now overlaps — and NOT the bystander, which is the filter working.
+    expect(narrow.offered).toBe(4);
     expect(await readGroupStorylines(db, old)).toContain(arc);
 
     // The equivalence that makes the narrowing safe: the same offer, from the

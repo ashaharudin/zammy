@@ -63,7 +63,8 @@ The decision stays anchor + mass (ADR-0009's structure), with the corpus
 redefined:
 
 - A storyline speaks through **profile tokens** — tokens carried by at least
-  half its member groups, stored on the storyline row. ADR-0009's
+  half its member groups — and, since ADR-0026, no fewer than two of them
+  wherever the storyline has two — stored on the storyline row. ADR-0009's
   majority-support rule promoted one level; also the percolation damper, since
   a growing storyline's consensus vocabulary tightens rather than loosens.
 - **Candidate retrieval** is a GIN overlap between the arriving group's
@@ -374,7 +375,8 @@ The profile alone was the wrong reading of "what a storyline is about", for two
 reasons that only showed up once labels were real:
 
 - **The majority rule is a filter on vocabulary, not on aboutness.** Profile
-  tokens are the words at least half the member groups carry, which is exactly
+  tokens are the words at least half the member groups carry (at least two of
+  them since ADR-0026), which is exactly
   right for the linker — it is the percolation damper — and wrong for search: a
   word only a minority of the coverage uses is dropped even when it is the word
   the model chose to name the event by. "Fort Hood Crash" answered to neither
