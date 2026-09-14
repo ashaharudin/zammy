@@ -32,6 +32,7 @@ export function CommandBar({
   onSearch,
   onClear,
   onOpenStorylineView,
+  viewLabelHint,
   onLeaveStorylineView,
   qualifiers,
 }: {
@@ -41,7 +42,14 @@ export function CommandBar({
   reference: Reference | undefined;
   onSearch: (topic: TopicQuery, options?: { replace?: boolean }) => void;
   onClear: () => void;
-  onOpenStorylineView: (storylineId: string) => void;
+  onOpenStorylineView: (storylineId: string, label: string | null) => void;
+  /**
+   * The label the click that opened this view already had in hand, for the
+   * chip to show before `page` — the view's own topic, not yet fetched —
+   * has one of its own. `null` covers a reload or a shared link, which has no
+   * click to have carried it.
+   */
+  viewLabelHint: string | null;
   /** The keywords typed to leave the view, or null for a dismissed chip. */
   onLeaveStorylineView: (typed: string | null) => void;
   /** storyline id → the date that separates it from its namesakes on screen. */
@@ -51,7 +59,12 @@ export function CommandBar({
   // The storyline view: opened by clicking a label, so there are no keywords
   // and the box is empty by definition (ADR-0011).
   const view = topic.q === "" && topic.storyline !== undefined ? topic.storyline : null;
-  const viewLabel = view ? (page?.storylines[0]?.label ?? null) : null;
+  // `page` is this view's own topic once loaded, and outranks the hint: a
+  // storyline whose label generation genuinely failed reports that as `null`
+  // here, and the hint — good only until the real answer is in — must not
+  // paper over it. Before `page` arrives there is nothing to outrank yet, so
+  // the hint carries the chip instead of the "storyline" fallback.
+  const viewLabel = view ? (page ? (page.storylines[0]?.label ?? null) : viewLabelHint) : null;
 
   // Back/forward (or a shared link) changes the topic from outside; the bar
   // must follow the URL, not fight it.

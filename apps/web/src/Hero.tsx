@@ -32,7 +32,7 @@ export function Hero({
   onFilters: (filters: TopicFilters) => void;
   onSearch: (q: string) => void;
   /** A cloud word opens its storyline by UUID (ADR-0016), not a search. */
-  onOpenStoryline: (storylineId: string) => void;
+  onOpenStoryline: (storylineId: string, label: string | null) => void;
 }) {
   const [q, setQ] = useState("");
   const reference = useReference();
