@@ -446,3 +446,64 @@ export async function readStorylineSummaries(
     generatedAt: row.generated_at,
   }));
 }
+
+/**
+ * The DAY sentences an arc can be read under, `dayKey → summary` — what the
+ * storyline view puts beside its day headings.
+ *
+ * Three narrowings, each of which is the difference between this read and
+ * `readStorylineSummaries` above:
+ *
+ *  - **`segment = 'day'` only.** The four quarters are the day sentence's own
+ *    input (docs/STORYLINE-SUMMARIES.md, "What the model is asked"), and the
+ *    rail already cuts a day into parts of the READER's day — four UTC quarters
+ *    drawn against four local parts would be two different divisions of one day
+ *    sitting on top of each other. The day sentence is the one that answers the
+ *    heading it goes under.
+ *  - **`summary is not null`.** A refusal is a row, and it means the model was
+ *    asked and would not answer; there is no deterministic fallback for prose
+ *    (the migration's own argument), so what a reader gets is the heading they
+ *    always had. Absent and refused read the same way here, on purpose — the
+ *    difference matters to the pass, never to the page.
+ *  - **the whole ALIAS CHAIN**, not just this id. A merge leaves these rows on
+ *    the id they were written for and never rewrites them (migration 0024);
+ *    the view resolves a bookmark FORWARD to the winner, so reading the winner's
+ *    id alone would drop every sentence written before the merge — on days whose
+ *    coverage the view is nonetheless drawing, because membership followed the
+ *    merge even though the preserve did not.
+ *
+ * Two rows can therefore answer for one day: the winner's and a loser's, each
+ * written over the coverage its own arc held. The higher `article_count` wins —
+ * the sentence written over more of that day is the one that describes more of
+ * it — and `generated_at` breaks the tie, newest first, because a later write
+ * saw at least as much as an earlier one. `storyline_id` last so the answer is
+ * stable across replays rather than left to the scan.
+ *
+ * `storylineId` must ALREADY be alias-resolved: this walks the chain downward
+ * (who merged INTO me), which answers nothing when handed a loser.
+ */
+export async function readArcDaySummaries(
+  db: Kysely<Database>,
+  input: { storylineId: string },
+): Promise<Map<string, string>> {
+  // The alias walk, downward, with the same depth cap `resolveStoryline` uses
+  // upward and for the same reason: no writer here can create a cycle, and the
+  // cap bounds a corrupted chain to a bad answer rather than a hanging query.
+  const { rows } = await sql<{ day_key: string; summary: string }>`
+    with recursive arc(id, depth) as (
+      select id, 0 from storylines where id = ${input.storylineId}::uuid
+      union all
+      select loser.id, arc.depth + 1
+      from storylines loser join arc on loser.merged_into = arc.id
+      where arc.depth < 32
+    )
+    select distinct on (day_key) day_key, summary
+    from storyline_day_summaries
+    where storyline_id in (select id from arc)
+      and segment = 'day'
+      and summary is not null
+    order by day_key, article_count desc, generated_at desc, storyline_id
+  `.execute(db);
+
+  return new Map(rows.map((row) => [row.day_key, row.summary]));
+}

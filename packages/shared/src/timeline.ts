@@ -235,6 +235,44 @@ export const TimelineEntry = z.object({
   moreCoverage: z.array(Article),
   /** Non-null exactly when this slot's storyline has been promoted. */
   storyline: StorylineRef.nullable(),
+  /**
+   * What this storyline-day held, in one sentence, and the calendar day that
+   * sentence is about: the historical preserve's DAY summary for this slot
+   * (ADR-0023, docs/STORYLINE-SUMMARIES.md).
+   *
+   * On the entry rather than page-level, because an entry IS a storyline-day —
+   * the same `(storyline, day)` pair the preserve is keyed by.
+   *
+   * `dayKey` travels WITH the sentence and is the whole reason this is an
+   * object. A consumer cannot derive it: `published` is an instant, and which
+   * calendar day it falls in depends on a zone the browser does not know the
+   * server used. And a consumer needs it, because the sentence is a claim about
+   * a DATE — it says "the 22nd" in its own words often enough — so it has to be
+   * drawn under a heading reading the same date. A renderer that cuts the
+   * timeline by the reader's own calendar instead (`apps/web/src/format.ts`
+   * does) therefore matches this LABEL against its own day labels rather than
+   * trying to reconcile two frames: the two calendars disagree about which
+   * instants a day holds, and agree exactly about what to call it.
+   *
+   * Null in three cases a consumer must not try to tell apart: no sentence was
+   * written for that day, the model was asked and refused, or this is an
+   * ordinary SEARCH rather than the storyline view. The last one is a rule
+   * rather than an omission — a search's slot carries only the members that
+   * matched the keywords (`readStorylineTimelinePage` step 2), and a sentence
+   * written over the storyline's whole day would be describing coverage the
+   * reader cannot see on the row it sits on.
+   *
+   * Defaulted, so a response from an instance that predates this field parses
+   * as the silence it is rather than failing the page.
+   */
+  daySummary: z
+    .object({
+      /** YYYY-MM-DD, the day the sentence is about. */
+      dayKey: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      text: z.string().min(1),
+    })
+    .nullable()
+    .default(null),
 });
 export type TimelineEntry = z.infer<typeof TimelineEntry>;
 

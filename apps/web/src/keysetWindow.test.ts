@@ -73,6 +73,7 @@ const entry = (row: { published: string; storylineId: string }): TimelineEntry =
   related: [],
   moreCoverage: [],
   storyline: null,
+  daySummary: null,
 });
 
 const page = (items: TimelineEntry[], nextCursor: string | null): TimelinePage => ({

@@ -6,6 +6,7 @@ import { ApiError, type TopicQuery } from "./api.js";
 import { enterDelayMs } from "./articleEnter.js";
 import { readTimeZone } from "./browser.js";
 import { isCollapsed, nothingCollapsed, segmentKey, toggle } from "./dayCollapse.js";
+import { useDaySummaries } from "./daySummaryPreference.js";
 import {
   groupByDay,
   hasLaterCoverage,
@@ -58,6 +59,10 @@ export function TimelinePage({
 }) {
   const timeline = useTimeline(topic);
   const reference = useReference();
+  // A standing reader preference, held at the top because the two halves of it
+  // are in different subtrees: the command bar owns the switch and the rail
+  // owns what it switches.
+  const { daySummaries, toggleDaySummaries } = useDaySummaries();
 
   const pages = timeline.data?.pages ?? [];
   const latest = pages.at(-1);
@@ -148,6 +153,8 @@ export function TimelinePage({
         viewLabelHint={viewLabelHint}
         onLeaveStorylineView={onLeaveStoryline}
         qualifiers={qualifiers}
+        daySummaries={daySummaries}
+        onToggleDaySummaries={toggleDaySummaries}
       />
       <main style={{ maxWidth: "var(--page-max)", margin: "0 auto", padding: "1.5rem 1rem 3rem" }}>
         {timeline.isPending && <SkeletonRail />}
@@ -166,6 +173,7 @@ export function TimelinePage({
             onOpenStorylineView={onOpenStoryline}
             qualifiers={qualifiers}
             memberships={memberships}
+            daySummaries={daySummaries}
             items={visible}
             newCount={newCount}
             onReveal={reveal}
@@ -389,6 +397,7 @@ function RailSpine({ charged }: { charged: boolean }) {
 
 function Rail({
   items,
+  daySummaries,
   newCount,
   onReveal,
   onOpenStorylineView,
@@ -412,6 +421,13 @@ function Rail({
   qualifiers: Map<string, string>;
   /** Which storylines each group on the page is filed in (ADR-0025). */
   memberships: PageMemberships;
+  /**
+   * The reader's day-sentence setting (`daySummaryPreference`). Only ever
+   * suppresses: a page with no sentences on it draws none either way, so this
+   * is a reader turning off prose they are being shown rather than a request
+   * for it.
+   */
+  daySummaries: boolean;
   ingesting: boolean;
   /** A refetch of what is already here, as opposed to upstream still arriving. */
   refreshing: boolean;
@@ -523,6 +539,12 @@ function Rail({
       )}
       {days.map((day) => {
         const dayCollapsed = isCollapsed(collapsed, day.key);
+        // What the day held, in one sentence (ADR-0023), where the page carried
+        // one and the reader has not turned them off. Not suppressed by the
+        // day being COLLAPSED: collapsing hides the coverage, and a sentence
+        // about what the coverage said is then the most useful thing the row
+        // can still show — it is the reason to open it again.
+        const summary = daySummaries ? day.summary : null;
         // A day whose coverage all landed in one part of the day gets no
         // segment treatment: a divider that chunks nothing is noise. Read off
         // the shape groupByDay already produced.
@@ -537,8 +559,16 @@ function Rail({
               big
               toggle={() => setCollapsed((sections) => toggle(sections, day.key))}
             >
+              {/*
+                Inline, so the sentence beside it reads as one line — "TODAY.
+                Rescuers reached the valley." — rather than as a heading with a
+                paragraph under it. The heading itself stays the DAY alone:
+                heading navigation should land on a label, and a 35-word
+                sentence in the outline is a heading nobody can skim.
+              */}
               <h2
                 style={{
+                  display: "inline",
                   fontSize: "0.9rem",
                   textTransform: "uppercase",
                   letterSpacing: "0.08em",
@@ -573,6 +603,26 @@ function Rail({
                   {day.day}
                 </button>
               </h2>
+              {summary && (
+                <span
+                  style={{
+                    // The heading's own casing and tracking are set for a label
+                    // and have to be undone here: an uppercase, letter-spaced
+                    // sentence is a headline, and this is prose.
+                    fontSize: "0.9rem",
+                    textTransform: "none",
+                    letterSpacing: "normal",
+                    fontWeight: 400,
+                    color: "var(--fg-faint)",
+                  }}
+                >
+                  {/* The separator belongs to the pair, not to either half:
+                      `day.day` is a label everywhere else on the rail, and the
+                      sentence is written to stand on its own. */}
+                  {". "}
+                  {summary}
+                </span>
+              )}
             </RailEntry>
             {!dayCollapsed &&
               day.segments.map((part) => {

@@ -1122,6 +1122,29 @@ keywords in, timeline out.
   apart claims a story developed when nothing did. Where `sighting_count > 1` (a continuously-updated post)
   the card shows the same quiet treatment from `latest_seen`. This is the user-visible half of §7.4; without
   it, over half of a typical timeline is one post repeated.
+- **Day sentence** — in the STORYLINE VIEW, a day's heading carries what that day held, in one sentence:
+  "TODAY. Rescuers reached the valley." It is the historical preserve's `day` row (ADR-0023,
+  docs/STORYLINE-SUMMARIES.md), reaching the browser on the entry as `TimelineEntry.daySummary` — on the entry
+  because an entry IS a storyline-day, the pair the preserve is keyed by, and page-level would need a day key
+  the wire does not otherwise carry. The QUARTERS stay unread: they are the day sentence's own input, and the
+  rail already divides a day into the parts of the reader's day, so drawing both would be two divisions of one
+  day on top of each other. A SEARCH carries none, and that is a rule rather than a gap — its slot holds only
+  the members the keywords matched, so a sentence about the whole day would describe coverage the row does not
+  show. The rail cuts days in the READER's zone and a sentence is written over a UTC day, so the coverage one
+  sentence describes routinely lands in two rail days and no rail day IS the day it covers; the match is
+  therefore by DATE LABEL — `2026-08-22`'s sentence under the rail day called `2026-08-22` — which is why the
+  wire field is an object carrying `dayKey` beside the text, a day a browser cannot derive from an instant
+  under a zone it does not know the server used. Filing it by the slot instead drew the 22nd's sentence under
+  "FRIDAY, AUG 21" for a reader six hours west, a heading contradicting prose that names its own date; caught
+  in a real browser, where both calendars are visible at once. The cost is that a sentence whose date has no
+  rail day on the page is not drawn. A merge is the case the read has to work for: the
+  preserve never follows one while the view resolves a bookmark forward, so `readArcDaySummaries` walks the
+  alias chain downward and the higher `article_count` settles a day two arcs both wrote. A refused sentence and
+  an unwritten one are the same silence here. The heading is still the day and still the collapse control; the
+  sentence is a span beside it in the page's own casing, and collapsing the day does not hide it — collapsing
+  hides the coverage, and what the coverage said is the reason to open it again. A `summary` toggle in the
+  command bar's meta row turns them off, as a `localStorage` reader preference on by default, shown in the view
+  alone because it is the only place with sentences to suppress.
 - **Storyline label** — every slot of a labelled storyline hangs its label in the gutter on the far
   side of the rail; clicking opens the **storyline view**: the timeline filtered to that UUID, the
   label as a dismissible chip, the search box empty, typing exits (ADR-0011). The label's words are

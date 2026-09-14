@@ -14,6 +14,7 @@ import {
   setStorylineLabel,
   setStorylineStatus,
   upsertTopic,
+  writeStorylineDaySummary,
 } from "@zammy/storage";
 import type { CanonicalQuery } from "./canonical.js";
 import { groupCreatedArticles } from "./grouping-service.js";
@@ -468,6 +469,47 @@ describe("the storyline view", () => {
     expect(view).not.toBeNull();
     expect(view!.storylines[0]?.id).toBe(winner);
     expect(view!.items.length).toBeGreaterThan(0);
+  });
+
+  it("hands each slot the day sentence written for it, and a search none", async () => {
+    // The historical preserve (ADR-0023) reaching a reader. Two days, a
+    // sentence for one of them: the day that has one carries it, the day that
+    // does not carries null rather than borrowing its neighbour's.
+    const query = await seed([
+      sighting({ domain: "a.example", title: "Hurricane Fausto nears Hawaii", published: MONDAY }),
+      sighting({ domain: "b.example", title: "Fausto weakens over Hawaii", published: TUESDAY }),
+    ]);
+    const storyline = await storylineOf(await groupIds(), "Hurricane Fausto");
+    await writeStorylineDaySummary(db, {
+      storylineId: storyline,
+      dayKey: "2026-08-10",
+      segment: "day",
+      summary: "Fausto closed on the islands as shelters opened.",
+      articleCount: 6,
+      label: "Hurricane Fausto",
+      modelId: "gemma-test",
+      attempts: 0,
+      segmented: true,
+      generatedAt: NOW,
+    });
+
+    const view = await readStorylineView(harness.deps, { storylineId: storyline, limit: 25 });
+
+    // Newest day first, so Tuesday — which has no sentence — leads. The
+    // sentence travels WITH the date it is about, because the browser cuts the
+    // rail by the reader's calendar and has to put it under a heading reading
+    // the same day (`TimelineEntry.daySummary`).
+    expect(view!.items.map((item) => item.daySummary)).toEqual([
+      null,
+      { dayKey: "2026-08-10", text: "Fausto closed on the islands as shelters opened." },
+    ]);
+
+    // The same storyline-day, reached by SEARCH, says nothing: a search's slot
+    // holds only the members that matched the keywords, and a sentence about
+    // the whole day would describe coverage the row does not show.
+    await dropCachedPages(query.fingerprint);
+    const searched = await readTimeline(harness.deps, query, { limit: 25 });
+    expect(searched.items.map((item) => item.daySummary)).toEqual([null, null]);
   });
 
   it("reports a UUID this database never held as absent, not as empty", async () => {

@@ -45,7 +45,15 @@ const entry = (
   id: string,
   published: string,
   headlinePublished = published,
-  members: { related?: Article[]; moreCoverage?: Article[] } = {},
+  members: {
+    related?: Article[];
+    moreCoverage?: Article[];
+    /**
+     * The storyline-day's own sentence (ADR-0023), which only the view sends,
+     * and the date it is about — `[dayKey, text]`.
+     */
+    daySummary?: [string, string];
+  } = {},
 ): TimelineEntry => {
   const related = members.related ?? [];
   const moreCoverage = members.moreCoverage ?? [];
@@ -65,6 +73,9 @@ const entry = (
     related: related.map((copy) => ({ ...copy, groupId: id })),
     moreCoverage,
     storyline: null,
+    daySummary: members.daySummary
+      ? { dayKey: members.daySummary[0], text: members.daySummary[1] }
+      : null,
   };
 };
 
@@ -718,5 +729,95 @@ describe("groupByDay", () => {
     const days = groupByDay(older, now, VANCOUVER);
     expect(partsOf(days)).toEqual(["Evening", "Afternoon", "Morning"]);
     expect(days[0]?.segments[0]?.items[0]?.article.id).toBe("late");
+  });
+});
+
+
+describe("groupByDay day summaries", () => {
+  const now = new Date("2026-08-12T19:00:00.000Z");
+
+  it("draws a sentence under the day it is ABOUT, not the day its slot leads in", () => {
+    // The regression this rule exists for, seen in a live render: the slot's
+    // earliest article ran at 01:00 UTC on the 12th, which for a reader six
+    // hours west is the EVENING OF THE 11TH — so filing the sentence by the
+    // slot put the 12th's sentence under "AUGUST 11", a heading contradicting
+    // prose that names its own date. The rest of that day's coverage is drawn
+    // under the 12th, which is where the sentence goes.
+    const days = groupByDay(
+      [
+        entry("1", "2026-08-12T01:00:00.000Z", "2026-08-12T01:00:00.000Z", {
+          daySummary: ["2026-08-12", "Rescuers reached the valley."],
+          moreCoverage: [article("later", "2026-08-12T20:00:00.000Z")], // 13:00 on the 12th
+        }),
+      ],
+      now,
+      VANCOUVER,
+    );
+
+    expect(days.map((day) => [day.key, day.summary])).toEqual([
+      ["2026-08-12", "Rescuers reached the valley."],
+      ["2026-08-11", null],
+    ]);
+  });
+
+  it("carries the sentence where the two calendars do agree", () => {
+    const days = groupByDay(
+      [
+        entry("1", "2026-08-11T18:00:00.000Z", "2026-08-11T18:00:00.000Z", {
+          daySummary: ["2026-08-11", "Rescuers reached the valley."],
+        }),
+      ],
+      now,
+      VANCOUVER,
+    );
+
+    expect(days).toHaveLength(1);
+    expect(days[0]?.summary).toBe("Rescuers reached the valley.");
+  });
+
+  it("is null on a day the page sent no sentence for", () => {
+    // Every ordinary search is this case (`TimelineEntry.daySummary`), and so
+    // is a storyline-day the preserve has not written or the model refused.
+    const days = groupByDay([entry("1", "2026-08-11T18:00:00.000Z")], now, VANCOUVER);
+
+    expect(days[0]?.summary).toBeNull();
+  });
+
+  it("draws nothing for a sentence whose date this page has no day for", () => {
+    // It takes a day whose every article ran in the few hours falling outside
+    // the reader's like-named day. Silent beats under the wrong heading.
+    const days = groupByDay(
+      [
+        entry("1", "2026-08-12T03:00:00.000Z", "2026-08-12T03:00:00.000Z", {
+          daySummary: ["2026-08-12", "A sentence with nowhere to go."],
+        }),
+      ],
+      now,
+      VANCOUVER, // 20:00 on the 11th
+    );
+
+    expect(days.map((day) => [day.key, day.summary])).toEqual([["2026-08-11", null]]);
+  });
+
+  it("gives each day its own sentence when two land in one reader-day", () => {
+    // Far enough east that two server days both begin inside one of the
+    // reader's. Matching by date rather than by slot means the group draws the
+    // day it is NAMED for, and the other sentence waits for its own group.
+    const days = groupByDay(
+      [
+        entry("2", "2026-08-12T08:00:00.000Z", "2026-08-12T08:00:00.000Z", {
+          daySummary: ["2026-08-12", "The second day's sentence."],
+        }),
+        entry("1", "2026-08-11T12:00:00.000Z", "2026-08-11T12:00:00.000Z", {
+          daySummary: ["2026-08-11", "The first day's sentence."],
+        }),
+      ],
+      now,
+      "Pacific/Kiritimati", // UTC+14: both fall in the reader's 2026-08-12
+    );
+
+    expect(days.map((day) => [day.key, day.summary])).toEqual([
+      ["2026-08-12", "The second day's sentence."],
+    ]);
   });
 });
