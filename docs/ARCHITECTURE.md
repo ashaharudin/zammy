@@ -1159,6 +1159,14 @@ keywords in, timeline out.
   stamp, each a size-bucket glyph plus the label. In the chrome rather than the results, because
   search and storylines are separate axes and a strip among the results reads as part of the result
   set. The bar's bottom edge hides the row; the collapsed state persists.
+  **Biggest storyline first**, ties keeping the order the API sent (recency), and the row CHANGES
+  by moving: the pills a search no longer matches fade out holding their slots, then the survivors
+  bubble to their new places — rising in front of the pills they overtake, sinking behind the ones
+  that overtake them — and the new ones fade in. Which storylines surface is still the API's pick
+  (`SURFACED_STORYLINE_LIMIT` by recency, §7.3); this is the arrangement of the eight that made it,
+  because the question a reader asks of a row of pills is "which of these is the big story".
+  `storylinePillMotion.ts` owns the order and the three states, `index.css` the fades, and
+  `StorylinePills` only the measuring the move needs. Reduced motion drops all three.
   **A storyline speaks in two vocabularies and a keyword may be found in either** (ADR-0011,
   amended): its `profile_tokens`, and its LABEL — the majority rule drops a word only a minority of
   member groups use (and, since ADR-0026, a word only ONE of two members uses), even when that
