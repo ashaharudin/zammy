@@ -82,8 +82,17 @@ function TopicApp() {
   // up when the cloud stopped running a search. The transition does not wait on
   // it and the view does not show it — whatever arrives lands in the archive for
   // the next read of the arc.
+  //
+  // `label` is the click's own hand-off — every entry point already renders
+  // the storyline's name, so it costs nothing to carry — held here rather than
+  // in the route because it is a hint for the one transition in flight, not
+  // part of what a shared link should reproduce. `viewLabelHint` is only read
+  // while it matches the route's own storyline id, so a stale one from a
+  // dismissed view can never leak onto the next.
+  const [labelHint, setLabelHint] = useState<{ id: string; label: string | null } | null>(null);
   const openStoryline = useCallback(
-    (storylineId: string) => {
+    (storylineId: string, label: string | null) => {
+      setLabelHint({ id: storylineId, label });
       refreshStoryline(storylineId);
       navigate(openStorylineView(route, storylineId));
     },
@@ -123,6 +132,7 @@ function TopicApp() {
       // not searches: only here is the search being left still in hand to be
       // recorded, and to be returned to.
       onOpenStoryline={openStoryline}
+      viewLabelHint={route.storyline && labelHint?.id === route.storyline ? labelHint.label : null}
       onLeaveStoryline={(typed) => {
         const { route: next, replace } = leaveStorylineView(route, typed);
         navigate(next, { replace });

@@ -25,7 +25,7 @@ export function StorylinePills({
 }: {
   storylines: readonly StorylineSummary[];
   qualifiers: Map<string, string>;
-  onOpen: (storylineId: string) => void;
+  onOpen: (storylineId: string, label: string | null) => void;
 }) {
   const [collapsed, setCollapsed] = useState(
     () => globalThis.localStorage?.getItem(COLLAPSED_KEY) === "1",
@@ -58,7 +58,7 @@ export function StorylinePills({
               key={storyline.id}
               storyline={storyline}
               qualifier={qualifiers.get(storyline.id) ?? null}
-              onOpen={() => onOpen(storyline.id)}
+              onOpen={() => onOpen(storyline.id, storyline.label)}
             />
           ))}
         </div>

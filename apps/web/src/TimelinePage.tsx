@@ -39,12 +39,19 @@ export function TimelinePage({
   onSearch,
   onClear,
   onOpenStoryline,
+  viewLabelHint,
   onLeaveStoryline,
 }: {
   topic: TopicQuery;
   onSearch: (topic: TopicQuery, options?: { replace?: boolean }) => void;
   onClear: () => void;
-  onOpenStoryline: (storylineId: string) => void;
+  onOpenStoryline: (storylineId: string, label: string | null) => void;
+  /**
+   * The label the reader clicked to get here, good only until the topic's own
+   * data says otherwise (`CommandBar`'s `viewLabel`) — a hand-off from the
+   * click, not a fact this page holds onto past that.
+   */
+  viewLabelHint: string | null;
   /** The keywords typed to leave the view, or null for a dismissed chip. */
   onLeaveStoryline: (typed: string | null) => void;
 }) {
@@ -137,6 +144,7 @@ export function TimelinePage({
         onSearch={onSearch}
         onClear={onClear}
         onOpenStorylineView={onOpenStoryline}
+        viewLabelHint={viewLabelHint}
         onLeaveStorylineView={onLeaveStoryline}
         qualifiers={qualifiers}
       />
@@ -398,7 +406,7 @@ function Rail({
   items: TimelineEntry[];
   newCount: number;
   onReveal: () => void;
-  onOpenStorylineView: (storylineId: string) => void;
+  onOpenStorylineView: (storylineId: string, label: string | null) => void;
   /** storyline id → the date that separates it from its namesakes on screen. */
   qualifiers: Map<string, string>;
   /** Which storylines each group on the page is filed in (ADR-0025). */
@@ -706,7 +714,7 @@ function GroupCard({
   relatedLevel,
 }: {
   entry: RailSlot;
-  onOpenStorylineView: (storylineId: string) => void;
+  onOpenStorylineView: (storylineId: string, label: string | null) => void;
   /** storyline id → the date that separates it from its namesakes on screen. */
   qualifiers: Map<string, string>;
   /** Which storylines each group on the page is filed in (ADR-0025). */
@@ -763,7 +771,7 @@ function GroupCard({
             <StorylineLabel
               label={entry.storyline.label}
               qualifier={qualifiers.get(entry.storylineId) ?? null}
-              onOpen={() => onOpenStorylineView(entry.storylineId)}
+              onOpen={() => onOpenStorylineView(entry.storylineId, entry.storyline?.label ?? null)}
             />
           )}
           <ArticleCard

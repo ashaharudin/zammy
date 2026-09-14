@@ -145,7 +145,7 @@ export function TrendingCloud({
 }: {
   /** The cloud's language, already made concrete (see cloudLanguage). */
   language: string;
-  onOpenStoryline: (storylineId: string) => void;
+  onOpenStoryline: (storylineId: string, label: string | null) => void;
 }) {
   const trending = useTrending(language);
   const [asList, setAsList] = useState(false);
@@ -333,7 +333,7 @@ export function TrendingCloud({
               <button
                 key={word.storyline.id}
                 tabIndex={-1}
-                onClick={() => onOpenStoryline(word.storyline.id)}
+                onClick={() => onOpenStoryline(word.storyline.id, word.storyline.label)}
                 title={cloudDetail(word.storyline, bounds)}
                 style={{
                   position: "absolute",
@@ -397,7 +397,7 @@ export function TrendingCloud({
           {storylines.map((storyline) => (
             <li key={storyline.id} style={{ marginBottom: "0.3rem" }}>
               <button
-                onClick={() => onOpenStoryline(storyline.id)}
+                onClick={() => onOpenStoryline(storyline.id, storyline.label)}
                 style={{
                   border: "none",
                   background: "none",

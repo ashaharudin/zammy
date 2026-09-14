@@ -112,7 +112,7 @@ export function StorylineBraid({
    * the only thing that differs, so it is the only thing passed in.
    */
   subject: string;
-  onOpenStoryline: (storylineId: string) => void;
+  onOpenStoryline: (storylineId: string, label: string | null) => void;
   /** Tighter hit area for the disclosure's hairline, which has 0.9rem to give. */
   dense?: boolean;
 }) {
@@ -220,13 +220,13 @@ export function StorylineBraid({
           others={membership.others}
           qualifiers={membership.qualifiers}
           left={dense ? "1.4rem" : "1.7rem"}
-          onOpenStoryline={(id) => {
+          onOpenStoryline={(id, label) => {
             // Closed on the way out: the next rail may hold a row under the
             // same key, and a popover that survived the navigation would
             // re-open itself on something the reader never pressed. No focus
             // restore — the rail this trigger belongs to is being replaced.
             close(false);
-            onOpenStoryline(id);
+            onOpenStoryline(id, label);
           }}
         />
       )}
@@ -252,7 +252,7 @@ function MembershipList({
   others: readonly StorylineSummary[];
   qualifiers: Map<string, string>;
   left: string;
-  onOpenStoryline: (storylineId: string) => void;
+  onOpenStoryline: (storylineId: string, label: string | null) => void;
 }) {
   const heading = `also in ${others.length} storyline${others.length === 1 ? "" : "s"}`;
   return (
@@ -319,7 +319,7 @@ function MembershipList({
                 type="button"
                 // By UUID, never by the label's words: labels are non-unique,
                 // so only the id identifies the story (ADR-0011).
-                onClick={() => onOpenStoryline(arc.id)}
+                onClick={() => onOpenStoryline(arc.id, arc.label)}
                 aria-label={`Open storyline ${arc.label}${
                   qualifier ? `, ${qualifier}` : ""
                 }, ${detail}`}
