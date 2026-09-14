@@ -11,7 +11,8 @@ import { markStorylinesLinkDirty } from "./storyline-link-dirty.js";
  * two derivations are the ones the read path and the linker cannot afford to
  * recompute:
  *
- *  - **profile tokens**: the tokens at least half the member groups carry.
+ *  - **profile tokens**: the tokens at least half the member groups carry, and
+ *    no fewer than two of them where there are two (ADR-0026).
  *    Re-derived on every membership change, because it is what candidate
  *    retrieval overlaps against, and a profile that lagged its membership would
  *    quietly change which storylines a group can even be compared to.
@@ -327,6 +328,56 @@ export async function readLabelledStorylinePage(
   if (input.after !== null) query = query.where("id", ">", input.after);
   const rows = await query.execute();
   return rows.map((row) => ({ id: row.id, label: row.label! }));
+}
+
+/**
+ * A page of LIVE storylines, id-ordered — every storyline, labelled or not,
+ * because a profile is a fact about membership rather than about naming and a
+ * provisional storyline-of-one has one too.
+ *
+ * Aliases are excluded because nothing reads their profile: `mergeStorylines`
+ * empties it on the same write that sets `merged_into`, and every read resolves
+ * the alias first. Re-deriving one would be harmless rather than wrong — the
+ * merge deletes the loser's `storyline_groups` before aliasing it, so the
+ * derivation would find no members and write `'{}'` over `'{}'` — but a backfill
+ * that touches 17,000 rows should touch the ones that mean something.
+ */
+export async function readStorylinePage(
+  db: Kysely<Database>,
+  input: { after: string | null; limit: number },
+): Promise<{ id: string }[]> {
+  let query = db
+    .selectFrom("storylines")
+    .select(["id"])
+    .where("merged_into", "is", null)
+    .orderBy("id")
+    .limit(input.limit);
+  if (input.after !== null) query = query.where("id", ">", input.after);
+  return query.execute();
+}
+
+/**
+ * Re-derive one storyline's `profile_tokens` and nothing else.
+ *
+ * The public door onto `refreshProfileTokens`, for the backfill that has to run
+ * when the derivation RULE changes rather than when a membership does —
+ * ADR-0026 is the first of those. Deliberately not `refreshStorylineDerivations`:
+ * the day slots are a function of membership, which a rule change does not move,
+ * and re-deriving 17,000 of them to fix a column they do not touch is work whose
+ * only possible outcome is a mistake.
+ *
+ * It does NOT `markStorylinesLinkDirty` either, and that one is a judgement
+ * rather than an omission. The marker exists so a WIDENED profile re-offers the
+ * old groups it can now reach (migration 0017); ADR-0026's floor only ever
+ * narrows, so there is no new reach to go and find. A pass under a rule that
+ * could widen would have to mark — which is what the `widened` and `swapped`
+ * counters in `backfillStorylineProfiles` are watching for.
+ */
+export async function refreshStorylineProfile(
+  db: Kysely<Database>,
+  storylineId: string,
+): Promise<void> {
+  await refreshProfileTokens(db, storylineId);
 }
 
 /**
@@ -1419,12 +1470,26 @@ export async function refreshStorylineDerivations(
 }
 
 /**
- * Re-derive the profile: every token carried by at least half the member groups.
+ * Re-derive the profile: every token carried by at least half the member groups,
+ * and by no fewer than TWO of them wherever the storyline has two to give.
  *
  * Group-level support, not article-level, and that is the whole point — it is the
  * majority-support rule that silenced AP live-blog vocabulary at the group layer,
  * promoted one level (ADR-0011). Counted over DISTINCT (group, token) pairs, so a
  * story syndicated forty times has one vote like everything else.
+ *
+ * The floor of two is ADR-0026, and it exists because the majority alone
+ * degenerates exactly once: at n = 2, `half` is 1, so this column used to be the
+ * UNION of two groups' vocabularies rather than their consensus — the second
+ * group donated everything it said to the arc's identity, and since
+ * `profile_tokens` is what candidate retrieval overlaps against, the third group
+ * was then FOUND BY words no two members had agreed on. `least(2, n)` is what
+ * keeps a storyline-of-one whole: its own vocabulary is all it has, and an empty
+ * profile there is not a stricter storyline but one no group can ever find.
+ *
+ * `storylineProfile` in the api applies the same floor in memory, and the two
+ * must move together — it is the function the sweep replays, and a floor on one
+ * side only is how a threshold gets pinned against a decision nothing runs.
  */
 async function refreshProfileTokens(db: Kysely<Database>, storylineId: string): Promise<void> {
   await sql`
@@ -1445,7 +1510,8 @@ async function refreshProfileTokens(db: Kysely<Database>, storylineId: string): 
     set profile_tokens = coalesce(
       (select array_agg(support.tok order by support.tok)
         from support, total
-        where support.groups_with * 2 >= total.n),
+        -- ceil(n/2) by integer division, floored at 2 and clamped to n.
+        where support.groups_with >= greatest((total.n + 1) / 2, least(2, total.n))),
       '{}'
     )
     where id = ${storylineId}::uuid

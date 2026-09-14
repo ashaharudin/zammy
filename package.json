@@ -23,6 +23,7 @@
     "merge:storyline-labels": "pnpm --filter @zammy/api merge:storyline-labels",
     "backfill:storylines": "pnpm --filter @zammy/api backfill:storylines",
     "backfill:label-words": "pnpm --filter @zammy/api backfill:label-words",
+    "backfill:storyline-profiles": "pnpm --filter @zammy/api backfill:storyline-profiles",
     "measure:storylines-v2": "pnpm --filter @zammy/api measure:storylines-v2",
     "measure:storyline-coherence": "pnpm --filter @zammy/api measure:storyline-coherence",
     "measure:deepening-yield": "pnpm --filter @zammy/api measure:deepening-yield",

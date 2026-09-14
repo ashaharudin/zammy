@@ -323,7 +323,8 @@ export interface StorylinesTable {
    */
   label_words: Generated<string[]>;
   /**
-   * Tokens carried by at least half the member groups: the storyline's own
+   * Tokens carried by at least half the member groups, and by no fewer than two
+   * of them wherever there are two (ADR-0026): the storyline's own
    * vocabulary, and the GIN surface candidate retrieval overlaps against. The
    * majority rule is the percolation damper — a growing storyline's consensus
    * vocabulary tightens rather than loosens.

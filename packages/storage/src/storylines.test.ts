@@ -182,15 +182,11 @@ describe("storylines in storage", () => {
     const second = await group("2026-08-10T10:00:00.000Z", ["mars", "lander", "photos"]);
     await attachGroup(harness.db, { storylineId: storyline.id, groupId: second, timeZone: ZONE });
 
-    // Two groups: one group IS half, so the profile is their union. A young
-    // storyline is deliberately the permissive case — it has nothing to be a
-    // consensus about yet, and it is a growing one that must tighten.
-    expect(await profile(storyline.id)).toEqual([
-      "lander",
-      "mars",
-      "photos",
-      "touchdown",
-    ]);
+    // Two groups, and the profile is what BOTH say rather than what either says
+    // (ADR-0026). One group is half of two, so the majority alone would have
+    // made this their union and handed the second group's whole vocabulary to
+    // the arc — the words a third group would then be retrieved by.
+    expect(await profile(storyline.id)).toEqual(["lander", "mars"]);
 
     const third = await group("2026-08-10T11:00:00.000Z", ["mars", "lander", "reaction"]);
     await attachGroup(harness.db, { storylineId: storyline.id, groupId: third, timeZone: ZONE });
@@ -200,6 +196,33 @@ describe("storylines in storage", () => {
     // direction is the percolation damper — a swallowing storyline's vocabulary
     // narrows, so it gets harder to join, not easier.
     expect(await profile(storyline.id)).toEqual(["lander", "mars"]);
+  });
+
+  it("keeps a storyline-of-one's own vocabulary, which the floor must not empty", async () => {
+    // `profile_tokens` is what candidate retrieval overlaps against, so a floor
+    // of two applied literally to a single member would not be a stricter
+    // storyline — it would be one nothing can ever find, and formation stops.
+    const only = await group("2026-08-10T09:00:00.000Z", ["ceres", "flyby"]);
+    const storyline = await createProvisionalStoryline(harness.db, {
+      groupId: only,
+      timeZone: ZONE,
+    });
+    expect(await profile(storyline.id)).toEqual(["ceres", "flyby"]);
+  });
+
+  it("gives two groups that share nothing an empty profile", async () => {
+    // Prod 49002d0e: a stolen ambulance and eight EPA power-plant articles, one
+    // bridge apart. Under the union rule the bridge's vocabulary became the
+    // arc's, and the EPA coverage was retrieved by words the ambulance never
+    // said. Nothing can chain through an arc with no consensus to overlap.
+    const one = await group("2026-08-10T09:00:00.000Z", ["ambulance", "antigonish"]);
+    const storyline = await createProvisionalStoryline(harness.db, {
+      groupId: one,
+      timeZone: ZONE,
+    });
+    const other = await group("2026-08-10T10:00:00.000Z", ["greenhouse", "epa"]);
+    await attachGroup(harness.db, { storylineId: storyline.id, groupId: other, timeZone: ZONE });
+    expect(await profile(storyline.id)).toEqual([]);
   });
 
   it("counts a group once however syndicated", async () => {

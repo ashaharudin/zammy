@@ -265,6 +265,20 @@ export interface ReplayVariant {
    * sweep's retroactive-attachment value.
    */
   bridgeOffers?: "all" | "first";
+  /**
+   * Option 5: how many member groups must carry a token for it to enter a
+   * storyline's PROFILE (`storylineProfile`). 2 is the deployed rule (ADR-0026)
+   * and what `undefined` reaches, since the floor is that function's default;
+   * 1 prices the rule before it, whose majority test degenerated to a union at
+   * two members. Either way nothing moves from three members up.
+   *
+   * It is the only variant here that moves the RETRIEVAL as well as the bar:
+   * `profile_tokens` is what candidates are found by, so a narrower profile is
+   * a smaller candidate set and fewer attaches, not merely stricter ones. That
+   * cuts both ways and is why it is swept rather than argued — the arcs that
+   * grow past two groups pass through the two-group stage too.
+   */
+  minGroupSupport?: number;
 }
 
 /**
@@ -332,7 +346,7 @@ interface World {
   readonly narrowRetrieval: boolean;
   readonly cascadeMerges: boolean;
   readonly variant: Required<Pick<ReplayVariant, "independence" | "bridgeOffers">> &
-    Pick<ReplayVariant, "maxBridgingQualifiers">;
+    Pick<ReplayVariant, "maxBridgingQualifiers" | "minGroupSupport">;
   /**
    * Set while an archive is being BUILT under the pre-#117 retrieval and
    * cleared before the sweep passes run against it — see
@@ -397,6 +411,9 @@ const createWorld = (
     ...(variant.maxBridgingQualifiers !== undefined
       ? { maxBridgingQualifiers: variant.maxBridgingQualifiers }
       : {}),
+    ...(variant.minGroupSupport !== undefined
+      ? { minGroupSupport: variant.minGroupSupport }
+      : {}),
   },
   storylines: new Map(),
   byToken: new Map(),
@@ -439,7 +456,10 @@ const deindex = (world: World, storyline: ReplayStoryline): void => {
 /** Re-derive both derivations after any membership change, as storage does. */
 const refresh = (world: World, storyline: ReplayStoryline): void => {
   deindex(world, storyline);
-  storyline.profileTokens = storylineProfile(storyline.groupProfiles);
+  storyline.profileTokens = storylineProfile(
+    storyline.groupProfiles,
+    world.variant.minGroupSupport,
+  );
   index(world, storyline);
 };
 

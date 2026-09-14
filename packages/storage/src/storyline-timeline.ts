@@ -354,7 +354,8 @@ async function readStorylineSummaries(
  * keyword (ADR-0011 — "search keywords ⊆ profile tokens", widened to the label).
  *
  * Two places a storyline says what it is about, and a keyword may be found in
- * either: its **profile tokens**, the words half its member groups carry, and
+ * either: its **profile tokens**, the words half its member groups carry — two
+ * of them at minimum, since ADR-0026 — and
  * its **label words**, the words the model chose to name it by. The label is not
  * a restatement of the profile — the majority rule means a word only a minority
  * of groups use is absent from the profile even when it is the very word that

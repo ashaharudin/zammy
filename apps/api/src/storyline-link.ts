@@ -13,7 +13,8 @@
  *    is asked. Measured in docs/TRAILING-CORPUS.md — "leavitt" is 4.4% of its
  *    own day and 0.93% of the trailing corpus, which is the headroom this buys.
  *  - **the right-hand side is a STORYLINE's profile**, not another group's:
- *    tokens at least half its member groups carry. The majority rule that
+ *    tokens at least half its member groups carry, and no fewer than two of
+ *    them (ADR-0026). The majority rule that
  *    silenced AP live-blog vocabulary at the group layer, promoted one level,
  *    and the percolation damper — a growing storyline's consensus vocabulary
  *    tightens rather than loosens.
@@ -60,7 +61,7 @@ export interface LinkRules {
 /** A storyline as the decision sees it. No labels, no status strings — facts. */
 export interface LinkCandidate {
   id: string;
-  /** Tokens at least half its member groups carry. */
+  /** Tokens at least half its member groups carry, no fewer than two (ADR-0026). */
   profileTokens: readonly string[];
   /** Its most recent coverage, epoch ms — what dormancy is measured from. */
   lastCoverageMs: number;
@@ -382,9 +383,77 @@ export function groupProfile(memberTokens: readonly (readonly string[])[]): stri
  * changes every number the committed threshold grid was pinned against, so it
  * needs its own measurement rather than a quiet edit
  * (docs/STORYLINE-LINKING.md, "Two things this contradicts").
+ *
+ * `minGroupSupport` is the floor under that majority, and it DEFAULTS TO 2
+ * because the majority alone degenerates at two members: `Math.ceil(n / 2)` is
+ * 1 when n is 2, so a two-group storyline's profile was the UNION of its
+ * members' vocabularies rather than their consensus. The second group donated
+ * everything it said to the arc's identity, and the third group was then judged
+ * against a profile no two members had agreed on. At 2 the rule reads as the
+ * INTERSECTION there, and it is unchanged from three members up, where the
+ * majority already demands 2 — so this moves exactly one member count.
+ *
+ * MEASURED before it shipped, over 62 days of the dev archive (35,178 articles,
+ * 28,723 groups) at the deployed share=0.002 / mass=20 / K=2, by
+ * `pnpm measure:storylines-v2 --variant=min-support:1` for the old rule against
+ * an unqualified run for this one:
+ *
+ *   | rule            | chained arcs | named-intact  | groups kept | merges |
+ *   |-----------------|--------------|---------------|-------------|--------|
+ *   | support >= 1    | 350  (7.4%)  | 1473  (30.1%) | 54.0%       | 606    |
+ *   | support >= 2    |  45  (0.7%)  |  901  (18.4%) | 48.3%       | 339    |
+ *
+ * A "chained" arc holds two member groups sharing NO token — it cannot have
+ * been built by those two linking, so something percolated. That is the failure
+ * this buys down, and the worked example is prod storyline
+ * 49002d0e ("Antigonish Ambulance Theft"), where a stolen-ambulance report and
+ * eight EPA power-plant articles shared nothing at all: one CBC piece about
+ * natural gas plants in a Nova Scotia county overlapped the ambulance on
+ * `{nova, scotia, county, ultimately}` and the EPA coverage on `{natural, gas,
+ * power, plant}`, and the union-at-two handed its whole vocabulary to the arc.
+ * Under this rule that arc's profile is those four Nova Scotia tokens, the EPA
+ * group shares none of them, and no threshold can admit it.
+ *
+ * The cost is real and is not hidden: 572 judged-real arcs stop reassembling
+ * exactly. It is bought anyway because the same precision purchased through the
+ * mass floor costs MORE — share=0.002/mass=25 leaves 101 chained arcs with only
+ * 793 named arcs intact and 43.3% of groups kept, which this beats on all three.
+ *
+ * `refreshProfileTokens` in storage applies the same floor in SQL, and the two
+ * must move together. 1 prices the old rule, which is what the sweep's
+ * `--variant=min-support:1` is for.
  */
-export function storylineProfile(groupTokens: readonly (readonly string[])[]): string[] {
-  return groupProfile(groupTokens);
+export function storylineProfile(
+  groupTokens: readonly (readonly string[])[],
+  minGroupSupport = 2,
+): string[] {
+  // The pre-2026-09-14 rule, reached by the same call it always was so a run
+  // pricing it cannot drift: `groupProfile` keeps its own single-member
+  // shortcut, whose output is not sorted, and nothing here re-derives it.
+  if (minGroupSupport <= 1) return groupProfile(groupTokens);
+  const need = Math.max(
+    Math.ceil(groupTokens.length / 2),
+    // Clamped to the member count, because a storyline of ONE must keep its own
+    // vocabulary: `profile_tokens` is what candidate retrieval overlaps against,
+    // so an empty profile is not a stricter storyline, it is a storyline no
+    // group can ever find. Formation would stop outright rather than tighten.
+    Math.min(minGroupSupport, groupTokens.length),
+  );
+  return tokensWithSupport(groupTokens, need);
+}
+
+/** Tokens at least `need` of these members carry, sorted. */
+function tokensWithSupport(
+  memberTokens: readonly (readonly string[])[],
+  need: number,
+): string[] {
+  const support = new Map<string, number>();
+  for (const tokens of memberTokens) {
+    for (const token of new Set(tokens)) support.set(token, (support.get(token) ?? 0) + 1);
+  }
+  const profile: string[] = [];
+  for (const [token, count] of support) if (count >= need) profile.push(token);
+  return profile.sort();
 }
 
 /**

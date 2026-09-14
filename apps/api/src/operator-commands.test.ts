@@ -13,6 +13,7 @@ import { spec as storylineCoherence } from "./storyline-coherence-command.js";
 import { spec as storylineDissolve } from "./storyline-dissolve-command.js";
 import { spec as storylineLabel } from "./storyline-label-command.js";
 import { spec as storylineLabelMerge } from "./storyline-label-merge-command.js";
+import { spec as storylineProfilesBackfill } from "./storyline-profiles-backfill-command.js";
 import { spec as storylineSummary } from "./storyline-summary-command.js";
 import { spec as storylineSweep } from "./storyline-sweep-command.js";
 import { createLabeler } from "./wiring.js";
@@ -50,6 +51,7 @@ const COMMANDS: ReadonlyArray<readonly [file: string, spec: CommandSpec]> = [
   ["storyline-dissolve", storylineDissolve],
   ["storyline-label", storylineLabel],
   ["storyline-label-merge", storylineLabelMerge],
+  ["storyline-profiles-backfill", storylineProfilesBackfill],
   ["storyline-summary", storylineSummary],
   ["storyline-sweep", storylineSweep],
 ];

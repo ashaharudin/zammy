@@ -35,6 +35,10 @@ on:
         description: "also recompute label_words (step 3)"
         type: boolean
         default: true
+      storyline_profiles:
+        description: "also re-derive every storyline profile under ADR-0026's support floor (step 4) — a ONE-SHOT, off by default"
+        type: boolean
+        default: false
 
 # A superseded run on the same ref has nothing to tell us — on a PULL REQUEST.
 # Main is different now that this workflow carries a migration (`migrate
@@ -254,6 +258,29 @@ jobs:
       # Step 3: `label_words`, materialized from `label` through the same fold.
       - if: inputs.label_words
         run: pnpm backfill:label-words
+
+      # Step 4: `profile_tokens`, re-derived under ADR-0026's support floor.
+      #
+      # LAST, and off by default, and both are deliberate.
+      #
+      # Last because step 1 rewrites `story_tokens` and this derives from them:
+      # re-deriving profiles before a regroup repaired the tokens under them
+      # would write a profile from vocabulary the same run is about to change.
+      #
+      # Off by default because it is a ONE-SHOT and the other three are not. A
+      # rule change moves no membership, so nothing re-derives these on its own
+      # and the archive keeps profiles the old rule wrote (ADR-0026) — but once
+      # this has run, `refreshProfileTokens` keeps every row current on every
+      # membership change, and a second run is 14,665 no-ops. Re-run it only
+      # after another change to the profile rule.
+      #
+      # It is row-at-a-time on purpose (one copy of the rule, in
+      # `refreshProfileTokens`), so budget minutes rather than seconds from a
+      # runner: ~40s against a local socket on 14,665 rows, and this reaches
+      # Supabase over the network. Read the run's `widened` and `swapped`
+      # counters when it finishes — under ADR-0026 both must be 0.
+      - if: inputs.storyline_profiles
+        run: pnpm backfill:storyline-profiles
 
   migrate-production:
     name: migrate (production)
