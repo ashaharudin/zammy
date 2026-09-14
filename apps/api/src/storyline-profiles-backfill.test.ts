@@ -92,7 +92,7 @@ describe("the ADR-0026 profile backfill", () => {
     const result = await run({ batch: 100 });
 
     expect(await profileOf(arc)).toEqual(["fausto"]);
-    expect(result).toEqual({ scanned: 1, narrowed: 1, widened: 0, unchanged: 0 });
+    expect(result).toEqual({ scanned: 1, narrowed: 1, widened: 0, swapped: 0, unchanged: 0 });
   });
 
   it("reaches every row across page boundaries", async () => {
@@ -111,11 +111,12 @@ describe("the ADR-0026 profile backfill", () => {
     for (const arc of arcs) expect(await profileOf(arc)).toEqual(["fausto"]);
   });
 
-  it("never widens, which is the guard rather than a statistic", async () => {
-    // ADR-0026's support requirement is pointwise at or above the old one, so
-    // the new profile is a subset of the old and no row can gain a token. A
-    // three-group arc is where the floor is inert and the majority already
-    // demanded two: it must come out untouched.
+  it("leaves an arc of three alone, where the floor is inert", async () => {
+    // From three members up the majority already demands two, so ADR-0026 moves
+    // nothing here and the pass must report it untouched. Named for what it
+    // proves: `before` is derived by the CURRENT rule, so this is an inertness
+    // and `unchanged`-accounting test, NOT a guard on the subset property —
+    // that one is below, and it needs a profile the current rule did not write.
     const seed = await group(["mars", "lander"]);
     const arc = await createProvisionalStoryline(db, { groupId: seed, ...TZ });
     await attachGroup(db, { storylineId: arc.id, groupId: await group(["mars", "lander"]), ...TZ });
@@ -129,13 +130,56 @@ describe("the ADR-0026 profile backfill", () => {
     expect(result.unchanged).toBe(1);
   });
 
+  it("can actually raise its widened alarm, so a zero reading means something", async () => {
+    // An alarm nobody has seen fire is not evidence. ADR-0026 says `widened`
+    // must read 0 across the archive, and that claim is worth exactly as much
+    // as this counter's ability to report otherwise — so: a stored profile
+    // NARROWER than the rule's own derivation, which no rule wrote and only a
+    // fixture can produce. The pass must notice the row gained tokens.
+    const seed = await group(["mars", "lander"]);
+    const arc = await createProvisionalStoryline(db, { groupId: seed, ...TZ });
+    await attachGroup(db, { storylineId: arc.id, groupId: await group(["mars", "lander"]), ...TZ });
+    await db
+      .updateTable("storylines")
+      .set({ profile_tokens: [] })
+      .where("id", "=", arc.id)
+      .execute();
+
+    const result = await run({ batch: 100 });
+
+    expect(await profileOf(arc.id)).toEqual(["lander", "mars"]);
+    expect(result.widened).toBe(1);
+    expect(result.narrowed).toBe(0);
+  });
+
+  it("reports an equal-length exchange as swapped, not as widened", async () => {
+    // The case the array comparison exists for: same token count, different
+    // tokens. It cannot happen under ADR-0026 — the new profile is a subset —
+    // so a fixture is the only way to reach it, and the point is that the
+    // counter it lands in says what actually happened.
+    const seed = await group(["mars", "lander"]);
+    const arc = await createProvisionalStoryline(db, { groupId: seed, ...TZ });
+    await attachGroup(db, { storylineId: arc.id, groupId: await group(["mars", "lander"]), ...TZ });
+    await db
+      .updateTable("storylines")
+      .set({ profile_tokens: ["ceres", "flyby"] })
+      .where("id", "=", arc.id)
+      .execute();
+
+    const result = await run({ batch: 100 });
+
+    expect(result.swapped).toBe(1);
+    expect(result.widened).toBe(0);
+    expect(result.narrowed).toBe(0);
+  });
+
   it("is idempotent, so an interrupted run is safe to repeat", async () => {
     await unionShapedArc(["fausto", "hawaii"], ["fausto", "swell"]);
     await run({ batch: 100 });
 
     const second = await run({ batch: 100 });
 
-    expect(second).toEqual({ scanned: 1, narrowed: 0, widened: 0, unchanged: 1 });
+    expect(second).toEqual({ scanned: 1, narrowed: 0, widened: 0, swapped: 0, unchanged: 1 });
   });
 
   it("resumes an id-ordered scan after the row an interrupted run last logged", async () => {

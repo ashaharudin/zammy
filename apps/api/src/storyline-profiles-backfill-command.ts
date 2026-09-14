@@ -33,7 +33,15 @@ export const spec: CommandSpec = {
     );
     console.log(
       `scanned: ${result.scanned}  narrowed: ${result.narrowed}  ` +
-        `widened: ${result.widened}  unchanged: ${result.unchanged}`,
+        `widened: ${result.widened}  swapped: ${result.swapped}  ` +
+        `unchanged: ${result.unchanged}`,
     );
+    // Both are subset-property alarms, not statistics — see the module doc.
+    if (result.widened > 0 || result.swapped > 0) {
+      console.log(
+        `WARNING: ${result.widened} rows gained a token and ${result.swapped} exchanged one. ` +
+          `Under ADR-0026 the new profile is a subset of the old, so both should be 0.`,
+      );
+    }
   },
 };

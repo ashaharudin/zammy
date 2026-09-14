@@ -147,8 +147,17 @@ export function cloudQuery(input: {
       : // This branch STILL SHOWS THE FOLD, and cannot stop: `profile_tokens` are
         // stored folded, and a label sharing nothing with them offers no surface
         // to read one off. So a storyline whose label misses its own coverage can
-        // put `crisi` in the placeholder yet — rarely, since the fallback is for
-        // storylines that should not exist, but not never. Fixing it needs a
+        // put `crisi` in the placeholder yet.
+        //
+        // This branch used to be for "storylines that should not exist" and is
+        // not any more: ADR-0026 narrowed a two-group profile to what BOTH
+        // members carry, and a label word only one of them says is no longer in
+        // it. Measured on the dev archive, 149 of 892 labelled two-group arcs
+        // land here — "Nvidia GPU Financing" is grounded on nothing and shows
+        // `convince keep`. Ugly rather than wrong: the arc has no consensus
+        // vocabulary its own name is in, and these two tokens at least keep
+        // `findSurfacedStorylines`' containment, so its pill still appears.
+        // Fixing it needs a
         // surface corpus on the request path (`story_tokens`), which is the cost
         // ADR-0014 declined for the ordering question and would decline again.
         [...new Set(input.profileTokens)];
@@ -204,8 +213,15 @@ function dedupeBy<T>(items: readonly T[], key: (item: T) => string): T[] {
  * majority-support profile came out empty — every member's `story_tokens` empty,
  * or a hand-built or provisional arc nobody labelled. Not a merged-away one,
  * whose profile `mergeStorylines` also clears: `queueStorylineRefresh` resolves
- * the alias chain BEFORE reading the row, so it only ever sees a survivor. So a
- * count here is a tokenization or labelling problem, never a merge one.
+ * the alias chain BEFORE reading the row, so it only ever sees a survivor.
+ *
+ * It CAN be a merge, and that is ADR-0026's doing: a two-group profile is now
+ * what both members carry, so an arc the label-agreement merge fused out of two
+ * disjoint singletons has no profile at all. Linking cannot build one — a group
+ * joins by overlapping the profile it is judged against — and 0 of the dev
+ * archive's 1,005 two-group arcs are empty, so this stays rare. Triage it as a
+ * tokenization or labelling problem FIRST, and reach for the merge only when
+ * the arc has two groups that share nothing.
  *
  * The profile guard comes FIRST, before the label, and that ordering is the whole
  * of the difference from `cloudQuery`. `cloudQuery`'s last resort returns the
@@ -214,10 +230,11 @@ function dedupeBy<T>(items: readonly T[], key: (item: T) => string): T[] {
  * one. It is wrong for what this feeds: these words become `?q=` and the keywords
  * handed to upstream `/search`, so a four-word label arrives as four conjunctive
  * terms — exactly the query ADR-0014 measured at zero results across every
- * label-shaped search in the archive. `cloudQuery` calls that branch unreachable
- * for a promoted, labelled arc and is right, but this route accepts any UUID the
- * `storylines` table holds, so the reachability argument was doing more work here
- * than it was written for. Better to spend nothing than to spend a call on a
+ * label-shaped search in the archive. `cloudQuery` used to call that branch
+ * unreachable for a promoted, labelled arc; ADR-0026 made it reachable, and this
+ * route accepts any UUID the `storylines` table holds besides — so the
+ * reachability argument was doing more work there than it was written for, and
+ * has none left to do here. Better to spend nothing than to spend a call on a
  * query already known to return nothing.
  */
 export function storylineKeywords(input: {

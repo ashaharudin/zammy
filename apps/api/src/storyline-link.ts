@@ -13,7 +13,8 @@
  *    is asked. Measured in docs/TRAILING-CORPUS.md — "leavitt" is 4.4% of its
  *    own day and 0.93% of the trailing corpus, which is the headroom this buys.
  *  - **the right-hand side is a STORYLINE's profile**, not another group's:
- *    tokens at least half its member groups carry. The majority rule that
+ *    tokens at least half its member groups carry, and no fewer than two of
+ *    them (ADR-0026). The majority rule that
  *    silenced AP live-blog vocabulary at the group layer, promoted one level,
  *    and the percolation damper — a growing storyline's consensus vocabulary
  *    tightens rather than loosens.
@@ -60,7 +61,7 @@ export interface LinkRules {
 /** A storyline as the decision sees it. No labels, no status strings — facts. */
 export interface LinkCandidate {
   id: string;
-  /** Tokens at least half its member groups carry. */
+  /** Tokens at least half its member groups carry, no fewer than two (ADR-0026). */
   profileTokens: readonly string[];
   /** Its most recent coverage, epoch ms — what dormancy is measured from. */
   lastCoverageMs: number;

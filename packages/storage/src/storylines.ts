@@ -11,7 +11,8 @@ import { markStorylinesLinkDirty } from "./storyline-link-dirty.js";
  * two derivations are the ones the read path and the linker cannot afford to
  * recompute:
  *
- *  - **profile tokens**: the tokens at least half the member groups carry.
+ *  - **profile tokens**: the tokens at least half the member groups carry, and
+ *    no fewer than two of them where there are two (ADR-0026).
  *    Re-derived on every membership change, because it is what candidate
  *    retrieval overlaps against, and a profile that lagged its membership would
  *    quietly change which storylines a group can even be compared to.

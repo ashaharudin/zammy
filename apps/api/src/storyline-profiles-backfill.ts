@@ -24,20 +24,33 @@ import { readStorylinePage, refreshStorylineProfile, type Database } from "@zamm
  * pass's own evidence that it did something: it should be dominated by
  * two-group storylines, where the old majority rule read as a union.
  *
- * `widened` is a GUARD rather than a statistic, and under ADR-0026 it must read
- * zero: the new support requirement is pointwise at or above the old one, so the
- * new profile is a subset of the old and no row can gain a token. A non-zero
- * count means the two rules are not what this pass thinks they are — read it
- * before trusting the run.
+ * `widened` and `swapped` are GUARDS rather than statistics, and under ADR-0026
+ * both must read zero: the new support requirement is pointwise at or above the
+ * old one, so the new profile is a SUBSET of the old — no row can gain a token,
+ * and none can exchange one. A non-zero count in either means the two rules are
+ * not what this pass thinks they are; read them before trusting the run.
+ *
+ * `swapped` is separate from `widened` rather than folded into it because the
+ * comment below justifies comparing arrays by exactly the case that would land
+ * there — a future rule that exchanges a token without changing the count. An
+ * alarm that fires under a name that says "gained a token" would send whoever
+ * reads it looking for the wrong thing.
  */
 export async function backfillStorylineProfiles(
   deps: { db: Kysely<Database>; log?: (message: string) => void },
   options: { batch: number; after?: string | null },
-): Promise<{ scanned: number; narrowed: number; widened: number; unchanged: number }> {
+): Promise<{
+  scanned: number;
+  narrowed: number;
+  widened: number;
+  swapped: number;
+  unchanged: number;
+}> {
   let after: string | null = options.after ?? null;
   let scanned = 0;
   let narrowed = 0;
   let widened = 0;
+  let swapped = 0;
   let unchanged = 0;
 
   for (;;) {
@@ -74,16 +87,17 @@ export async function backfillStorylineProfiles(
       const same = was.length === now.length && was.every((token, i) => token === now[i]);
       if (same) unchanged += 1;
       else if (now.length < was.length) narrowed += 1;
-      else widened += 1;
+      else if (now.length > was.length) widened += 1;
+      else swapped += 1;
     }
 
     scanned += page.length;
     after = page[page.length - 1]!.id;
     deps.log?.(
       `scanned ${scanned}  narrowed ${narrowed}  widened ${widened}  ` +
-        `unchanged ${unchanged}  last id ${after}`,
+        `swapped ${swapped}  unchanged ${unchanged}  last id ${after}`,
     );
   }
 
-  return { scanned, narrowed, widened, unchanged };
+  return { scanned, narrowed, widened, swapped, unchanged };
 }

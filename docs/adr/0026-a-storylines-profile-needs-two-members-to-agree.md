@@ -88,8 +88,19 @@ so the sweep grew a label-free alarm (`chained`) for this decision and for the o
   `pnpm backfill:storyline-profiles` exists for that and must be run wherever the code lands,
   or the archive keeps union-shaped profiles and the retrieval keeps finding groups through
   them. On the dev archive: 14,665 live storylines scanned, 997 narrowed, 0 widened, ~40s.
-  The 997 are almost exactly the 1,005 two-group arcs, which is the rule binding where it was
-  predicted to and nowhere else.
+
+  A census by member count says the rest, and it is the strongest claim this ADR makes:
+
+  | member groups | storylines | narrowed | widened | empty after |
+  |---------------|-----------:|---------:|--------:|------------:|
+  | 1             |      9,392 |        0 |       0 |           0 |
+  | 2             |      1,005 |  **997** |       0 |           0 |
+  | 3             |      2,630 |        0 |       0 |           0 |
+  | 4+            |      1,638 |        0 |       0 |           0 |
+
+  **The rule moves exactly one member count and nothing else.** Every arc from three members
+  up is byte-identical, the storyline-of-one clamp holds across all 9,392 of them, and the 8
+  two-group arcs that do not narrow are the ones whose members already agreed on every word.
 - An arc's profile now **widens only on corroboration** — two members must say a word before
   the arc does — so the nightly late-candidate sweep reaches an old group one arrival later
   than it used to.
@@ -99,6 +110,25 @@ so the sweep grew a label-free alarm (`chained`) for this decision and for the o
   "Hurricane Fausto Hawaii Landfall" becomes `fausto hawaii` rather than `fausto hurricane`. The
   words that survive are the ones the coverage agrees on, which is the trade this rule makes
   everywhere else too.
+- **It can strip EVERY label word, and then the deepening gate refuses the arc.** Measured on
+  the dev archive: of 892 labelled two-group arcs, **149 (16.7%)** have no label word left in
+  their profile, against 0 before. "Nvidia GPU Financing" is grounded on nothing and keeps
+  `{convince, keep, lending}`. Two consequences, and the first is the one with teeth:
+
+  - `deepeningQuery` returns `null` for an ungrounded label, so those arcs are **never deepened
+    again** unless a third group joins and re-widens the profile. That is archive-wide and
+    permanent per arc, where the cloud-query effect is cosmetic.
+  - `cloudQuery` falls to its last-resort branch and shows two alphabetically-first folded
+    tokens as the placeholder.
+
+  Defensible on the gate's own logic, which is why it ships: the gate exists because the
+  deepening plane's product is MEMBERSHIP, and an arc whose two members do not agree on the
+  word its name is built from is exactly the arc whose deepened results nobody has checked
+  belong to it. Refusing more of those is the rule working, not misfiring. But it is a 17%
+  swing that was unmeasured until review, and if the deepening yield drops, grounding against
+  the union while retrieving against the consensus is the lever to reach for — a split with
+  its own measurement, not a line to add here.
+  At three members and up the gate is unmoved (324 of 2,488 ungrounded before and after).
 - **An empty profile is now reachable, where `cloudQuery` documented it as impossible.** A
   two-group arc whose members share nothing has no consensus, so it has no profile. Linking
   cannot build one — a group joins by overlapping the profile it is judged against — and 0 of
