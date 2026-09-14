@@ -5,6 +5,7 @@ import { attachGroup, createProvisionalStoryline, promoteStoryline } from "./sto
 import {
   bumpSummaryAttempts,
   quarterOfUtcHour,
+  readArcDaySummaries,
   readStorylineDaySegments,
   readStorylineDaySummaries,
   readStorylineSummaries,
@@ -495,6 +496,136 @@ describe("storyline day summaries in storage", () => {
       // And the row still says what it was called, because the label was copied
       // onto it rather than read back through a join that no longer resolves.
       expect(rows[0]?.label).toBe("Doomed Arc");
+    });
+  });
+
+  describe("readArcDaySummaries", () => {
+    /** The write the pass makes, with only what a case varies spelled out. */
+    const wrote = async (write: {
+      storylineId: string;
+      dayKey: string;
+      segment?: "night" | "morning" | "afternoon" | "evening" | "day";
+      summary: string | null;
+      articleCount?: number;
+    }): Promise<void> => {
+      await writeStorylineDaySummary(harness.db, {
+        storylineId: write.storylineId,
+        dayKey: write.dayKey,
+        segment: write.segment ?? "day",
+        summary: write.summary,
+        articleCount: write.articleCount ?? 6,
+        label: "Arc",
+        modelId: "gemma-test",
+        attempts: 0,
+        segmented: true,
+        generatedAt: new Date("2026-08-23T05:00:00.000Z"),
+      });
+    };
+
+    /** Point `loser` at `winner`, the way a merge leaves the rows. */
+    const alias = async (loser: string, winner: string): Promise<void> => {
+      await harness.db
+        .updateTable("storylines")
+        .set({ merged_into: winner })
+        .where("id", "=", loser)
+        .execute();
+    };
+
+    it("answers with the DAY sentences, keyed by day", async () => {
+      const a = await article({ published: "2026-08-20T01:00:00.000Z" });
+      const arc = await storyline([a.groupId], "Arc");
+      await wrote({ storylineId: arc, dayKey: "2026-08-20", summary: "The first day." });
+      await wrote({ storylineId: arc, dayKey: "2026-08-21", summary: "The second day." });
+
+      expect([...(await readArcDaySummaries(harness.db, { storylineId: arc }))]).toEqual([
+        ["2026-08-20", "The first day."],
+        ["2026-08-21", "The second day."],
+      ]);
+    });
+
+    it("leaves the quarters where they are", async () => {
+      // The day sentence is built FROM them, and the rail already cuts a day
+      // into the parts of the READER's day — drawing both would be two
+      // divisions of one day sitting on top of each other.
+      const a = await article({ published: "2026-08-20T01:00:00.000Z" });
+      const arc = await storyline([a.groupId], "Arc");
+      await wrote({ storylineId: arc, dayKey: "2026-08-20", segment: "night", summary: "Night." });
+      await wrote({
+        storylineId: arc,
+        dayKey: "2026-08-20",
+        segment: "evening",
+        summary: "Evening.",
+      });
+
+      expect(await readArcDaySummaries(harness.db, { storylineId: arc })).toEqual(new Map());
+    });
+
+    it("reads a refusal as the silence it is", async () => {
+      // A row whose `summary` is null means the model was asked and would not
+      // answer. Prose has no deterministic fallback, so the page gets the
+      // heading it always had — the same as a day the pass never reached.
+      const a = await article({ published: "2026-08-20T01:00:00.000Z" });
+      const arc = await storyline([a.groupId], "Arc");
+      await wrote({ storylineId: arc, dayKey: "2026-08-20", summary: null });
+
+      expect(await readArcDaySummaries(harness.db, { storylineId: arc })).toEqual(new Map());
+    });
+
+    it("finds the sentences a merge left behind on the loser's id", async () => {
+      // The preserve never follows a merge (migration 0024), but the view
+      // resolves a bookmark forward to the winner — so the winner's read has to
+      // walk back down the chain, or every pre-merge day loses its sentence
+      // while still showing its coverage.
+      const a = await article({ published: "2026-08-20T01:00:00.000Z" });
+      const b = await article({ published: "2026-08-21T01:00:00.000Z" });
+      const winner = await storyline([a.groupId], "Winner");
+      const loser = await storyline([b.groupId], "Loser");
+      const older = await storyline([b.groupId], "Older");
+      await wrote({ storylineId: winner, dayKey: "2026-08-22", summary: "The winner's day." });
+      await wrote({ storylineId: loser, dayKey: "2026-08-21", summary: "The loser's day." });
+      await wrote({ storylineId: older, dayKey: "2026-08-20", summary: "Two hops back." });
+      // A CHAIN, not a star: `older` was merged away before `loser` was, which
+      // is the case a single hop would answer half of.
+      await alias(older, loser);
+      await alias(loser, winner);
+
+      expect([...(await readArcDaySummaries(harness.db, { storylineId: winner }))]).toEqual([
+        ["2026-08-20", "Two hops back."],
+        ["2026-08-21", "The loser's day."],
+        ["2026-08-22", "The winner's day."],
+      ]);
+    });
+
+    it("gives one day one sentence: the one written over more of it", async () => {
+      // Both arcs covered the day before they were merged, so two rows answer
+      // for it, and one sentence per day is what the preserve is.
+      const a = await article({ published: "2026-08-20T01:00:00.000Z" });
+      const winner = await storyline([a.groupId], "Winner");
+      const loser = await storyline([a.groupId], "Loser");
+      await wrote({
+        storylineId: winner,
+        dayKey: "2026-08-20",
+        summary: "Four articles' worth.",
+        articleCount: 4,
+      });
+      await wrote({
+        storylineId: loser,
+        dayKey: "2026-08-20",
+        summary: "Eleven articles' worth.",
+        articleCount: 11,
+      });
+      await alias(loser, winner);
+
+      expect(await readArcDaySummaries(harness.db, { storylineId: winner })).toEqual(
+        new Map([["2026-08-20", "Eleven articles' worth."]]),
+      );
+    });
+
+    it("answers nothing for an arc the preserve has never reached", async () => {
+      const a = await article({ published: "2026-08-20T01:00:00.000Z" });
+      const arc = await storyline([a.groupId], "Arc");
+
+      expect(await readArcDaySummaries(harness.db, { storylineId: arc })).toEqual(new Map());
     });
   });
 });

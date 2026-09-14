@@ -10,7 +10,9 @@ prompts and the contract) and
 [storyline-summary-service.ts](../apps/api/src/storyline-summary-service.ts)
 (what gets written and when). This page is the map.
 
-**UI is not in scope here.** Nothing reads these rows yet.
+**One reader now sees these rows**: the storyline view draws the *day* sentence
+beside each day's heading. [What a reader sees](#what-a-reader-sees) is the whole
+of it — the quarters are still written and still unread.
 
 ## What a row is
 
@@ -165,6 +167,75 @@ collapsed." is a correct answer whose first word is part of the sentence.
 nicety: `U.S. officials paused the wall` is a period, a space and a capital
 letter inside one sentence, and a naive boundary test rejects every summary that
 names a country.
+
+## What a reader sees
+
+In the **storyline view**, and there alone, a day's heading carries its sentence:
+
+```
+● TODAY. Rescuers reached the valley as the river fell for the first time in a week.
+● TUESDAY, SEP 8. The evacuation order widened to three more districts.
+```
+
+The heading is still the day and still the collapse control; the sentence is a
+span beside it, in the page's own casing rather than the heading's. Both halves
+of the format are already there — `dayLabel` produces "Today" / "Tuesday, Sep 8"
+and the heading uppercases it — so the only new mark is the separating period.
+
+Four decisions, each of which is a place this could have gone differently:
+
+| | |
+|---|---|
+| **the day sentence only** | the quarters are its own input, and the rail already cuts a day into the parts of the **reader's** day. Four UTC quarters drawn against four local parts is two divisions of one day on top of each other. |
+| **the view only** | a search's slot holds the members that matched the keywords, so a sentence about the whole day would describe coverage the row does not show. `toEntry` leaves `daySummary` null; `toStorylineEntry` fills it. |
+| **matched by DATE** | the rail cuts days in the **reader's** zone and a sentence is written over a day in **UTC**, so the coverage one sentence describes routinely lands in two rail days. The sentence goes under the heading reading its own date — see below. |
+| **absent = refused** | a null `summary` is a row, but a reader gets the heading they always had either way. The difference matters to the pass, never to the page. |
+
+### Two calendars, one date
+
+The rail's days are the **reader's** (`Intl` zone, §8.1); a sentence is written
+over a **UTC** day. They hold different instants, so a storyline-day's cards are
+routinely split across two rail days and there is no rail day that *is* the day
+the sentence covers.
+
+Filing the sentence by the slot — under whichever rail day its earliest article
+fell in — was the first answer and was wrong. For a reader six hours west, a
+storyline-day whose earliest article ran at 01:00 UTC leads in the *previous*
+local day, so the 22nd's sentence drew under **"FRIDAY, AUG 21"** while the rest
+of the 22nd's coverage sat below under Saturday. Caught by rendering the real
+view in a real browser, which is the only place both calendars are visible at
+once — no unit test on either side of the wire can see it.
+
+So the match is by **date label**, not by instants: `2026-08-22`'s sentence goes
+under the rail day called `2026-08-22`. The two calendars disagree about which
+instants a day holds and agree exactly about what to call it, and the sentence is
+a claim about a date — it names its own ("as the August 19 deadline approaches"),
+so a heading reading a different one contradicts the prose beside it. That is why
+`daySummary` is an object: `dayKey` travels with the text, because the browser
+cannot derive which calendar day an instant fell in under a zone it does not
+know the server used.
+
+The cost, stated: a sentence whose date has no rail day on the page is not drawn.
+It takes a day whose every article ran in the few hours falling outside the
+reader's like-named day.
+
+A **merge** is the one case the read has to work for. The preserve never follows
+one — the rows stay on the id they were written for — while the view resolves a
+bookmark forward to the winner, so
+[`readArcDaySummaries`](../packages/storage/src/storyline-summaries.ts) walks the
+alias chain *downward* and gathers every id that merged into this one. Two rows
+can then answer for one day; the one with the higher `article_count` wins,
+because it was written over more of that day.
+
+The sentences can be turned **off**, with the `summary` toggle in the command
+bar's meta row (a reader preference in `localStorage`, on by default, only ever
+recording an *off* — `apps/web/src/daySummaryPreference.ts`). The toggle appears
+in the storyline view only, since it is the only place with sentences to
+suppress. Collapsing a day does **not** hide its sentence: collapsing hides the
+coverage, and what that coverage said is then the reason to open it again.
+
+`TimelineEntry.daySummary` is the wire field, defaulted so a response from an
+instance that predates it parses as the silence it is.
 
 ## Running it
 

@@ -35,6 +35,8 @@ export function CommandBar({
   viewLabelHint,
   onLeaveStorylineView,
   qualifiers,
+  daySummaries,
+  onToggleDaySummaries,
 }: {
   topic: TopicQuery;
   /** The newest response — the authority on meta. */
@@ -54,6 +56,9 @@ export function CommandBar({
   onLeaveStorylineView: (typed: string | null) => void;
   /** storyline id → the date that separates it from its namesakes on screen. */
   qualifiers: Map<string, string>;
+  /** Whether the rail draws its day sentences (`daySummaryPreference`). */
+  daySummaries: boolean;
+  onToggleDaySummaries: () => void;
 }) {
   const [q, setQ] = useState(topic.q);
   // The storyline view: opened by clicking a label, so there are no keywords
@@ -185,6 +190,12 @@ export function CommandBar({
           reference={reference}
           onChange={(filters) => onSearch({ ...topic, ...filters })}
         />
+        {/* Only in the VIEW, because only the view has sentences to draw
+            (`TimelineEntry.daySummary`): a search's slots carry none, so the
+            same control on a search would be a switch with nothing behind it. */}
+        {view && (
+          <DaySummaryToggle on={daySummaries} onToggle={onToggleDaySummaries} />
+        )}
       </div>
       {/* S8's verdict: surfaced storylines live in the chrome, in the meta row
           — never in the results, which they are not part of. Suppressed
@@ -197,6 +208,40 @@ export function CommandBar({
         />
       )}
     </header>
+  );
+}
+
+/**
+ * The switch for the day sentences (ADR-0023), beside the filter chips it is
+ * not one of — it narrows nothing, it decides whether the rail speaks.
+ *
+ * A pressed-state toggle rather than two labels that swap, because the two
+ * states are one setting rather than two actions: `aria-pressed` is what tells
+ * a screen reader that "summaries" is currently on, where a button reading
+ * "hide summaries" would have to be read as a prediction of what pressing it
+ * does. The tick carries the same fact to everyone else.
+ */
+function DaySummaryToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={on}
+      title={on ? "Hide the daily summary" : "Show the daily summary"}
+      style={{
+        border: "1px solid var(--border)",
+        borderRadius: "999px",
+        background: on ? "var(--chip-bg)" : "transparent",
+        color: "inherit",
+        cursor: "pointer",
+        font: "inherit",
+        lineHeight: 1.3,
+        opacity: on ? 1 : 0.7,
+        padding: "0.05rem 0.5rem",
+      }}
+    >
+      {on ? "✓ summary" : "summary"}
+    </button>
   );
 }
 

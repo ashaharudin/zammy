@@ -12,6 +12,7 @@ import {
 } from "@zammy/shared";
 import {
   findSurfacedStorylines,
+  readArcDaySummaries,
   readCoverage,
   readGroupMemberships,
   readStorylineArticleCount,
@@ -318,7 +319,9 @@ async function planAndRead(
           ? { from: first.from.toISOString(), to: last.to.toISOString() }
           : null,
     },
-    items: stored.items.map(toStorylineEntry),
+    // No day sentences: see `toStorylineEntry`'s second parameter. `.map` would
+    // otherwise hand it the index.
+    items: stored.items.map((slot) => toStorylineEntry(slot)),
     storylines: surfaced.map(toSummary),
     memberships: {
       byGroup: Object.fromEntries(memberships.byGroup),
@@ -409,6 +412,10 @@ function toEntry(slot: {
     // storylines with no identity a reader could open. `toStorylineEntry` fills
     // this in when the flag is on.
     storyline: null,
+    // The base has no day sentence and cannot have one: it is handed three
+    // fields, none of them a day key. `toStorylineEntry` fills it, and only for
+    // the storyline view — the wire contract carries why a search does not.
+    daySummary: null,
   };
 }
 
@@ -452,6 +459,17 @@ export async function readStorylineView(
   // wording). One extra count for a read that is already three statements deep.
   const size = first ? await readStorylineArticleCount(deps.db, resolved) : 0;
   const memberships = await readGroupMemberships(deps.db, groupsOn(stored.items));
+  // The historical preserve's day sentences (ADR-0023), which only the VIEW
+  // reads — `toEntry` leaves `daySummary` null for a search, and the wire
+  // contract carries why.
+  //
+  // The WHOLE arc, not this page's days. It is one small row per day of one
+  // storyline's life, the keyset pages by day so a second page is a second
+  // read, and the alternative — passing the page's day keys down as an `in`
+  // list — makes the query's cost depend on the page rather than on the arc.
+  // The map is then a lookup, and a day the preserve never got to is simply
+  // absent from it.
+  const daySummaries = await readArcDaySummaries(deps.db, { storylineId: resolved });
   return {
     // No topic: the view is not a search, and inventing a fingerprint for it
     // would put a keyword-less row in `topics` that nothing could ever hit
@@ -474,7 +492,7 @@ export async function readStorylineView(
       byGroup: Object.fromEntries(memberships.byGroup),
       storylines: memberships.storylines.map(toSummary),
     },
-    items: stored.items.map(toStorylineEntry),
+    items: stored.items.map((slot) => toStorylineEntry(slot, daySummaries)),
     page: {
       nextCursor: stored.nextCursor ? encodeCursor(stored.nextCursor) : null,
       hasMore: stored.hasMore,
@@ -489,6 +507,18 @@ export async function readStorylineView(
       ingest: { state: "complete", pendingJobs: 0 },
     },
   };
+}
+
+/**
+ * The sentence for a slot's day, as the wire carries it: the text and the day
+ * it is about, together (`TimelineEntry.daySummary`).
+ */
+function daySummary(
+  slot: StorylineSlot,
+  daySummaries: Map<string, string> | undefined,
+): TimelineEntry["daySummary"] {
+  const text = daySummaries?.get(slot.dayKey);
+  return text === undefined ? null : { dayKey: slot.dayKey, text };
 }
 
 /**
@@ -567,7 +597,20 @@ const SURFACED_STORYLINE_LIMIT = 8;
  * That is the whole of what the front end needs to know to render it as it
  * always did.
  */
-function toStorylineEntry(slot: StorylineSlot): TimelineEntry {
+function toStorylineEntry(
+  slot: StorylineSlot,
+  /**
+   * `dayKey → sentence` for the whole arc (`readArcDaySummaries`).
+   *
+   * Omitted by the SEARCH, which is the one place this is a decision rather
+   * than a plumbing detail: a search's `slot.members` are the members that
+   * matched the keywords, so a sentence written over the storyline's whole day
+   * would describe coverage the row it sits on does not show. The view shows
+   * the whole day and passes the map. The wire contract states the same rule
+   * from the reader's side (`TimelineEntry.daySummary`).
+   */
+  daySummaries?: Map<string, string>,
+): TimelineEntry {
   const base = toEntry({
     id: slot.storylineId,
     published: slot.published,
@@ -579,6 +622,14 @@ function toStorylineEntry(slot: StorylineSlot): TimelineEntry {
       slot.status === "provisional"
         ? null
         : { label: slot.label, from: slot.spanFrom, to: slot.spanTo },
+    // `slot.dayKey` is an APP_TIMEZONE day and the preserve's key is a UTC one.
+    // They are the same string because APP_TIMEZONE is UTC, which is not a
+    // coincidence to be relied on quietly: `config` warns when it stops being
+    // UTC, and this lookup is one of the things that warning is about — under
+    // any other zone a slot would ask the preserve for a day whose boundaries
+    // are not the ones the sentence was written across, and the miss (a day
+    // with no sentence) is the failure mode rather than a wrong sentence.
+    daySummary: daySummary(slot, daySummaries),
   };
 }
 

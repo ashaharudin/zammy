@@ -266,6 +266,31 @@ export interface DayGroup {
    * would be noise.
    */
   dateSuffix: string | null;
+  /**
+   * What this day held, in one sentence — the historical preserve's day summary
+   * (ADR-0023), matched to this group by DATE.
+   *
+   * By date, and not by which cards ended up here, and the difference is the
+   * whole of it. A rail day is a day in the READER's zone; a sentence is written
+   * over a day in the server's, and the two hold different instants — so the
+   * coverage one sentence describes routinely lands in two of these groups. The
+   * sentence is nonetheless a claim about a DATE, and it says so in its own
+   * words ("as the August 19 deadline approaches"), so the one thing it must not
+   * do is sit under a heading reading a different date. `2026-08-22`'s sentence
+   * goes under the group called `2026-08-22`, whatever the zones do to the cards.
+   *
+   * Filing it by the SLOT instead — under the day the slot's earliest article
+   * fell in for this reader — was the first answer here and was wrong on exactly
+   * that point: for a reader six hours west it drew the 22nd's sentence under
+   * "FRIDAY, AUG 21", a heading contradicting the prose beside it. Verified in a
+   * real browser, which is the only place the two calendars are visible at once.
+   *
+   * Null unless the page carried a sentence for this date, which today is the
+   * storyline view alone (`TimelineEntry.daySummary`). A sentence whose date has
+   * no group on this page is simply not drawn — it takes a day whose every
+   * article ran in the few hours that fall outside the reader's like-named day.
+   */
+  summary: string | null;
   segments: { segment: Segment; items: RailSlot[] }[];
 }
 
@@ -302,6 +327,14 @@ export function groupByDay(items: TimelineEntry[], now: Date, timeZone: string):
   const todayKey = dayKey(now.toISOString(), timeZone);
   // `at` is any instant inside the day, kept only to format its label — every
   // card in the group shares the day, so the first one to arrive will do.
+  // The page's sentences, by the date each is about — see `DayGroup.summary`.
+  // Built before the walk because a day's sentence can arrive on a slot whose
+  // cards all landed in a NEIGHBOURING group, and looked up by the group's own
+  // key rather than pushed from the slot for the same reason.
+  const summaries = new Map<string, string>();
+  for (const item of items) {
+    if (item.daySummary) summaries.set(item.daySummary.dayKey, item.daySummary.text);
+  }
   const days = new Map<string, { at: string; parts: Map<Segment, RailSlot[]> }>();
   for (const item of items) {
     for (const { day, segment, slot } of railSlots(item, timeZone)) {
@@ -323,6 +356,7 @@ export function groupByDay(items: TimelineEntry[], now: Date, timeZone: string):
         key,
         day: labelFor(key, group.at, todayKey, timeZone),
         dateSuffix: dateSuffixFor(key, group.at, todayKey, timeZone),
+        summary: summaries.get(key) ?? null,
         segments: SEGMENTS_DESC.flatMap((segment) => {
           const part = group.parts.get(segment);
           return part ? [{ segment, items: [...part].sort((a, b) => at(b) - at(a)) }] : [];
