@@ -5,8 +5,8 @@ import { Hero } from "./Hero.js";
 import {
   leaveStorylineView,
   openStorylineView,
-  parseRoute,
-  routeSearch,
+  parseLocation,
+  routeUrl,
   type Route,
 } from "./route.js";
 import { TimelinePage } from "./TimelinePage.js";
@@ -47,28 +47,16 @@ export function App() {
 }
 
 function TopicApp() {
-  const [route, setRoute] = useState<Route>(() => parseRoute(window.location.search));
+  const [route, setRoute] = useState<Route>(() =>
+    parseLocation(window.location.pathname, window.location.search),
+  );
 
   useEffect(() => {
-    const onPopState = () => setRoute(parseRoute(window.location.search));
+    const onPopState = () =>
+      setRoute(parseLocation(window.location.pathname, window.location.search));
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
-
-  // `replace` is for a transition the reader did not make — the detected
-  // filter defaults land on whatever they are looking at, and a history entry
-  // for that would make Back appear to do nothing.
-  const navigate = useCallback((next: Route, options?: { replace?: boolean }) => {
-    const url = `${window.location.pathname}${routeSearch(next)}`;
-    if (options?.replace) window.history.replaceState(null, "", url);
-    else window.history.pushState(null, "", url);
-    setRoute(next);
-  }, []);
-
-  const setFilters = useCallback(
-    (filters: TopicFilters) => navigate({ q: null, filters }, { replace: true }),
-    [navigate],
-  );
 
   // Entering the storyline view is a transition of the ROUTE, not a search
   // (see the TimelinePage prop below) — one definition, shared by every entry
@@ -89,12 +77,70 @@ function TopicApp() {
   // part of what a shared link should reproduce. `viewLabelHint` is only read
   // while it matches the route's own storyline id, so a stale one from a
   // dismissed view can never leak onto the next.
+  //
+  // It is ALSO the slug's source now (Tier 2 SEO, `route.ts`'s `routeUrl`): a
+  // `Route` names a storyline by id and nothing else, on purpose, so the label
+  // for the address bar's cosmetic half has to come from somewhere state-side.
+  // Declared above `navigate` so a filter change made from inside an open view
+  // — `CommandBar`'s `onSearch({ ...topic, ...filters })`, which carries the
+  // same storyline id straight through — still finds the label this hint set
+  // when the view was opened, without `navigate` itself needing one passed in.
   const [labelHint, setLabelHint] = useState<{ id: string; label: string | null } | null>(null);
+
+  // `replace` is for a transition the reader did not make — the detected
+  // filter defaults land on whatever they are looking at, and a history entry
+  // for that would make Back appear to do nothing. `label` is for the ONE
+  // transition that mints a fresh view (`openStoryline` below): `labelHint`
+  // state is not yet updated on the same tick that sets it, so a slug built
+  // from the hint here would still be building the PREVIOUS view's slug (or
+  // none) for the view this very call is opening.
+  const navigate = useCallback(
+    (next: Route, options?: { replace?: boolean; label?: string | null }) => {
+      const label =
+        options?.label ??
+        (labelHint !== null && labelHint.id === next.storyline ? labelHint.label : null);
+      const url = routeUrl(next, label);
+      if (options?.replace) window.history.replaceState(null, "", url);
+      else window.history.pushState(null, "", url);
+      setRoute(next);
+    },
+    [labelHint],
+  );
+
+  // A bookmarked or shared `?storyline=<uuid>` predates the pretty path, which
+  // is canonical now (`route.ts`, `docs/SEO.md`). The very first thing such a
+  // link does here is become one — once, on mount, using whatever the initial
+  // parse already found. Nothing else can ever produce this shape again: every
+  // navigation from here on goes through `navigate` above, which already
+  // writes the pretty form for a UUID view. A bigint SEED (ADR-0010) is left
+  // alone — it has no route of its own to redirect to, and `routeUrl` already
+  // knows that.
+  useEffect(() => {
+    // The UUID check is the whole condition, deliberately, rather than a diff
+    // against the current URL: a bigint SEED also reaches this effect with
+    // `route.storyline` set and has no pretty route to move to, and an ORDINARY
+    // search never sets `storyline` at all — so a looser check (any URL this
+    // function would build differently) would also fire on a plain search
+    // whose query parameters merely arrived in a different order, rewriting
+    // its address bar for no reason connected to this redirect at all.
+    if (window.location.pathname === "/" && STORYLINE_UUID.test(route.storyline ?? "")) {
+      window.history.replaceState(null, "", routeUrl(route, null));
+    }
+    // Mount-once, deliberately: this reads the ROUTE the app booted with, not
+    // whatever `route` state has become by the time a later render runs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const setFilters = useCallback(
+    (filters: TopicFilters) => navigate({ q: null, filters }, { replace: true }),
+    [navigate],
+  );
+
   const openStoryline = useCallback(
     (storylineId: string, label: string | null) => {
       setLabelHint({ id: storylineId, label });
       refreshStoryline(storylineId);
-      navigate(openStorylineView(route, storylineId));
+      navigate(openStorylineView(route, storylineId), { label });
     },
     [navigate, route],
   );

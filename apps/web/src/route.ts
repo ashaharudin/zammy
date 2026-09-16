@@ -1,4 +1,4 @@
-import { STORYLINE_UUID } from "@zammy/shared";
+import { slugifyStoryline, STORYLINE_UUID } from "@zammy/shared";
 import type { TopicFilters } from "./api.js";
 
 /**
@@ -80,6 +80,81 @@ export function routeSearch(route: Route): string {
   if (route.from && view) params.set("from", route.from);
   const search = params.toString();
   return search ? `?${search}` : "";
+}
+
+/**
+ * `/storyline/<uuid>/<slug>` (Tier 2 SEO), as a sibling path of `/` rather than
+ * a query parameter on it — so there is a URL a crawler can follow and a reader
+ * can share, and something for `api/storyline.ts` to server-render before this
+ * app's JavaScript ever runs.
+ *
+ * Read ONLY here and in `parseLocation` below: every other function in this
+ * file still speaks in terms of `search` alone, because a STORYLINE VIEW is the
+ * one route with a pathname of its own — the hero and every search stay on `/`
+ * exactly as they were. `STORYLINE_UUID` is reused rather than re-typed so the
+ * one pattern that decides what a storyline id looks like stays in one place
+ * (`@zammy/shared`).
+ */
+const STORYLINE_PATH = /^\/storyline\/([^/?]+)(?:\/[^/?]*)?\/?$/;
+
+/**
+ * `window.location.pathname` + `.search` → a `Route`, the pretty-path form.
+ *
+ * `parseRoute` alone cannot do this — it only ever reads `search`, which is
+ * right for every route but this one. Kept as a second function rather than
+ * folded into `parseRoute` so every existing caller (this file's own
+ * `routeSearch`, and every test that built a `Route` from a bare query string)
+ * keeps meaning exactly what it always meant; `App.tsx` is the one caller that
+ * needs the pathname too, and it is the only one updated to call this instead.
+ *
+ * A path that does not name a storyline falls straight through to `parseRoute`,
+ * which is also what makes an unrecognized pathname (a typo, an old deep link
+ * to a page this app never had) resolve as the plain search its query string
+ * describes rather than as a 404 the SPA has no view for.
+ */
+export function parseLocation(pathname: string, search: string): Route {
+  const match = STORYLINE_PATH.exec(pathname);
+  const pathStoryline = match && STORYLINE_UUID.test(match[1]!) ? match[1]! : undefined;
+  if (pathStoryline === undefined) return parseRoute(search);
+
+  const params = new URLSearchParams(search);
+  const from = params.get("from")?.trim() || undefined;
+  return {
+    q: null,
+    filters: {
+      language: params.get(PARAM_KEYS.language) ?? undefined,
+      country: params.get(PARAM_KEYS.country) ?? undefined,
+    },
+    storyline: pathStoryline,
+    ...(from ? { from } : {}),
+  };
+}
+
+/**
+ * A `Route` → the URL to navigate to — `routeSearch`'s counterpart once a
+ * STORYLINE VIEW has a path of its own.
+ *
+ * `label` is the one thing this needs that the route itself does not carry
+ * (`Route` intentionally holds no display text, only identity — see its own
+ * comment). It is best-effort and cosmetic: `parseLocation` above ignores
+ * everything after the UUID, so a slug built from a stale or missing label
+ * still opens the right storyline, and `slugifyStoryline(null)` names a real
+ * segment rather than leaving one out. Every OTHER route (the hero, a search,
+ * ADR-0010's bigint seed) has no pathname of its own and falls back to
+ * `routeSearch` unchanged.
+ */
+export function routeUrl(route: Route, label: string | null = null): string {
+  const view = route.storyline !== undefined && STORYLINE_UUID.test(route.storyline);
+  if (!view) return `/${routeSearch(route)}`;
+
+  const params = new URLSearchParams();
+  for (const [filter, key] of Object.entries(PARAM_KEYS)) {
+    const value = route.filters[filter as keyof TopicFilters];
+    if (value) params.set(key, value);
+  }
+  if (route.from) params.set("from", route.from);
+  const search = params.toString();
+  return `/storyline/${route.storyline}/${slugifyStoryline(label)}${search ? `?${search}` : ""}`;
 }
 
 /**

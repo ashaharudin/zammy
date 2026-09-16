@@ -108,8 +108,15 @@ const cacheKeyFor = (deps: TrendingDeps, language: string): string =>
 const sampleLockFor = (deps: TrendingDeps, language: string): string =>
   `${deps.queue.name}:lock:sample:${language}`;
 
-/** The window ending at `now`, as the storyline read and the response want it. */
-function windowBounds(now: Date, windowHours: number): { from: Date; to: Date } {
+/**
+ * The window ending at `now`, as the storyline read and the response want it.
+ *
+ * Exported for `render-sitemap.ts`, which asks `readTrendingStorylines` the
+ * SAME question this file does (`docs/SEO.md`'s "off the same query that
+ * feeds `/api/v1/trending`") — the window is half of that question, and a
+ * second copy of this one-line calculation would be free to drift from it.
+ */
+export function windowBounds(now: Date, windowHours: number): { from: Date; to: Date } {
   return { from: new Date(now.getTime() - windowHours * 3_600_000), to: now };
 }
 

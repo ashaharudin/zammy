@@ -18,7 +18,36 @@ Two consequences follow, and everything below is downstream of them:
    site is the word "Zammy" and an empty div.
 
 Neither is fixed by metadata. They are fixed by giving storylines routes of their own and
-server-rendering them, which has not been done.
+server-rendering them — Tier 2, below, is that fix.
+
+## What Tier 2 shipped
+
+Three pieces, in the order they depend on each other:
+
+1. **Pretty routes.** `/storyline/<uuid>/<slug>` stands alongside `?storyline=<uuid>` rather than
+   replacing it — `apps/web/src/route.ts`'s `parseLocation` reads either shape and ignores the slug
+   entirely (it is cosmetic; the UUID is identity, exactly as `merged_into` already treats it). A
+   bookmarked `?storyline=<uuid>` on `/` redirects to the pretty path once, client-side, on mount —
+   every navigation the app makes from then on already writes the pretty form (`routeUrl`).
+   ADR-0010's bigint SEED is untouched: it has no route of its own, because it shares `q`'s lifetime
+   rather than naming a story.
+2. **A server-rendered head and content skeleton** for those routes — `api/storyline.ts` /
+   `apps/api/src/render-storyline.ts`. Per-storyline `<title>`, description, canonical, and OG tags,
+   plus a readable body: the day's own sentence (ADR-0023) leading each section, then that day's
+   headlines as outbound links. Reads `readStorylineView` directly — the same function
+   `GET /api/v1/timeline?storyline=` calls — never `/api/v1/*` over HTTP, so a crawl never spends a
+   token against `RATE_LIMIT_PER_MINUTE`. **A merged UUID gets the 301 the "open question" below used
+   to describe as unused**: `resolveStoryline` follows the alias, and the response redirects to the
+   survivor's own canonical path rather than serving a silent duplicate.
+3. **A generated sitemap** — `api/sitemap.ts` / `apps/api/src/render-sitemap.ts` — off
+   `readTrendingStorylines`, the same storage call `/api/v1/trending` reads, with `<lastmod>` from
+   `lastUpdated`. It replaces the static one-URL `apps/web/public/sitemap.xml`, which is deleted
+   outright: a static file at `/sitemap.xml` would be served directly and the rewrite to
+   `api/sitemap.ts` behind it would never fire.
+
+Not done: full SSR. `apps/web/src/main.tsx` still mounts with `createRoot`, not `hydrateRoot` — the
+skeleton is right the instant it arrives and gone the instant React commits over it, which is what
+"hydrating over it" means here rather than literal DOM adoption.
 
 ## What is in place
 
@@ -27,20 +56,23 @@ Static assets in `apps/web/public/`, which Vite copies to the dist root verbatim
 | File | Why |
 | --- | --- |
 | `robots.txt` | Carries the sitemap line. Restricts nothing — see the open question below. |
-| `sitemap.xml` | One URL, because one URL exists. |
 | `favicon.svg`, `favicon.ico`, `apple-touch-icon.png`, `icon-192.png`, `icon-512.png` | The hero's `zammy>` mark reduced to two stroked paths. |
 | `og.png` | 1200×630 share card. |
 | `site.webmanifest` | Name, icons, colors. |
+
+`sitemap.xml` is no longer among them — it is generated per request now (`api/sitemap.ts`, above).
 
 And in `apps/web/index.html`: title, description, canonical, OpenGraph, Twitter card, two
 `theme-color` entries, the icon links, and the GA4 tag.
 
 ## Decisions worth knowing about
 
-**The canonical points at `/` from every route.** Deliberate, and only correct while the parameter
-forms render nothing: it consolidates an unbounded number of identical blank URLs onto the one page
-that has content. It becomes wrong the day a storyline is server-rendered, and a per-route canonical
-is part of that change rather than something to retrofit after it.
+**The canonical points at `/` from every PARAMETER route**, still — `?q=`, `?storyline=<uuid>` before
+its client-side redirect fires, `?lang=`. Deliberate, and only correct while those forms render
+nothing: it consolidates an unbounded number of identical blank URLs onto the one page that has
+content. `/storyline/<uuid>/<slug>` is the one route that now has a canonical of its own
+(`render-storyline.ts`), because it is the one route with something server-rendered to be canonical
+ABOUT.
 
 **Non-canonical hosts are `noindex`, via `vercel.json` headers.** `zammy-alpha.vercel.app` answers
 200 with the same content, and every deployment URL is another copy. The rule is written with
@@ -95,34 +127,32 @@ irrelevant here. Production answers `x-ratelimit-limit: 120`, which is
 26/min, so 120 is about four readers behind one IP. That is a reader number. It was never chosen
 against agent traffic, and one bucket per IP covers both.
 
-Raising it is the wrong lever anyway. `/api/v1/trending` and `/api/v1/reference` are read-only,
-slow-changing, and today answer `cache-control: public, max-age=0, must-revalidate` with
-`x-vercel-cache: MISS` on every hit — so every agent request reaches the function, the database and
-the limiter. An `s-maxage` with `stale-while-revalidate` on those two would serve agents from the
-edge and never touch the counter, which is worth more than any value of `RATE_LIMIT_PER_MINUTE`.
+Raising it is the wrong lever anyway. `/api/v1/trending` now answers `s-maxage=60,
+stale-while-revalidate=300` on a settled cloud (PR #227) — an edge hit never reaches the function,
+the database, or the limiter — but that is a property of RESPONSES the CDN may cache, and this
+render function's own reads (`render-storyline.ts`, `render-sitemap.ts`) go through the storage
+layer directly rather than earning it that way. `/api/v1/reference` still answers with no
+`cache-control` of its own; it is read-only and slow-changing in exactly the same way `/trending`
+was before #227, and is the next candidate if agent traffic against it ever shows up in the logs.
 `/api/v1/timeline` is the opposite case — per-query, high cardinality, expensive — and is the one
 that should stay limited.
 
-**Storyline URLs would never 404.** Merges keep the loser's UUID as an alias and reads resolve
-through `merged_into` (`packages/storage/src/storylines.ts`), so a storyline route could serve a
-`301` to the survivor's canonical instead of a dead end. That is unusually good link-equity
-behaviour to be leaving unused.
+**Storyline URLs never 404, now for real.** Merges keep the loser's UUID as an alias and reads
+resolve through `merged_into` (`packages/storage/src/storylines.ts`); `render-storyline.ts` follows
+it and serves a `301` to the survivor's canonical path instead of a dead end or a silent duplicate.
+This used to be the "unusually good link-equity behaviour being left unused" paragraph — Tier 2 is
+what used it.
 
 ## What comes next
 
-In order of how much it would actually move:
+Tier 2 (pretty routes, server-rendered head and skeleton, a generated sitemap) shipped above. What is
+left, in order of how much it would actually move:
 
-1. Pretty routes — `/storyline/<uuid>/<slug>` — alongside the existing parameter, so there is
-   something to link to.
-2. A Vercel function that server-renders the head and a content skeleton for those routes, with the
-   SPA hydrating over it. Not full SSR: per-storyline title, description, canonical, OG tags and a
-   readable body of day summaries and headlines is most of the value.
-3. A generated sitemap (`api/sitemap.ts`) off the same query that feeds `/api/v1/trending`, with
-   `<lastmod>` from `lastUpdated`.
-4. `CollectionPage` + `ItemList` JSON-LD per storyline; `WebSite` + `SearchAction` on the landing
+1. `CollectionPage` + `ItemList` JSON-LD per storyline; `WebSite` + `SearchAction` on the landing
    page. The honest framing matters here: Zammy links out rather than hosting article text, and thin
    aggregator pages are a real ranking liability. The original content is the storyline — the
    synthesized arc and the day summaries (ADR-0023) — not the headlines, and the markup should say
-   so.
-5. `/llms.txt`: what Zammy is, the sighting / article / group / storyline vocabulary from
+   so. `render-storyline.ts`'s body already leads with the day's own sentence for exactly this
+   reason; the structured data should make the same claim machine-readable.
+2. `/llms.txt`: what Zammy is, the sighting / article / group / storyline vocabulary from
    `CONTEXT.md`, and a pointer to the JSON API.
