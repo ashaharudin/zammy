@@ -55,16 +55,38 @@ blocking it in `robots.txt` would close the one door that works; but a timeline 
 page and has no business in a search index. `noindex` on the response says exactly that and nothing
 more.
 
+**AI agents are split by what they do with the page, not by whose name is on them.** Three groups,
+and the middle one is where the decision actually was:
+
+| | Examples | |
+| --- | --- | --- |
+| Fetches because a reader asked | `ChatGPT-User`, `Claude-User`, `Perplexity-User` | allowed |
+| Indexes so Zammy can be found inside an AI product | `OAI-SearchBot`, `Claude-SearchBot`, `PerplexityBot`, `Applebot` | allowed |
+| Trains on the corpus | `GPTBot`, `ClaudeBot`, `CCBot`, `Google-Extended`, `Bytespider`, … | blocked |
+
+The middle row is not training and not a live fetch: it builds the index that decides whether Zammy
+can be surfaced at all. For an aggregator whose whole value is freshness, that is the discovery
+channel worth having, so it is allowed with the first row rather than blocked with the third.
+
+Two things about that file are easy to get wrong later. A crawler obeys the **most specific group
+naming it** and ignores `*` once it has one — so a `Disallow:` added to `*` will not reach any of
+the explicitly allowed agents, and has to be repeated into each group. And `Google-Extended` /
+`Applebot-Extended` are **not crawlers**: they are opt-out tokens for Gemini and Apple Intelligence
+training, Googlebot and Applebot are untouched, and Google's AI Overviews ride on ordinary Search
+indexing rather than on that token. Blocking them costs no search visibility, which is the opposite
+of what people usually assume.
+
+None of it is enforcement. robots.txt is obeyed voluntarily and `Bytespider` in particular has been
+documented ignoring it; blocking that actually blocks is a firewall rule, not a text file.
+
 **The title changed** from a bare `Zammy` to `Zammy — trace any story back to where it started`. A
 one-word title is the single largest thing a search result can be missing.
 
 ## Open questions
 
-**AI training crawlers are allowed, by inheritance rather than by decision.** No `robots.txt` meant
-everything was allowed; this one keeps that. Declining GPTBot / ClaudeBot / CCBot / Google-Extended
-is one block per agent, and it is a *separate* question from the retrieval agents (ChatGPT-User,
-Claude-User, PerplexityBot) that fetch because a reader asked — those are traffic, and for an
-aggregator whose value is freshness they are probably the traffic we want.
+**The agent list is a snapshot, not a standard.** Agents appear, get renamed, and split into
+training and retrieval halves; an agent nobody has added yet falls through to `*` and is allowed.
+The file needs a pass now and then.
 
 **The rate limiter has not been sized for crawlers.** `RATE_LIMIT_PER_MINUTE` per IP applies to
 `/api/` only (`apps/api/src/server.ts`), so static crawling is unaffected — but an agent fanning out

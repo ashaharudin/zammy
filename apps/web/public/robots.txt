@@ -1,20 +1,106 @@
-# Everything is crawlable, which is also what NO robots.txt meant — this file
-# exists to carry the sitemap line, not to start restricting anything.
+# Search engines crawl freely. AI agents are split by what they DO with the
+# page, not by whose name is on them: an agent fetching because a reader asked
+# is traffic, and an agent hoovering a corpus to train on is not.
 #
-# `/api/` is deliberately NOT disallowed. The JSON under it is the one surface
-# an agent that cannot run JavaScript can actually read, and blocking it here
-# would close the only door that currently works. It is kept OUT of search
-# indexes by `X-Robots-Tag: noindex` on the responses themselves (vercel.json),
-# which stops a JSON body being indexed as a page without stopping anyone
-# fetching it.
+# The groups below are the whole policy. Read the robots.txt matching rule
+# before editing them: a crawler obeys the MOST SPECIFIC group naming it and
+# ignores `*` entirely once it has one. That cuts both ways here — the allowed
+# agents are listed explicitly for the sake of saying so, but it also means a
+# future `Disallow:` added to `*` will NOT reach them. Anything meant for
+# everyone has to be repeated into each named group, or those groups deleted.
 #
-# AI TRAINING crawlers (GPTBot, ClaudeBot, CCBot, Google-Extended) are allowed
-# here only because that is the status quo this file inherited. Declining them
-# is a product decision nobody has made yet; it is one block per agent when
-# somebody does, and it is separate from the retrieval agents (ChatGPT-User,
-# Claude-User, PerplexityBot) that fetch a page because a reader asked for it.
+# None of this is enforcement. robots.txt is obeyed voluntarily, and at least
+# one agent named below has been documented ignoring it repeatedly. Blocking
+# that actually blocks is a firewall rule, not this file.
+#
+# This list is a snapshot, not a standard. Agents appear, get renamed, and
+# split into training and retrieval halves; it needs a pass now and then, and
+# an agent nobody has added yet falls through to `*` and is allowed.
+
+# --- Everyone not named below, search engines included ---------------------
 
 User-agent: *
 Allow: /
+
+# --- Fetch because a reader asked, right now -------------------------------
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: Claude-User
+Allow: /
+
+User-agent: Perplexity-User
+Allow: /
+
+# --- Index so Zammy can be FOUND inside an AI product ----------------------
+#
+# Not training, and not a live fetch either: these build the index that decides
+# whether Zammy can be surfaced at all. For an aggregator whose whole value is
+# freshness, that is the discovery channel worth having.
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: Claude-SearchBot
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Applebot
+Allow: /
+
+# --- Train on the corpus -----------------------------------------------------
+#
+# `Google-Extended` and `Applebot-Extended` are NOT crawlers and blocking them
+# costs no search visibility — they are opt-out tokens for Gemini and Apple
+# Intelligence training. Googlebot and Applebot are untouched above, and
+# Google's AI Overviews ride on ordinary Search indexing rather than on this
+# token, so they are unaffected too. This is the line people most often expect
+# to have cost them ranking; it does not.
+
+User-agent: GPTBot
+Disallow: /
+
+User-agent: ClaudeBot
+Disallow: /
+
+User-agent: anthropic-ai
+Disallow: /
+
+User-agent: Google-Extended
+Disallow: /
+
+User-agent: Applebot-Extended
+Disallow: /
+
+User-agent: CCBot
+Disallow: /
+
+User-agent: meta-externalagent
+Disallow: /
+
+User-agent: Bytespider
+Disallow: /
+
+User-agent: AI2Bot
+Disallow: /
+
+User-agent: Diffbot
+Disallow: /
+
+User-agent: Omgilibot
+Disallow: /
+
+User-agent: cohere-training-data-crawler
+Disallow: /
+
+# `/api/` is deliberately NOT disallowed anywhere above. The JSON under it is
+# the one surface an agent that cannot run JavaScript can actually read, and
+# blocking it would close the only door that currently works. It is kept out of
+# search indexes by `X-Robots-Tag: noindex` on the responses themselves
+# (vercel.json), which stops a JSON body being indexed as a page without
+# stopping anyone fetching it.
 
 Sitemap: https://www.zammy.info/sitemap.xml
