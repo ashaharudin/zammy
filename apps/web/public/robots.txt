@@ -1,0 +1,20 @@
+# Everything is crawlable, which is also what NO robots.txt meant — this file
+# exists to carry the sitemap line, not to start restricting anything.
+#
+# `/api/` is deliberately NOT disallowed. The JSON under it is the one surface
+# an agent that cannot run JavaScript can actually read, and blocking it here
+# would close the only door that currently works. It is kept OUT of search
+# indexes by `X-Robots-Tag: noindex` on the responses themselves (vercel.json),
+# which stops a JSON body being indexed as a page without stopping anyone
+# fetching it.
+#
+# AI TRAINING crawlers (GPTBot, ClaudeBot, CCBot, Google-Extended) are allowed
+# here only because that is the status quo this file inherited. Declining them
+# is a product decision nobody has made yet; it is one block per agent when
+# somebody does, and it is separate from the retrieval agents (ChatGPT-User,
+# Claude-User, PerplexityBot) that fetch a page because a reader asked for it.
+
+User-agent: *
+Allow: /
+
+Sitemap: https://www.zammy.info/sitemap.xml

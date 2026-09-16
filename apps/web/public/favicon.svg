@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="zammy">
+  <!--
+    The hero's mark (`zammy>`, Hero.tsx) shrunk to the two glyphs that carry it.
+
+    Both are STROKED PATHS rather than <text>, because an SVG favicon is drawn
+    by the browser with whatever it resolves `font-family` to — which on a
+    machine without the mono stack is a serif `z` nobody chose. A polyline `z`
+    and a chevron are the same shape everywhere, and at 16px they are crisper
+    than a hinted glyph.
+
+    The two spans (14–28 and 38–50) are centred on 32 together, not each: the
+    pair is the mark. The 10 units between them are the whole reason the glyphs
+    read as two — at 5 apart, which is where this started, the z's diagonal ran
+    into the chevron and the mark became one blob at favicon size.
+
+    Colors are the light theme's --fg on the DARK surface deliberately: a
+    favicon sits on browser chrome we do not control, and dark-on-dark
+    disappears in far more places than light-on-dark does.
+  -->
+  <rect width="64" height="64" rx="12" fill="#121212"/>
+  <path d="M14 23 H28 L14 41 H28" fill="none" stroke="#fafafa" stroke-width="5"
+        stroke-linejoin="miter" stroke-linecap="square"/>
+  <path d="M38 25 L50 32 L38 39" fill="none" stroke="#b58900" stroke-width="5"
+        stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

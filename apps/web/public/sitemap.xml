@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  One URL, because one URL is all that exists: every other view the app has
+  lives behind a query parameter (`?q=`, `?storyline=`) that renders nothing
+  until JavaScript runs, and listing those would be pointing crawlers at blank
+  pages. This file grows when storylines get routes of their own and something
+  server-renders them.
+
+  No <lastmod>: a hand-written date in a static file is wrong the day after it
+  is written, and a stale lastmod is treated worse than an absent one.
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://www.zammy.info/</loc>
+  </url>
+</urlset>
