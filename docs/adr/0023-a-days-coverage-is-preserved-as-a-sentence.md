@@ -118,7 +118,8 @@ evening coverage* and *we could not tell when that day's coverage landed*.
 - **A bounded night defers rather than drops — but only because the walk is
   oldest-day-first.** The ceiling is reached on a busy corpus, and the days
   nearest to falling out of the window are the ones that cannot wait, so they
-  are the ones the ceiling is spent on.
+  are the ones the ceiling is spent on. (Amended 2026-09-16; see below. The
+  sentence is still true and it was not sufficient.)
 - **The day sentence is built from the quarters', not from the articles.** It
   cannot contradict them and it costs ~150 tokens instead of ~3,000. What it
   gives up is the chance to notice something across the day that no quarter
@@ -126,6 +127,57 @@ evening coverage* and *we could not tell when that day's coverage landed*.
 - **It is off on merge.** `SUMMARIES_ENABLED=false`, the posture ADR-0011's
   linker shipped with, because this is the second thing here that spends quota
   per call.
+
+## Amendment, 2026-09-16: the newest days were the ones being lost
+
+Oldest-first was chosen so that a bounded night defers the newest day, "which is
+still there tomorrow". In production it was not there tomorrow. On 2026-09-16
+the two newest UTC days held **45 qualifying storyline-days and not one
+sentence**, while the six firings before them spent 379 model calls on days
+09-07 to 09-13.
+
+The reasoning above has a premise it does not state: that the deficit is spread
+evenly across the window, so tomorrow's night inherits a little more work than
+today's. A **promotion burst** breaks it. A newly promoted arc brings its whole
+back-history as first-write candidates, a first write is allowed at any age, and
+80 arcs were promoted on one day against 11 on a quiet one. That arrives as
+several hundred calls of old-end work at once, and under a strictly oldest-first
+walk it pre-empts the newest days for as long as it takes to drain — which, at
+the capacity the pass had, was longer than the newest days could wait.
+
+So the walk is now **two phases**:
+
+1. the newest `SUMMARY_FRESH_DAYS` (3) of the window, **newest first**, bounded
+   by `SUMMARY_FRESH_SHARE` (0.6) of the night's budget; then
+2. the whole window, **oldest first** — the walk above, unchanged.
+
+The bound is the part that keeps the original decision intact. The fresh phase
+cannot spend the night, so the days about to leave the window still get the
+larger share of every firing, and the guarantee that a bounded night *defers*
+rather than *drops* is the same guarantee it always was. What changed is only
+which end goes first with a bounded slice.
+
+Two consequences worth stating, because both were bugs before they were rules:
+
+- **A day the fresh phase bounces off is handed back, not kept.** It is
+  unfinished, and marking it walked would make the share boundary a one-day hole
+  that reports as `exhausted`.
+- **The second phase walks the whole window, not the window minus the fresh
+  range**, so budget the fresh phase did not spend still reaches fresh days.
+
+### And the budget now aborts what it cannot stop
+
+`SUMMARY_BUDGET_MS` bounds when a call is **admitted**. It never bounded a call
+already in flight, which can run to three `GEMINI_TIMEOUT_MS` attempts plus
+backoff — 60.75 s — on a route the platform kills at 300 s. The pass and the ask
+have always taken an `AbortSignal` for exactly this and nothing ever passed one.
+
+It does now, firing ten seconds past the budget. That bounds the tail to a
+number the arithmetic can hold (2.1 s boot + budget + 10 s + ~1 s), which is
+what makes 275 s a safe budget where 240 s was the largest number that survived
+a single timing-out call by luck. An abort costs nothing the preserve cares
+about: it surfaces as `unreachable`, which writes no row and spends no attempt,
+exactly as the refusal/outage line above requires.
 
 ## What did not change
 

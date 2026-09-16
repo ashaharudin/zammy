@@ -769,6 +769,26 @@ export async function runStorylineGraphChore(deps: ChoreDeps): Promise<Storyline
  * `day_key` and `storyline_days.day_key` stop naming the same 24 hours, which is
  * a surprise for whoever joins them later and not an error today.
  */
+/**
+ * How long a call ALREADY IN FLIGHT may run past `SUMMARY_BUDGET_MS`.
+ *
+ * Not a config knob, because it is not a preference: it is the gap between the
+ * budget and the platform's own kill, and both of those are named elsewhere. It
+ * needs to be longer than an ordinary call (1.3-3.5 s measured) and far shorter
+ * than the 60.75 s a call can take on its own (3 x `GEMINI_TIMEOUT_MS` plus
+ * backoff), which is the whole reason it exists.
+ *
+ * The arithmetic it has to satisfy, against `api/chores.ts`'s 300 s
+ * `maxDuration` and measured production timings:
+ *
+ *     2.1 s boot + 275 s budget + 10 s grace + ~1 s to write `chore_runs`
+ *       = ~288 s, ~12 s clear of the kill.
+ *
+ * Raising `SUMMARY_BUDGET_MS` without re-checking that sum is how a night
+ * becomes a `chore_runs` row with a null `finished_at`.
+ */
+const SUMMARY_ABORT_GRACE_MS = 10_000;
+
 export async function runSummaryChore(
   deps: StorylinePassDeps & { sleep?: (ms: number) => Promise<void> },
 ): Promise<SummaryPassTally & { enabled: boolean }> {
@@ -780,6 +800,7 @@ export async function runSummaryChore(
     return {
       enabled: false,
       days: 0,
+      fresh: 0,
       written: 0,
       recomputed: 0,
       refused: 0,
@@ -821,31 +842,67 @@ export async function runSummaryChore(
     deps.summaryWindow?.from ??
     new Date(todayStart.getTime() - deps.summaryGate.windowDays * 86_400_000);
 
-  const tally = await summaryPass(
-    // The pass's clock governs BOTH halves. `createSummarizer` leaves `now`
-    // unset, so without this the window arithmetic here would read the chore's
-    // clock while the age-and-cliff arithmetic inside read the wall clock —
-    // identical in production, and a seam a frozen test clock falls straight
-    // through.
-    { db: deps.db, ...deps.summarizer, now: deps.now },
-    {
-      from,
-      to,
-      minArticlesExclusive: deps.summaryGate.minArticlesExclusive,
-      minGroups: deps.summaryGate.minGroups,
-      now: deps.now,
-      ...(deps.summaryStorylineId !== undefined
-        ? { storylineId: deps.summaryStorylineId }
-        : {}),
-      ...(deps.maxSummaries !== undefined ? { maxSummaries: deps.maxSummaries } : {}),
-      ...(deps.summaryBudgetMs !== undefined ? { budgetMs: deps.summaryBudgetMs } : {}),
-      ...(deps.summaryRatePerMinute !== undefined
-        ? { ratePerMinute: deps.summaryRatePerMinute }
-        : {}),
-      ...(deps.summaryProgress ? { onProgress: deps.summaryProgress } : {}),
-      ...(deps.sleep ? { sleep: deps.sleep } : {}),
-    },
-  );
+  // **The deadline the PLATFORM enforces, as an abort the model call can hear.**
+  //
+  // `SUMMARY_BUDGET_MS` stops the pass ADMITTING calls. It cannot stop one
+  // already in flight, and an in-flight call runs to `GEMINI_TIMEOUT_MS` (20 s)
+  // times `maxRetries + 1` (3) plus backoff — up to 60.75 s past the deadline,
+  // on a route Vercel kills at 300 s. `summaryPass` and `ask` have always taken
+  // a signal for exactly this, and nothing ever passed one: measured on
+  // 2026-09-16, production boots in ~2.1 s and finishes ~1 s after the pass
+  // returns, so a 240 s budget survived one timing-out call at the deadline
+  // (282 s) and three (303 s) only by luck.
+  //
+  // Armed only when there IS a budget, which is the route. A CLI run has no
+  // function timeout and nothing to be rescued from.
+  //
+  // What an abort costs is nothing: it surfaces as `failure: "unreachable"`,
+  // which writes no row and spends no attempt (ADR-0023's refusal/outage line),
+  // and the next pass reselects the span.
+  const controller = new AbortController();
+  const deadlineTimer =
+    deps.summaryBudgetMs !== undefined
+      ? setTimeout(() => controller.abort(), deps.summaryBudgetMs + SUMMARY_ABORT_GRACE_MS)
+      : undefined;
+  // Never the reason this process stays alive — the pass is awaited below, and
+  // the timer is cleared either way.
+  deadlineTimer?.unref?.();
+
+  let tally: SummaryPassTally;
+  try {
+    tally = await summaryPass(
+      // The pass's clock governs BOTH halves. `createSummarizer` leaves `now`
+      // unset, so without this the window arithmetic here would read the chore's
+      // clock while the age-and-cliff arithmetic inside read the wall clock —
+      // identical in production, and a seam a frozen test clock falls straight
+      // through.
+      { db: deps.db, ...deps.summarizer, now: deps.now },
+      {
+        from,
+        to,
+        minArticlesExclusive: deps.summaryGate.minArticlesExclusive,
+        minGroups: deps.summaryGate.minGroups,
+        now: deps.now,
+        signal: controller.signal,
+        ...(deps.summaryStorylineId !== undefined
+          ? { storylineId: deps.summaryStorylineId }
+          : {}),
+        ...(deps.maxSummaries !== undefined ? { maxSummaries: deps.maxSummaries } : {}),
+        ...(deps.summaryBudgetMs !== undefined ? { budgetMs: deps.summaryBudgetMs } : {}),
+        ...(deps.summaryRatePerMinute !== undefined
+          ? { ratePerMinute: deps.summaryRatePerMinute }
+          : {}),
+        ...(deps.summaryFreshDays !== undefined ? { freshDays: deps.summaryFreshDays } : {}),
+        ...(deps.summaryFreshShare !== undefined
+          ? { freshShare: deps.summaryFreshShare }
+          : {}),
+        ...(deps.summaryProgress ? { onProgress: deps.summaryProgress } : {}),
+        ...(deps.sleep ? { sleep: deps.sleep } : {}),
+      },
+    );
+  } finally {
+    clearTimeout(deadlineTimer);
+  }
 
   deps.log.info(
     {
@@ -943,6 +1000,13 @@ export interface StorylinePassDeps extends ChoreDeps {
   summaryBudgetMs?: number;
   /** Model calls per minute for the summary pass — `--summary-rate`. */
   summaryRatePerMinute?: number;
+  /**
+   * Days at the newest end of the window the pass walks first, newest first —
+   * `SUMMARY_FRESH_DAYS`. See `SummaryPassOptions.freshDays`.
+   */
+  summaryFreshDays?: number;
+  /** Share of the budget that first walk may spend — `SUMMARY_FRESH_SHARE`. */
+  summaryFreshShare?: number;
   /**
    * An explicit window for the summary pass, replacing the rolling
    * `summaryGate.windowDays` one — `--from`/`--to` on

@@ -324,6 +324,76 @@ describe("storyline day summaries in storage", () => {
       });
       expect(next.map((day) => day.dayKey)).toEqual(["2026-07-08"]);
     });
+
+    it("walks NEWEST day first when asked, and pages without repeating itself", async () => {
+      const a = await article({ published: "2026-07-16T01:00:00.000Z" });
+      const b = await article({ published: "2026-07-16T13:00:00.000Z" });
+      for (const day of ["2026-07-16", "2026-07-17", "2026-07-18"]) {
+        for (let i = 0; i < 3; i += 1) {
+          await article({ published: `${day}T02:00:00.000Z`, groupId: a.groupId });
+          await article({ published: `${day}T14:00:00.000Z`, groupId: b.groupId });
+        }
+      }
+      const arc = await storyline([a.groupId, b.groupId], "Three Days Backwards");
+
+      const first = await readSummaryCandidateDays(harness.db, {
+        ...window,
+        storylineId: arc,
+        order: "newest",
+        limit: 2,
+      });
+      expect(first.map((day) => day.dayKey)).toEqual(["2026-07-18", "2026-07-17"]);
+
+      // The half that a reversed ORDER BY alone would get wrong. `after` means
+      // "the last row I saw", so a descending walk has to page with `<`; left
+      // as `>` it would re-read the newest day for ever and the fresh phase
+      // would spend its whole share on one day.
+      const next = await readSummaryCandidateDays(harness.db, {
+        ...window,
+        storylineId: arc,
+        order: "newest",
+        limit: 2,
+        after: { dayKey: first[1]!.dayKey, storylineId: first[1]!.storylineId },
+      });
+      expect(next.map((day) => day.dayKey)).toEqual(["2026-07-16"]);
+    });
+
+    it("covers every day exactly once in either direction", async () => {
+      const a = await article({ published: "2026-07-21T01:00:00.000Z" });
+      const b = await article({ published: "2026-07-21T13:00:00.000Z" });
+      const days = ["2026-07-21", "2026-07-22", "2026-07-23", "2026-07-24"];
+      for (const day of days) {
+        for (let i = 0; i < 3; i += 1) {
+          await article({ published: `${day}T02:00:00.000Z`, groupId: a.groupId });
+          await article({ published: `${day}T14:00:00.000Z`, groupId: b.groupId });
+        }
+      }
+      const arc = await storyline([a.groupId, b.groupId], "Four Days Either Way");
+
+      // Page one day at a time to the end, the way the pass does with a batch
+      // size smaller than the work, and assert the walk is a partition: no day
+      // missed, none served twice.
+      for (const order of ["oldest", "newest"] as const) {
+        const seen: string[] = [];
+        let after: { dayKey: string; storylineId: string } | undefined;
+        for (;;) {
+          const page = await readSummaryCandidateDays(harness.db, {
+            ...window,
+            storylineId: arc,
+            order,
+            limit: 1,
+            ...(after ? { after } : {}),
+          });
+          if (page.length === 0) break;
+          seen.push(...page.map((day) => day.dayKey));
+          const last = page[page.length - 1]!;
+          after = { dayKey: last.dayKey, storylineId: last.storylineId };
+          // A keyset that does not advance is an infinite loop in production.
+          expect(seen.length).toBeLessThanOrEqual(days.length);
+        }
+        expect(seen).toEqual(order === "oldest" ? days : [...days].reverse());
+      }
+    });
   });
 
   describe("writing", () => {

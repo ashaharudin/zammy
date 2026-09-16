@@ -249,17 +249,60 @@ from the start of today, up to the start of today. Today is excluded because the
 pass fires at 05:00, inside the `night` quarter it would otherwise summarise and
 then freeze — a night sentence permanently describing five sixths of its span.
 
-Within that window the walk is **oldest day first**. The pass has a ceiling and
-the ceiling is reached, so a bounded night has to leave something unwritten, and
-the order decides what: oldest-first spends it on the days about to fall out of
-the window, and defers the newest day, which is still there tomorrow.
+Within that window the walk is **two phases** (ADR-0023's amendment):
+
+1. the newest `SUMMARY_FRESH_DAYS` (3) days, **newest first**, until they are
+   done or `SUMMARY_FRESH_SHARE` (0.6) of the budget is spent;
+2. the whole window, **oldest day first** — the original walk.
+
+Oldest-first alone is what ADR-0023 chose, and the reason still holds: the days
+about to fall out of the window cannot wait, and the newest day can. What it did
+not anticipate is a **promotion burst**. A newly promoted arc brings its whole
+back-history as first-write candidates, so one day's inflow can be several times
+another's, and it pre-empts the newest days for as long as it takes to drain. On
+2026-09-16 that was long enough to leave the two newest UTC days with 45
+qualifying storyline-days and no sentence at all, through six firings that spent
+379 calls between them.
+
+The fresh phase is **bounded** rather than merely first, and that bound is what
+keeps the original guarantee: it cannot spend the night, so the old end still
+gets two fifths of every firing. Two details follow from it, both of which are
+easy to get wrong:
+
+- a day the fresh phase **bounces off** is handed back to the second walk rather
+  than counted as done, or the share boundary becomes a one-day hole that reports
+  as `exhausted`;
+- the second walk covers the **whole** window, so budget the fresh phase did not
+  spend still reaches fresh days.
 
 `SUMMARY_MAX_PER_RUN` is a *spend* bound and `SUMMARY_BUDGET_MS` is the *clock*
-bound — the same split `CHORE_MAX_LABELS` and `CHORE_LABEL_BUDGET_MS` make. At
-30 rpm the pass's own 2 s spacing means the budget is what actually stops a
-healthy night, somewhere around 30–40 calls. And a run of unreachable asks stops
-the pass early rather than spending the whole ceiling discovering the API is
-still down.
+bound — the same split `CHORE_MAX_LABELS` and `CHORE_LABEL_BUDGET_MS` make. The
+budget is what actually stops a healthy night: about **128 calls** at 275 s and
+`SUMMARY_MAX_RPM` 28. And a run of unreachable asks stops the pass early rather
+than spending the whole ceiling discovering the API is still down.
+
+**The pacing is measured from one call's START, not from its return.** That is
+not a detail: sleeping a full interval *after* each answer runs the pass at
+`60000 / (spacing + latency)`, which is not the rate anybody configured. Measured
+on 2026-09-16, 2 s of spacing plus ~1.3 s of latency gave 18 calls a minute
+against a key that allows 30, and about 40% of every firing was the pass asleep
+with the key idle. `SUMMARY_MAX_RPM` is its own knob and sits below
+`GEMINI_MAX_RPM` so the drain's organic label promotions keep a share of the key
+— of the rpm window and of the 16k input-tokens-per-minute one alike.
+
+**The budget aborts what it cannot stop.** `SUMMARY_BUDGET_MS` bounds when a
+call is *admitted*; a call in flight runs to three `GEMINI_TIMEOUT_MS` attempts
+plus backoff, up to 60.75 s, against a 300 s `maxDuration`. `runSummaryChore`
+arms an abort ten seconds past the budget, so the sum that has to clear 300 s is
+
+```
+2.1s boot + 275s budget + 10s grace + ~1s chore_runs write = ~288s
+```
+
+with both measured halves taken from production. **Raising `SUMMARY_BUDGET_MS`
+means redoing that sum**: overshooting leaves a `chore_runs` row with a null
+`finished_at`, which `check-chores.sh` reports as a failed night. An abort costs
+the preserve nothing — it reads as `unreachable`, so no row and no attempt.
 
 ```bash
 pnpm chores summaries --max-summaries=30 --summary-rate=10
@@ -325,5 +368,12 @@ dispatch.
 All of them are in [`.env.example`](../.env.example) with their reasoning.
 The ones that change behaviour rather than pace: `SUMMARIES_ENABLED`,
 `SUMMARY_MIN_ARTICLES_PER_DAY` + `SUMMARY_MIN_GROUPS` (the gate),
-`SUMMARY_SETTLING_DAYS` + `SUMMARY_RECOMPUTE_DELTA` (what may be rewritten), and
-`SUMMARY_CLIFF_DAYS` (which days get quarters).
+`SUMMARY_SETTLING_DAYS` + `SUMMARY_RECOMPUTE_DELTA` (what may be rewritten),
+`SUMMARY_CLIFF_DAYS` (which days get quarters), and `SUMMARY_FRESH_DAYS` +
+`SUMMARY_FRESH_SHARE` (which end of the window goes first, and for how long —
+set `SUMMARY_FRESH_DAYS=0` to restore the single oldest-first walk).
+
+The ones that set the pace: `SUMMARY_MAX_RPM`, `SUMMARY_BUDGET_MS` and
+`SUMMARY_MAX_PER_RUN`. The first two are coupled to things outside this file —
+the key's shared rate and token limits, and the route's `maxDuration` — so
+neither is a number to nudge without reading its comment.

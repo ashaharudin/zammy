@@ -819,3 +819,203 @@ describe("the pass", () => {
     expect(model.prompts).toEqual([]);
   });
 });
+
+/**
+ * One arc with qualifying coverage on each of the given UTC days: six articles
+ * across two groups, landing in the night and afternoon quarters, so every day
+ * clears the gate and costs three calls (two quarters and the day).
+ */
+async function arcAcrossDays(days: string[], label = "Many Days"): Promise<string> {
+  const a = await article(`${days[0]}T02:00:00Z`);
+  const b = await article(`${days[0]}T14:00:00Z`);
+  for (const day of days) {
+    for (let i = 0; i < 3; i += 1) {
+      await article(`${day}T03:00:00Z`, a);
+      await article(`${day}T15:00:00Z`, b);
+    }
+  }
+  return arc([a, b], label);
+}
+
+/** A clock the model's own latency moves, so pacing can be asserted exactly. */
+function movingClock(latencyMs: number) {
+  let t = NOW.getTime();
+  const sleeps: number[] = [];
+  return {
+    sleeps,
+    now: (): Date => new Date(t),
+    sleep: async (ms: number): Promise<void> => {
+      sleeps.push(ms);
+      t += ms;
+    },
+    /** Wrap a stub so each call costs `latencyMs` of the clock. */
+    wrap(model: TextGenerator): TextGenerator {
+      return {
+        async generate(request: GenerateRequest): Promise<GenerateResult> {
+          t += latencyMs;
+          return model.generate(request);
+        },
+      };
+    },
+  };
+}
+
+describe("the pass spaces calls from one call's START", () => {
+  const options = {
+    from: new Date("2026-08-01T00:00:00Z"),
+    to: NOW,
+    minArticlesExclusive: 4,
+    minGroups: 2,
+    // 2 s between the START of one call and the start of the next.
+    ratePerMinute: 30,
+  };
+
+  it("sleeps only the remainder when the call was faster than the interval", async () => {
+    await seedThreeQuarters();
+    const clock = movingClock(500);
+    const model = clock.wrap(stub(["A sentence."]));
+
+    const tally = await summaryPass(deps(model, { now: clock.now }), {
+      ...options,
+      now: clock.now,
+      sleep: clock.sleep,
+    });
+
+    // Four calls: three populated quarters and the day.
+    expect(tally.model).toBe(4);
+    // Three waits, each the interval MINUS the latency already spent on the
+    // previous call. Sleeping the full 2000 here is the double pacing that cost
+    // production 40% of its key: 2 s of spacing plus 1.3 s of latency ran a
+    // 30 rpm key at 18.
+    expect(clock.sleeps).toEqual([1_500, 1_500, 1_500]);
+  });
+
+  it("does not sleep at all when the call already outlasted the interval", async () => {
+    await seedThreeQuarters();
+    const clock = movingClock(3_000);
+    const model = clock.wrap(stub(["A sentence."]));
+
+    const tally = await summaryPass(deps(model, { now: clock.now }), {
+      ...options,
+      now: clock.now,
+      sleep: clock.sleep,
+    });
+
+    expect(tally.model).toBe(4);
+    // A slow call has already paid the interval by taking it. The rate is a
+    // ceiling on how often a call may START, not a delay owed after each one.
+    expect(clock.sleeps).toEqual([]);
+  });
+});
+
+describe("the fresh-first phase", () => {
+  const DAYS = ["2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13", "2026-08-14"];
+  const options = {
+    from: new Date("2026-08-10T00:00:00Z"),
+    // Whole UTC days at both ends, as the chore computes them: today is excluded.
+    to: new Date("2026-08-15T00:00:00Z"),
+    minArticlesExclusive: 4,
+    minGroups: 2,
+    ratePerMinute: 0,
+    now: () => NOW,
+  };
+
+  it("reaches the newest day first, where the oldest-first walk would not", async () => {
+    const id = await arcAcrossDays(DAYS);
+    // Three calls: exactly one day's worth.
+    const budget = { maxSummaries: 3 };
+
+    const fresh = await summaryPass(deps(stub(["A sentence."])), {
+      ...options,
+      ...budget,
+      freshDays: 2,
+    });
+    expect(fresh.stoppedBy).toBe("max-summaries");
+    expect(await rowsFor(id, "2026-08-14")).toHaveLength(3);
+    expect(await rowsFor(id, "2026-08-10")).toHaveLength(0);
+
+    // The contrast is the point: the same corpus and the same ceiling, with the
+    // phase off, spends everything on the oldest end — which is what ADR-0023
+    // chose and what left the two newest days of production with no sentence at
+    // all through six consecutive firings.
+    await sql`truncate storyline_day_summaries`.execute(db);
+    const oldest = await summaryPass(deps(stub(["A sentence."])), {
+      ...options,
+      ...budget,
+      freshDays: 0,
+    });
+    expect(oldest.stoppedBy).toBe("max-summaries");
+    expect(await rowsFor(id, "2026-08-14")).toHaveLength(0);
+    expect(await rowsFor(id, "2026-08-10")).toHaveLength(3);
+  });
+
+  it("yields to the oldest-first walk when its share runs out, rather than ending the night", async () => {
+    const id = await arcAcrossDays(DAYS);
+    const clock = movingClock(1_000);
+    const model = clock.wrap(stub(["A sentence."]));
+
+    // Four fresh days would cost 12 calls; a quarter of a 20 s budget admits
+    // about five. So the phase is cut off mid-walk, which is the case that
+    // matters — the whole guarantee is that being cut off hands the rest of the
+    // night to the days about to leave the window.
+    const tally = await summaryPass(deps(model, { now: clock.now }), {
+      ...options,
+      now: clock.now,
+      sleep: clock.sleep,
+      budgetMs: 20_000,
+      freshDays: 4,
+      freshShare: 0.25,
+    });
+
+    expect(tally.fresh).toBeGreaterThan(0);
+    expect(tally.fresh).toBeLessThan(tally.days);
+    // The newest day, reached by the fresh phase.
+    expect(await rowsFor(id, "2026-08-14")).toHaveLength(3);
+    // The oldest day, reached only because the fresh phase gave way.
+    expect(await rowsFor(id, "2026-08-10")).toHaveLength(3);
+    // And the night ended on its own terms. `fresh-budget` must never surface
+    // here: it is one phase yielding, not the pass running out of room.
+    expect(tally.stoppedBy).toBe("exhausted");
+  });
+
+  it("counts and walks each storyline-day once when both phases cover it", async () => {
+    await arcAcrossDays(DAYS);
+    const model = stub(["A sentence."]);
+
+    // The fresh phase covers the WHOLE window here, so the oldest-first walk
+    // that follows sees nothing it has not already done. It must not re-walk
+    // them: the cost would be silent (no model call, since every span is
+    // current) and the report would say the night considered ten days when the
+    // window holds five.
+    const tally = await summaryPass(deps(model), { ...options, freshDays: 8 });
+
+    expect(tally.days).toBe(DAYS.length);
+    expect(tally.fresh).toBe(DAYS.length);
+    expect(tally.model).toBe(DAYS.length * 3);
+    expect(tally.stoppedBy).toBe("exhausted");
+  });
+
+  it("still lets the oldest-first walk finish the fresh days the phase could not reach", async () => {
+    const id = await arcAcrossDays(DAYS);
+    const clock = movingClock(1_000);
+    const model = clock.wrap(stub(["A sentence."]));
+
+    // A tiny share, so the fresh phase writes the newest day and stops. The
+    // window phase walks the whole window — not the window minus the fresh
+    // range — so budget it did not spend still reaches 08-13.
+    const tally = await summaryPass(deps(model, { now: clock.now }), {
+      ...options,
+      now: clock.now,
+      sleep: clock.sleep,
+      budgetMs: 60_000,
+      freshDays: 2,
+      freshShare: 0.05,
+    });
+
+    expect(tally.stoppedBy).toBe("exhausted");
+    for (const day of DAYS) {
+      expect(await rowsFor(id, day)).toHaveLength(3);
+    }
+    expect(tally.days).toBe(DAYS.length);
+  });
+});

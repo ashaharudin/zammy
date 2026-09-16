@@ -80,10 +80,27 @@ export interface SummaryCandidateOptions {
   after?: SummaryCandidateCursor;
   /** One arc only — the verification and per-storyline backfill runs. */
   storylineId?: string;
+  /**
+   * Which end of the window the walk starts from. `"oldest"` is the default and
+   * is what the nightly pass has always done over the whole window.
+   *
+   * `"newest"` exists for ONE caller: the fresh-first phase the pass runs before
+   * its oldest-first walk (ADR-0023's amendment). It is not a general-purpose
+   * knob and not a preference — the two orders answer different questions, and
+   * which of them a walk wants is decided by which days it is walking. See
+   * `summaryPass`.
+   *
+   * The keyset flips with it: `after` is still "the last row I saw", so a
+   * newest-first walk pages with `<` rather than `>`.
+   */
+  order?: "oldest" | "newest";
 }
 
 /**
- * Storyline-days worth preserving, newest first.
+ * Storyline-days worth preserving, oldest day first unless `order` says otherwise.
+ *
+ * (The first line used to read "newest first", which the paragraph below has
+ * always contradicted. The code was right and the summary was wrong.)
  *
  * The gate is three clauses and each is a different question:
  *
@@ -103,19 +120,29 @@ export interface SummaryCandidateOptions {
  * this selects is a property of `articles`, which the summary pass never
  * touches — so the walk is stable even though the pass is writing throughout it.
  *
- * **OLDEST day first, which is the opposite of every other read here.** The
- * pass has a ceiling and the ceiling is reached: a night that cannot drain its
- * window has to leave something unwritten, and the order decides WHAT. Newest
- * first leaves the oldest end unwritten — and that end is about to fall out of
- * the window, after which nothing selects it again, so a bounded night would
- * silently lose the days it was closest to losing. Oldest first spends the
+ * **OLDEST day first by default, which is the opposite of every other read
+ * here.** The pass has a ceiling and the ceiling is reached: a night that cannot
+ * drain its window has to leave something unwritten, and the order decides WHAT.
+ * Newest first leaves the oldest end unwritten — and that end is about to fall
+ * out of the window, after which nothing selects it again, so a bounded night
+ * would silently lose the days it was closest to losing. Oldest first spends the
  * ceiling on exactly the days that are running out of chances; the newest day
  * is still there tomorrow, and is the day most likely to be rewritten anyway.
+ *
+ * That argument is sound and it is not the whole story, which is what the
+ * amendment to ADR-0023 records: it assumes the deficit is spread evenly over
+ * the window, and a promotion burst breaks that assumption by adding a whole
+ * arc's back-history at once. Measured on 2026-09-16, six straight firings spent
+ * 379 calls without reaching 09-14 or 09-15 at all. So the PASS now walks the
+ * few freshest days first under a bounded share of its budget and then walks the
+ * whole window this way — `order` is how it asks for the first of those. The
+ * guarantee above is unchanged: the fresh phase cannot spend the night.
  */
 export async function readSummaryCandidateDays(
   db: Kysely<Database>,
   options: SummaryCandidateOptions,
 ): Promise<SummaryCandidateDay[]> {
+  const newestFirst = options.order === "newest";
   const { rows } = await sql<{
     storyline_id: string;
     day_key: string;
@@ -149,12 +176,17 @@ export async function readSummaryCandidateDays(
          // tie-break on storyline id is the same one the ORDER BY makes — and
          // both sides are text, so the comparison and the ordering agree on
          // collation rather than one of them sorting as `uuid`.
+         //
+         // The comparison FOLLOWS the order: `after` means "the last row I saw",
+         // so a descending walk pages with `<`. Leaving this as `>` under a
+         // descending ORDER BY would re-read the first page for ever.
          options.after
            ? sql`and (to_char(a.published at time zone 'UTC', 'YYYY-MM-DD'), sg.storyline_id::text)
-                     > (${options.after.dayKey}, ${options.after.storylineId})`
+                     ${newestFirst ? sql`<` : sql`>`} (${options.after.dayKey}, ${options.after.storylineId})`
            : sql``
        }
-     order by 2 asc, sg.storyline_id::text asc
+     order by 2 ${newestFirst ? sql`desc` : sql`asc`},
+              sg.storyline_id::text ${newestFirst ? sql`desc` : sql`asc`}
      limit ${options.limit}
   `.execute(db);
 

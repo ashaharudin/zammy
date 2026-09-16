@@ -828,27 +828,92 @@ const EnvSchema = z
      *
      * **It is a SPEND bound, and `SUMMARY_BUDGET_MS` is the clock bound — the
      * same split `CHORE_MAX_LABELS` and `CHORE_LABEL_BUDGET_MS` make, and the
-     * same warning applies: do not read this number as a duration.** At 30 rpm
-     * the pass's own spacing is 2 s per call, so 120 calls is 240 s of *sleeping
-     * alone*, before a single model answer — which means the budget below is
-     * what actually stops a healthy night, somewhere around 30-40 calls. 120
-     * stays anyway, exactly as 50 stayed for labels: pinning it to today's
-     * latency would bake a pathology into a deployment parameter and throttle a
-     * fast night later.
+     * same warning applies: do not read this number as a duration.** The budget
+     * is what should stop a healthy night; this is the backstop behind it.
+     *
+     * **So it has to stay ABOVE what a firing can physically spend, and that is
+     * now a live constraint rather than a comfortable one.** The pacer caps a
+     * firing at `SUMMARY_MAX_RPM / 60 * SUMMARY_BUDGET_MS` — 128 calls at 28 rpm
+     * and 275 s. 120 was safe while a call cost 3.3 s and a firing reached ~72;
+     * at 128 it would have become the bound, and the pass would have reported
+     * `max-summaries` on nights the budget was meant to end. 200 puts it back
+     * behind the clock with room for either number to move.
+     *
+     * Raising `SUMMARY_MAX_RPM` or `SUMMARY_BUDGET_MS` means re-checking that
+     * product. A spend bound that quietly becomes the binding one is not a
+     * failure anything reports — the night just ends early, correctly, for a
+     * reason nobody chose.
      *
      * What a bounded night costs is bounded too, and deliberately so: the walk
-     * is OLDEST-day-first, so the ceiling is spent on the days closest to
-     * falling out of `SUMMARY_WINDOW_DAYS`, and what it defers is the newest
-     * day — which is still there tomorrow.
+     * spends a bounded share on the newest days and the rest OLDEST-day-first,
+     * so the ceiling still reaches the days closest to falling out of
+     * `SUMMARY_WINDOW_DAYS`. See `SUMMARY_FRESH_DAYS`.
      */
-    SUMMARY_MAX_PER_RUN: z.coerce.number().int().min(1).max(100_000).default(120),
+    SUMMARY_MAX_PER_RUN: z.coerce.number().int().min(1).max(100_000).default(200),
     /**
      * Wall-clock ceiling for one summary pass, in ms — the bound that matches
      * what the platform enforces, exactly as `CHORE_LABEL_BUDGET_MS` is for the
-     * label pass. 240 s against `api/chores.ts`'s 300 s `maxDuration`, leaving
-     * room for the two `chore_runs` writes.
+     * label pass.
+     *
+     * **275 s, and it is only safe because the pass now aborts what it cannot
+     * stop.** The budget bounds when a call is ADMITTED; a call in flight runs
+     * to 3 x `GEMINI_TIMEOUT_MS` plus backoff, up to 60.75 s more, against a
+     * 300 s `maxDuration`. `runSummaryChore` now arms an abort at
+     * budget + `SUMMARY_ABORT_GRACE_MS`, so the tail is 10 s rather than 61,
+     * and the sum that has to clear 300 s is:
+     *
+     *     2.1 s boot + 275 s + 10 s grace + ~1 s `chore_runs` = ~288 s.
+     *
+     * Both halves of that were measured on production, 2026-09-16. Raising this
+     * means re-doing that arithmetic; being killed costs a `chore_runs` row with
+     * a null `finished_at`, which `check-chores.sh` reads as a failed night.
      */
-    SUMMARY_BUDGET_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(240_000),
+    SUMMARY_BUDGET_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(275_000),
+    /**
+     * Model calls per minute the summary PASS paces itself at.
+     *
+     * Its own knob rather than `GEMINI_MAX_RPM`, and deliberately BELOW it. The
+     * pass used to sleep a full interval after each answer, so it ran at
+     * `60000 / (spacing + latency)` — 18 calls a minute against a key that
+     * allows 30, with ~40% of every firing spent asleep. Spacing now overlaps
+     * latency (`SummaryPassOptions.ratePerMinute`), which means the configured
+     * rate is the rate actually achieved, and a pass configured at the key's
+     * ceiling would leave nothing for anything else on that key.
+     *
+     * 28 rather than 30 is that margin: the drain's organic label promotions
+     * are ~5 a night in these hours and they share both the rpm window and the
+     * 16k input-tokens-per-minute one, which at 28 calls of ~490 tokens sits at
+     * ~14k. A label that cannot queue takes the bigram fallback, and a bigram
+     * label is sticky until membership doubles.
+     *
+     * With `SUMMARY_API_KEY` set the lanes do not compete and this could be the
+     * key's full ceiling — but the token limit is per key too, so 28 is still
+     * the more comfortable number.
+     */
+    SUMMARY_MAX_RPM: z.coerce.number().int().min(1).max(10_000).default(28),
+    /**
+     * Days at the NEWEST end of the window the nightly pass walks first, newest
+     * first, before its oldest-first walk over the whole window. 0 turns the
+     * phase off and restores ADR-0023's original single walk.
+     *
+     * 3, matching how long a day stays open to revision — but read from its own
+     * knob rather than `SUMMARY_SETTLING_DAYS`, because the two answer different
+     * questions (what may be REWRITTEN versus what is walked FIRST) and a shared
+     * number is how one of them silently changes the other later.
+     */
+    SUMMARY_FRESH_DAYS: z.coerce.number().int().min(0).max(30).default(3),
+    /**
+     * The share of `SUMMARY_BUDGET_MS` that first walk may spend before it
+     * yields to the oldest-first one.
+     *
+     * It is BOUNDED because ADR-0023's argument for oldest-first is still right:
+     * the days about to fall out of `SUMMARY_WINDOW_DAYS` are the ones that
+     * cannot wait, and an unbounded fresh phase could spend a whole night on the
+     * newest end and lose them for good. 0.6 leaves the old end two fifths of
+     * every firing, and at 275 s that is ~77 calls — comfortably more than the
+     * ~50 a normal night's old end needs.
+     */
+    SUMMARY_FRESH_SHARE: z.coerce.number().min(0).max(1).default(0.6),
     /**
      * How many live storylines must share one label before the ingest tail runs
      * the label-agreement merge for that label, without waiting for the nightly

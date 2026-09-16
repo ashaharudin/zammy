@@ -177,7 +177,7 @@ async function run(
   console.log(
     `model: ${
       summarizer.generator
-        ? `${config.SUMMARY_MODEL} (live, ${rate ?? config.GEMINI_MAX_RPM}/min)`
+        ? `${config.SUMMARY_MODEL} (live, ${rate ?? config.SUMMARY_MAX_RPM}/min)`
         : "none — no SUMMARY_API_KEY or GEMINI_API_KEY, nothing will be written"
     }`,
   );

@@ -192,27 +192,32 @@ select cron.schedule(
 --
 -- ── THREE firings, and the arithmetic that says so ───────────────────────────
 --
--- MEASURED against production on 2026-08-31. The 8-day window holds 246
--- qualifying storyline-days costing 957 model calls, and roughly 120 of those
--- calls arrive with each new day of coverage.
+-- RE-MEASURED against production on 2026-09-16, and the numbers moved enough
+-- that the old note is kept only as history. It read: a call costs ~5 s, a
+-- 240 s firing manages ~48, three firings buy ~144 against ~120 of inflow.
 --
--- One firing cannot spend 120. `SUMMARY_BUDGET_MS` is 240 s and a call costs
--- about 5 s — 2 s of the pass's own pacing at `GEMINI_MAX_RPM` 30, plus ~3 s of
--- model latency — so a single run manages about 48 before it stops on `budget`,
--- and the other ~70 calls' worth of days age out of the window unwritten. That
--- is roughly 60% of production's history quietly not preserved.
+-- What was actually happening: every firing spent 67-74 calls, and ~40% of each
+-- one was the PASS ASLEEP. Its spacing was measured from the previous call's
+-- RETURN, so 2 s of pacing and ~1.3 s of latency added up to 3.3 s a call and
+-- ran a 30 rpm key at 18. Spacing now overlaps latency, `SUMMARY_MAX_RPM` is 28,
+-- and `SUMMARY_BUDGET_MS` is 275 s (safe because the pass now aborts a call in
+-- flight ten seconds past the budget — see that knob's comment). So:
 --
--- The budget cannot absorb the difference: `api/chores.ts` is killed at
--- Vercel's 300 s `maxDuration`, which is what the 240 s is sized under. So the
--- schedule absorbs it instead. Three firings is ~144 calls a night against ~120
--- of inflow, with the remainder chipping at the standing backlog.
+--   ~2.14 s a call x 275 s  =  ~128 calls a firing  =  ~385 a night.
+--
+-- Against demand measured the same day: ~150 calls arrive with each new day of
+-- coverage, and a promotion burst adds up to ~400 of back-history at once.
+-- Steady nights should now end `exhausted`; a burst should drain in about a
+-- night and a half.
 --
 -- Overlap is safe and the extra runs are nearly free: the pass takes an
 -- advisory lock (a second run skips), and one that finds every span current
 -- makes no model call at all — `decideSpan` re-reads the rows and skips.
 --
 -- If `chore_runs.report` stops saying `stoppedBy: budget` on the later firings,
--- the schedule is ahead of the work and one of them can go.
+-- the schedule is ahead of the work and one of them can go. That is now the
+-- EXPECTED steady state rather than a remote possibility, so give it a week of
+-- reports before removing the 07:00 job — a burst week needs all three.
 select cron.schedule(
   'zammy-chores-summaries',
   '0 5 * * *',
