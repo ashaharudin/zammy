@@ -88,10 +88,20 @@ one-word title is the single largest thing a search result can be missing.
 training and retrieval halves; an agent nobody has added yet falls through to `*` and is allowed.
 The file needs a pass now and then.
 
-**The rate limiter has not been sized for crawlers.** `RATE_LIMIT_PER_MINUTE` per IP applies to
-`/api/` only (`apps/api/src/server.ts`), so static crawling is unaffected — but an agent fanning out
-across storyline JSON will meet it, and it fails open silently per instance
-(`MEASUREMENT-RATE-LIMIT-FAIL-OPEN.md`), so neither we nor the agent gets a clean signal.
+**The limiter is sized for readers, and nothing is sized for agents.** `RATE_LIMIT_PER_MINUTE`
+applies to `/api/` only (`apps/api/src/server.ts`), so crawling the static files is unlimited and
+irrelevant here. Production answers `x-ratelimit-limit: 120`, which is
+`MEASUREMENT-RATE-LIMIT-FAIL-OPEN.md` §4's measured verdict already applied — one reader peaks at
+26/min, so 120 is about four readers behind one IP. That is a reader number. It was never chosen
+against agent traffic, and one bucket per IP covers both.
+
+Raising it is the wrong lever anyway. `/api/v1/trending` and `/api/v1/reference` are read-only,
+slow-changing, and today answer `cache-control: public, max-age=0, must-revalidate` with
+`x-vercel-cache: MISS` on every hit — so every agent request reaches the function, the database and
+the limiter. An `s-maxage` with `stale-while-revalidate` on those two would serve agents from the
+edge and never touch the counter, which is worth more than any value of `RATE_LIMIT_PER_MINUTE`.
+`/api/v1/timeline` is the opposite case — per-query, high cardinality, expensive — and is the one
+that should stay limited.
 
 **Storyline URLs would never 404.** Merges keep the loser's UUID as an alias and reads resolve
 through `merged_into` (`packages/storage/src/storylines.ts`), so a storyline route could serve a
