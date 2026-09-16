@@ -1,0 +1,83 @@
+# Zammy
+
+> Zammy reads news from several upstream providers, joins the same story as different
+> outlets ran it, and shows each story as a timeline of the days it was covered. It links
+> to the original articles and does not host their text.
+
+**Fetch the JSON, not the HTML.** Every page except a storyline's own is a JavaScript
+application whose served markup is an empty shell — `https://www.zammy.info/` and any
+`?q=` search will look blank to anything that does not execute scripts. Two things are
+readable without JavaScript: the JSON under `/api/v1/` below, and the server-rendered
+storyline pages at `/storyline/<uuid>/<slug>`. The JSON is the better source; the pages
+exist so the same content is reachable by something that only reads HTML.
+
+**The words below are used precisely**, and reading them loosely will misread a response:
+
+- **Sighting** — one emission of an article by an upstream provider. Providers re-emit the
+  same story under fresh identifiers, so a sighting is an observation, not a story.
+  `sightingCount` on an article counts these, and it measures upstream's chattiness rather
+  than the story's importance. Do not rank by it.
+- **Article** — one real-world news story, identified by its canonical URL. This is the
+  unit with a headline, a source and a publication time.
+- **Group** — one story as several outlets ran it: the same piece syndicated at different
+  URLs, kept as separate articles and joined. Most groups hold one article.
+- **Storyline** — one specific event or evolving situation ("Canada EU Partnership", never
+  bare "Canada"), as a persistent collection of groups identified by a UUID and unbounded
+  in time. This is the unit worth citing.
+- **Day** — a storyline is paged by day. Each day it has coverage carries that day's
+  articles and, usually, a one-sentence summary written for it.
+
+**Storyline UUIDs are stable and safe to keep.** Storylines merge, and a merge keeps the
+absorbed UUID as an alias: an old id resolves to the survivor rather than breaking, and
+`/storyline/<old-uuid>/…` answers `301` to the survivor's URL. An id you stored last month
+still means something today.
+
+**What Zammy does not have:** article body text, paywalled content, or any writing of its
+own about the news beyond the day summaries. Headlines and links belong to the outlets that
+published them and should be attributed and linked to those outlets, not to Zammy.
+
+**Rate limiting** applies to `/api/` only, per IP, and every response carries
+`x-ratelimit-limit` / `x-ratelimit-remaining` — read those rather than assuming a number.
+The static files and the storyline pages are not limited. `/api/v1/trending` and the
+storyline pages are cached at the edge, so repeated identical requests are cheap; a wide
+fan-out of distinct `/api/v1/timeline` queries is not, and each new keyword search spends
+upstream provider quota.
+
+## API
+
+- [Trending storylines](https://www.zammy.info/api/v1/trending): the storylines a rolling
+  window found several newsrooms covering, busiest and freshest first. Each carries `id`,
+  `label`, `size`, `sourceCount` and `lastUpdated`. Optional `language` (default `en`) and
+  `limit` (1–100, default 50). The best starting point, and the cheapest.
+- [Timeline](https://www.zammy.info/api/v1/timeline?q=climate): a keyword search as a
+  time-ordered timeline. Takes `q` (required unless `storyline` is given), `language`,
+  `country`, `from`/`to` (ISO 8601), `limit` (1–100, default 25) and an opaque `cursor`
+  for paging. Returns `items` — one slot per storyline-day, each with its lead article,
+  syndicated copies and the rest of that day's coverage.
+- [One storyline's coverage](https://www.zammy.info/api/v1/timeline?storyline=b3fd657c-e75d-4e58-81c2-18d724523715):
+  the same endpoint with `storyline=<uuid>` and no `q` — one storyline's whole arc, which
+  is what the storyline pages are built from.
+- [Reference values](https://www.zammy.info/api/v1/reference): the language and country
+  codes `language` and `country` accept, as name → code maps. Fetch once; it rarely
+  changes.
+- [Topic detail](https://www.zammy.info/api/v1/topics/): append a 64-character hex
+  fingerprint from a timeline response's `topic.fingerprint` to see what has been fetched
+  for that search and over what span.
+
+## Pages
+
+- [Home](https://www.zammy.info/): the search box and a cloud of current storylines.
+  Requires JavaScript.
+- [Sitemap](https://www.zammy.info/sitemap.xml): every storyline page currently worth
+  crawling, with `lastmod`. Generated per request from the same query that feeds
+  `/api/v1/trending`, so it lists what is live now rather than an ever-growing archive.
+- [A storyline page](https://www.zammy.info/storyline/b3fd657c-e75d-4e58-81c2-18d724523715/canada-eu-partnership):
+  `/storyline/<uuid>/<slug>`, server-rendered. The slug is cosmetic — only the UUID is
+  read, so a stale slug still resolves. Each day appears with its summary and that day's
+  headlines as outbound links.
+
+## Optional
+
+- [Crawler policy](https://www.zammy.info/robots.txt): agents that fetch because a reader
+  asked, and agents that index so Zammy can be found, are welcome. Crawlers collecting
+  training corpora are not.

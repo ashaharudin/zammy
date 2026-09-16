@@ -56,6 +56,7 @@ Static assets in `apps/web/public/`, which Vite copies to the dist root verbatim
 | File | Why |
 | --- | --- |
 | `robots.txt` | Carries the sitemap line. Restricts nothing — see the open question below. |
+| `llms.txt` | What Zammy is, the vocabulary, and where the JSON is — for agents that read before fetching. |
 | `favicon.svg`, `favicon.ico`, `apple-touch-icon.png`, `icon-192.png`, `icon-512.png` | The hero's `zammy>` mark reduced to two stroked paths. |
 | `og.png` | 1200×630 share card. |
 | `site.webmanifest` | Name, icons, colors. |
@@ -114,6 +115,20 @@ documented ignoring it; blocking that actually blocks is a firewall rule, not a 
 **The title changed** from a bare `Zammy` to `Zammy — trace any story back to where it started`. A
 one-word title is the single largest thing a search result can be missing.
 
+**`llms.txt` tells an agent to skip the HTML.** The one fact worth knowing before fetching
+anything here is that `/` and every `?q=` search are an empty shell — so the file leads with "fetch
+the JSON, not the HTML" and names the two things that are readable without JavaScript. It also
+carries the sighting / article / group / storyline vocabulary from `CONTEXT.md`, because those words
+are used precisely and a consumer reading them loosely will misread a response (`sightingCount`
+measures upstream's chattiness, not importance, and ranking by it is the mistake the definition
+exists to prevent).
+
+It is a file of CLAIMS about this repo that nothing in the app ever loads, so every claim in it is
+free to stop being true in silence. `llms-txt.test.ts` asserts them instead: the origin is the
+canonical one, every `/api/v1/*` path is registered in `routes.ts`, every documented example query
+parses against the SAME Zod the route parses with, every page path matches a `vercel.json` rewrite,
+and every static file named actually ships.
+
 ## Open questions
 
 **The agent list is a snapshot, not a standard.** Agents appear, get renamed, and split into
@@ -154,5 +169,3 @@ left, in order of how much it would actually move:
    synthesized arc and the day summaries (ADR-0023) — not the headlines, and the markup should say
    so. `render-storyline.ts`'s body already leads with the day's own sentence for exactly this
    reason; the structured data should make the same claim machine-readable.
-2. `/llms.txt`: what Zammy is, the sighting / article / group / storyline vocabulary from
-   `CONTEXT.md`, and a pointer to the JSON API.
