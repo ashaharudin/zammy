@@ -225,6 +225,71 @@ describe("renderStorylinePage", () => {
     expect(result.body).not.toContain('<div id="root"></div>');
   });
 
+  it("escapes markup in a label, a headline and a day summary", async () => {
+    // Every string on this page is upstream text — a label a model wrote from
+    // a headline, a headline an outlet wrote, a summary written from both.
+    // None of it is ours, and all of it lands in HTML we generate by hand.
+    const groups = await seedGroups([
+      sighting({
+        domain: "a.example",
+        title: `<script>alert("xss")</script> & "quoted"`,
+        published: MONDAY,
+      }),
+    ]);
+    const storyline = await storylineOf(groups, "<b>Bold</b> Storyline");
+    await writeStorylineDaySummary(db, {
+      storylineId: storyline,
+      dayKey: "2026-08-10",
+      segment: "day",
+      summary: `A summary with <em>tags</em> & an ampersand.`,
+      articleCount: 1,
+      label: "<b>Bold</b> Storyline",
+      modelId: "test-model",
+      attempts: 0,
+      segmented: true,
+      generatedAt: NOW,
+    });
+
+    const result = await renderStorylinePage(harness.deps, {
+      path: `/storyline/${storyline}/x`,
+      template: TEMPLATE,
+    });
+
+    expect(result.status).toBe(200);
+    // Not one raw angle bracket from any of the three reaches the document.
+    expect(result.body).not.toContain("<script>");
+    expect(result.body).not.toContain("<b>Bold</b>");
+    expect(result.body).not.toContain("<em>tags</em>");
+    expect(result.body).toContain("&lt;b&gt;Bold&lt;/b&gt; Storyline");
+    expect(result.body).toContain("&lt;script&gt;");
+    expect(result.body).toContain("&amp;");
+  });
+
+  it("survives a dollar sign in the text, which String.replace would otherwise read", async () => {
+    // The regression this file did not have. `escapeHtml` turns `'` into
+    // `&#39;`, so `$'` arrives at the injection point as `$&#39;` — a `$&`,
+    // which a STRING replacement expands to the matched text. `injectBody`
+    // would have grown a second `<div id="root">` inside the page and
+    // `injectHead` a nested `<title>`; both take a replacer FUNCTION now.
+    const groups = await seedGroups([
+      sighting({ domain: "a.example", title: `Oil at $' a barrel, say traders`, published: MONDAY }),
+    ]);
+    const storyline = await storylineOf(groups, `Crude $" Rally`);
+
+    const result = await renderStorylinePage(harness.deps, {
+      path: `/storyline/${storyline}/x`,
+      template: TEMPLATE,
+    });
+
+    expect(result.status).toBe(200);
+    // One root div, one title, and no fragment of the template folded into
+    // either — the three shapes a `$&` substitution actually produces here.
+    expect([...result.body.matchAll(/<div id="root">/g)]).toHaveLength(1);
+    expect([...result.body.matchAll(/<title>/g)]).toHaveLength(1);
+    expect(result.body).toContain("Oil at $&#39; a barrel, say traders");
+    expect(result.body).toContain("<title>Crude $&quot; Rally — Zammy</title>");
+  });
+
   it("301s a merged (aliased) uuid to the survivor's own canonical path", async () => {
     const groups = await seedGroups([
       sighting({ domain: "a.example", title: "Fausto nears Hawaii", published: MONDAY }),

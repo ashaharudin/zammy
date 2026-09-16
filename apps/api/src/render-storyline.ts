@@ -178,28 +178,67 @@ function notFoundPage(template: string): StorylinePageResult {
  * `apps/web/index.html`, which is a change `render-storyline.test.ts` would
  * catch as every field silently failing to update.
  */
-const TITLE_TAG = /<title>[\s\S]*?<\/title>/;
-const DESCRIPTION_TAG = /<meta[^>]*name="description"[^>]*>/;
-const CANONICAL_TAG = /<link[^>]*rel="canonical"[^>]*>/;
-const OG_URL_TAG = /<meta[^>]*property="og:url"[^>]*>/;
-const OG_TITLE_TAG = /<meta[^>]*property="og:title"[^>]*>/;
-const OG_DESCRIPTION_TAG = /<meta[^>]*property="og:description"[^>]*>/;
-const TWITTER_TITLE_TAG = /<meta[^>]*name="twitter:title"[^>]*>/;
-const TWITTER_DESCRIPTION_TAG = /<meta[^>]*name="twitter:description"[^>]*>/;
-const ROOT_DIV = '<div id="root"></div>';
+interface HeadField {
+  readonly name: string;
+  readonly tag: RegExp;
+  /** The attribute the value lives in, or null for `<title>`, whose value is its text. */
+  readonly attr: string | null;
+}
+
+/**
+ * Every tag this file rewrites, as a table rather than as eight constants —
+ * so it can be EXPORTED, and checked against the real `apps/web/index.html`.
+ *
+ * `render-storyline.test.ts` drives this file through a synthetic template,
+ * which is right for testing the rewriting itself and proves nothing at all
+ * about the template actually shipped: that template necessarily matches these
+ * patterns, because it was written to. The one check that matters is against
+ * the real file, and it imports THESE patterns rather than retyping them — the
+ * rule `railAnnouncer.test.ts` already follows for `RAIL_STATUS_ID`, and for
+ * the same reason. A test carrying its own copy of the thing it checks is a
+ * test of that copy.
+ */
+export const HEAD_FIELDS: readonly HeadField[] = [
+  { name: "title", tag: /<title>[\s\S]*?<\/title>/, attr: null },
+  { name: "description", tag: /<meta[^>]*name="description"[^>]*>/, attr: "content" },
+  { name: "canonical", tag: /<link[^>]*rel="canonical"[^>]*>/, attr: "href" },
+  { name: "og:url", tag: /<meta[^>]*property="og:url"[^>]*>/, attr: "content" },
+  { name: "og:title", tag: /<meta[^>]*property="og:title"[^>]*>/, attr: "content" },
+  { name: "og:description", tag: /<meta[^>]*property="og:description"[^>]*>/, attr: "content" },
+  { name: "twitter:title", tag: /<meta[^>]*name="twitter:title"[^>]*>/, attr: "content" },
+  {
+    name: "twitter:description",
+    tag: /<meta[^>]*name="twitter:description"[^>]*>/,
+    attr: "content",
+  },
+];
+
+/** The empty mount point `injectBody` writes into, exported for the same check. */
+export const ROOT_DIV = '<div id="root"></div>';
 
 function injectHead(
   html: string,
   head: { title: string; description: string; canonicalUrl: string },
 ): string {
-  let out = html.replace(TITLE_TAG, `<title>${escapeHtml(head.title)}</title>`);
-  out = setAttr(out, DESCRIPTION_TAG, "content", head.description);
-  out = setAttr(out, CANONICAL_TAG, "href", head.canonicalUrl);
-  out = setAttr(out, OG_URL_TAG, "content", head.canonicalUrl);
-  out = setAttr(out, OG_TITLE_TAG, "content", head.title);
-  out = setAttr(out, OG_DESCRIPTION_TAG, "content", head.description);
-  out = setAttr(out, TWITTER_TITLE_TAG, "content", head.title);
-  out = setAttr(out, TWITTER_DESCRIPTION_TAG, "content", head.description);
+  const values: Record<string, string> = {
+    title: head.title,
+    description: head.description,
+    canonical: head.canonicalUrl,
+    "og:url": head.canonicalUrl,
+    "og:title": head.title,
+    "og:description": head.description,
+    "twitter:title": head.title,
+    "twitter:description": head.description,
+  };
+  let out = html;
+  for (const field of HEAD_FIELDS) {
+    const value = values[field.name] ?? "";
+    out =
+      field.attr === null
+        ? // A FUNCTION, not a string — see `injectBody` for what a string costs here.
+          out.replace(field.tag, () => `<title>${escapeHtml(value)}</title>`)
+        : setAttr(out, field.tag, field.attr, value);
+  }
   return out;
 }
 
@@ -211,8 +250,19 @@ function injectHead(
  */
 function setAttr(html: string, selector: RegExp, attr: string, value: string): string {
   return html.replace(selector, (tag) => {
-    const attrPattern = new RegExp(`${attr}="[^"]*"`);
-    return attrPattern.test(tag) ? tag.replace(attrPattern, `${attr}="${escapeHtml(value)}"`) : tag;
+    // The leading `\s` is load-bearing: an unanchored `href="[^"]*"` also
+    // matches the TAIL of `data-href="…"`, so a template whose attribute had
+    // been renamed would be rewritten in place — the wrong attribute updated,
+    // the right one still missing, and nothing anywhere reporting it. Every
+    // real attribute is preceded by whitespace, so requiring it costs nothing.
+    const attrPattern = new RegExp(`(?<=\\s)${attr}="[^"]*"`);
+    // The inner replacement is a FUNCTION too, for the reason `injectBody`
+    // gives: a description carrying `$'` or `$"` reaches here already escaped
+    // into `$&#39;` / `$&quot;`, and a string replacement would read that `$&`
+    // as "insert the matched attribute here".
+    return attrPattern.test(tag)
+      ? tag.replace(attrPattern, () => `${attr}="${escapeHtml(value)}"`)
+      : tag;
   });
 }
 
@@ -224,7 +274,18 @@ function setAttr(html: string, selector: RegExp, attr: string, value: string): s
  * fetches the page and gone the moment the app mounts over it.
  */
 function injectBody(html: string, bodyHtml: string): string {
-  return html.replace(ROOT_DIV, `<div id="root">${bodyHtml}</div>`);
+  // A REPLACER FUNCTION, not a string, and this is the one place it is not a
+  // style choice. `String.replace` reads `$&`, `` $` ``, `$'` and `$$` in a
+  // STRING replacement as substitution patterns, and `escapeHtml` is what
+  // creates them: it turns `'` into `&#39;`, so a headline reading
+  // `Oil at $' a barrel` arrives here as `Oil at $&#39;` — a `$&`, which
+  // expands to the matched `<div id="root"></div>` and leaves a second root
+  // div nested inside the page. `` $` `` is worse and needs no escaping to
+  // get here: it inserts everything BEFORE the match, which is the entire
+  // `<head>`. Article titles and day summaries are upstream text this file
+  // does not get to choose, so the only safe form is the one that does no
+  // substitution at all.
+  return html.replace(ROOT_DIV, () => `<div id="root">${bodyHtml}</div>`);
 }
 
 // ---------------------------------------------------------------------------
