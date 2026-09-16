@@ -31,7 +31,14 @@ afterEach(async () => {
  */
 const ROUTES_NOW = new Date("2026-08-06T12:00:00.000Z");
 
-async function setup(): Promise<void> {
+/**
+ * `settled: true` stands the cloud up with nothing pending, which is the only
+ * way to reach the `complete` branch here: state is `pendingCount() > 0` and
+ * NOTHING else (trending-service), and a cold cloud queues its own sample
+ * behind the first read. Stubbing the queue rather than draining it keeps the
+ * two cache-header tests reading as one pair — same request, opposite state.
+ */
+async function setup(options?: { settled?: boolean }): Promise<void> {
   harness = await createTestHarness({}, ROUTES_NOW);
   app = Fastify({ logger: false });
   const trendingDeps: TrendingDeps = {
@@ -43,6 +50,15 @@ async function setup(): Promise<void> {
       windowHours: 24,
       halfLifeHours: 8,
     },
+    ...(options?.settled
+      ? {
+          queue: {
+            name: harness.deps.queue.name,
+            enqueueSample: async () => {},
+            pendingCount: async () => 0,
+          },
+        }
+      : {}),
   };
   await registerQueryRoutes(app, { deps: harness.deps, defaultLanguage: "en" });
   registerTrendingRoute(app, { deps: trendingDeps });
@@ -403,6 +419,38 @@ describe("GET /api/v1/trending", () => {
     // A cold cloud warms behind this very request (§10.1).
     expect(body.meta.ingest.state).toBe("in_progress");
     expect(body.meta.ingest.pendingJobs).toBeGreaterThanOrEqual(1);
+  });
+
+  it("does NOT let a shared cache hold a warming cloud", async () => {
+    // The one that matters. A cold cloud warms behind this request and
+    // `TrendingCloud` then polls every 1.5s waiting for `state` to change; a
+    // shared cache holding this body would answer all 40 polls with the same
+    // frozen `in_progress` and the cloud would never appear to arrive. Asserted
+    // on `s-maxage` specifically rather than on the whole string, because it is
+    // the shared cache that does the damage — a browser revalidating its own
+    // copy does not.
+    await setup();
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/trending" });
+
+    expect(response.json().meta.ingest.state).toBe("in_progress");
+    expect(response.headers["cache-control"]).not.toMatch(/s-maxage/);
+    expect(response.headers["cache-control"]).toBe("public, max-age=0, must-revalidate");
+  });
+
+  it("lets a shared cache hold a settled cloud for a minute", async () => {
+    // The other side of the same branch: a settled cloud is what an agent and a
+    // repeat landing page get, and keeping those off the origin is the whole
+    // point — they never reach the function, the database, or the per-IP
+    // counter that was sized against readers.
+    await setup({ settled: true });
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/trending" });
+
+    expect(response.json().meta.ingest.state).toBe("complete");
+    expect(response.headers["cache-control"]).toBe(
+      "public, max-age=0, s-maxage=60, stale-while-revalidate=300",
+    );
   });
 
   it("ignores a stale ?day= rather than 400ing a bookmark", async () => {

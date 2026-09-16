@@ -399,6 +399,36 @@ export async function registerQueryRoutes(
   );
 }
 
+/**
+ * What the CDN may do with a /api/v1/trending response, which depends entirely
+ * on whether that response is a WAITING ROOM or an answer.
+ *
+ * A settled cloud describes a 24-hour window redrawn by whatever ingest
+ * happened to land. A minute of staleness is invisible in it, the browser
+ * already holds its own copy for five (`TrendingCloud.tsx`), and the minute
+ * buys something worth having: repeat callers — agents especially, which have
+ * no React Query cache and no reason to pace themselves — never reach the
+ * function, the database, or the per-IP counter. That last one matters most.
+ * `RATE_LIMIT_PER_MINUTE` is a number measured against READERS
+ * (MEASUREMENT-RATE-LIMIT-FAIL-OPEN §4), and keeping agent traffic off the
+ * counter is worth more than any value we could raise it to.
+ *
+ * `in_progress` is the opposite, and caching it would be a bug rather than a
+ * tradeoff. A cold cloud warms behind the very request that asked for it
+ * (§10.1) and `TrendingCloud` then polls this route every 1.5s — up to 40
+ * times — waiting for `state` to change. Hand a shared cache 60 seconds of an
+ * `in_progress` body and every one of those polls gets the same frozen answer:
+ * the cloud never appears to warm, "gathering the latest news…" never resolves,
+ * and the reader pays 40 requests to be told nothing. The transient state is
+ * exactly the one that must reach the origin every time.
+ *
+ * `max-age=0` rides along on the cacheable branch deliberately: the shared
+ * cache may hold this, a browser may not, because only one of the two can be
+ * purged when it is wrong.
+ */
+const TRENDING_CACHE_SETTLED = "public, max-age=0, s-maxage=60, stale-while-revalidate=300";
+const TRENDING_CACHE_WARMING = "public, max-age=0, must-revalidate";
+
 /** GET /api/v1/trending (§10.4) — the landing-page cloud. */
 export function registerTrendingRoute(
   app: FastifyInstance,
@@ -414,12 +444,22 @@ export function registerTrendingRoute(
       return reply.status(400).send({ error: { message: "invalid query", fields } });
     }
 
-    return reply.send(
-      await readTrending(options.deps, {
-        language: parsed.data.language,
-        limit: parsed.data.limit,
-      }),
-    );
+    const cloud = await readTrending(options.deps, {
+      language: parsed.data.language,
+      limit: parsed.data.limit,
+    });
+
+    // Read off the body rather than off anything the request said: whether this
+    // response is cacheable is a property of what is IN it, and the 400 above
+    // never reaches here to be cached at all.
+    return reply
+      .header(
+        "cache-control",
+        cloud.meta.ingest.state === "in_progress"
+          ? TRENDING_CACHE_WARMING
+          : TRENDING_CACHE_SETTLED,
+      )
+      .send(cloud);
   });
 }
 
