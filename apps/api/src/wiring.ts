@@ -448,6 +448,14 @@ export function choreDepsFromConfig(
     summaryBudgetMs: config.SUMMARY_BUDGET_MS,
     // The same reasoning as `labelRatePerMinute`: pace the PASS as well as the
     // client, so it spaces itself instead of piling into the pacer's queue.
-    summaryRatePerMinute: config.GEMINI_MAX_RPM,
+    //
+    // Its OWN ceiling, not `GEMINI_MAX_RPM`, and below it — see
+    // `SUMMARY_MAX_RPM`. Now that the pass's spacing overlaps model latency
+    // instead of being added to it, the configured rate is the rate it actually
+    // reaches, so pointing this at the key's ceiling would leave the labeler
+    // nothing.
+    summaryRatePerMinute: config.SUMMARY_MAX_RPM,
+    summaryFreshDays: config.SUMMARY_FRESH_DAYS,
+    summaryFreshShare: config.SUMMARY_FRESH_SHARE,
   };
 }

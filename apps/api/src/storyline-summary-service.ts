@@ -612,8 +612,39 @@ export interface SummaryPassOptions {
   maxSummaries?: number;
   /** Wall-clock ceiling. Absent is unbounded — right for a CLI, wrong for a route. */
   budgetMs?: number;
-  /** Model calls per minute. Only the model is paced; the reads are not. */
+  /**
+   * Model calls per minute. Only the model is paced; the reads are not.
+   *
+   * **The spacing is measured from one call's START to the next call's start**,
+   * not from the previous call's return, so it overlaps model latency instead of
+   * being added to it. A pass that sleeps a full interval AFTER each answer runs
+   * at `60000 / (spacing + latency)`, which is not the rate anybody configured:
+   * measured in production on 2026-09-16, 2 s of spacing plus ~1.3 s of latency
+   * gave 18 calls a minute against a key that allows 30, and about 40% of the
+   * night was the pass asleep with the key idle.
+   */
   ratePerMinute?: number;
+  /**
+   * Days at the NEWEST end of the window that are walked first, newest first,
+   * before the oldest-first walk over the whole window. 0 disables the phase.
+   *
+   * See the walk itself for why this exists; the short version is that
+   * oldest-first alone assumes the deficit is spread evenly over the window, and
+   * a promotion burst violates that by adding one arc's whole back-history at
+   * once.
+   */
+  freshDays?: number;
+  /**
+   * The share of `budgetMs` the fresh phase may spend before it yields to the
+   * oldest-first walk, in [0, 1].
+   *
+   * It is a SHARE rather than a count of calls because what it is protecting is
+   * the clock: the guarantee ADR-0023 bought with oldest-first is that the days
+   * about to leave the window are reached, and the only thing that can break it
+   * is the fresh phase spending the night. Without `budgetMs` there is no night
+   * to divide and the fresh phase simply runs first.
+   */
+  freshShare?: number;
   batchSize?: number;
   /** One arc only. */
   storylineId?: string;
@@ -624,8 +655,14 @@ export interface SummaryPassOptions {
 }
 
 export interface SummaryPassTally {
-  /** Storyline-days considered. */
+  /**
+   * Storyline-days considered — DISTINCT, across both phases of the walk. A day
+   * the fresh phase reached is not walked again by the window phase, so this
+   * keeps the meaning it had when there was one walk.
+   */
   days: number;
+  /** Of `days`, how many the fresh-first phase reached. */
+  fresh: number;
   written: number;
   recomputed: number;
   /** The model answered and the answer was unusable. Costs the span an attempt. */
@@ -668,12 +705,24 @@ const CONSECUTIVE_UNAVAILABLE_LIMIT = 5;
  */
 const RETRY_TEMPERATURE = 0.4;
 
+/**
+ * The gate's answer when the FRESH phase has spent its share of the budget.
+ *
+ * Deliberately not one of `SummaryPassTally["stoppedBy"]`'s values: it never
+ * reaches the tally, because it does not stop the night. It stops one phase, and
+ * the walk that reads it starts the next one. Giving it a value the tally could
+ * hold would make "the fresh phase yielded" indistinguishable from "the night
+ * ran out", which is the difference the report exists to show.
+ */
+const FRESH_BUDGET = "fresh-budget";
+
 export async function summaryPass(
   deps: SummarizerDeps,
   options: SummaryPassOptions,
 ): Promise<SummaryPassTally> {
   const tally: SummaryPassTally = {
     days: 0,
+    fresh: 0,
     written: 0,
     recomputed: 0,
     refused: 0,
@@ -693,8 +742,6 @@ export async function summaryPass(
   const now = options.now ?? (() => new Date());
   const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const startedAt = now().getTime();
-  const overBudget = (): boolean =>
-    options.budgetMs !== undefined && now().getTime() - startedAt >= options.budgetMs;
   const rate = options.ratePerMinute ?? 30;
   const spacingMs = rate > 0 ? Math.ceil(60_000 / rate) : 0;
   const batchSize = options.batchSize ?? 200;
@@ -705,17 +752,68 @@ export async function summaryPass(
     ? { ...deps, signal: options.signal }
     : deps;
 
+  /**
+   * The deadline the gate is currently enforcing, as ms from `startedAt`.
+   *
+   * The fresh phase lowers it to its share and the window phase restores it, so
+   * there is ONE budget check rather than a phase-aware condition inside it.
+   */
+  let deadlineMs = options.budgetMs;
+  /** Which stop reason a deadline means right now — see `FRESH_BUDGET`. */
+  let deadlineReason: "budget" | typeof FRESH_BUDGET = "budget";
+  const pastDeadline = (): boolean =>
+    deadlineMs !== undefined && now().getTime() - startedAt >= deadlineMs;
+
+  /**
+   * The SPEND ceiling the gate is currently enforcing, and its twin reason.
+   *
+   * The fresh phase needs a share of this as well as of the clock, and the
+   * reason is the CLI: `chores-command` and `storyline-summary-command` both
+   * delete `summaryBudgetMs` (a terminal has no function timeout), while
+   * `maxSummaries` stays at `SUMMARY_MAX_PER_RUN`. Bounding the fresh phase by
+   * the clock alone leaves it UNBOUNDED there — and since a fresh phase that
+   * ends on `max-summaries` ends the night rather than yielding, the oldest end
+   * would never be walked at all. Against measured demand (107-211 calls for one
+   * new UTC day) three fresh days can exceed the ceiling on their own, so this
+   * is the ordinary case for `pnpm chores summaries`, not a corner of it.
+   */
+  let callCeiling = options.maxSummaries;
+  let ceilingReason: "max-summaries" | typeof FRESH_BUDGET = "max-summaries";
+  const pastCeiling = (): boolean =>
+    callCeiling !== undefined && tally.model >= callCeiling;
+
+  /**
+   * When the last admitted call STARTED. The spacing is measured from here, so
+   * a call's own latency counts towards the interval before the next one — see
+   * `SummaryPassOptions.ratePerMinute`.
+   */
+  let lastCallStartedAt: number | null = null;
+
   const gate: CallGate = {
     async before(): Promise<string | null> {
       if (options.signal?.aborted) return "signal";
       // Checked BEFORE the spacing sleep and the call: a budget that notices it
       // is spent only once the call returns is a budget the deadline has passed.
-      if (overBudget()) return "budget";
-      if (options.maxSummaries !== undefined && tally.model >= options.maxSummaries) {
-        return "max-summaries";
-      }
+      if (pastDeadline()) return deadlineReason;
+      if (pastCeiling()) return ceilingReason;
       if (consecutiveUnavailable >= CONSECUTIVE_UNAVAILABLE_LIMIT) return "unavailable";
-      if (tally.model > 0 && spacingMs > 0) await sleep(spacingMs);
+
+      if (lastCallStartedAt !== null && spacingMs > 0) {
+        const wait = lastCallStartedAt + spacingMs - now().getTime();
+        // Only when the previous call returned FASTER than the interval. A slow
+        // call has already paid the spacing by taking it, and sleeping again
+        // would be the double pacing this measures its way out of.
+        if (wait > 0) await sleep(wait);
+        // Re-checked after the sleep, which is the half a budget checked only
+        // before it cannot see: the deadline can pass while we wait, and a call
+        // STARTED past the deadline is a call the budget did not admit. The
+        // abort in `runSummaryChore` is what bounds a call already in flight;
+        // this is what stops one being started.
+        if (options.signal?.aborted) return "signal";
+        if (pastDeadline()) return deadlineReason;
+      }
+
+      lastCallStartedAt = now().getTime();
       tally.model += 1;
       return null;
     },
@@ -726,68 +824,220 @@ export async function summaryPass(
     },
   };
 
-  let after: { dayKey: string; storylineId: string } | undefined;
+  /**
+   * Storyline-days this run has already walked, `dayKey|storylineId`.
+   *
+   * The window phase walks the WHOLE window rather than the window minus the
+   * fresh range, so that budget the fresh phase did not spend still reaches
+   * fresh days. This is what keeps it from paying for them twice — and what
+   * keeps `days` and `skipped` counting each storyline-day once, as they did
+   * when there was a single walk. Bounded by the candidates in one night.
+   */
+  const visited = new Set<string>();
 
-  walk: for (;;) {
-    const candidates = await readSummaryCandidateDays(deps.db, {
-      from: options.from,
-      to: options.to,
-      minArticlesExclusive: options.minArticlesExclusive,
-      minGroups: options.minGroups,
-      limit: batchSize,
-      ...(after ? { after } : {}),
-      ...(options.storylineId ? { storylineId: options.storylineId } : {}),
-    });
-    if (candidates.length === 0) break;
+  /**
+   * Walk one range in one order.
+   *
+   * Returns the gate's reason if it stopped us, and WHICH day it stopped on —
+   * the caller needs the second half to hand an unfinished day to the next
+   * phase. See the fresh phase below.
+   */
+  async function walkRange(range: {
+    from: Date;
+    to: Date;
+    order: "oldest" | "newest";
+    phase: "fresh" | "window";
+  }): Promise<{
+    stoppedBy?: string;
+    stoppedOn?: string;
+    /** What the stopped day had already done, so the caller can undo it. */
+    stoppedOutcome?: DaySummaryOutcome;
+  }> {
+    let after: { dayKey: string; storylineId: string } | undefined;
 
-    for (const candidate of candidates) {
-      after = { dayKey: candidate.dayKey, storylineId: candidate.storylineId };
-      tally.days += 1;
-      let outcome: DaySummaryOutcome;
-      try {
-        outcome = await summarizeStorylineDay(askDeps, candidate, gate);
-      } catch (error) {
-        // Never throws for one day's sake, exactly as the linker and the label
-        // pass don't: a day this run could not summarise is a day standing
-        // where it stood, and the next run selects it again.
-        tally.failures += 1;
-        deps.logger?.warn(
-          {
-            err: error instanceof Error ? error.message : String(error),
-            storylineId: candidate.storylineId,
-            dayKey: candidate.dayKey,
-          },
-          "summary pass: one storyline-day failed",
-        );
-        continue;
-      }
-      tally.written += outcome.written;
-      tally.recomputed += outcome.recomputed;
-      tally.refused += outcome.refused;
-      tally.unavailable += outcome.unavailable;
-      tally.skipped += outcome.skipped;
-      options.onProgress?.({ days: tally.days, modelCalls: tally.model });
+    for (;;) {
+      const candidates = await readSummaryCandidateDays(deps.db, {
+        from: range.from,
+        to: range.to,
+        minArticlesExclusive: options.minArticlesExclusive,
+        minGroups: options.minGroups,
+        limit: batchSize,
+        order: range.order,
+        ...(after ? { after } : {}),
+        ...(options.storylineId ? { storylineId: options.storylineId } : {}),
+      });
+      if (candidates.length === 0) return {};
 
-      if (outcome.stoppedBy !== undefined) {
-        tally.stoppedBy =
-          outcome.stoppedBy === "signal" ||
-          outcome.stoppedBy === "budget" ||
-          outcome.stoppedBy === "max-summaries" ||
-          outcome.stoppedBy === "unavailable"
-            ? outcome.stoppedBy
-            : "exhausted";
-        if (tally.stoppedBy === "unavailable") {
+      for (const candidate of candidates) {
+        // **The deadline bounds the WALK, not just the calls.**
+        //
+        // The gate is only consulted when a span needs a model call, so a day
+        // whose spans are all current never reaches it — it costs two queries
+        // and returns. That was survivable with one walk over a window the
+        // budget usually outlasted; it is not now, because this commit adds a
+        // second walk and the abort in `runSummaryChore` leaves only ~12 s of
+        // headroom under `maxDuration`. Production's window holds ~246
+        // qualifying storyline-days, and walking them against a pooler in
+        // another region is seconds that used to land wherever they landed.
+        if (options.signal?.aborted) return { stoppedBy: "signal" };
+        if (pastDeadline()) return { stoppedBy: deadlineReason };
+
+        // The cursor advances over every row READ, including ones already
+        // walked — it is the keyset's position in the scan, not a record of
+        // work done, and skipping it for a visited row would re-read that page.
+        after = { dayKey: candidate.dayKey, storylineId: candidate.storylineId };
+
+        const key = `${candidate.dayKey}|${candidate.storylineId}`;
+        if (visited.has(key)) continue;
+        visited.add(key);
+
+        tally.days += 1;
+        if (range.phase === "fresh") tally.fresh += 1;
+        let outcome: DaySummaryOutcome;
+        try {
+          outcome = await summarizeStorylineDay(askDeps, candidate, gate);
+        } catch (error) {
+          // Never throws for one day's sake, exactly as the linker and the label
+          // pass don't: a day this run could not summarise is a day standing
+          // where it stood, and the next run selects it again.
+          tally.failures += 1;
           deps.logger?.warn(
-            { days: tally.days, unavailable: tally.unavailable },
-            "summary pass stopping: the model has been unreachable for every recent ask. " +
-              "Nothing was written and nothing was retired; the next pass reselects it.",
+            {
+              err: error instanceof Error ? error.message : String(error),
+              storylineId: candidate.storylineId,
+              dayKey: candidate.dayKey,
+            },
+            "summary pass: one storyline-day failed",
           );
+          continue;
         }
-        break walk;
+        tally.written += outcome.written;
+        tally.recomputed += outcome.recomputed;
+        tally.refused += outcome.refused;
+        tally.unavailable += outcome.unavailable;
+        tally.skipped += outcome.skipped;
+        options.onProgress?.({ days: tally.days, modelCalls: tally.model });
+
+        if (outcome.stoppedBy !== undefined) {
+          return { stoppedBy: outcome.stoppedBy, stoppedOn: key, stoppedOutcome: outcome };
+        }
       }
+
+      if (candidates.length < batchSize) return {};
+    }
+  }
+
+  /**
+   * Phase one: the few freshest days, newest first, under a share of the budget.
+   *
+   * ADR-0023 chose oldest-first because the days nearest to leaving the window
+   * are the ones that cannot wait, and that argument still holds — it is why
+   * this phase is BOUNDED rather than merely first. What it did not anticipate
+   * is a promotion burst: a newly promoted arc brings its whole back-history as
+   * first-write candidates, and a first write is allowed at any age, so one
+   * night's inflow can be several times a normal one. Measured on 2026-09-16,
+   * six consecutive firings spent 379 model calls and reached neither of the two
+   * newest days, which had 45 qualifying storyline-days and no sentence at all.
+   *
+   * Every firing runs this phase, not just the first of the night: a phase that
+   * finds its days already written costs reads and no model call, which is the
+   * same property that makes the extra nightly firings nearly free.
+   */
+  const freshDays = options.freshDays ?? 0;
+  const freshShare = options.freshShare ?? 0;
+  const freshFrom = new Date(
+    Math.max(options.from.getTime(), options.to.getTime() - freshDays * 86_400_000),
+  );
+  let stoppedBy: string | undefined;
+
+  // `freshShare > 0` is a CONDITION on running the phase at all, not a detail
+  // of bounding it. A phase allowed none of the budget does no work, and the
+  // knob reads as "the share the first walk may spend" — so 0 has to mean "no
+  // fresh phase", the same as `freshDays: 0`. Letting it fall through to an
+  // unset bound would make 0 mean the OPPOSITE: the whole night, unbounded.
+  if (freshDays > 0 && freshShare > 0 && freshFrom.getTime() < options.to.getTime()) {
+    const share = Math.min(freshShare, 1);
+    if (options.budgetMs !== undefined) {
+      deadlineMs = Math.floor(options.budgetMs * share);
+      deadlineReason = FRESH_BUDGET;
+    }
+    if (options.maxSummaries !== undefined) {
+      // At least one call, so a tiny share is a small phase rather than a
+      // phase that cannot ask anything and yields having achieved nothing.
+      callCeiling = Math.max(1, Math.floor(options.maxSummaries * share));
+      ceilingReason = FRESH_BUDGET;
+    }
+    const walked = await walkRange({
+      from: freshFrom,
+      to: options.to,
+      order: "newest",
+      phase: "fresh",
+    });
+
+    if (walked.stoppedBy === FRESH_BUDGET) {
+      // Its share running out is this phase ENDING, not the night ending.
+      //
+      // The day it stopped on is handed back so the window walk can finish it,
+      // because leaving it marked as walked would make the share boundary a
+      // one-day hole — invisible, and reported as `exhausted`. That is this
+      // whole change's own bug, reintroduced one day along.
+      //
+      // **But only when nothing was ASKED for that day, and that condition is
+      // load-bearing.** Re-walking a day this run already worked on means
+      // re-deciding its spans, and a span this run REFUSED now carries a row
+      // with `attempts: 1` — which `decideSpan` reads as "retry", spending a
+      // second of its three attempts in the same night. Three refusals retires
+      // a span for ever, so that would retire it a night early, on a table
+      // nothing can rebuild. A day with calls already spent keeps its place and
+      // waits for the next firing, which is a deferral and not a hole: it is
+      // still a fresh day, so it leads the next firing too.
+      //
+      // `modelCalls === 0` also makes the rollback exact — with no call there is
+      // nothing written, recomputed, refused or unavailable, so `skipped` is the
+      // only counter the day can have moved.
+      if (walked.stoppedOn !== undefined && walked.stoppedOutcome?.modelCalls === 0) {
+        visited.delete(walked.stoppedOn);
+        tally.days -= 1;
+        tally.fresh -= 1;
+        tally.skipped -= walked.stoppedOutcome.skipped;
+      }
+    } else {
+      stoppedBy = walked.stoppedBy;
     }
 
-    if (candidates.length < batchSize) break;
+    deadlineMs = options.budgetMs;
+    deadlineReason = "budget";
+    callCeiling = options.maxSummaries;
+    ceilingReason = "max-summaries";
+  }
+
+  // Phase two: the whole window, oldest first — the walk ADR-0023 describes.
+  if (stoppedBy === undefined) {
+    stoppedBy = (
+      await walkRange({
+        from: options.from,
+        to: options.to,
+        order: "oldest",
+        phase: "window",
+      })
+    ).stoppedBy;
+  }
+
+  if (stoppedBy !== undefined) {
+    tally.stoppedBy =
+      stoppedBy === "signal" ||
+      stoppedBy === "budget" ||
+      stoppedBy === "max-summaries" ||
+      stoppedBy === "unavailable"
+        ? stoppedBy
+        : "exhausted";
+    if (tally.stoppedBy === "unavailable") {
+      deps.logger?.warn(
+        { days: tally.days, unavailable: tally.unavailable },
+        "summary pass stopping: the model has been unreachable for every recent ask. " +
+          "Nothing was written and nothing was retired; the next pass reselects it.",
+      );
+    }
   }
 
   return tally;
