@@ -908,6 +908,22 @@ describe("the pass spaces calls from one call's START", () => {
   });
 });
 
+/**
+ * A clock that advances every time it is READ, so wall time passes during the
+ * pass's queries and not only during its model calls. `movingClock` cannot
+ * express that: it moves on calls and sleeps, so a walk over days that need no
+ * call takes zero time and no deadline can ever fall due inside it.
+ */
+function tickingClock(msPerRead: number) {
+  let t = NOW.getTime();
+  return {
+    now: (): Date => {
+      t += msPerRead;
+      return new Date(t);
+    },
+  };
+}
+
 describe("the fresh-first phase", () => {
   const DAYS = ["2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13", "2026-08-14"];
   const options = {
@@ -929,6 +945,9 @@ describe("the fresh-first phase", () => {
       ...options,
       ...budget,
       freshDays: 2,
+      // The whole ceiling, so what is under test is the ORDER rather than the
+      // split. The split has its own tests below.
+      freshShare: 1,
     });
     expect(fresh.stoppedBy).toBe("max-summaries");
     expect(await rowsFor(id, "2026-08-14")).toHaveLength(3);
@@ -978,6 +997,101 @@ describe("the fresh-first phase", () => {
     expect(tally.stoppedBy).toBe("exhausted");
   });
 
+  it("bounds itself by the CALL ceiling too, so a run with no budget still reaches the old end", async () => {
+    // The CLI's exact shape: `chores-command` and `storyline-summary-command`
+    // both delete `summaryBudgetMs`, and `maxSummaries` stays configured. A
+    // fresh phase bounded only by the clock is unbounded here — and because it
+    // would end on `max-summaries`, which ends the night rather than yielding,
+    // the oldest end would never be walked at all.
+    const id = await arcAcrossDays(DAYS);
+
+    const tally = await summaryPass(deps(stub(["A sentence."])), {
+      ...options,
+      maxSummaries: 6,
+      freshDays: 3,
+      freshShare: 0.5,
+    });
+
+    // Three of the six calls are the fresh phase's share; the rest went to the
+    // oldest end, which is the half that used to get nothing.
+    expect(await rowsFor(id, "2026-08-14")).toHaveLength(3);
+    expect(await rowsFor(id, "2026-08-10")).toHaveLength(3);
+    expect(tally.model).toBe(6);
+    expect(tally.stoppedBy).toBe("max-summaries");
+  });
+
+  it("treats a share of zero as NO fresh phase, not as the whole night", async () => {
+    const id = await arcAcrossDays(DAYS);
+
+    const tally = await summaryPass(deps(stub(["A sentence."])), {
+      ...options,
+      maxSummaries: 3,
+      freshDays: 3,
+      freshShare: 0,
+    });
+
+    // The oldest-first walk, unchanged — which is what "the first walk may
+    // spend none of the budget" has to mean. Falling through to an unset bound
+    // would make 0 grant the phase everything and invert the knob.
+    expect(await rowsFor(id, "2026-08-10")).toHaveLength(3);
+    expect(await rowsFor(id, "2026-08-14")).toHaveLength(0);
+    expect(tally.fresh).toBe(0);
+  });
+
+  it("never spends two of a span's three attempts in one night", async () => {
+    // The hand-back re-walks the day the fresh phase bounced off. If that day
+    // had already been ASKED, its refused spans carry `attempts: 1`, which
+    // `decideSpan` reads as "retry" — a second attempt inside the same run, on
+    // a counter whose third strike retires the span for ever.
+    const id = await arcAcrossDays(DAYS);
+    const clock = movingClock(1_000);
+    const model = clock.wrap(stub([UNUSABLE]));
+
+    await summaryPass(deps(model, { now: clock.now }), {
+      ...options,
+      now: clock.now,
+      sleep: clock.sleep,
+      budgetMs: 60_000,
+      freshDays: 2,
+      // Small enough that the phase stops part-way through the fresh range.
+      freshShare: 0.07,
+    });
+
+    for (const day of DAYS) {
+      for (const row of await rowsFor(id, day)) {
+        expect(row.summary).toBeNull();
+        expect(row.attempts).toBe(1);
+      }
+    }
+  });
+
+  it("stops WALKING at the deadline, not just calling", async () => {
+    // The gate is only consulted when a span needs a model call, so a window
+    // that is entirely current never reaches it. With the budget already spent
+    // the pass must stop reading too: those reads are round trips to another
+    // region, and they land in the headroom the abort leaves under maxDuration.
+    await arcAcrossDays(DAYS);
+    const first = await summaryPass(deps(stub(["A sentence."])), {
+      ...options,
+      freshDays: 3,
+      freshShare: 0.6,
+    });
+    expect(first.stoppedBy).toBe("exhausted");
+
+    // A clock that moves while the pass READS, and a budget already spent.
+    const clock = tickingClock(10);
+    const second = await summaryPass(deps(stub(["A sentence."]), { now: clock.now }), {
+      ...options,
+      now: clock.now,
+      budgetMs: 1,
+      freshDays: 3,
+      freshShare: 0.6,
+    });
+    expect(second.days).toBe(0);
+    expect(second.model).toBe(0);
+    expect(second.stoppedBy).toBe("budget");
+  });
+
   it("counts and walks each storyline-day once when both phases cover it", async () => {
     await arcAcrossDays(DAYS);
     const model = stub(["A sentence."]);
@@ -987,7 +1101,11 @@ describe("the fresh-first phase", () => {
     // them: the cost would be silent (no model call, since every span is
     // current) and the report would say the night considered ten days when the
     // window holds five.
-    const tally = await summaryPass(deps(model), { ...options, freshDays: 8 });
+    const tally = await summaryPass(deps(model), {
+      ...options,
+      freshDays: 8,
+      freshShare: 1,
+    });
 
     expect(tally.days).toBe(DAYS.length);
     expect(tally.fresh).toBe(DAYS.length);

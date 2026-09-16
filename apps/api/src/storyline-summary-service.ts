@@ -765,6 +765,24 @@ export async function summaryPass(
     deadlineMs !== undefined && now().getTime() - startedAt >= deadlineMs;
 
   /**
+   * The SPEND ceiling the gate is currently enforcing, and its twin reason.
+   *
+   * The fresh phase needs a share of this as well as of the clock, and the
+   * reason is the CLI: `chores-command` and `storyline-summary-command` both
+   * delete `summaryBudgetMs` (a terminal has no function timeout), while
+   * `maxSummaries` stays at `SUMMARY_MAX_PER_RUN`. Bounding the fresh phase by
+   * the clock alone leaves it UNBOUNDED there — and since a fresh phase that
+   * ends on `max-summaries` ends the night rather than yielding, the oldest end
+   * would never be walked at all. Against measured demand (107-211 calls for one
+   * new UTC day) three fresh days can exceed the ceiling on their own, so this
+   * is the ordinary case for `pnpm chores summaries`, not a corner of it.
+   */
+  let callCeiling = options.maxSummaries;
+  let ceilingReason: "max-summaries" | typeof FRESH_BUDGET = "max-summaries";
+  const pastCeiling = (): boolean =>
+    callCeiling !== undefined && tally.model >= callCeiling;
+
+  /**
    * When the last admitted call STARTED. The spacing is measured from here, so
    * a call's own latency counts towards the interval before the next one — see
    * `SummaryPassOptions.ratePerMinute`.
@@ -777,9 +795,7 @@ export async function summaryPass(
       // Checked BEFORE the spacing sleep and the call: a budget that notices it
       // is spent only once the call returns is a budget the deadline has passed.
       if (pastDeadline()) return deadlineReason;
-      if (options.maxSummaries !== undefined && tally.model >= options.maxSummaries) {
-        return "max-summaries";
-      }
+      if (pastCeiling()) return ceilingReason;
       if (consecutiveUnavailable >= CONSECUTIVE_UNAVAILABLE_LIMIT) return "unavailable";
 
       if (lastCallStartedAt !== null && spacingMs > 0) {
@@ -831,7 +847,12 @@ export async function summaryPass(
     to: Date;
     order: "oldest" | "newest";
     phase: "fresh" | "window";
-  }): Promise<{ stoppedBy?: string; stoppedOn?: string }> {
+  }): Promise<{
+    stoppedBy?: string;
+    stoppedOn?: string;
+    /** What the stopped day had already done, so the caller can undo it. */
+    stoppedOutcome?: DaySummaryOutcome;
+  }> {
     let after: { dayKey: string; storylineId: string } | undefined;
 
     for (;;) {
@@ -848,6 +869,19 @@ export async function summaryPass(
       if (candidates.length === 0) return {};
 
       for (const candidate of candidates) {
+        // **The deadline bounds the WALK, not just the calls.**
+        //
+        // The gate is only consulted when a span needs a model call, so a day
+        // whose spans are all current never reaches it — it costs two queries
+        // and returns. That was survivable with one walk over a window the
+        // budget usually outlasted; it is not now, because this commit adds a
+        // second walk and the abort in `runSummaryChore` leaves only ~12 s of
+        // headroom under `maxDuration`. Production's window holds ~246
+        // qualifying storyline-days, and walking them against a pooler in
+        // another region is seconds that used to land wherever they landed.
+        if (options.signal?.aborted) return { stoppedBy: "signal" };
+        if (pastDeadline()) return { stoppedBy: deadlineReason };
+
         // The cursor advances over every row READ, including ones already
         // walked — it is the keyset's position in the scan, not a record of
         // work done, and skipping it for a visited row would re-read that page.
@@ -885,7 +919,7 @@ export async function summaryPass(
         options.onProgress?.({ days: tally.days, modelCalls: tally.model });
 
         if (outcome.stoppedBy !== undefined) {
-          return { stoppedBy: outcome.stoppedBy, stoppedOn: key };
+          return { stoppedBy: outcome.stoppedBy, stoppedOn: key, stoppedOutcome: outcome };
         }
       }
 
@@ -916,10 +950,22 @@ export async function summaryPass(
   );
   let stoppedBy: string | undefined;
 
-  if (freshDays > 0 && freshFrom.getTime() < options.to.getTime()) {
-    if (options.budgetMs !== undefined && freshShare > 0) {
-      deadlineMs = Math.floor(options.budgetMs * Math.min(freshShare, 1));
+  // `freshShare > 0` is a CONDITION on running the phase at all, not a detail
+  // of bounding it. A phase allowed none of the budget does no work, and the
+  // knob reads as "the share the first walk may spend" — so 0 has to mean "no
+  // fresh phase", the same as `freshDays: 0`. Letting it fall through to an
+  // unset bound would make 0 mean the OPPOSITE: the whole night, unbounded.
+  if (freshDays > 0 && freshShare > 0 && freshFrom.getTime() < options.to.getTime()) {
+    const share = Math.min(freshShare, 1);
+    if (options.budgetMs !== undefined) {
+      deadlineMs = Math.floor(options.budgetMs * share);
       deadlineReason = FRESH_BUDGET;
+    }
+    if (options.maxSummaries !== undefined) {
+      // At least one call, so a tiny share is a small phase rather than a
+      // phase that cannot ask anything and yields having achieved nothing.
+      callCeiling = Math.max(1, Math.floor(options.maxSummaries * share));
+      ceilingReason = FRESH_BUDGET;
     }
     const walked = await walkRange({
       from: freshFrom,
@@ -931,16 +977,29 @@ export async function summaryPass(
     if (walked.stoppedBy === FRESH_BUDGET) {
       // Its share running out is this phase ENDING, not the night ending.
       //
-      // And the day it stopped on is handed back rather than kept: the gate
-      // refused that day a call, so it is unfinished, and leaving it marked as
-      // walked would make the share boundary a hole. It is exactly one day per
-      // night and it would be invisible — the pass would report `exhausted`
-      // having silently skipped the second-newest day, which is the bug this
-      // whole change exists to fix, reintroduced one day further along.
-      if (walked.stoppedOn !== undefined) {
+      // The day it stopped on is handed back so the window walk can finish it,
+      // because leaving it marked as walked would make the share boundary a
+      // one-day hole — invisible, and reported as `exhausted`. That is this
+      // whole change's own bug, reintroduced one day along.
+      //
+      // **But only when nothing was ASKED for that day, and that condition is
+      // load-bearing.** Re-walking a day this run already worked on means
+      // re-deciding its spans, and a span this run REFUSED now carries a row
+      // with `attempts: 1` — which `decideSpan` reads as "retry", spending a
+      // second of its three attempts in the same night. Three refusals retires
+      // a span for ever, so that would retire it a night early, on a table
+      // nothing can rebuild. A day with calls already spent keeps its place and
+      // waits for the next firing, which is a deferral and not a hole: it is
+      // still a fresh day, so it leads the next firing too.
+      //
+      // `modelCalls === 0` also makes the rollback exact — with no call there is
+      // nothing written, recomputed, refused or unavailable, so `skipped` is the
+      // only counter the day can have moved.
+      if (walked.stoppedOn !== undefined && walked.stoppedOutcome?.modelCalls === 0) {
         visited.delete(walked.stoppedOn);
         tally.days -= 1;
         tally.fresh -= 1;
+        tally.skipped -= walked.stoppedOutcome.skipped;
       }
     } else {
       stoppedBy = walked.stoppedBy;
@@ -948,6 +1007,8 @@ export async function summaryPass(
 
     deadlineMs = options.budgetMs;
     deadlineReason = "budget";
+    callCeiling = options.maxSummaries;
+    ceilingReason = "max-summaries";
   }
 
   // Phase two: the whole window, oldest first — the walk ADR-0023 describes.

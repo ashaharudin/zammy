@@ -152,10 +152,19 @@ So the walk is now **two phases**:
 2. the whole window, **oldest first** — the walk above, unchanged.
 
 The bound is the part that keeps the original decision intact. The fresh phase
-cannot spend the night, so the days about to leave the window still get the
-larger share of every firing, and the guarantee that a bounded night *defers*
-rather than *drops* is the same guarantee it always was. What changed is only
-which end goes first with a bounded slice.
+cannot spend the night: at a share of 0.6 the old end keeps two fifths of every
+firing — the smaller share, but a reserved one — and a fresh phase with nothing
+left to do yields its remainder rather than holding it. So the guarantee that a
+bounded night *defers* rather than *drops* is the same guarantee it always was.
+What changed is only which end goes first, with a bounded slice.
+
+The bound has to be a share of **both** limits, not just the clock. The CLI
+entrypoints drop `SUMMARY_BUDGET_MS` deliberately — a terminal has no function
+timeout — and keep `SUMMARY_MAX_PER_RUN`, so a fresh phase bounded only by the
+clock is unbounded exactly there. It would then end on `max-summaries`, which
+ends the night rather than yielding, and `pnpm chores summaries` would spend
+every call on the newest three days and never reach the oldest. For the same
+reason a share of **0** disables the phase rather than granting it everything.
 
 Two consequences worth stating, because both were bugs before they were rules:
 
