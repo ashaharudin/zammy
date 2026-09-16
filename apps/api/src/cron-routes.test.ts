@@ -28,9 +28,9 @@ import { createHandler as createKeepaliveHandler, type Pingable } from "./keepal
  * optional in config: a deployment can switch these routes off, and "off" has
  * to mean off rather than open.
  *
- * The two entrypoints that are NOT bearer-gated are here too, with the fact
- * that makes each exemption true asserted rather than described — because "it
- * has no public URL" is a claim about `vercel.json`, and a claim about a
+ * The entrypoints that are NOT bearer-gated are here too, with the fact that
+ * makes each exemption true asserted rather than described — because "it has
+ * no public URL" is a claim about `vercel.json`, and a claim about a
  * configuration file is exactly the kind that stops being true quietly.
  */
 
@@ -146,7 +146,7 @@ const GUARDED: readonly Guarded[] = [
   },
 ];
 
-/** The two that are deliberately not bearer-gated, and why each is allowed. */
+/** Every entrypoint that is deliberately not bearer-gated, and why each is allowed. */
 const EXEMPT = [
   {
     path: "/api/index",
@@ -154,6 +154,21 @@ const EXEMPT = [
     // The public Fastify surface. Its auth is the app's, and an entrypoint that
     // grew a bearer check would be a second place to look when production and
     // Compose disagree.
+    reason: "public",
+  },
+  {
+    path: "/api/storyline",
+    source: "vercel-storyline.ts",
+    // The Tier 2 SEO storyline page (`docs/SEO.md`) — a crawler's first request
+    // to the site is likeliest to hit this one, and a crawler carries no
+    // bearer token to hit it with.
+    reason: "public",
+  },
+  {
+    path: "/api/sitemap",
+    source: "vercel-sitemap.ts",
+    // Same reasoning as `/api/storyline`: a sitemap crawl is anonymous by
+    // definition.
     reason: "public",
   },
   {
@@ -216,17 +231,29 @@ describe("the fail-closed rule, over every bearer-gated entrypoint", () => {
   });
 });
 
-describe("the two entrypoints that are not bearer-gated", () => {
-  it("routes public traffic to the Fastify surface and nowhere else", () => {
-    // `/api/index` is exempt because it IS the public surface — every rewrite
-    // in `vercel.json` points at it, and its auth is the app's. If a rewrite
-    // ever pointed at `/api/chores`, `/api/drain` or `/api/keepalive`, those
-    // would be answering browser traffic on a path nobody audited.
+describe("the entrypoints that are not bearer-gated", () => {
+  it("routes public traffic only to entrypoints that are deliberately public", () => {
+    // Every rewrite in `vercel.json` points at one of the `EXEMPT` entries
+    // marked `public` — `/api/index`, `/api/storyline`, `/api/sitemap` — and
+    // never at a `GUARDED` one. If a rewrite ever pointed at `/api/chores`,
+    // `/api/drain` or `/api/keepalive`, those would be answering browser
+    // traffic on a path nobody audited; if it pointed anywhere not listed in
+    // `EXEMPT` at all, this test — not a production incident — is where that
+    // gets noticed.
     const vercel = JSON.parse(read("vercel.json")) as {
       rewrites: Array<{ source: string; destination: string }>;
       functions: Record<string, { experimentalTriggers?: unknown }>;
     };
-    expect([...new Set(vercel.rewrites.map((rule) => rule.destination))]).toEqual(["/api/index"]);
+    const destinations = [...new Set(vercel.rewrites.map((rule) => rule.destination))];
+    const publiclyRoutable = EXEMPT.filter((entry) => entry.reason === "public").map(
+      (entry) => entry.path,
+    );
+    expect(destinations.sort()).toEqual([...publiclyRoutable].sort());
+    for (const { path } of GUARDED) {
+      expect(destinations, `${path} is bearer-gated and must never be a rewrite target`).not.toContain(
+        path,
+      );
+    }
   });
 
   it("gives the ingest consumer a trigger and no route", () => {

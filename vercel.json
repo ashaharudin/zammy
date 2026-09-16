@@ -24,6 +24,13 @@
     "api/keepalive.ts": {
       "maxDuration": 15
     },
+    "api/storyline.ts": {
+      "maxDuration": 15,
+      "includeFiles": "apps/web/dist/**"
+    },
+    "api/sitemap.ts": {
+      "maxDuration": 15
+    },
     "api/queues/ingest.ts": {
       "maxDuration": 300,
       "includeFiles": "fixtures/**",
@@ -38,7 +45,9 @@
   "rewrites": [
     { "source": "/api/v1/(.*)", "destination": "/api/index" },
     { "source": "/healthz", "destination": "/api/index" },
-    { "source": "/readyz", "destination": "/api/index" }
+    { "source": "/readyz", "destination": "/api/index" },
+    { "source": "/storyline/(.*)", "destination": "/api/storyline" },
+    { "source": "/sitemap.xml", "destination": "/api/sitemap" }
   ],
   "headers": [
     {

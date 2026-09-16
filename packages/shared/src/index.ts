@@ -10,3 +10,4 @@ export * from "./article.js";
 export * from "./timeline.js";
 export * from "./cursor.js";
 export * from "./trending.js";
+export * from "./storyline-slug.js";

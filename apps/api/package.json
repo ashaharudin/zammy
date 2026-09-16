@@ -13,6 +13,14 @@
       "types": "./dist/vercel-queue.d.ts",
       "default": "./dist/vercel-queue.js"
     },
+    "./vercel-storyline": {
+      "types": "./dist/vercel-storyline.d.ts",
+      "default": "./dist/vercel-storyline.js"
+    },
+    "./vercel-sitemap": {
+      "types": "./dist/vercel-sitemap.d.ts",
+      "default": "./dist/vercel-sitemap.js"
+    },
     "./drain": {
       "types": "./dist/drain.d.ts",
       "default": "./dist/drain.js"

@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   leaveStorylineView,
   openStorylineView,
+  parseLocation,
   parseRoute,
   routeSearch,
+  routeUrl,
 } from "./route.js";
 
 /**
@@ -203,5 +205,100 @@ describe("openStorylineView", () => {
       storyline: "0192f3c4-5d6e-7f80-9123-456789abcdef",
       from: "Trump",
     });
+  });
+});
+
+/**
+ * The pretty path (Tier 2 SEO): `/storyline/<uuid>/<slug>` reads exactly like
+ * the query form, and a URL that does not name one falls through to it
+ * untouched.
+ */
+describe("parseLocation", () => {
+  const UUID = "0192f3c4-5d6e-7f80-9123-456789abcdef";
+
+  it("reads a storyline id out of the pretty path, ignoring the slug", () => {
+    expect(parseLocation(`/storyline/${UUID}/trump-upended`, "")).toEqual({
+      q: null,
+      filters: { language: undefined, country: undefined },
+      storyline: UUID,
+    });
+  });
+
+  it("reads filters and the view's origin from the query string beside it", () => {
+    expect(parseLocation(`/storyline/${UUID}/trump-upended`, "?lang=en&from=Trump")).toEqual({
+      q: null,
+      filters: { language: "en", country: undefined },
+      storyline: UUID,
+      from: "Trump",
+    });
+  });
+
+  it("accepts the bare id with no slug segment at all", () => {
+    expect(parseLocation(`/storyline/${UUID}`, "")).toEqual({
+      q: null,
+      filters: { language: undefined, country: undefined },
+      storyline: UUID,
+    });
+  });
+
+  it("falls through to the query-string parse for every other path", () => {
+    // The hero, a search, and a mistyped or unrecognized path all land here —
+    // there is no separate "404" route for the SPA to render, so this is
+    // exactly what `/` itself parses to.
+    expect(parseLocation("/", "?q=wildfires")).toEqual(parseRoute("?q=wildfires"));
+    expect(parseLocation("/nonsense", "?q=wildfires")).toEqual(parseRoute("?q=wildfires"));
+  });
+
+  it("does not accept a bigint SEED in the path — only a UUID view has one", () => {
+    // Inverting the UUID check here would let `/storyline/23905` (ADR-0010's
+    // seed shape) be read as a storyline VIEW, which has no keywords and would
+    // silently drop the ones a seed link is supposed to carry.
+    expect(parseLocation("/storyline/23905", "?q=mail-in+voting")).toEqual(
+      parseRoute("?q=mail-in+voting"),
+    );
+  });
+});
+
+describe("routeUrl", () => {
+  const UUID = "0192f3c4-5d6e-7f80-9123-456789abcdef";
+
+  it("builds the pretty path for a storyline view, slugging the label given", () => {
+    expect(
+      routeUrl({ q: null, filters: {}, storyline: UUID }, "Trump Upended"),
+    ).toBe(`/storyline/${UUID}/trump-upended`);
+  });
+
+  it("still names a real segment with no label to slug", () => {
+    expect(routeUrl({ q: null, filters: {}, storyline: UUID })).toBe(
+      `/storyline/${UUID}/storyline`,
+    );
+  });
+
+  it("carries the filters and the view's origin as a query string", () => {
+    expect(
+      routeUrl(
+        { q: null, filters: { language: "en" }, storyline: UUID, from: "Trump" },
+        "Trump Upended",
+      ),
+    ).toBe(`/storyline/${UUID}/trump-upended?lang=en&from=Trump`);
+  });
+
+  it("round-trips through parseLocation", () => {
+    const route = { q: null, filters: { language: "en" }, storyline: UUID, from: "Trump" };
+    const [pathname, search] = routeUrl(route, "Trump Upended").split("?");
+    expect(parseLocation(pathname!, search ? `?${search}` : "")).toEqual(route);
+  });
+
+  it("falls back to routeSearch on `/` for every route without a view", () => {
+    expect(routeUrl({ q: "wildfires", filters: { language: "en" } })).toBe(
+      `/${routeSearch({ q: "wildfires", filters: { language: "en" } })}`,
+    );
+  });
+
+  it("does not build a pretty path for a bigint SEED", () => {
+    // Same distinction `routeSearch` already draws: a seed shares `q`'s
+    // lifetime and has no route of its own to be pretty about.
+    const route = { q: "mail-in voting", filters: {}, storyline: "23905" };
+    expect(routeUrl(route)).toBe(`/${routeSearch(route)}`);
   });
 });
