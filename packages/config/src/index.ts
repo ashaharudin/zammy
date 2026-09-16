@@ -909,9 +909,15 @@ const EnvSchema = z
      * It is BOUNDED because ADR-0023's argument for oldest-first is still right:
      * the days about to fall out of `SUMMARY_WINDOW_DAYS` are the ones that
      * cannot wait, and an unbounded fresh phase could spend a whole night on the
-     * newest end and lose them for good. 0.6 leaves the old end two fifths of
-     * every firing, and at 275 s that is ~77 calls — comfortably more than the
-     * ~50 a normal night's old end needs.
+     * newest end and lose them for good.
+     *
+     * At 0.6, a 128-call firing reserves ~77 calls for the newest days and ~51
+     * for the old end — ~231 and ~153 across the three nightly firings. Both
+     * sides of that were sized against measured demand: one new UTC day costs
+     * 107-211 calls, and the largest back-history burst seen was ~400, which the
+     * old end's own share drains in under three nights and faster than that in
+     * practice, because a fresh phase with nothing left to do yields its
+     * remainder rather than holding it.
      */
     SUMMARY_FRESH_SHARE: z.coerce.number().min(0).max(1).default(0.6),
     /**
