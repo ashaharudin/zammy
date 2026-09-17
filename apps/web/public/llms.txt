@@ -48,7 +48,7 @@ upstream provider quota.
 - [Trending storylines](https://www.zammy.info/api/v1/trending): the storylines a rolling
   window found several newsrooms covering, busiest and freshest first. Each carries `id`,
   `label`, `size`, `sourceCount` and `lastUpdated`. Optional `language` (default `en`) and
-  `limit` (1–100, default 50). The best starting point, and the cheapest.
+  `limit` (1–100, default 60). The best starting point, and the cheapest.
 - [Timeline](https://www.zammy.info/api/v1/timeline?q=climate): a keyword search as a
   time-ordered timeline. Takes `q` (required unless `storyline` is given), `language`,
   `country`, `from`/`to` (ISO 8601), `limit` (1–100, default 25) and an opaque `cursor`

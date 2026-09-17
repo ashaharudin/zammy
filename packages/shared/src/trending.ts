@@ -105,10 +105,16 @@ export const TRENDING_LIMIT_MAX = 100;
  * No `day`: the cloud rolls over a window ending now (ADR-0008), so there are
  * no addressable periods to ask for. A stale `?day=` from the old contract is
  * stripped here rather than rejected — the bookmark lands on the live cloud.
+ *
+ * The default was 50 for as long as the cloud was a still picture, where it was
+ * a bound on what a 700×340 board could hold rather than on what was worth
+ * showing: past that, d3-cloud simply dropped what would not place. The board
+ * now drifts and is as long as its words need (`cloudBoard`), so the cheapest
+ * way to have more to show is to ask for more.
  */
 export const TrendingQuery = z.object({
   language: z.string().min(2).max(8).default("en"),
-  limit: z.coerce.number().int().min(1).max(TRENDING_LIMIT_MAX).default(50),
+  limit: z.coerce.number().int().min(1).max(TRENDING_LIMIT_MAX).default(60),
 });
 export type TrendingQuery = z.infer<typeof TrendingQuery>;
 
