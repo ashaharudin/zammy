@@ -11,6 +11,7 @@ import {
   removeStorylineFromView,
   routeStorylines,
   routeUrl,
+  viewIsFull,
   withViewStorylines,
   type Route,
 } from "./route.js";
@@ -172,9 +173,13 @@ function TopicApp() {
   // is one storyline opened, so it is tracked and refreshed exactly once. An arc
   // the view already holds is left alone: the click was aimed at something on
   // screen, and re-pushing the same view would make Back appear to do nothing.
+  // A FULL view is left alone too (`viewIsFull`) — the wire caps a view at
+  // `MAX_VIEW_STORYLINES` and the pills row stops offering there, but the rail's
+  // gutter labels and the braid's crossings do not, so the check is here rather
+  // than only in the row that usually produces the click.
   const openStoryline = useCallback(
     (storylineId: string, label: string | null, source: StorylineOpenSource) => {
-      if (routeStorylines(route).includes(storylineId)) return;
+      if (routeStorylines(route).includes(storylineId) || viewIsFull(route)) return;
       trackStorylineOpen(source);
       hint([[storylineId, label]]);
       refreshStoryline(storylineId);
@@ -186,9 +191,10 @@ function TopicApp() {
     [navigate, route, hint],
   );
 
-  // A chip dismissed, or a pressed pill pressed again: one arc out of the view.
-  // The last one out closes the view the way dismissing the single chip always
-  // has — back to the search it was opened from, or to the hero.
+  // A chip dismissed: the one way an arc leaves the view, since a taken arc has
+  // no pill in the row to press again (`offeredPills` leaves out what the view
+  // holds). The last one out closes the view the way dismissing the single chip
+  // always has — back to the search it was opened from, or to the hero.
   const removeStoryline = useCallback(
     (storylineId: string) => {
       const next = removeStorylineFromView(route, storylineId);
@@ -253,7 +259,7 @@ function TopicApp() {
         ...(route.also ? { also: route.also } : {}),
       }}
       // The search the view was opened from, as a topic — what keeps its pills
-      // in the bar (`useSurfacedStorylines`). The filters are the route's,
+      // in the bar (`useStorylineSearch`). The filters are the route's,
       // which are the ones that search ran under: they outlive the topic.
       viewOrigin={storylineView && route.from ? { q: route.from, ...route.filters } : null}
       viewFind={storylineView ? (route.find ?? null) : null}

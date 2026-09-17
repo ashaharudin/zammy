@@ -76,8 +76,14 @@ shape, at the cost of nothing new.
 - **The server-rendered page stays single.** `/storyline/<uuid>/<slug>` renders the
   path's storyline whatever `also` says; a crawler is sent to one page per arc and a
   reader's JavaScript widens it. The canonical link is that page's.
-- **No cap below 12 in the UI.** A reader assembles a view by clicking, and a search
-  surfaces at most eight; the cap exists so a hand-built URL cannot page the archive.
+- **No cap below 12 in the UI, but the UI knows the cap.** A reader assembles a view by
+  clicking, so there is no smaller ceiling to impose — but 12 is the WIRE's cap, and a
+  click past it would 400 the view the reader just spent twelve clicks building. So the
+  row stops offering at twelve (`viewIsFull`), `openStorylineView` refuses to widen a full
+  view, and `parseAlso` truncates a link that names more. This bullet originally argued the
+  UI needed no ceiling at all because a search surfaces at most eight; the amendment below
+  made the row a pool that tops itself up as pills are taken, which is what let a reader
+  click past eight and made the reasoning stale.
 
 ## Consequences
 

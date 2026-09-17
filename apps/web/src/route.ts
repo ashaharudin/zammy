@@ -1,4 +1,4 @@
-import { slugifyStoryline, STORYLINE_UUID } from "@zammy/shared";
+import { MAX_VIEW_STORYLINES, slugifyStoryline, STORYLINE_UUID } from "@zammy/shared";
 import type { TopicFilters } from "./api.js";
 
 /**
@@ -53,7 +53,16 @@ export interface Route {
   find?: string;
 }
 
-/** The `?also=` list as the URL spells it: UUIDs, comma-joined, no repeats. */
+/**
+ * The `?also=` list as the URL spells it: UUIDs, comma-joined, no repeats, and
+ * no more than a view may hold.
+ *
+ * TRUNCATED rather than passed on whole, because the cap is the wire's
+ * (`TimelineQuery` refuses a list longer than `MAX_VIEW_STORYLINES`) and a
+ * hand-built or stale link that names thirteen arcs would otherwise 400 the
+ * whole view — an error page instead of the twelve the server would have
+ * served. The path's storyline is one of the twelve, so this keeps eleven.
+ */
 function parseAlso(params: URLSearchParams, primary: string): string[] {
   const raw = params.get("also");
   if (!raw) return [];
@@ -61,7 +70,7 @@ function parseAlso(params: URLSearchParams, primary: string): string[] {
     .split(",")
     .map((id) => id.trim())
     .filter((id) => STORYLINE_UUID.test(id) && id !== primary);
-  return [...new Set(ids)];
+  return [...new Set(ids)].slice(0, MAX_VIEW_STORYLINES - 1);
 }
 
 /** Is this the STORYLINE VIEW — a UUID standing in `storyline` (ADR-0011)? */
@@ -232,24 +241,44 @@ export function routeStorylines(route: Route): string[] {
 }
 
 /**
+ * Is the view holding as many arcs as one may hold (`MAX_VIEW_STORYLINES`)?
+ *
+ * The cap is the WIRE's — `TimelineQuery` refuses a longer `?storyline=` list —
+ * so a view that reached it must stop offering, or the next click sends a
+ * request the API answers 400 to and the reader loses the rail they built.
+ * ADR-0028 argued no cap was needed in the UI because a search surfaced at most
+ * eight; its amendment made the row a pool that tops itself up as pills are
+ * taken, and a reader can now click past eight, so the UI has to know the
+ * ceiling after all.
+ */
+export function viewIsFull(route: Route): boolean {
+  return routeStorylines(route).length >= MAX_VIEW_STORYLINES;
+}
+
+/**
  * The view with exactly these storylines in it, first to the path and the
  * rest to `also`, or null for an empty list — a view of nothing is not a view,
  * and what to show instead (`leaveStorylineView`) is the caller's decision.
  *
  * Everything else about the route — filters, and the origin the view was
  * opened from — is kept: the set changing is not the reader going anywhere.
+ *
+ * Trimmed to `MAX_VIEW_STORYLINES`, which is the wire's own cap: no route this
+ * function builds can name a set the API would refuse.
  */
 export function withViewStorylines(route: Route, ids: readonly string[]): Route | null {
-  const [first, ...rest] = ids;
+  const [first, ...rest] = ids.slice(0, MAX_VIEW_STORYLINES);
   if (first === undefined) return null;
   const { storyline: _was, also: _were, ...kept } = route;
   return { ...kept, storyline: first, ...(rest.length > 0 ? { also: rest } : {}) };
 }
 
 /**
- * The view without one of its storylines — a chip dismissed, or a pressed
- * pill pressed again. Null when that was the last one, which is the caller's
- * cue to leave the view altogether rather than show a view of nothing.
+ * The view without one of its storylines — a chip dismissed, which is the one
+ * way an arc leaves a view: a taken pill is out of the row already
+ * (`offeredPills` leaves out what the view holds), so there is no pill to press
+ * again. Null when that was the last one, which is the caller's cue to leave
+ * the view altogether rather than show a view of nothing.
  */
 export function removeStorylineFromView(route: Route, storylineId: string): Route | null {
   return withViewStorylines(
@@ -271,12 +300,20 @@ export function removeStorylineFromView(route: Route, storylineId: string): Rout
  * The reader had one arc open and asked for another, and the pills that
  * offered it are still in the bar, so the natural reading of the click is
  * "this too" rather than "this instead". The origin and the path's storyline
- * both stay where they were; one already in the view is left alone.
+ * both stay where they were; one already in the view is left alone — so a
+ * gutter label under the arc the reader is reading is a press that changes
+ * nothing, deliberately, rather than re-minting the view and losing its origin
+ * the way it used to.
  */
 export function openStorylineView(current: Route, storylineId: string): Route {
   if (isView(current)) {
     const held = routeStorylines(current);
     if (held.includes(storylineId)) return current;
+    // A full view is left alone rather than widened past what the wire accepts:
+    // the row stops offering at this point (`viewIsFull`), so there should be
+    // nothing to click, and the rail's own gutter labels are the reason this is
+    // belt as well as braces.
+    if (held.length >= MAX_VIEW_STORYLINES) return current;
     return { ...current, also: [...(current.also ?? []), storylineId] };
   }
   return {

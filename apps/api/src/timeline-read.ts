@@ -503,9 +503,16 @@ export async function readStorylineView(
   // Resolved in request order and folded AFTER resolving: two aliases of one
   // survivor are one arc, and the order is what the browser reads the answer
   // back against (`viewStorylineIds`).
+  //
+  // Concurrently, and the ORDER is then restored by walking the answers rather
+  // than the awaits: one alias lookup per arc is a round trip per arc, and a
+  // twelve-arc view awaiting them one at a time spends twelve serial latencies
+  // before the page read has started. They are independent reads of one table.
+  const survivors = await Promise.all(
+    request.storylineIds.map((storylineId) => resolveStoryline(deps.db, storylineId)),
+  );
   const resolved: string[] = [];
-  for (const storylineId of request.storylineIds) {
-    const survivor = await resolveStoryline(deps.db, storylineId);
+  for (const survivor of survivors) {
     if (survivor !== null && !resolved.includes(survivor)) resolved.push(survivor);
   }
   if (resolved.length === 0) return null;
@@ -541,10 +548,18 @@ export async function readStorylineView(
   // than on the arc. Per arc rather than one map keyed by day, because two arcs
   // in one view can both have a sentence for the same day, and a slot must be
   // handed its OWN arc's. A day the preserve never got to is simply absent.
-  const daySummaries = new Map<string, Map<string, string>>();
-  for (const storylineId of resolved) {
-    daySummaries.set(storylineId, await readArcDaySummaries(deps.db, { storylineId }));
-  }
+  //
+  // One read per arc, concurrently for the reason the alias lookups above are:
+  // serially they are a round trip per arc on the hot path, and no arc's
+  // sentences depend on another's.
+  const daySummaries = new Map(
+    await Promise.all(
+      resolved.map(
+        async (storylineId) =>
+          [storylineId, await readArcDaySummaries(deps.db, { storylineId })] as const,
+      ),
+    ),
+  );
   return {
     // No topic: the view is not a search, and inventing a fingerprint for it
     // would put a keyword-less row in `topics` that nothing could ever hit

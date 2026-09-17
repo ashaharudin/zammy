@@ -328,10 +328,9 @@ export async function readGroupMemberships(
  * a view may hold several arcs (ADR-0028), needs them described in one
  * statement rather than one count per arc. Not `readStorylineSummaries`: that
  * name is taken by the day SENTENCES (`storyline-summaries.ts`), and a summary
- * here is the wire's `StorylineSummary` — a description, not prose. A
- * storyline with no covered day is
- * absent from the answer — the join enforces it — so callers must not read the
- * result's length as the input's.
+ * here is the wire's `StorylineSummary` — a description, not prose. A storyline
+ * with no covered day is absent from the answer — the join enforces it — so
+ * callers must not read the result's length as the input's.
  */
 export async function describeStorylines(
   db: Kysely<Database>,

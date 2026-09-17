@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Article, StorylineSummary, TimelineEntry } from "@zammy/shared";
-import { isTerminalPage, STORYLINE_OFFER_COUNT } from "@zammy/shared";
+import { isTerminalPage, MAX_VIEW_STORYLINES, STORYLINE_OFFER_COUNT } from "@zammy/shared";
 import { ApiError, topicStorylines, type TopicQuery } from "./api.js";
 import type { StorylineOpenSource } from "./analytics.js";
 import { enterDelayMs } from "./articleEnter.js";
@@ -78,7 +78,7 @@ export function TimelinePage({
   onSearch: (topic: TopicQuery, options?: { replace?: boolean }) => void;
   onClear: () => void;
   onOpenStoryline: (storylineId: string, label: string | null, source: StorylineOpenSource) => void;
-  /** One arc out of the view — a chip dismissed, or a pressed pill pressed again. */
+  /** One arc out of the view: its chip dismissed, which is the only way out. */
   onRemoveStoryline: (storylineId: string) => void;
   /**
    * The arcs the server actually served, when they differ from the ones asked
@@ -132,9 +132,15 @@ export function TimelinePage({
   // not already hold, biggest first, a row's worth. A pill taken into the view
   // leaves the row — its chip names it now — and the next match fills in; a
   // chip dismissed puts its arc back and the smallest pill makes room.
+  // A FULL view offers nothing. The cap is the wire's — `TimelineQuery` refuses
+  // a `?storyline=` list longer than `MAX_VIEW_STORYLINES` — and the row tops
+  // itself up as pills are taken, so without this the reader is offered a
+  // thirteenth pill whose click 400s the view they spent twelve clicks
+  // building. The chips stay, so the way back under the cap is to dismiss one.
+  const offerCount = selected.size >= MAX_VIEW_STORYLINES ? 0 : STORYLINE_OFFER_COUNT;
   const surfaced = useMemo<readonly StorylineSummary[]>(
-    () => (storylineView ? offeredPills(pool, selected, STORYLINE_OFFER_COUNT) : named),
-    [storylineView, pool, selected, named],
+    () => (storylineView ? offeredPills(pool, selected, offerCount) : named),
+    [storylineView, pool, selected, offerCount, named],
   );
   // "Nothing matched" is only sayable once the answer is in: before that the
   // row is empty because it is waiting, and a note would be a lie for a beat.

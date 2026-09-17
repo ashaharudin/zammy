@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MAX_VIEW_STORYLINES } from "@zammy/shared";
 import {
   findInView,
   leaveStorylineView,
@@ -9,6 +10,7 @@ import {
   routeSearch,
   routeStorylines,
   routeUrl,
+  viewIsFull,
   withViewStorylines,
 } from "./route.js";
 
@@ -338,6 +340,48 @@ describe("a view of several storylines", () => {
 
   it("keeps only UUIDs in the list, never the path's own storyline, and no repeats", () => {
     expect(parseLocation(`/storyline/${A}/x`, `?also=${A},${B},23905,${B},,junk`).also).toEqual([B]);
+  });
+
+  /**
+   * The wire caps a `?storyline=` list at `MAX_VIEW_STORYLINES`, so every route
+   * this module builds has to stay under it: a thirteenth arc is not a
+   * thirteenth arc, it is a 400 that loses the twelve the reader had.
+   */
+  describe("the wire's cap on how many one view holds", () => {
+    const ids = (count: number) =>
+      Array.from({ length: count }, (_, index) =>
+        `${String(index + 3).padStart(8, "0")}-3333-4333-8333-333333333333`,
+      );
+
+    it("refuses to widen a full view", () => {
+      const full = { ...view, also: ids(MAX_VIEW_STORYLINES - 1) };
+      expect(viewIsFull(full)).toBe(true);
+      expect(openStorylineView(full, B)).toBe(full);
+    });
+
+    it("still widens a view one short of full", () => {
+      const nearly = { ...view, also: ids(MAX_VIEW_STORYLINES - 2) };
+      expect(viewIsFull(nearly)).toBe(false);
+      expect(routeStorylines(openStorylineView(nearly, B))).toHaveLength(MAX_VIEW_STORYLINES);
+    });
+
+    it("truncates a link that names more than a view may hold", () => {
+      // An error page is the wrong answer to a stale or hand-built URL: the
+      // server would serve twelve of these happily.
+      const many = ids(MAX_VIEW_STORYLINES + 5);
+      const route = parseLocation(`/storyline/${A}/x`, `?also=${many.join(",")}`);
+      expect(routeStorylines(route)).toHaveLength(MAX_VIEW_STORYLINES);
+      expect(route.storyline).toBe(A);
+    });
+
+    it("truncates the set a server answer is written back as", () => {
+      const many = [A, ...ids(MAX_VIEW_STORYLINES + 5)];
+      expect(routeStorylines(withViewStorylines(view, many)!)).toHaveLength(MAX_VIEW_STORYLINES);
+    });
+
+    it("is not full — and not a view — for a plain search", () => {
+      expect(viewIsFull({ q: "Trump", filters: {} })).toBe(false);
+    });
   });
 
   it("drops the list where there is no view for it to widen", () => {

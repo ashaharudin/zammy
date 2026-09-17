@@ -454,9 +454,12 @@ storyline  uuid[,…] optional   the STORYLINE VIEW (ADR-0011): the timeline fil
                               one storyline — or several, comma-joined, at most 12
                               (ADR-0028) — alias-resolving, their days on one keyset.
                               Carries no keywords — `q` is optional only for this —
-                              because the view's search box is empty by definition,
-                              and typing exits it. NOT part of the fingerprint; it has
-                              no topic at all.
+                              because the view's search box searches FOR storylines
+                              rather than for articles (ADR-0028 amended: typing no
+                              longer exits the view). NOT part of the fingerprint; it
+                              has no topic at all. A longer list is a 400, so a client
+                              assembling one caps itself (`viewIsFull`) rather than
+                              letting a thirteenth arc lose the whole view.
 ```
 
 There is no `category`, and its absence is load-bearing
