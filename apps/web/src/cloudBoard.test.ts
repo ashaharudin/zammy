@@ -4,6 +4,7 @@ import {
   BOARD_MIN,
   DRIFT_FASTEST_PX_PER_SECOND,
   DRIFT_SLOWEST_PX_PER_SECOND,
+  HOVER_CRAWL_RATE,
   boardWidth,
   laneDriftSeconds,
 } from "./cloudBoard.js";
@@ -37,6 +38,24 @@ describe("boardWidth (§10.5)", () => {
     // `?limit=100` is reachable, and the strip is what a reader waits to come
     // back around.
     expect(boardWidth(TRENDING_LIMIT_MAX)).toBeLessThanOrEqual(BOARD_MAX);
+  });
+});
+
+describe("HOVER_CRAWL_RATE (§10.5)", () => {
+  it("is a crawl rather than a freeze, and rather than no change at all", () => {
+    // 0 is what this replaced: a board that stops dead under the cursor reads
+    // as one the reader's own arrival has broken. 1 would leave a word being
+    // aimed at moving at full speed.
+    expect(HOVER_CRAWL_RATE).toBeGreaterThan(0);
+    expect(HOVER_CRAWL_RATE).toBeLessThan(1);
+  });
+
+  it("leaves the slowest lane slow enough to click", () => {
+    // A word should not travel far while a reader presses on it. The slowest
+    // lane is the worst case for aliveness, the fastest for aiming.
+    const crawl = (pxPerSecond: number) => pxPerSecond * HOVER_CRAWL_RATE;
+    expect(crawl(DRIFT_FASTEST_PX_PER_SECOND)).toBeLessThan(10); // px in a second
+    expect(crawl(DRIFT_SLOWEST_PX_PER_SECOND)).toBeGreaterThan(1); // still moving
   });
 });
 

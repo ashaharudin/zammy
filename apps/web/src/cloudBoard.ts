@@ -81,6 +81,23 @@ export const DRIFT_SLOWEST_PX_PER_SECOND = 26;
 export const DRIFT_FASTEST_PX_PER_SECOND = 62;
 
 /**
+ * What a lane's speed is multiplied by while the pointer is over the cloud.
+ *
+ * Not zero, which is what this replaced. A board that stops dead under the
+ * cursor reads as broken — the reader's own arrival is what appears to have
+ * killed it — and every lane freezing at once is a bigger change to the page
+ * than pointing at it should cause. A twelfth leaves the slowest lane moving
+ * about 2px a second: a word travels a couple of pixels during the time it
+ * takes to click it, which is as good as still for aiming, and the board is
+ * plainly alive the whole time.
+ *
+ * The rate multiplies whatever the lane was already doing, so the fast lanes
+ * stay the fast ones as they slow — the board crawls, rather than flattening
+ * into a single speed.
+ */
+export const HOVER_CRAWL_RATE = 1 / 12;
+
+/**
  * Seconds for one LANE to cross its own `laneWidth`. `pick` is a stable
  * number in [0, 1) — see `seededRandom`, keyed per lane so that a poll cannot
  * re-roll it — chosen across the range above.
