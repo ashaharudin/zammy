@@ -966,14 +966,24 @@ const EnvSchema = z
      * summaries turn out to be the cheap way to backfill, and the number to
      * watch if they turn out to be the expensive way to drain a key.
      *
-     * **What bounds this ACROSS arcs is nothing, which is stated rather than
-     * defended.** Every open of a distinct UUID is its own 8, and UUIDs are
-     * public on every timeline page. The guards that do bind are the per-IP
-     * ceiling on `/api/v1/*` and the pacer the consumer shares with everything
-     * else on the key — so the failure mode is a slow night for the labeler, not
-     * an unbounded bill. ADR-0017 accepted the same shape for the same reason
-     * and the note there applies here unchanged: a global daily ceiling is the
-     * fix if this ever bites, and there is no evidence yet asking for one.
+     * **What bounds this ACROSS arcs is the per-IP ceiling and nothing else**,
+     * which is stated rather than defended. Every open of a distinct UUID is its
+     * own 8, and UUIDs are public on every timeline page.
+     *
+     * The pacer is NOT a second guard here, and it is worth being exact because
+     * the obvious reading is wrong: `createPacer` holds its window in memory and
+     * is built once per process (`wiring.ts`), so concurrent consumer
+     * invocations are concurrent PACERS. `SUMMARY_MAX_RPM` bounds one job, not
+     * the key. At `RATE_LIMIT_PER_MINUTE` 120 the demand one IP can queue is
+     * well above what the key allows in a day, and what absorbs the excess is
+     * the model refusing — which reads here as `unavailable`, writes no row and
+     * spends no attempt, so nothing is corrupted and the labeler's promotions
+     * fall back to the bigram extractor.
+     *
+     * ADR-0017 accepted the same shape for its own plane and the note there
+     * applies: a global daily ceiling is the fix if this bites. The difference
+     * worth flagging is that ADR-0017's budget refills daily and this one is
+     * shared with the labeler in the same minutes.
      */
     SUMMARY_CLICK_MAX_DAYS: z.coerce.number().int().min(0).max(200).default(8),
     /**
@@ -985,8 +995,11 @@ const EnvSchema = z
      * `api/chores.ts`; this runs on the queue consumer, whose `maxDuration` is
      * also 300 s but which is carrying other jobs' redeliveries besides.
      *
-     * 120 s holds 8 calls at 18 rpm (~27 s of pacing) with room for the model to
-     * be slow, and leaves the consumer most of its function to other work.
+     * 120 s holds 8 calls at 18 rpm — seven gaps, so ~23 s of pacing — with room
+     * for the model to be slow, and leaves the consumer most of its function to
+     * other work. `runSummarizeJob` arms an abort ten seconds past it, so the
+     * job's worst case is ~130 s rather than the ~181 s an unaborted in-flight
+     * call would reach against `api/drain.ts`'s tighter ceiling.
      */
     SUMMARY_CLICK_BUDGET_MS: z.coerce
       .number()

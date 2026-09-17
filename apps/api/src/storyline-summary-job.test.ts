@@ -8,7 +8,7 @@ import {
   runSummarizeJob,
   type SummarizeJobDeps,
 } from "./storyline-summary-job.js";
-import type { SummarizeJob } from "./ingest-queue.js";
+import { SUMMARIZE_SNAP_MS, type SummarizeJob } from "./ingest-queue.js";
 
 /**
  * The click plane (ADR-0027): opening a storyline submits its unsummarised days.
@@ -138,13 +138,17 @@ function jobDeps(
   };
 }
 
-const job = (storylineId: string): SummarizeJob => ({ kind: "summarize", storylineId });
+const job = (storylineId: string): SummarizeJob => ({
+  kind: "summarize",
+  storylineId,
+  at: new Date(Math.floor(NOW.getTime() / SUMMARIZE_SNAP_MS) * SUMMARIZE_SNAP_MS).toISOString(),
+});
 
 const rowsFor = (storylineId: string, dayKey: string) =>
   readStorylineDaySummaries(db, { storylineId, dayKey });
 
 describe("queueing one arc's summary work", () => {
-  it("queues a job addressed by the ARC alone", async () => {
+  it("queues a job addressed by the arc and the minute it was asked in", async () => {
     const id = await arcAcrossDays(["2026-08-13", "2026-08-14"]);
     const queued: SummarizeJob[] = [];
 
@@ -160,10 +164,37 @@ describe("queueing one arc's summary work", () => {
 
     expect(outcome).toEqual({ status: "queued", storylineId: id, job: job(id) });
     expect(queued).toEqual([job(id)]);
+    // Snapped DOWN to the minute, so two readers inside one minute produce the
+    // same content address and cost one job.
+    expect(queued[0]?.at).toBe("2026-08-15T05:00:00.000Z");
+  });
+
+  it("gives a click in the NEXT minute a different identity, so it is delivered", async () => {
+    // The bug this fixes: the transport dedups on `idempotencyKey` for a fixed
+    // 900 seconds from PUBLISH, not until the job finishes. Addressed by the arc
+    // alone, every click inside a quarter of an hour was silently swallowed and
+    // a cold arc drained at 8 days per 15 minutes however often it was opened.
+    const id = await arcAcrossDays(["2026-08-14"]);
+    const queued: SummarizeJob[] = [];
+    const queue = { enqueueSummarize: async (next: SummarizeJob) => void queued.push(next) };
+
+    await queueStorylineSummaries(
+      { db, queue, enabled: true, now: () => new Date("2026-08-15T05:00:30.000Z") },
+      { storylineId: id },
+    );
+    await queueStorylineSummaries(
+      { db, queue, enabled: true, now: () => new Date("2026-08-15T05:01:10.000Z") },
+      { storylineId: id },
+    );
+
+    expect(queued.map((next) => next.at)).toEqual([
+      "2026-08-15T05:00:00.000Z",
+      "2026-08-15T05:01:00.000Z",
+    ]);
   });
 
   it("queues nothing when the feature is off", async () => {
-    const id = await arcAcrossDays(["2026-08-14"]);
+    await arcAcrossDays(["2026-08-14"]);
     const queued: SummarizeJob[] = [];
 
     const outcome = await queueStorylineSummaries(
@@ -173,10 +204,12 @@ describe("queueing one arc's summary work", () => {
         enabled: false,
         now: () => NOW,
       },
-      { storylineId: id },
+      { storylineId: "1b671a64-40d5-491e-99b0-da01ff1f3341" },
     );
 
-    expect(outcome).toEqual({ status: "disabled", storylineId: id });
+    // No id, because the flag is checked before the alias query — a deployment
+    // with the feature off pays nothing on a path every open takes.
+    expect(outcome).toEqual({ status: "disabled" });
     expect(queued).toEqual([]);
   });
 
@@ -385,6 +418,37 @@ describe("running one click's summary job", () => {
     expect(first.model).toBe(2);
     expect(second.model).toBe(0);
     expect(model.prompts).toHaveLength(2);
+  });
+
+  it("keeps going when ONE day throws, and says so in the tally", async () => {
+    const id = await arcAcrossDays(["2026-08-12", "2026-08-13", "2026-08-14"]);
+    let call = 0;
+    const flaky: TextGenerator = {
+      async generate(): Promise<GenerateResult> {
+        call += 1;
+        if (call === 1) throw new Error("boom");
+        return { ok: true, text: "A sentence." };
+      },
+    };
+
+    const tally = await runSummarizeJob(jobDeps(flaky), job(id));
+
+    // One day lost, the other two written — a day this run could not summarise
+    // has no row, so the next open's plan selects it again.
+    expect(tally.failures).toBe(1);
+    expect(tally.written).toBe(2);
+    expect(tally.stoppedBy).toBe("exhausted");
+  });
+
+  it("does nothing at all when the bound is zero", async () => {
+    const id = await arcAcrossDays(["2026-08-14"]);
+    const model = stub(["Should never be asked."]);
+
+    const tally = await runSummarizeJob(jobDeps(model, { maxDays: 0 }), job(id));
+
+    expect(tally.stoppedBy).toBe("max-days");
+    expect(tally.planned).toBe(0);
+    expect(model.prompts).toEqual([]);
   });
 
   it("stops at the wall-clock budget", async () => {

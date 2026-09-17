@@ -79,6 +79,14 @@ Two consequences follow, and both are handled rather than accepted:
   keeps whatever the row already said. Stamping `false` over a day with four
   quarter sentences beside it would make the one column whose whole job is to
   not lie about the past start lying about it.
+
+  Two edges where it is approximate rather than exact, both narrow and both
+  accepted: a pre-ADR-0027 day recomputed inside its settling window carries
+  `true` onto a sentence written from 12 articles, and a day whose quarters were
+  written but whose `day` call never landed gets a first write of `false` beside
+  them. So `segmented = true` means "this row's day has quarter rows", which is
+  what a reader of the table can act on, rather than "this sentence was built
+  from them".
 - **`summaries:storylines --show` still prints the segment**, with a footnote
   saying what a quarter row is. Collapsing them would make the same day appear
   twice for no stated reason.
@@ -111,10 +119,11 @@ every arc, and a click is one reader asking about one arc. The rest waits for
 the next open, which is a deferral and not a loss — a reader who keeps coming
 back to an arc is exactly the reader whose arc is worth summarising.
 
-**First writes only.** A click never retries a refusal and never recomputes a
-day that gained articles. Both belong to the nightly pass, and the reason is
-`SUMMARY_MAX_ATTEMPTS`: a refusal has three asks before the span is retired for
-ever, a reader can open an arc as often as they like, and three opens would
+**First writes only**, with one consequence stated below. A click never retries
+a refusal and never recomputes a day that gained articles. Both belong to the
+nightly pass, and the reason is `SUMMARY_MAX_ATTEMPTS`: a refusal has three
+asks before the span is retired for ever, a reader can open an arc as often as
+they like, and three opens would
 spend the whole budget on a table nothing can rebuild. `onlyMissing` is that
 rule, and `readArcDaysAwaitingSummary` enforces it again in SQL by selecting on
 the absence of a row — so a row with a null summary counts as having one.
@@ -140,9 +149,29 @@ rather than the API's 60. A second topic would have bought a second Vercel Queue
 topic, a second consumer deployable and a second set of redelivery semantics, to
 carry one job kind arriving on the same trigger as the `deepen` beside it.
 
-**The job's identity is the arc alone** — `sum_<uuid>`, with no span and no clock
-— so readers opening one storyline while a job is outstanding collapse into one
-job, and a later click queues again.
+**The job's identity is the arc and the MINUTE it was asked in** —
+`sum_<uuid>_<snapped ms>`. Readers opening one storyline inside a minute collapse
+into one job; the next minute's click is a different message.
+
+That clock was not in the first version of this ADR, and leaving it out was a
+bug worth recording because the reasoning was plausible and wrong. The intent was
+"collapse while a job is outstanding, queue again once it is not", and the
+transport does not work that way: `enqueueSummarize` publishes under
+`idempotencyKey: ingestJobId(job)` with `retentionSeconds:
+INGEST_RETENTION_SECONDS`, so the dedup window is a fixed **900 seconds from the
+publish**. `ingest-queue-vercel.ts` already said so — "a re-plan inside that
+window is deduplicated against this very message and never sees a delivery — it
+only re-adds the pending entry".
+
+So under the arc-only address a cold arc drained at `SUMMARY_CLICK_MAX_DAYS` per
+**fifteen minutes** however often a reader opened it, which is ~15× slower than
+"the rest waits for the next open" describes. Worse, the swallowed republishes
+left pending entries that only `api/drain.ts` would later collect — making the
+manual drain route the click plane's real executor on a hot arc, a path nothing
+here intended and nothing there is sized for.
+
+A minute is the same grid ADR-0017's freshness gate uses, and deliberately not
+`WINDOW_SNAP_MS` (15 minutes), which would reproduce the stall exactly.
 
 **The days are planned in the CONSUMER, not in the payload.** A payload naming
 its days would be a plan made at click time and executed later, so two clicks a
@@ -205,18 +234,40 @@ attended spend, and completeness has its own path for the first time.
   `/api/v1/storylines/:id/refresh`, and this is a third plane inside that route.
   The 202's body gains a `summaries` key beside `deepening`, for operators and
   tests.
-- **Across ARCS nothing bounds this**, and the arithmetic is ADR-0017's with a
-  different unit: every open of a distinct UUID is its own 8 calls, and UUIDs are
-  public on every timeline page. What binds is the per-IP ceiling on `/api/v1/*`
-  and the pacer the consumer shares with everything else on the key, so the
-  failure mode is a slow night for the labeler rather than an unbounded bill. A
-  global daily ceiling is the fix if this ever bites; there is no evidence yet
-  asking for one.
+- **Across ARCS the per-IP ceiling is the only bound**, and the arithmetic is
+  ADR-0017's with a different unit: every open of a distinct UUID is its own 8
+  calls, and UUIDs are public on every timeline page.
+
+  The pacer is **not** a second guard, and the obvious reading that it is was in
+  an earlier draft of this ADR. `createPacer` keeps its window in memory and is
+  built once per process, so concurrent consumer invocations are concurrent
+  pacers: `SUMMARY_MAX_RPM` bounds one job, never the key. At
+  `RATE_LIMIT_PER_MINUTE` 120 the demand one IP can queue exceeds what the key
+  allows in a day.
+
+  What absorbs the excess is the model refusing, which reads here as
+  `unavailable` — no row, no attempt, nothing corrupted — while the labeler's
+  promotions fall back to the bigram extractor. So the failure mode is degraded
+  labels rather than lost history or an unbounded bill, which is the same
+  exposure ADR-0017 accepted; a global daily ceiling is the fix if it bites. The
+  honest new fact is that this budget is shared with the labeler *in the same
+  minutes*, where ADR-0017's refills daily.
 - **`storyline open: what the click's summary job wrote` is the only report this
   plane has.** It writes no article, touches no coverage row and answers no
   request, so the consumer's log line is it. `planned` high with `stoppedBy:
   max-days` is a cold arc draining over several opens, which is the design;
   `planned: 0` on most lines is the warm archive this should settle into.
+- **A refusal on a day outside `SUMMARY_WINDOW_DAYS` is retried only by hand.**
+  The click writes the row and then excludes that day from every later click;
+  the nightly pass never selects a day that old. So out-of-window days get one
+  automatic ask rather than the three `SUMMARY_MAX_ATTEMPTS` implies, and the
+  other two are reachable only through `pnpm summaries:storylines --from=…`,
+  which does select them and does read the row as a retry.
+
+  Accepted rather than fixed: before this ADR those days had no automatic ask at
+  all, so the floor has risen, not fallen. The measured contract-failure rate is
+  ~6.7%, which is the share of newly-reachable old days that land a refusal
+  instead of a sentence.
 - **A day summary written today and one written last month were produced
   differently**, and nothing in the row says which. `model_id` and `generated_at`
   are what an operator has; the `segmented` column distinguishes them in

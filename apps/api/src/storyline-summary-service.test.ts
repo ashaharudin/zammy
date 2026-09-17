@@ -253,6 +253,43 @@ describe("summarizing one storyline-day", () => {
     expect(row?.segmented).toBe(true);
   });
 
+  it("skips a day that gained a row since the plan, when the caller says onlyMissing", async () => {
+    // The click plane's rule, at the level that ENFORCES it rather than the
+    // level that selects for it. `readArcDaysAwaitingSummary` already excludes
+    // days with a row, so this is the race it cannot cover: the nightly pass (or
+    // another delivery) writes the row between the plan query and the call.
+    // Without the flag this would read as "retry" and spend one of the three
+    // attempts a refusal has.
+    const id = await seedDay();
+    await sql`
+      insert into storyline_day_summaries
+        (storyline_id, day_key, segment, summary, article_count, label, model_id,
+         attempts, segmented, generated_at)
+      values (${id}::uuid, '2026-08-14', 'day', null, 6, 'Big Bend Wall Pause',
+              'gemma-test', 1, false, '2026-08-15T00:00:00Z'::timestamptz)
+    `.execute(db);
+
+    const model = stub(["Should never be asked."]);
+    const outcome = await summarizeStorylineDay(
+      deps(model, { onlyMissing: true }),
+      candidate(id, "2026-08-14"),
+    );
+
+    expect(outcome).toMatchObject({ modelCalls: 0, skipped: 1, written: 0 });
+    expect(model.prompts).toEqual([]);
+    // The attempt the nightly pass still owns is untouched.
+    expect((await rowsFor(id, "2026-08-14"))[0]?.attempts).toBe(1);
+  });
+
+  it("still writes a day with no row under onlyMissing, which is the point of it", async () => {
+    const id = await seedDay();
+    const outcome = await summarizeStorylineDay(
+      deps(stub(["A sentence."]), { onlyMissing: true }),
+      candidate(id, "2026-08-14"),
+    );
+    expect(outcome.written).toBe(1);
+  });
+
   it("copies the label onto the row, because labels drift", async () => {
     const id = await seedDay();
     await summarizeStorylineDay(deps(stub(["A sentence."])), candidate(id, "2026-08-14"));

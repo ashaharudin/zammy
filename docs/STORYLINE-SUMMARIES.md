@@ -427,12 +427,19 @@ that makes no upstream call, and ADR-0027 defends the exception.
 
 Three properties worth knowing:
 
-- **The job's identity is the arc alone** (`sum_<uuid>`), so readers opening one
-  storyline while a job is outstanding collapse into one job.
+- **The job's identity is the arc and the MINUTE** (`sum_<uuid>_<snapped ms>`),
+  so readers opening one storyline together collapse into one job and the next
+  minute's click is still delivered. The clock is not decoration: the transport
+  dedups on the key for a fixed 900 s from publish, so an arc-only address made
+  every click inside a quarter-hour a message that was never delivered. ADR-0027
+  records it as a bug.
 - **The days are planned in the CONSUMER**, not carried on the payload. A payload
   naming its days would be a plan made at click time and executed later, so two
   clicks a second apart would spend twice on the same days. It also makes
   redelivery free — and Vercel Queues *do* redeliver.
+- **An abort is armed ten seconds past the budget**, as the nightly pass arms
+  one: the budget stops the job ADMITTING calls and cannot stop one in flight,
+  which runs to three `GEMINI_TIMEOUT_MS` attempts plus backoff.
 - **No advisory lock.** The nightly pass takes one; this cannot enter that race
   in the damaging direction, because it only writes days with no row and the
   upsert refuses in SQL to let a null replace a standing sentence. ADR-0027 has

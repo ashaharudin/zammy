@@ -296,7 +296,10 @@ describe("POST /api/v1/storylines/:id/refresh", () => {
     expect(body.summaries).toEqual({ status: "queued", queued: true });
     // The identity is the ARC alone, with no span and no clock in it, so a
     // storyline several readers open in one window is one job.
-    expect(summarized).toEqual([{ kind: "summarize", storylineId }]);
+    expect(summarized).toMatchObject([{ kind: "summarize", storylineId }]);
+    // The clock is snapped onto the minute grid, so readers opening one arc
+    // together cost one job and the next minute's click is still delivered.
+    expect(Date.parse(summarized[0]!.at) % 60_000).toBe(0);
   });
 
   it("queues NOTHING for a summary when the flag is off, whatever else it does", async () => {

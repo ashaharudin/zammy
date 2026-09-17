@@ -168,11 +168,66 @@ export interface DeepenJob {
  * the absence of a row: a redelivery after a successful job finds the days it
  * wrote and returns them to nobody. (Vercel Queues DO redeliver — a consumer's
  * 200 proves nothing about the lease, which is a platform constant that moves.)
+ *
+ * **`at` is a SNAPPED clock, and leaving it out was a bug.** This job first
+ * addressed the arc alone, on the reasoning that repeated clicks should collapse
+ * while one is outstanding and a later click should queue again. Only the first
+ * half of that is how the transport behaves: `enqueueSummarize` publishes under
+ * `idempotencyKey: ingestJobId(job)` with `retentionSeconds:
+ * INGEST_RETENTION_SECONDS`, so the dedup window is a fixed **900 seconds from
+ * the PUBLISH**, not from the job finishing. `ingest-queue-vercel.ts` says so
+ * itself: "a re-plan inside that window is deduplicated against this very
+ * message and never sees a delivery — it only re-adds the pending entry".
+ *
+ * Under the arc-only address a cold arc therefore drained at
+ * `SUMMARY_CLICK_MAX_DAYS` per **fifteen minutes** however often it was opened,
+ * and the un-delivered republishes left pending entries for `api/drain.ts` to
+ * pick up — making the manual drain route the click plane's real executor on a
+ * hot arc, which nothing intended.
+ *
+ * Snapping to `SUMMARIZE_SNAP_MS` keeps the property that was actually wanted
+ * (readers opening one arc in the same minute cost one job) and restores the one
+ * that was assumed (the next minute's click is a different message, so it is
+ * delivered). It is the same trick `ingestJobId` already plays on a segment's
+ * span, and the same minute ADR-0017's freshness gate uses.
  */
 export interface SummarizeJob {
   kind: "summarize";
   /** The arc to summarise. Resolved through aliases before enqueue. */
   storylineId: string;
+  /**
+   * When this was asked for, snapped down to `SUMMARIZE_SNAP_MS` — ISO-8601,
+   * because job payloads cross a transport as JSON.
+   *
+   * It is in the CONTENT ADDRESS and nowhere else: no consumer reads it, and
+   * the plan is made against the rows as they stand when the job runs.
+   */
+  at: string;
+}
+
+/**
+ * The grid a summarize job's clock is snapped onto: one minute.
+ *
+ * Small enough that a reader re-opening an arc gets a fresh job rather than a
+ * silently swallowed one, large enough that the readers who open a storyline
+ * together cost one. ADR-0017 drew its freshness gate at the same minute and for
+ * the same reason.
+ *
+ * Deliberately NOT `WINDOW_SNAP_MS` (15 minutes), which is a span grid for
+ * fetches planned against coverage. Reusing it here would reproduce exactly the
+ * fifteen-minute stall this constant exists to remove.
+ */
+export const SUMMARIZE_SNAP_MS = 60_000;
+
+/** A `SummarizeJob` for one arc, with its clock snapped onto the grid. */
+export function summarizeJob(storylineId: string, now: Date): SummarizeJob {
+  return {
+    kind: "summarize",
+    storylineId,
+    at: new Date(
+      Math.floor(now.getTime() / SUMMARIZE_SNAP_MS) * SUMMARIZE_SNAP_MS,
+    ).toISOString(),
+  };
 }
 
 export type IngestJob = SegmentJob | SampleJob | DeepenJob | SummarizeJob;
@@ -203,12 +258,12 @@ export function ingestJobId(job: IngestJob): string {
   if (job.kind === "deepen") {
     return `deep_${job.storylineId}_${Date.parse(job.from)}_${Date.parse(job.to)}`;
   }
-  // The arc alone, with no span and no clock in it — which is what makes
-  // repeated clicks on one arc collapse into one job while any of them is still
-  // outstanding, and what lets a LATER click queue again once it is not. A
-  // deepening job addresses a span because it plans one; this addresses an arc
-  // because the days are planned at the far end (see `SummarizeJob`).
-  if (job.kind === "summarize") return `sum_${job.storylineId}`;
+  // The arc and the minute it was asked in. The minute is what makes a later
+  // click a DIFFERENT message rather than one the transport's 900-second dedup
+  // swallows — see `SummarizeJob`, where leaving it out is recorded as a bug.
+  if (job.kind === "summarize") {
+    return `sum_${job.storylineId}_${Date.parse(job.at)}`;
+  }
   // The plane sits right after the prefix, where it cannot be confused with the
   // fingerprint: plane names are `[a-z]+` and carry no underscore, so
   // `parseIngestJobId` still splits this on "_" and still round-trips.
@@ -252,11 +307,6 @@ export function parseIngestJobId(id: string, now: Date): IngestJob | null {
     return language.length > 0 ? { kind: "sample", language } : null;
   }
 
-  if (id.startsWith("sum_")) {
-    const storylineId = id.slice("sum_".length);
-    return storylineId.length > 0 ? { kind: "summarize", storylineId } : null;
-  }
-
   const parts = id.split("_");
 
   const asIso = (ms: string): string | null => {
@@ -264,6 +314,13 @@ export function parseIngestJobId(id: string, now: Date): IngestJob | null {
     const date = new Date(Number(ms));
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
   };
+
+  if (parts[0] === "sum" && parts.length === 3) {
+    const [, storylineId, atMs] = parts;
+    const at = asIso(atMs!);
+    if (!storylineId || !at) return null;
+    return { kind: "summarize", storylineId, at };
+  }
 
   if (parts[0] === "deep" && parts.length === 4) {
     const [, storylineId, fromMs, toMs] = parts;
@@ -359,8 +416,11 @@ export function parseIngestJob(payload: unknown): IngestJob | null {
       : null;
   }
   if (candidate.kind === "summarize") {
-    return typeof candidate.storylineId === "string" && candidate.storylineId.length > 0
-      ? { kind: "summarize", storylineId: candidate.storylineId }
+    return typeof candidate.storylineId === "string" &&
+      candidate.storylineId.length > 0 &&
+      typeof candidate.at === "string" &&
+      candidate.at.length > 0
+      ? { kind: "summarize", storylineId: candidate.storylineId, at: candidate.at }
       : null;
   }
   if (candidate.kind === "sample") {

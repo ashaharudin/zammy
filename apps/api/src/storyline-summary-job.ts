@@ -7,7 +7,7 @@ import {
   type Database,
   type SummaryCandidateDay,
 } from "@zammy/storage";
-import type { IngestQueue, SummarizeJob } from "./ingest-queue.js";
+import { summarizeJob, type IngestQueue, type SummarizeJob } from "./ingest-queue.js";
 import {
   summarizeStorylineDay,
   type CallGate,
@@ -69,8 +69,12 @@ export interface StorylineSummaryJobDeps {
 
 export type StorylineSummaryOutcome =
   | { status: "unknown" }
-  /** `SUMMARIES_ENABLED` is false. Nothing queued, nothing spent. */
-  | { status: "disabled"; storylineId: string }
+  /**
+   * `SUMMARIES_ENABLED` is false. Nothing queued, nothing spent — and nothing
+   * READ either, so there is no id to report: the flag is checked before the
+   * alias resolution, on a path every storyline open takes.
+   */
+  | { status: "disabled" }
   | { status: "queued"; storylineId: string; job: SummarizeJob };
 
 /**
@@ -92,6 +96,11 @@ export async function queueStorylineSummaries(
   deps: StorylineSummaryJobDeps,
   input: { storylineId: string },
 ): Promise<StorylineSummaryOutcome> {
+  // The flag BEFORE the query, so a deployment with the feature off pays nothing
+  // on a path every storyline open takes. It costs the `disabled` outcome its
+  // resolved id, which no caller uses — the route logs the status and reports it.
+  if (!deps.enabled) return { status: "disabled" };
+
   // Forward, to the winner. The preserve never follows a merge — its rows stay
   // on the id they were written for — but the WORK belongs to the arc a reader
   // is actually looking at, and `readArcDaysAwaitingSummary` walks back down the
@@ -99,9 +108,10 @@ export async function queueStorylineSummaries(
   const storylineId = await resolveStoryline(deps.db, input.storylineId);
   if (storylineId === null) return { status: "unknown" };
 
-  if (!deps.enabled) return { status: "disabled", storylineId };
-
-  const job: SummarizeJob = { kind: "summarize", storylineId };
+  // Snapped onto the minute grid: readers opening one arc together cost one job,
+  // and the next minute's click is a different message rather than one the
+  // transport's dedup window swallows. `SummarizeJob` has the measurement.
+  const job = summarizeJob(storylineId, deps.now());
   await deps.queue.enqueueSummarize(job);
   return { status: "queued", storylineId, job };
 }
@@ -268,56 +278,93 @@ export async function runSummarizeJob(
     },
   };
 
+  // **The deadline the PLATFORM enforces, as an abort the model call can hear.**
+  //
+  // `budgetMs` stops this job ADMITTING calls and cannot stop one already in
+  // flight: that call runs to `GEMINI_TIMEOUT_MS` (20 s) times `maxRetries + 1`
+  // (3) plus backoff, up to 60.75 s past the deadline. `runSummaryChore` arms
+  // exactly this for the nightly pass and writes down the arithmetic; this plane
+  // shipped without it, which left a 120 s job with a ~181 s worst case.
+  //
+  // Survivable on the queue consumer's 300 s, and NOT survivable on
+  // `api/drain.ts`, which checks its own deadline only BETWEEN jobs — a
+  // summarize job it dispatched late would run past the function's ceiling and
+  // take every later entry's settle down with it.
+  //
+  // An abort costs the preserve nothing: it surfaces as `unreachable`, which
+  // writes no row and spends no attempt, and the next open re-plans the day.
+  const controller = new AbortController();
+  const deadlineTimer = setTimeout(
+    () => controller.abort(),
+    deps.budgetMs + SUMMARIZE_ABORT_GRACE_MS,
+  );
+  // Never the reason this process stays alive.
+  deadlineTimer.unref?.();
+
   const summarizer: SummarizerDeps = {
     db: deps.db,
     ...deps.summarizer,
     now,
+    signal: controller.signal,
     // The whole of what makes this plane safe to hand a reader. See the type.
     onlyMissing: true,
   };
 
-  for (const candidate of candidates) {
-    if (pastDeadline()) {
-      tally.stoppedBy = "budget";
-      break;
-    }
-    if (tally.model >= deps.maxDays) {
-      tally.stoppedBy = "max-days";
-      break;
-    }
+  try {
+    for (const candidate of candidates) {
+      if (pastDeadline()) {
+        tally.stoppedBy = "budget";
+        break;
+      }
+      if (tally.model >= deps.maxDays) {
+        tally.stoppedBy = "max-days";
+        break;
+      }
 
-    let outcome;
-    try {
-      outcome = await summarizeStorylineDay(summarizer, candidate, gate);
-    } catch (error) {
-      // One day's failure never fails the job, exactly as it never fails the
-      // nightly pass: a day this run could not summarise has no row, so the next
-      // click's plan selects it again.
-      tally.failures += 1;
-      deps.log?.warn(
-        {
-          err: error instanceof Error ? error.message : String(error),
-          storylineId: candidate.storylineId,
-          dayKey: candidate.dayKey,
-        },
-        "summarize job: one storyline-day failed",
-      );
-      continue;
-    }
+      let outcome;
+      try {
+        outcome = await summarizeStorylineDay(summarizer, candidate, gate);
+      } catch (error) {
+        // One day's failure never fails the job, exactly as it never fails the
+        // nightly pass: a day this run could not summarise has no row, so the next
+        // click's plan selects it again.
+        tally.failures += 1;
+        deps.log?.warn(
+          {
+            err: error instanceof Error ? error.message : String(error),
+            storylineId: candidate.storylineId,
+            dayKey: candidate.dayKey,
+          },
+          "summarize job: one storyline-day failed",
+        );
+        continue;
+      }
 
-    tally.written += outcome.written;
-    tally.refused += outcome.refused;
-    tally.unavailable += outcome.unavailable;
-    tally.skipped += outcome.skipped;
+      tally.written += outcome.written;
+      tally.refused += outcome.refused;
+      tally.unavailable += outcome.unavailable;
+      tally.skipped += outcome.skipped;
 
-    if (outcome.stoppedBy !== undefined) {
-      tally.stoppedBy = outcome.stoppedBy === "budget" ? "budget" : "max-days";
-      break;
+      if (outcome.stoppedBy !== undefined) {
+        tally.stoppedBy = outcome.stoppedBy === "budget" ? "budget" : "max-days";
+        break;
+      }
     }
+  } finally {
+    clearTimeout(deadlineTimer);
   }
 
   return tally;
 }
+
+/**
+ * How long past `budgetMs` an in-flight call is allowed before it is aborted.
+ *
+ * The nightly pass's `SUMMARY_ABORT_GRACE_MS` by another name and for the same
+ * reason: the budget bounds when a call is ADMITTED, and the grace is what turns
+ * "we stopped asking" into "the last ask is over".
+ */
+const SUMMARIZE_ABORT_GRACE_MS = 10_000;
 
 /** The consumer's entry point, as `ingestDispatch` calls it. */
 export async function processSummarizeJob(
