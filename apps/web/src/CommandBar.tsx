@@ -221,6 +221,10 @@ export function CommandBar({
  * a screen reader that "summaries" is currently on, where a button reading
  * "hide summaries" would have to be read as a prediction of what pressing it
  * does. The tick carries the same fact to everyone else.
+ *
+ * Icon-only: a filled sheet with lines while on, an outline while off, so the
+ * on/off contrast survives losing the word. `aria-pressed` plus `title` still
+ * carry the state and the action in words for anyone who needs them.
  */
 function DaySummaryToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
   return (
@@ -228,8 +232,12 @@ function DaySummaryToggle({ on, onToggle }: { on: boolean; onToggle: () => void 
       type="button"
       onClick={onToggle}
       aria-pressed={on}
+      aria-label={on ? "Hide the daily summary" : "Show the daily summary"}
       title={on ? "Hide the daily summary" : "Show the daily summary"}
       style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
         border: "1px solid var(--border)",
         borderRadius: "999px",
         background: on ? "var(--chip-bg)" : "transparent",
@@ -238,10 +246,10 @@ function DaySummaryToggle({ on, onToggle }: { on: boolean; onToggle: () => void 
         font: "inherit",
         lineHeight: 1.3,
         opacity: on ? 1 : 0.7,
-        padding: "0.05rem 0.5rem",
+        padding: "0.05rem 0.4rem",
       }}
     >
-      {on ? "✓ summary" : "summary"}
+      {on ? "▤" : "▢"}
     </button>
   );
 }
