@@ -157,6 +157,18 @@ describe("parseIngestJobId", () => {
     expect(parseIngestJobId(ingestJobId(odd), NOW)).toEqual(odd);
   });
 
+  it("round-trips a summarize job, whose identity is the arc and nothing else", () => {
+    // No span and no clock in it (ADR-0027): that is what makes repeated clicks
+    // on one arc collapse into one job while any of them is outstanding, and
+    // what lets a later click queue again once it is not.
+    const job: IngestJob = {
+      kind: "summarize",
+      storylineId: "1b671a64-40d5-491e-99b0-da01ff1f3341",
+    };
+    expect(ingestJobId(job)).toBe("sum_1b671a64-40d5-491e-99b0-da01ff1f3341");
+    expect(parseIngestJobId(ingestJobId(job), NOW)).toEqual(job);
+  });
+
   it("restores a top-up's upper bound from the clock, because its identity omits it", () => {
     // The ONE case that cannot round-trip, and by design: a top-up dedups by its
     // leading edge alone. `to` is "now" by definition, so it is supplied again.
@@ -184,6 +196,7 @@ describe("parseIngestJobId", () => {
       "seg_abc_1_2_pX",
       "topup_abc",
       "topup_abc_nope",
+      "sum_",
       "written_by_an_older_version",
     ]) {
       expect(parseIngestJobId(bad, NOW)).toBeNull();
@@ -198,6 +211,14 @@ describe("parseIngestJob", () => {
       kind: "sample",
       language: "en",
     });
+    expect(parseIngestJob({ kind: "summarize", storylineId: "abc" })).toEqual({
+      kind: "summarize",
+      storylineId: "abc",
+    });
+    // A payload from a deployment that predates the field, or a topic collision:
+    // dropped deliberately rather than thrown into a redelivery loop.
+    expect(parseIngestJob({ kind: "summarize" })).toBeNull();
+    expect(parseIngestJob({ kind: "summarize", storylineId: "" })).toBeNull();
     // Carried through, because it is what makes a top-up dedup by its leading
     // edge — dropped, it would re-enqueue on every poll.
     expect(parseIngestJob(segment({ kind: "topup" }))).toEqual(segment({ kind: "topup" }));

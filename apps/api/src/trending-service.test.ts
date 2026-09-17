@@ -191,7 +191,7 @@ describe("the first visitor after the snapshot staled (§10.1)", () => {
     harness.queue.startConsumer((job) =>
       job.kind === "sample"
         ? processSampleJob(deps, job)
-        : job.kind === "deepen"
+        : job.kind === "deepen" || job.kind === "summarize"
           ? Promise.resolve()
           : processSegmentJob(harness.deps, job),
     );
@@ -250,7 +250,7 @@ describe("the first visitor after the snapshot staled (§10.1)", () => {
     harness.queue.startConsumer((job) =>
       job.kind === "sample"
         ? processSampleJob(deps, job)
-        : job.kind === "deepen"
+        : job.kind === "deepen" || job.kind === "summarize"
           ? Promise.resolve()
           : processSegmentJob(harness.deps, job),
     );

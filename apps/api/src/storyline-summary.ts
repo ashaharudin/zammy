@@ -1,11 +1,15 @@
-import type { SummaryMember, SummaryQuarter } from "@zammy/storage";
+import type { SummaryMember } from "@zammy/storage";
 
 /**
  * The prompts and the contract for the historical preserve (ADR-0023,
  * docs/STORYLINE-SUMMARIES.md) — the pure half, mirroring `storyline-label.ts`.
  *
- * A summary is ONE SENTENCE about what happened in a span of a storyline's
- * coverage. The contract is deliberately narrower than a label's in one way and
+ * A summary is ONE SENTENCE about what happened in one UTC DAY of a storyline's
+ * coverage. There was a second prompt per six-hour quarter and a third that
+ * wrote the day from those four sentences; ADR-0027 removed both, and what is
+ * left is the one that was always the fallback — the day, from its articles.
+ *
+ * The contract is deliberately narrower than a label's in one way and
  * looser in another: mechanically it is length plus sentence count (there is no
  * grounding check, because a sentence's overlap with its sources is not a signal
  * the way a three-word label's is), and semantically it asks for the EVENTS
@@ -82,21 +86,7 @@ const NON_TERMINAL_ABBREVIATIONS = new Set([
   "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sept", "sep", "oct", "nov", "dec",
 ]);
 
-/** The quarter's own name and the hours it covers, for the prompt's first line. */
-export function describeSegment(segment: SummaryQuarter): string {
-  switch (segment) {
-    case "night":
-      return "night (00:00-06:00 UTC)";
-    case "morning":
-      return "morning (06:00-12:00 UTC)";
-    case "afternoon":
-      return "afternoon (12:00-18:00 UTC)";
-    case "evening":
-      return "evening (18:00-24:00 UTC)";
-  }
-}
-
-/** The rules block, identical for every prompt here — one contract, one wording. */
+/** The rules block. One contract, one wording — and now one prompt. */
 const RULES = [
   "Rules:",
   `- Exactly ONE sentence, at most ${SUMMARY_MAX_WORDS} words.`,
@@ -110,12 +100,12 @@ const RULES = [
 
 /** `The story is called "X".`, or nothing when the arc has no label yet. */
 function labelLine(label: string | null): string[] {
-  // The label is three words and costs nothing, and without it a quarter
-  // holding one headline gets summarized as if it were a standalone item
-  // rather than a turn in a running story. What is deliberately NOT here is
-  // the previous quarter's summary: chaining would let one bad sentence
-  // poison every later one and would stop the quarters being independently
-  // recomputable, which is exactly what the settling window needs them to be.
+  // The label is three words and costs nothing, and without it a thin day gets
+  // summarized as if its headlines were standalone items rather than a turn in
+  // a running story. What is deliberately NOT here is the PREVIOUS day's
+  // sentence: chaining would let one bad sentence poison every later one, and
+  // would stop a day being recomputable on its own — which is exactly what the
+  // settling window needs it to be.
   return label ? [`The running story is called "${label}".`] : [];
 }
 
@@ -132,64 +122,20 @@ function renderMembers(members: readonly SummaryMember[]): string {
     .join("\n");
 }
 
-/** One quarter of one day. */
-export function buildSegmentSummaryPrompt(input: {
-  label: string | null;
-  dayKey: string;
-  segment: SummaryQuarter;
-  members: readonly SummaryMember[];
-}): string {
-  return [
-    `These headlines are one news story's coverage from the ${describeSegment(input.segment)}` +
-      ` of ${input.dayKey}, oldest first.`,
-    ...labelLine(input.label),
-    "",
-    renderMembers(input.members),
-    "",
-    "Summarise what happened during that window in one sentence.",
-    "",
-    ...RULES,
-  ].join("\n");
-}
-
 /**
- * The whole day, from the quarters' own sentences.
+ * The whole day, from its articles. The only prompt there is (ADR-0027).
  *
- * This is the cheap half of the design and the reason the day summary is not a
- * second read of the articles: four sentences is ~150 tokens against ~3,000 for
- * the day's coverage, and a day summary built from the quarters beneath it
- * cannot contradict them.
- */
-export function buildDayFromSegmentsPrompt(input: {
-  label: string | null;
-  dayKey: string;
-  segments: ReadonlyArray<{ segment: SummaryQuarter; summary: string }>;
-}): string {
-  return [
-    `These are summaries of each part of ${input.dayKey} (UTC) in one news story, in order.`,
-    ...labelLine(input.label),
-    "",
-    input.segments
-      .map((entry) => `${describeSegment(entry.segment)}: ${entry.summary}`)
-      .join("\n"),
-    "",
-    "Summarise the whole day in one sentence.",
-    "",
-    ...RULES,
-  ].join("\n");
-}
-
-/**
- * The whole day, from its articles.
+ * It used to be the fallback — for a day past the pubDate cliff, whose articles
+ * carry no honest time of day, and for a day whose every quarter was refused.
+ * Removing the quarters promoted it, and nothing about the prompt itself had to
+ * change: it always took a day's articles and asked for a day's sentence.
  *
- * The fallback path, and it exists for exactly one reason: a day old enough that
- * Google News has dropped the pubDate TIME from its articles has no honest
- * quarters to summarise (89.4% of those rows are stamped midnight US Pacific),
- * so the backfill writes the day sentence alone and there are no segment
- * summaries to build it from. It is also what a day whose every quarter was
- * refused falls back to.
+ * What DID change is how much it is shown. Under the quarters a busy day
+ * reached the model as four samples of eight and the day sentence was written
+ * over their four answers; now this one call carries the day, which is why its
+ * sample is `SUMMARY_DAY_SAMPLE` and not the eight a quarter got.
  */
-export function buildDayFromArticlesPrompt(input: {
+export function buildDaySummaryPrompt(input: {
   label: string | null;
   dayKey: string;
   members: readonly SummaryMember[];

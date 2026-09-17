@@ -139,7 +139,43 @@ export interface DeepenJob {
   to: string;
 }
 
-export type IngestJob = SegmentJob | SampleJob | DeepenJob;
+/**
+ * The click plane's unit of work (ADR-0027): summarise one arc's unsummarised
+ * days.
+ *
+ * **The odd one out in this file, and the exception is worth naming.** Every
+ * other job here is an upstream FETCH — §9.1's whole subject is deferred
+ * ingestion, and the three above differ only in what they fetch and what
+ * records the completion. This one calls no provider and writes no article. It
+ * is here anyway, on the same topic and through the same consumer, because what
+ * it needs is exactly what this queue already is: at-least-once delivery of
+ * work a request path must not wait for, deduplicated by a content address,
+ * behind a function with 300 s rather than the API's 60.
+ *
+ * A second topic would have bought a second Vercel Queues topic, a second
+ * consumer deployable and a second set of redelivery semantics to reason about,
+ * to carry one job kind that arrives on exactly the same trigger as the
+ * `deepen` beside it — a storyline being opened.
+ *
+ * **No day list on the payload, deliberately.** The days are planned at the far
+ * end, not here: a payload naming its days would be a plan made at click time
+ * and executed later, so two clicks a second apart would carry the same days and
+ * spend twice on them. Planning in the consumer means the second delivery reads
+ * what the first one wrote.
+ *
+ * At-least-once therefore costs a re-plan and nothing else. The re-plan is
+ * exact rather than merely safe, because `readArcDaysAwaitingSummary` selects on
+ * the absence of a row: a redelivery after a successful job finds the days it
+ * wrote and returns them to nobody. (Vercel Queues DO redeliver — a consumer's
+ * 200 proves nothing about the lease, which is a platform constant that moves.)
+ */
+export interface SummarizeJob {
+  kind: "summarize";
+  /** The arc to summarise. Resolved through aliases before enqueue. */
+  storylineId: string;
+}
+
+export type IngestJob = SegmentJob | SampleJob | DeepenJob | SummarizeJob;
 
 export type IngestHandler = (job: IngestJob) => Promise<void>;
 
@@ -167,6 +203,12 @@ export function ingestJobId(job: IngestJob): string {
   if (job.kind === "deepen") {
     return `deep_${job.storylineId}_${Date.parse(job.from)}_${Date.parse(job.to)}`;
   }
+  // The arc alone, with no span and no clock in it — which is what makes
+  // repeated clicks on one arc collapse into one job while any of them is still
+  // outstanding, and what lets a LATER click queue again once it is not. A
+  // deepening job addresses a span because it plans one; this addresses an arc
+  // because the days are planned at the far end (see `SummarizeJob`).
+  if (job.kind === "summarize") return `sum_${job.storylineId}`;
   // The plane sits right after the prefix, where it cannot be confused with the
   // fingerprint: plane names are `[a-z]+` and carry no underscore, so
   // `parseIngestJobId` still splits this on "_" and still round-trips.
@@ -208,6 +250,11 @@ export function parseIngestJobId(id: string, now: Date): IngestJob | null {
     // remainder after the prefix is the whole of it.
     const language = id.slice("sample_".length);
     return language.length > 0 ? { kind: "sample", language } : null;
+  }
+
+  if (id.startsWith("sum_")) {
+    const storylineId = id.slice("sum_".length);
+    return storylineId.length > 0 ? { kind: "summarize", storylineId } : null;
   }
 
   const parts = id.split("_");
@@ -274,12 +321,14 @@ export function pendingIdOf(job: IngestJob): string {
   // against — counting it under one would make a timeline read report work it
   // has no way to wait for, and would let a deepening job's settle decrement a
   // count a reader is watching.
-  if (job.kind === "deepen") return storylinePendingId(job);
+  // Both arc-subject jobs count under the arc's own registry rather than any
+  // topic's — see the note above, which applies to this one identically.
+  if (job.kind === "deepen" || job.kind === "summarize") return storylinePendingId(job);
   return job.fingerprint;
 }
 
 /** The pending-set identity a storyline's own outstanding work is counted under. */
-export function storylinePendingId(job: Pick<DeepenJob, "storylineId">): string {
+export function storylinePendingId(job: { storylineId: string }): string {
   return `storyline_${job.storylineId}`;
 }
 
@@ -307,6 +356,11 @@ export function parseIngestJob(payload: unknown): IngestJob | null {
           from: candidate.from,
           to: candidate.to,
         }
+      : null;
+  }
+  if (candidate.kind === "summarize") {
+    return typeof candidate.storylineId === "string" && candidate.storylineId.length > 0
+      ? { kind: "summarize", storylineId: candidate.storylineId }
       : null;
   }
   if (candidate.kind === "sample") {
@@ -423,6 +477,15 @@ export interface IngestQueue {
    * call per click.
    */
   enqueueDeepen(job: DeepenJob): Promise<void>;
+
+  /**
+   * Enqueue one arc's summary work (ADR-0027), deduplicated by the ARC alone.
+   *
+   * Unlike the three above, the identity carries no span — the days are planned
+   * in the consumer, so two clicks a second apart must collapse into one job
+   * rather than plan the same days twice. See `SummarizeJob`.
+   */
+  enqueueSummarize(job: SummarizeJob): Promise<void>;
 
   /**
    * Outstanding jobs for a topic — meta.ingest.pendingJobs (§6.1) — or for a

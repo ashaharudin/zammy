@@ -1,7 +1,7 @@
 import type { Kysely } from "kysely";
 import {
   bumpSummaryAttempts,
-  readStorylineDaySegments,
+  readStorylineDayArticles,
   readSummaryCandidateDays,
   readStorylineDaySummaries,
   summaryDayBounds,
@@ -9,25 +9,24 @@ import {
   type Database,
   type StoredSummary,
   type SummaryCandidateDay,
-  type SummaryMember,
-  type SummaryQuarter,
   type SummarySegment,
-  type SummarySegmentInput,
 } from "@zammy/storage";
 import type { TextGenerator } from "./gemini.js";
-import {
-  buildDayFromArticlesPrompt,
-  buildDayFromSegmentsPrompt,
-  buildSegmentSummaryPrompt,
-  validateSummary,
-  SUMMARY_MAX_CHARS,
-} from "./storyline-summary.js";
+import { buildDaySummaryPrompt, validateSummary, SUMMARY_MAX_CHARS } from "./storyline-summary.js";
 
 /**
- * The summariser's service half (ADR-0023): read the day, ask the model once per
- * populated quarter, then once more over those sentences, and write what comes
- * back. `storyline-label-service.ts` is the shape this follows, and the one
- * place it deliberately diverges is failure — a label falls back to the bigram
+ * The summariser's service half (ADR-0023, amended by ADR-0027): read the day,
+ * ask the model ONCE, and write what comes back.
+ *
+ * It used to ask once per populated six-hour quarter and then once more over
+ * those four sentences — five calls for a day with coverage round the clock.
+ * ADR-0027 removed the quarters: nothing ever read them, and a day is now one
+ * sentence over its own articles. What that buys is a factor of five on the
+ * cost of a day, which is what makes the click plane in
+ * `storyline-summary-job.ts` affordable at all.
+ *
+ * `storyline-label-service.ts` is the shape this follows, and the one place it
+ * deliberately diverges is failure — a label falls back to the bigram
  * extractor, and prose has no such fallback, so a refusal here is a row that
  * says so rather than a worse sentence.
  */
@@ -38,7 +37,10 @@ export interface SummarizerDeps {
   generator: TextGenerator | null;
   /** Recorded on every row — `SUMMARY_MODEL`, or null with no generator. */
   modelId: string | null;
-  /** Articles per quarter that reach the prompt. */
+  /**
+   * Articles that reach the prompt. A DAY's worth since ADR-0027, where it was
+   * a quarter's — see `SUMMARY_DAY_SAMPLE` for why the number moved with it.
+   */
   sampleSize: number;
   /** Asks one span gets before it is retired. */
   maxAttempts: number;
@@ -47,13 +49,20 @@ export interface SummarizerDeps {
   /** Articles a span must GAIN before a rewrite is worth a model call. */
   recomputeDelta: number;
   /**
-   * Days after which an article's published TIME is no longer trustworthy, so a
-   * day is summarised whole rather than by quarters. Google News drops the
-   * pubDate time beyond ~8 days and stamps 89.4% of those rows at midnight US
-   * Pacific — four sentences off that would be four sentences about a bucket
-   * boundary rather than about the news.
+   * Write days that have NO sentence, and nothing else — no retry of a refusal,
+   * no recompute of a day that gained articles.
+   *
+   * The click plane's setting (ADR-0027), and it is a dep rather than a pass
+   * option because it narrows what a DAY may do, which is this module's
+   * question and not the walk's.
+   *
+   * Why a click must not retry: a refusal is bounded by `SUMMARY_MAX_ATTEMPTS`
+   * (3), and a reader can open an arc as often as they like. Three opens would
+   * retire every refused day of that arc for ever, on the one table nothing can
+   * rebuild — an anonymous POST spending a budget that exists to be spent
+   * slowly, by a pass that knows how many nights it has left.
    */
-  cliffDays: number;
+  onlyMissing?: boolean;
   /**
    * The caller's abort, threaded into the model call itself.
    *
@@ -90,7 +99,14 @@ export interface CallGate {
   after?(kind: "answered" | "unavailable"): void;
 }
 
-/** What one storyline-day cost and produced. */
+/**
+ * What one storyline-day cost and produced.
+ *
+ * Every counter here is now at most 1 — a day is one span (ADR-0027). They stay
+ * counters rather than a verdict because the PASS sums them across days, and a
+ * tally that can say "17 written, 3 refused, 1 unavailable" is the report an
+ * operator reads.
+ */
 export interface DaySummaryOutcome {
   storylineId: string;
   dayKey: string;
@@ -115,7 +131,7 @@ export interface DaySummaryOutcome {
    * are different facts and only the first is about the span.
    */
   unavailable: number;
-  /** Spans that needed no ask. */
+  /** Days that needed no ask. */
   skipped: number;
   /** Model calls made. Every ask, including a retry of an earlier refusal. */
   modelCalls: number;
@@ -162,7 +178,11 @@ type SpanDecision = "write" | "retry" | "recompute" | "skip";
  *    change was worth a model call. A day past the window is frozen, which is
  *    what makes it a preserve and what keeps the nightly pass reading three
  *    days of history rather than all of it.
- *  - Anything else → skip, at the cost of the reads and nothing else.
+ *  - Anything else → skip, at the cost of one read and nothing else.
+ *
+ * A fifth rule sat between the third and the fourth until ADR-0027: a day whose
+ * quarters had just been rewritten was stale whatever its own count did, and it
+ * had to outrank the freeze. There are no quarters, so there is no such day.
  */
 export function decideSpan(input: {
   existing: StoredSummary | undefined;
@@ -170,30 +190,20 @@ export function decideSpan(input: {
   withinSettlingWindow: boolean;
   recomputeDelta: number;
   maxAttempts: number;
-  /** The day row only: its quarters were rewritten, so it is stale by construction. */
-  forceRecompute?: boolean;
+  /** Only a day with no row at all may be written. See `SummarizerDeps.onlyMissing`. */
+  onlyMissing?: boolean;
 }): SpanDecision {
   const { existing, maxAttempts } = input;
   if (existing === undefined) return "write";
+  // Before every other clause, because it is not a judgement about this span —
+  // it is a statement about who is asking. A caller in `onlyMissing` mode is
+  // buying first writes and nothing else, so a row of any kind ends it here.
+  if (input.onlyMissing === true) return "skip";
   // One cap over both kinds of ask. Three refusals on one span is a strong
   // enough signal to stop paying for it — and an operator who disagrees can
   // clear the row, which is the deliberate act this refuses to make automatic.
   if (existing.attempts >= maxAttempts) return "skip";
   if (existing.summary === null) return "retry";
-  // BEFORE the window check, and that order is the bug this had.
-  //
-  // The force is set when a quarter of this day was just rewritten, and a
-  // quarter can be rewritten past the window by the two paths that legitimately
-  // ignore it: a FIRST write of a quarter that had no row (a late group lands
-  // afternoon coverage on a day that had none), and a successful RETRY of an
-  // earlier refusal. Checking the window first made the force unreachable in
-  // exactly those cases, so the day sentence kept describing quarters that had
-  // moved underneath it — a day summary that omits a quarter which now exists.
-  //
-  // It is not a hole in the freeze: the write that set the force was itself
-  // permitted, and this only keeps the day consistent with the quarters it is
-  // built from.
-  if (input.forceRecompute === true) return "recompute";
   if (!input.withinSettlingWindow) return "skip";
   return input.articleCount - existing.articleCount > input.recomputeDelta
     ? "recompute"
@@ -201,13 +211,19 @@ export function decideSpan(input: {
 }
 
 /**
- * Summarise one storyline-day.
+ * Summarise one storyline-day: at most ONE model call (ADR-0027).
  *
- * Order matters once: the quarters are written BEFORE the day, because the day
- * sentence is built from theirs. A run that is cut off between the two leaves
- * the quarters written and no day row, which the next run reads as "no row →
- * write" and completes — the resumability is the decision function's, not a
- * special case here.
+ * There used to be a second function under this one — `summarizeDay`, which
+ * wrote the fifth sentence over the other four — and with it a whole mechanism
+ * for keeping a day consistent with quarters that had moved underneath it
+ * (`forceRecompute`, `quartersRewritten`, `quartersOutranTheDay`). None of that
+ * survives the quarters, and none of it is missed: a day built from its own
+ * articles cannot disagree with anything.
+ *
+ * The decision is taken on the candidate's OWN article count rather than on a
+ * fresh read, which is what makes a skip cost nothing: the gate that selected
+ * this day already counted it, and the sample is only read when there is going
+ * to be an ask.
  */
 export async function summarizeStorylineDay(
   deps: SummarizerDeps,
@@ -223,230 +239,77 @@ export async function summarizeStorylineDay(
   // day old, and the window is about how settled the day's article set is.
   const ageDays = (now.getTime() - to.getTime()) / 86_400_000;
   const withinSettlingWindow = ageDays < deps.settlingDays;
-  const segmentsAreHonest = ageDays < deps.cliffDays;
 
-  const stored = new Map<SummarySegment, StoredSummary>();
-  for (const row of await readStorylineDaySummaries(deps.db, candidate)) {
-    stored.set(row.segment, row);
+  const rows = await readStorylineDaySummaries(deps.db, candidate);
+  const existing = rows.find((row) => row.segment === "day");
+
+  const decision = decideSpan({
+    existing,
+    articleCount: candidate.articleCount,
+    withinSettlingWindow,
+    recomputeDelta: deps.recomputeDelta,
+    maxAttempts: deps.maxAttempts,
+    ...(deps.onlyMissing === true ? { onlyMissing: true } : {}),
+  });
+  if (decision === "skip") {
+    outcome.skipped += 1;
+    return outcome;
   }
 
-  const segments = await readStorylineDaySegments(deps.db, {
+  const day = await readStorylineDayArticles(deps.db, {
     storylineId: candidate.storylineId,
     dayKey: candidate.dayKey,
     sampleSize: deps.sampleSize,
   });
-
-  /** The sentence each quarter now carries — stored, or written by this run. */
-  const sentences = new Map<SummaryQuarter, string>();
-  for (const [segment, row] of stored) {
-    if (segment !== "day" && row.summary !== null) {
-      sentences.set(segment as SummaryQuarter, row.summary);
-    }
-  }
-  let quartersRewritten = false;
-
-  // Past the cliff no quarter is asked — but the day's quarters are still spans
-  // that needed no ask, and a tally where the numbers do not add up is a tally
-  // nobody trusts.
-  if (!segmentsAreHonest) outcome.skipped += segments.length;
-
-  if (segmentsAreHonest) {
-    for (const input of segments) {
-      const decision = decideSpan({
-        existing: stored.get(input.segment),
-        articleCount: input.articleCount,
-        withinSettlingWindow,
-        recomputeDelta: deps.recomputeDelta,
-        maxAttempts: deps.maxAttempts,
-      });
-      if (decision === "skip") {
-        outcome.skipped += 1;
-        continue;
-      }
-
-      const stop = await gate?.before();
-      if (stop) {
-        outcome.stoppedBy = stop;
-        return outcome;
-      }
-
-      const result = await ask(
-        deps,
-        buildSegmentSummaryPrompt({
-          label: candidate.label,
-          dayKey: candidate.dayKey,
-          segment: input.segment,
-          members: input.members,
-        }),
-        outcome,
-        stored.get(input.segment)?.attempts ?? 0,
-      );
-
-      gate?.after?.(result.kind === "unavailable" ? "unavailable" : "answered");
-
-      await record(deps, {
-        candidate,
-        segment: input.segment,
-        existing: stored.get(input.segment),
-        articleCount: input.articleCount,
-        // Quarters exist only where they are honest, so a quarter row is always
-        // written as segmented. The DAY row is where the distinction is read.
-        segmented: true,
-        result,
-        now,
-        outcome,
-        decision,
-      });
-
-      if (result.kind === "sentence") {
-        sentences.set(input.segment, result.text);
-        quartersRewritten = true;
-      }
-    }
+  // The gate counted this day and the sample read found nothing, which means
+  // the day's articles went away between the two — retention, or a regroup. It
+  // is not a span the model can say anything about.
+  if (day.articleCount === 0) {
+    outcome.skipped += 1;
+    return outcome;
   }
 
-  const dayRow = stored.get("day");
-  // The DURABLE half of the force. `quartersRewritten` lives for the length of
-  // this call, and the pass can end between the quarters and the day — the gate
-  // stops on the budget or the ceiling, which is what the docs say actually
-  // stops a healthy night. The flag would be gone by the next run, the quarter
-  // would be current, and a day past its window would keep a sentence that
-  // omits a quarter it has never seen. Comparing stamps survives that: every
-  // row a single run writes carries the SAME `now`, so `>` is true only when a
-  // later run genuinely wrote a quarter after this day sentence.
-  const quartersOutranTheDay =
-    dayRow !== undefined &&
-    [...stored.values()].some(
-      (row) =>
-        row.segment !== "day" &&
-        row.summary !== null &&
-        row.generatedAt.getTime() > dayRow.generatedAt.getTime(),
-    );
+  const stop = await gate?.before();
+  if (stop) {
+    outcome.stoppedBy = stop;
+    return outcome;
+  }
 
-  await summarizeDay(deps, {
+  const result = await ask(
+    deps,
+    buildDaySummaryPrompt({
+      label: candidate.label,
+      dayKey: candidate.dayKey,
+      members: day.members,
+    }),
+    outcome,
+    existing?.attempts ?? 0,
+  );
+  gate?.after?.(result.kind === "unavailable" ? "unavailable" : "answered");
+
+  await record(deps, {
     candidate,
-    segments,
-    sentences,
-    stored: dayRow,
-    withinSettlingWindow,
-    // `segmented` says whether this day's coverage could be placed in time, and
-    // a day that ALREADY has quarter rows is such a day whatever its age is
-    // now. Without the second clause, a day whose `day` row was refused while
-    // it was fresh and retried past the cliff would be re-marked `false` with
-    // its four quarter sentences still standing beside it — the one column
-    // whose whole job is to not lie, lying.
-    segmented:
-      segmentsAreHonest ||
-      [...stored.values()].some(
-        // A quarter row with no sentence is not evidence the day's coverage
-        // could be placed in time — it is a refusal, and a day whose every
-        // quarter was refused and whose day row is retried past the cliff is
-        // exactly the "we could not tell when this landed" case.
-        (row) => row.segment !== "day" && row.summary !== null,
-      ),
-    quartersRewritten: quartersRewritten || quartersOutranTheDay,
+    segment: "day",
+    existing,
+    // The count the SAMPLE read saw, not the gate's. They are the same query in
+    // different words and will normally agree; when they do not, the one that
+    // describes what the model was actually shown is the one the recompute
+    // trigger must compare against.
+    articleCount: day.articleCount,
+    // **Carried forward, never re-derived.** This column says whether a day's
+    // coverage could be placed in time, which under ADR-0027 nothing new can
+    // claim — so a first write is `false` and a rewrite keeps whatever the row
+    // already said. Writing `false` onto a day that has four quarter sentences
+    // sitting beside it would make the one column whose whole job is to not lie
+    // about the past start lying about it.
+    segmented: existing?.segmented ?? false,
+    result,
     now,
     outcome,
-    gate,
+    decision,
   });
 
   return outcome;
-}
-
-/** The fifth sentence. */
-async function summarizeDay(
-  deps: SummarizerDeps,
-  input: {
-    candidate: SummaryCandidateDay;
-    segments: SummarySegmentInput[];
-    sentences: Map<SummaryQuarter, string>;
-    stored: StoredSummary | undefined;
-    withinSettlingWindow: boolean;
-    segmented: boolean;
-    quartersRewritten: boolean;
-    now: Date;
-    outcome: DaySummaryOutcome;
-    gate?: CallGate;
-  },
-): Promise<void> {
-  const articleCount = input.segments.reduce((sum, entry) => sum + entry.articleCount, 0);
-  const decision = decideSpan({
-    existing: input.stored,
-    articleCount,
-    withinSettlingWindow: input.withinSettlingWindow,
-    recomputeDelta: deps.recomputeDelta,
-    maxAttempts: deps.maxAttempts,
-    // A day whose quarters were just rewritten is stale whatever its own count
-    // did — the sentences it is built from are not the ones it was built from.
-    forceRecompute: input.quartersRewritten,
-  });
-  if (decision === "skip" || articleCount === 0) {
-    input.outcome.skipped += 1;
-    return;
-  }
-
-  const stop = await input.gate?.before();
-  if (stop) {
-    input.outcome.stoppedBy = stop;
-    return;
-  }
-
-  // From the quarters when there are any, which is the cheap and consistent
-  // path; from the articles when there are not — a day past the pubDate cliff,
-  // or one whose every quarter was refused.
-  const fromSegments = input.segments
-    .map((entry) => {
-      const summary = input.sentences.get(entry.segment);
-      return summary === undefined ? null : { segment: entry.segment, summary };
-    })
-    .filter((entry): entry is { segment: SummaryQuarter; summary: string } => entry !== null);
-
-  const prompt =
-    fromSegments.length > 0
-      ? buildDayFromSegmentsPrompt({
-          label: input.candidate.label,
-          dayKey: input.candidate.dayKey,
-          segments: fromSegments,
-        })
-      : buildDayFromArticlesPrompt({
-          label: input.candidate.label,
-          dayKey: input.candidate.dayKey,
-          members: dayMembers(input.segments, deps.sampleSize),
-        });
-
-  const result = await ask(deps, prompt, input.outcome, input.stored?.attempts ?? 0);
-  input.gate?.after?.(result.kind === "unavailable" ? "unavailable" : "answered");
-  await record(deps, {
-    candidate: input.candidate,
-    segment: "day",
-    existing: input.stored,
-    articleCount,
-    segmented: input.segmented,
-    result,
-    now: input.now,
-    outcome: input.outcome,
-    decision,
-  });
-}
-
-/**
- * The day's own sample, for the articles-based prompt.
- *
- * The union of the quarters' samples re-ranked, rather than a second query: the
- * per-quarter samples are already the most-syndicated coverage of each part of
- * the day, so the most-syndicated of THEM is the most-syndicated of the day.
- * (On the path this actually serves — a day past the pubDate cliff — nearly
- * every article is in one quarter anyway, so the two are the same set.)
- */
-function dayMembers(segments: SummarySegmentInput[], sampleSize: number): SummaryMember[] {
-  return segments
-    .flatMap((entry) => entry.members)
-    .sort(
-      (a, b) =>
-        b.sightingCount - a.sightingCount || a.published.getTime() - b.published.getTime(),
-    )
-    .slice(0, sampleSize)
-    .sort((a, b) => a.published.getTime() - b.published.getTime());
 }
 
 /**
@@ -608,7 +471,13 @@ export interface SummaryPassOptions {
   to: Date;
   minArticlesExclusive: number;
   minGroups: number;
-  /** Ceiling on MODEL CALLS, not on days: a day costs between 1 and 5. */
+  /**
+   * Ceiling on MODEL CALLS.
+   *
+   * Since ADR-0027 a day costs exactly one, so this is now also a count of days
+   * — but it stays named for what it bounds, because what the budget is actually
+   * protecting is the key's rate and token windows, and those are spent per call.
+   */
   maxSummaries?: number;
   /** Wall-clock ceiling. Absent is unbounded — right for a CLI, wrong for a route. */
   budgetMs?: number;

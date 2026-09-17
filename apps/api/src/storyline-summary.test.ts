@@ -1,9 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  buildDayFromArticlesPrompt,
-  buildDayFromSegmentsPrompt,
-  buildSegmentSummaryPrompt,
+  buildDaySummaryPrompt,
   sentenceCount,
   validateSummary,
   SUMMARY_MAX_CHARS,
@@ -203,19 +201,18 @@ describe("sentenceCount", () => {
   });
 });
 
-describe("the prompts", () => {
-  it("names the quarter's own hours, so the model knows what window it is in", () => {
-    const prompt = buildSegmentSummaryPrompt({
+describe("the prompt", () => {
+  it("names the day and renders the members the way the labeler does", () => {
+    const prompt = buildDaySummaryPrompt({
       label: "Big Bend Wall Pause",
       dayKey: "2026-08-14",
-      segment: "morning",
       members: MEMBERS,
     });
-    expect(prompt).toContain("morning (06:00-12:00 UTC) of 2026-08-14");
+    expect(prompt).toContain("coverage from 2026-08-14 (UTC)");
     expect(prompt).toContain('The running story is called "Big Bend Wall Pause".');
     // Oldest first, numbered, with the description trimmed onto its own line —
     // the labeler's rendering, so one reading of "what the model sees" serves
-    // both prompts.
+    // both.
     expect(prompt).toContain("1. Wall work halted at Big Bend");
     expect(prompt).toContain("2. Contractor confirms Big Bend pause");
     // WORDS in the prompt, characters in the validator. A model cannot count
@@ -226,45 +223,33 @@ describe("the prompts", () => {
   });
 
   it("omits the label line entirely when the arc has no label", () => {
-    const prompt = buildSegmentSummaryPrompt({
+    const prompt = buildDaySummaryPrompt({
       label: null,
       dayKey: "2026-08-14",
-      segment: "night",
       members: MEMBERS,
     });
     expect(prompt).not.toContain("running story is called");
   });
 
-  it("builds the day from the quarters' sentences, not from the articles", () => {
-    const prompt = buildDayFromSegmentsPrompt({
-      label: "Big Bend Wall Pause",
-      dayKey: "2026-08-14",
-      segments: [
-        { segment: "morning", summary: "Crews stood down at first light." },
-        { segment: "evening", summary: "The contractor confirmed the pause." },
-      ],
-    });
-    expect(prompt).toContain("morning (06:00-12:00 UTC): Crews stood down at first light.");
-    expect(prompt).toContain("evening (18:00-24:00 UTC): The contractor confirmed the pause.");
-    // The headlines must not be in here — that is the whole cost argument.
-    expect(prompt).not.toContain("Wall work halted at Big Bend");
-  });
-
-  it("falls back to the articles for a day with no quarters", () => {
-    const prompt = buildDayFromArticlesPrompt({
+  it("says nothing about six-hour quarters, which no longer exist", () => {
+    // ADR-0027. The wording is the contract a reader of a stored sentence sees,
+    // so a prompt still naming a window would produce sentences about a span
+    // nothing else in the system agrees is a span.
+    const prompt = buildDaySummaryPrompt({
       label: "Big Bend Wall Pause",
       dayKey: "2026-08-14",
       members: MEMBERS,
     });
-    expect(prompt).toContain("coverage from 2026-08-14 (UTC)");
-    expect(prompt).toContain("1. Wall work halted at Big Bend");
+    for (const quarter of ["night", "morning", "afternoon", "evening"]) {
+      expect(prompt).not.toContain(quarter);
+    }
+    expect(prompt).toContain("Summarise what happened that day in one sentence.");
   });
 
   it("trims a long description rather than sending it whole", () => {
-    const prompt = buildSegmentSummaryPrompt({
+    const prompt = buildDaySummaryPrompt({
       label: null,
       dayKey: "2026-08-14",
-      segment: "afternoon",
       members: [{ ...MEMBERS[0]!, description: "x".repeat(400) }],
     });
     expect(prompt).toContain(`${"x".repeat(200)}…`);

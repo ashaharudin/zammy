@@ -4,6 +4,14 @@ status: accepted
 
 # A day's coverage is preserved as a sentence
 
+> **Amended by [ADR-0027](0027-a-day-is-one-sentence-and-a-click-asks-for-it.md),
+> 2026-09-17.** The six-hour segments below are gone: nothing ever read them, so
+> a day is now ONE sentence over its own articles. The rows already written stay
+> in the table, unread. Everything else here — what a row is, the refusal/outage
+> line, the gate, the settling window, the freeze — still stands, and ADR-0027
+> adds a second writer beside the nightly pass. Read the segment paragraphs
+> below as history.
+
 Everything this system stores is derived from `articles` and rebuildable from
 it. Groups, storylines, day slots, the trailing corpus, labels — drop any of
 them and a pass rebuilds it. Retention (ADR-0001) is written on that assumption:

@@ -1,23 +1,35 @@
 # Storyline day summaries
 
-The historical preserve: one sentence per storyline-day, and one per populated
-six-hour UTC segment of it, written once and kept for ever. The decision is
-[ADR-0023](adr/0023-a-days-coverage-is-preserved-as-a-sentence.md); the source of
-truth is [the migration](../packages/storage/src/migrations/0024-storyline-day-summaries.ts)
+The historical preserve: **one sentence per storyline-day**, written once and
+kept for ever. The decision is
+[ADR-0023](adr/0023-a-days-coverage-is-preserved-as-a-sentence.md), amended by
+[ADR-0027](adr/0027-a-day-is-one-sentence-and-a-click-asks-for-it.md); the
+source of truth is
+[the migration](../packages/storage/src/migrations/0024-storyline-day-summaries.ts)
 (what a row is), [storyline-summaries.ts](../packages/storage/src/storyline-summaries.ts)
 (the reads), [storyline-summary.ts](../apps/api/src/storyline-summary.ts) (the
-prompts and the contract) and
+prompt and the contract),
 [storyline-summary-service.ts](../apps/api/src/storyline-summary-service.ts)
-(what gets written and when). This page is the map.
+(what gets written and when) and
+[storyline-summary-job.ts](../apps/api/src/storyline-summary-job.ts) (the click
+plane). This page is the map.
 
-**One reader now sees these rows**: the storyline view draws the *day* sentence
-beside each day's heading. [What a reader sees](#what-a-reader-sees) is the whole
-of it — the quarters are still written and still unread.
+**There were six-hour quarters until ADR-0027.** A day was four model calls over
+its populated `night`/`morning`/`afternoon`/`evening` segments plus a fifth over
+those four sentences. Nothing ever read them, so they are gone — but the rows
+already written are still in the table, unread, because nothing can rebuild
+them. Anywhere this page says "quarter", it is describing history.
+
+**Two things write these rows**: the nightly pass, and a reader opening a
+storyline ([the click plane](#the-click-plane)).
 
 ## What a row is
 
 `storyline_day_summaries`, keyed `(storyline_id, day_key, segment)` with
-`segment ∈ night | morning | afternoon | evening | day`.
+`segment ∈ night | morning | afternoon | evening | day`. **Only `day` is
+written now**, and only `day` was ever read; the other four are pre-ADR-0027
+rows kept because the model calls that produced them are spent and the articles
+behind them will age out under retention.
 
 | | |
 |---|---|
@@ -25,12 +37,12 @@ of it — the quarters are still written and still unread.
 | `summary` | the sentence, or **null** when the model was asked and refused |
 | `article_count` | what the sentence was written over — the recompute trigger's input |
 | `label` | the arc's label **as it read at write time**; labels drift, so this is not a join |
-| `attempts` | asks spent since the last sentence; three and the span is retired |
-| `segmented` | false on a day summarised whole — see [the cliff](#the-cliff) |
+| `attempts` | asks spent since the last sentence; three and the day is retired |
+| `segmented` | **carried forward, never re-derived.** It records whether a day's coverage could be placed in time; nothing new can claim that, so a first write is `false` and a rewrite keeps what the row said. Only a pre-ADR-0027 day can carry `true`, which makes it the one field that tells the two eras apart |
 
 Three states, and the difference between the first two is the whole feature:
 
-- **no row** — no articles landed in that segment, *or* the model could not be
+- **no row** — nobody has asked about that day, *or* the model could not be
   reached when it was tried.
 - **row, `summary` null** — the model answered and the answer was unusable.
 - **row, `summary` set** — the sentence.
@@ -48,7 +60,7 @@ string:
 | a 4xx, an unparseable body, a shape we do not know | unreachable | **no** |
 | the local pacer declined to queue the call | unreachable | **no** |
 
-Collapsing the two is how three nights of quota errors would take every span in
+Collapsing the two is how three nights of quota errors would take every day in
 the window to `SUMMARY_MAX_ATTEMPTS` without the model having declined one of
 them. Collapsing them the other way is just as bad: a storyline whose headlines
 trip the safety filter would look like an outage, and the pass's
@@ -61,24 +73,25 @@ itself. A merge leaves these rows on the id they were written for, and
 `storylines.merged_into` resolves it — the same hop every other holder of a
 storyline UUID makes.
 
-## The segments
+## The segments, and where they went
 
-Even six-hour quarters, in UTC:
+Until ADR-0027 a qualifying day was cut into four even six-hour UTC quarters —
+`night` 00:00–06:00, `morning` 06:00–12:00, `afternoon` 12:00–18:00, `evening`
+18:00–24:00 — each populated one getting its own sentence, and the day sentence
+being written over those four.
 
-| segment | hours (UTC) |
-|---|---|
-| night | 00:00–06:00 |
-| morning | 06:00–12:00 |
-| afternoon | 12:00–18:00 |
-| evening | 18:00–24:00 |
+They are gone because **nothing ever read them**. The storyline view draws the
+day sentence and nothing else, and ADR-0023's own consequences say why it never
+would: the rail already cuts a day into the parts of the *reader's* day, and four
+UTC quarters drawn against four local parts is two divisions of one day on top of
+each other. Four fifths of every day's cost bought an input to the fifth call.
 
-Even rather than the uneven spans the words name in speech, because an uneven
-night straddles midnight and would put part of a "night" in the previous day.
-Bucketing is on `articles.published`, not on when we collected the article.
+The rows already written stay in the table. ADR-0027 has the argument; the short
+version is that a summary is the one thing in this schema nothing can rebuild.
 
 ## What qualifies
 
-Three clauses, ANDed, in [`readSummaryCandidateDays`](../packages/storage/src/storyline-summaries.ts):
+Three clauses, ANDed:
 
 1. the arc is not `provisional` and is not an alias;
 2. the day holds **more than `SUMMARY_MIN_ARTICLES_PER_DAY`** articles (4, so
@@ -86,10 +99,16 @@ Three clauses, ANDed, in [`readSummaryCandidateDays`](../packages/storage/src/st
 3. from **at least `SUMMARY_MIN_GROUPS`** distinct groups (2).
 
 (2) and (3) are different tests and the difference is the common case here: one
-wire story syndicated six times is six articles in **one** group. Once a day
-qualifies, *every* non-empty quarter gets a sentence — there is no per-segment
-bar, because a five-article bar per six-hour quarter would suppress the segments
-on nearly every day that qualifies.
+wire story syndicated six times is six articles in **one** group.
+
+**Two reads apply that gate, and they ask opposite questions.**
+[`readSummaryCandidateDays`](../packages/storage/src/storyline-summaries.ts) walks
+a window across every arc, which is how the nightly pass discovers work.
+[`readArcDaysAwaitingSummary`](../packages/storage/src/storyline-summaries.ts)
+answers "which days of THIS arc have no sentence", in one query, with no window
+at all — that is the click plane's whole plan. It anti-joins on the absence of a
+`segment = 'day'` row across the arc's **whole alias chain**, so a merge never
+re-buys sentences written under a loser's id.
 
 ## When a sentence changes
 
@@ -97,8 +116,13 @@ on nearly every day that qualifies.
 |---|---|
 | no row | **write** — always allowed, however old the day is |
 | refused (`summary` null) | **retry**, until `SUMMARY_MAX_ATTEMPTS` |
-| written, day < `SUMMARY_SETTLING_DAYS` old, span gained > `SUMMARY_RECOMPUTE_DELTA` | **recompute** |
+| written, day < `SUMMARY_SETTLING_DAYS` old, day gained > `SUMMARY_RECOMPUTE_DELTA` | **recompute** |
 | written, day older than the window | **frozen** |
+
+That is [`decideSpan`](../apps/api/src/storyline-summary-service.ts), and it
+takes one more input: **`onlyMissing` collapses the table to its first row.** The
+click plane sets it, so a reader only ever buys first writes — see
+[the click plane](#the-click-plane).
 
 Two consequences worth knowing:
 
@@ -106,38 +130,31 @@ Two consequences worth knowing:
   declines bumps `attempts` and leaves the older sentence and its
   `article_count` alone, so the rewrite is still owed and will be retried. An
   unreachable model does not even bump the attempt.
-- **The day sentence follows its quarters, window or no window.** If any quarter
-  was written or rewritten, the day is rewritten too — the sentences it was built
-  from are not the ones it was built from. This outranks the freeze on purpose:
-  a quarter can legitimately change past the window (a first write of a quarter
-  that had no row, a successful retry of a refusal), and a frozen day sentence
-  beside a quarter it has never seen would be a day summary that omits part of
-  its own day.
-
-## The cliff
-
-Google News drops the pubDate **time** beyond ~8 days and stamps 89.4% of those
-rows midnight US Pacific (07:00/08:00 UTC), so nearly all of them land in
-"morning". A day older than `SUMMARY_CLIFF_DAYS` therefore gets the **day
-sentence alone**, built from its articles, with `segmented = false`.
-
-Quarters written while the day was fresh are left exactly where they are — they
-were honest when they were written, and ageing does not make them false.
+- **The decision reads the CANDIDATE's article count**, which the gate query
+  already counted, rather than taking a fresh one. So a day that needs no ask
+  costs one read and nothing else, and the sample is only fetched when there is
+  going to be a call.
 
 ## What the model is asked
 
-Per quarter: up to `SUMMARY_SEGMENT_SAMPLE` (8) articles, chosen
-`sighting_count DESC` — the dominant coverage of the quarter rather than whatever
-was published first — and rendered oldest-first with descriptions trimmed to 200
-characters, which is the labeler's rendering. The arc's **label** is included and
-nothing else: not the previous quarter's summary, because chaining lets one bad
-sentence poison every later one and stops the quarters being independently
-recomputable.
+One call, over the day's own articles: up to `SUMMARY_DAY_SAMPLE` (12) of them,
+chosen `sighting_count DESC` — the dominant coverage of the day rather than
+whatever was published first — and rendered oldest-first with descriptions
+trimmed to 200 characters, which is the labeler's rendering. The arc's **label**
+is included and nothing else: not the previous day's sentence, because chaining
+lets one bad sentence poison every later one and stops a day being recomputable
+on its own, which is exactly what the settling window needs it to be.
 
-The **day** call is over the quarters' own sentences: ~150 tokens instead of
-~3,000, and consistent with them by construction. Only a day with no quarters —
-past the cliff, or one whose every quarter was refused — falls back to the
-articles.
+This prompt is not new — it was the fallback for a day past the pubDate cliff,
+and has been writing day sentences in production since the feature shipped.
+ADR-0027 promoted it and deleted the two beside it.
+
+**`SUMMARY_DAY_SAMPLE` and `SUMMARY_MAX_RPM` are two halves of one budget.** The
+key meters input tokens (16k a minute) as well as calls, and the pacer counts
+only calls — so a sample raised on its own buys a rate limit nothing in the
+process can see, and the pass would simply start reading `unavailable`. Measured
+under the quarters at ~490 tokens a call, an article is ~60 of that: 12 articles
+is ~820 tokens, and 18 calls a minute is ~14.8k.
 
 The contract is one sentence about **what happened** rather than about the
 coverage. Its length is asked for in **words** (35) and enforced in
@@ -186,7 +203,7 @@ Four decisions, each of which is a place this could have gone differently:
 
 | | |
 |---|---|
-| **the day sentence only** | the quarters are its own input, and the rail already cuts a day into the parts of the **reader's** day. Four UTC quarters drawn against four local parts is two divisions of one day on top of each other. |
+| **the day sentence only** | the rail already cuts a day into the parts of the **reader's** day, and four UTC quarters drawn against four local parts is two divisions of one day on top of each other. This is the decision ADR-0027 followed to its conclusion: a segment nothing would ever draw is a segment not worth writing. |
 | **the view only** | a search's slot holds the members that matched the keywords, so a sentence about the whole day would describe coverage the row does not show. `toEntry` leaves `daySummary` null; `toStorylineEntry` fills it. |
 | **matched by DATE** | the rail cuts days in the **reader's** zone and a sentence is written over a day in **UTC**, so the coverage one sentence describes routinely lands in two rail days. The sentence goes under the heading reading its own date — see below. |
 | **absent = refused** | a null `summary` is a row, but a reader gets the heading they always had either way. The difference matters to the pass, never to the page. |
@@ -245,9 +262,16 @@ expensive one and they spend the same key. It writes nothing at all until
 `SUMMARIES_ENABLED=true`.
 
 Its window is whole UTC days at **both** ends: `SUMMARY_WINDOW_DAYS` (8) back
-from the start of today, up to the start of today. Today is excluded because the
-pass fires at 05:00, inside the `night` quarter it would otherwise summarise and
-then freeze — a night sentence permanently describing five sixths of its span.
+from the start of today, up to the start of today. Today is excluded because a
+day is summarised once it has finished: the pass fires at 05:00, and a sentence
+written over five hours of a day and then frozen would permanently describe a
+fraction of its own span.
+
+`SUMMARY_WINDOW_DAYS` keeps its 8 and lost its reason with the quarters — it used
+to be deliberately equal to `SUMMARY_CLIFF_DAYS`, which no longer exists. What
+justifies it now is the split ADR-0027 created: **this window bounds UNATTENDED
+spend**, and the click plane bounds attended spend. Completeness has its own path
+for the first time.
 
 Within that window the walk is **two phases** (ADR-0023's amendment):
 
@@ -277,8 +301,9 @@ easy to get wrong:
 
 `SUMMARY_MAX_PER_RUN` is a *spend* bound and `SUMMARY_BUDGET_MS` is the *clock*
 bound — the same split `CHORE_MAX_LABELS` and `CHORE_LABEL_BUDGET_MS` make. The
-budget is what actually stops a healthy night: about **128 calls** at 275 s and
-`SUMMARY_MAX_RPM` 28. And a run of unreachable asks stops the pass early rather
+budget is what actually stops a healthy night: about **82 calls** at 275 s and
+`SUMMARY_MAX_RPM` 18 — and since ADR-0027 a call IS a day, so that is ~82 days
+where the same firing used to reach 14-25. And a run of unreachable asks stops the pass early rather
 than spending the whole ceiling discovering the API is still down.
 
 **The pacing is measured from one call's START, not from its return.** That is
@@ -288,7 +313,10 @@ on 2026-09-16, 2 s of spacing plus ~1.3 s of latency gave 18 calls a minute
 against a key that allows 30, and about 40% of every firing was the pass asleep
 with the key idle. `SUMMARY_MAX_RPM` is its own knob and sits below
 `GEMINI_MAX_RPM` so the drain's organic label promotions keep a share of the key
-— of the rpm window and of the 16k input-tokens-per-minute one alike.
+— of the rpm window and of the 16k input-tokens-per-minute one alike. It came
+DOWN from 28 to 18 with ADR-0027 and the work went up: every call now carries a
+whole day's sample (~820 tokens rather than ~490), so 28 of them would have been
+~23k against a 16k ceiling the pacer cannot see.
 
 **The budget aborts what it cannot stop.** `SUMMARY_BUDGET_MS` bounds when a
 call is *admitted*; a call in flight runs to three `GEMINI_TIMEOUT_MS` attempts
@@ -348,6 +376,88 @@ schedule disagreeing with `supabase-cron.sql` from inside a query string.
 `--dry-run` and `--show` stay outside the pass entirely — no model, no writes, and
 a `chore_runs` row for a read would record a night that never happened.
 
+## The click plane
+
+**Opening a storyline submits its unsummarised days.** The decision is
+[ADR-0027](adr/0027-a-day-is-one-sentence-and-a-click-asks-for-it.md); the code
+is [storyline-summary-job.ts](../apps/api/src/storyline-summary-job.ts).
+
+This is the same click ADR-0017 built on and the third plane inside the same
+route. `POST /api/v1/storylines/:id/refresh` now does three things, planned
+separately and reported separately, because they are planned against three
+different tables and no one completion may stand for another's:
+
+| plane | asks | against | spends |
+|---|---|---|---|
+| refresh (ADR-0017) | a topic of the discovery provider | `topic_coverage` | the news quota |
+| deepening (ADR-0019) | an arc of the deepening provider | `storyline_coverage` | the news quota |
+| **summaries (ADR-0027)** | **the arc's unsummarised days** | **`storyline_day_summaries`** | **the model key** |
+
+**Nothing in the browser changed.** `App.openStoryline` already calls
+`refreshStoryline`, so the click was already arriving; this is what the server
+does with it.
+
+### What one click buys
+
+`SUMMARY_CLICK_MAX_DAYS` (8) model calls, newest day first, over the arc's
+**whole history** — there is no window here. The window bounds unattended spend
+across every arc; a click is one reader asking about one arc, and the bound is a
+call count instead. Days past the bound wait for the next open, which is a
+deferral rather than a loss.
+
+What made that affordable is the other half of ADR-0027: at one call a day, a
+whole click costs about what one and a half days used to.
+
+### What a click may never do
+
+- **Retry a refusal.** `SUMMARY_MAX_ATTEMPTS` is 3 and a reader can open an arc
+  as often as they like, so three opens would retire every refused day of that
+  arc for ever. `onlyMissing` is the rule and `readArcDaysAwaitingSummary`
+  enforces it again in SQL — a row with a null summary counts as having one.
+- **Recompute a day that gained articles.** Also the nightly pass's business.
+- **Touch today.** Excluded for the pass's reason.
+- **Anything, with `SUMMARIES_ENABLED=false`.** The gate is at the planner, so a
+  deployment that has not turned the feature on never publishes the message.
+
+### How it runs
+
+On the existing `ingest` queue as a fourth job kind, through the existing
+consumer — a 300 s function rather than the API's 60. It is the one job there
+that makes no upstream call, and ADR-0027 defends the exception.
+
+Three properties worth knowing:
+
+- **The job's identity is the arc alone** (`sum_<uuid>`), so readers opening one
+  storyline while a job is outstanding collapse into one job.
+- **The days are planned in the CONSUMER**, not carried on the payload. A payload
+  naming its days would be a plan made at click time and executed later, so two
+  clicks a second apart would spend twice on the same days. It also makes
+  redelivery free — and Vercel Queues *do* redeliver.
+- **No advisory lock.** The nightly pass takes one; this cannot enter that race
+  in the damaging direction, because it only writes days with no row and the
+  upsert refuses in SQL to let a null replace a standing sentence. ADR-0027 has
+  the full argument.
+
+### Reading it
+
+One log line per delivered job, and it is the only report this plane has —
+nothing else records it, since it writes no article and answers no request:
+
+```
+storyline open: what the click's summary job wrote (ADR-0027)
+  storyline=… planned=3 written=3 model=3 stoppedBy=exhausted
+```
+
+`planned` high with `stoppedBy: max-days` is a cold arc draining over several
+opens, which is the design. `unavailable` dominating is the key refusing, and
+costs nothing — an unreachable ask writes no row. `planned: 0` on most lines is
+the warm archive this should settle into.
+
+The route's own 202 carries `summaries: { status, queued }` beside `deepening`,
+for operators and tests. `queued` there means the JOB was accepted, not that a
+sentence was written: the days are planned at the far end, so how many is not
+knowable on the request side.
+
 ## Verifying it
 
 Fixtures cover the client and the contract
@@ -369,9 +479,13 @@ All of them are in [`.env.example`](../.env.example) with their reasoning.
 The ones that change behaviour rather than pace: `SUMMARIES_ENABLED`,
 `SUMMARY_MIN_ARTICLES_PER_DAY` + `SUMMARY_MIN_GROUPS` (the gate),
 `SUMMARY_SETTLING_DAYS` + `SUMMARY_RECOMPUTE_DELTA` (what may be rewritten),
-`SUMMARY_CLIFF_DAYS` (which days get quarters), and `SUMMARY_FRESH_DAYS` +
-`SUMMARY_FRESH_SHARE` (which end of the window goes first, and for how long —
-set `SUMMARY_FRESH_DAYS=0` to restore the single oldest-first walk).
+`SUMMARY_FRESH_DAYS` + `SUMMARY_FRESH_SHARE` (which end of the window goes first,
+and for how long — set `SUMMARY_FRESH_DAYS=0` to restore the single oldest-first
+walk), and `SUMMARY_CLICK_MAX_DAYS` (how much of an arc one open buys — 0 turns
+the click plane off).
+
+`SUMMARY_CLIFF_DAYS` was deleted by ADR-0027: it gated whether a day's quarters
+were honest, and there are no quarters.
 
 The ones that set the pace: `SUMMARY_MAX_RPM`, `SUMMARY_BUDGET_MS` and
 `SUMMARY_MAX_PER_RUN`. The first two are coupled to things outside this file —

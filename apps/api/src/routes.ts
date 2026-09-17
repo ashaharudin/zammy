@@ -22,6 +22,10 @@ import {
 } from "./timeline-read.js";
 import { queueStorylineRefresh, type StorylineRefreshDeps } from "./storyline-refresh.js";
 import {
+  queueStorylineSummaries,
+  type StorylineSummaryJobDeps,
+} from "./storyline-summary-job.js";
+import {
   queueStorylineDeepening,
   type StorylineDeepeningDeps,
 } from "./storyline-deepening.js";
@@ -48,7 +52,12 @@ import { readTrending, type TrendingDeps } from "./trending-service.js";
  */
 export type QueryRouteDeps = TimelineSearchDeps &
   StorylineRefreshDeps &
-  StorylineDeepeningDeps & {
+  StorylineDeepeningDeps &
+  // The click plane's planner half only (ADR-0027). Deliberately NOT the whole
+  // of `StorylineSummaryJobDeps`: the route supplies `enabled` from its own
+  // options and the consumer holds the summariser, so what the request path
+  // needs from this plane is one more enqueue.
+  Pick<StorylineSummaryJobDeps, "queue"> & {
     redis: Redis;
     currents: Pick<CurrentsClient, "availableLanguages" | "availableRegions">;
   };
@@ -56,6 +65,17 @@ export type QueryRouteDeps = TimelineSearchDeps &
 export interface QueryRouteOptions {
   deps: QueryRouteDeps;
   defaultLanguage: string;
+  /**
+   * `SUMMARIES_ENABLED` (ADR-0027) — whether a storyline open may submit the
+   * arc's unsummarised days.
+   *
+   * An option rather than something read off `deps`, because it is a deployment
+   * flag and `QueryRouteDeps` is the planners' contract. Defaulted to false at
+   * the one place that reads it, so a caller that predates the flag — every
+   * test harness — queues nothing rather than spending a key it did not
+   * configure.
+   */
+  summariesEnabled?: boolean;
 }
 
 /** 24h, matching the upstream refresh cadence in §9.1. */
@@ -286,6 +306,31 @@ export async function registerQueryRoutes(
       // for anyone who has not turned the flag on.
       const deepened = await queueStorylineDeepening(deps, { storylineId: id });
 
+      // The THIRD plane of the same click (ADR-0027): the arc's unsummarised
+      // days, submitted for a sentence.
+      //
+      // Beside the other two rather than folded into either, for the reason
+      // ADR-0019 gives about the first two and which applies a third time: this
+      // one is planned against `storyline_day_summaries`, the others against
+      // `topic_coverage` and `storyline_coverage`, and none of the three
+      // completions may stand for another's. It is also the only one that makes
+      // no upstream call at all — it spends the model key, not the news quota.
+      //
+      // Awaited and sequential like the deepening plane, and it costs one Redis
+      // publish: the planner deliberately does not look for work before queueing
+      // (see `queueStorylineSummaries`), so nothing on the request path touches
+      // the summary tables.
+      const summarized = await queueStorylineSummaries(
+        {
+          db: deps.db,
+          queue: deps.queue,
+          enabled: options.summariesEnabled === true,
+          now: deps.now,
+          ...(deps.log ? { log: deps.log } : {}),
+        },
+        { storylineId: id },
+      );
+
       // What each plane's freshness gate decided, as log fields — the two
       // counters ADR-0015 leaves nowhere else to live. The response body below
       // says the same thing to the CALLER, which is not the same as being
@@ -311,8 +356,13 @@ export async function registerQueryRoutes(
       // the cloud hides rather than a fetch problem — so a sudden rise means
       // the labeler moved, not that traffic did.
       deps.log?.info?.(
-        { storyline: id, refresh: outcome.status, deepening: deepened.status },
-        "storyline open: what each plane's freshness gate decided (ADR-0017, ADR-0019)",
+        {
+          storyline: id,
+          refresh: outcome.status,
+          deepening: deepened.status,
+          summaries: summarized.status,
+        },
+        "storyline open: what each plane's gate decided (ADR-0017, ADR-0019, ADR-0027)",
       );
 
       // 202 for every outcome that reached the planner, `fresh` included: the
@@ -334,6 +384,15 @@ export async function registerQueryRoutes(
         deepening: {
           status: deepened.status,
           queued: deepened.status === "queued",
+        },
+        // Under its own key for the same reason the deepening plane is: three
+        // planes with three gates, and a caller reading this body is asking
+        // which of them spent what. `queued` here means the JOB was accepted,
+        // not that a sentence was written — the days are planned in the
+        // consumer, so how many (if any) is not knowable on this side.
+        summaries: {
+          status: summarized.status,
+          queued: summarized.status === "queued",
         },
       });
     },

@@ -60,7 +60,6 @@ function deps(overrides: Partial<StorylinePassDeps> = {}): StorylinePassDeps {
       maxAttempts: 3,
       settlingDays: 3,
       recomputeDelta: 4,
-      cliffDays: 8,
     },
     summaryGate: { windowDays: 8, minArticlesExclusive: 4, minGroups: 2 },
     linker: storylineBar(),
