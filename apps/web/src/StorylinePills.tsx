@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { StorylineSummary } from "@zammy/shared";
+import type { StorylineOpenSource } from "./analytics.js";
 import { MONO } from "./theme.js";
 import { pillDetail, sizeBucket, SIZE_STEPS } from "./storylineLabels.js";
 import {
@@ -40,7 +41,7 @@ export function StorylinePills({
 }: {
   storylines: readonly StorylineSummary[];
   qualifiers: Map<string, string>;
-  onOpen: (storylineId: string, label: string | null) => void;
+  onOpen: (storylineId: string, label: string | null, source: StorylineOpenSource) => void;
 }) {
   const [collapsed, setCollapsed] = useState(
     () => globalThis.localStorage?.getItem(COLLAPSED_KEY) === "1",
@@ -84,7 +85,7 @@ export function StorylinePills({
               qualifier={qualifiers.get(slot.storyline.id) ?? null}
               leaving={slot.leaving}
               entering={slot.entering}
-              onOpen={() => onOpen(slot.storyline.id, slot.storyline.label)}
+              onOpen={() => onOpen(slot.storyline.id, slot.storyline.label, "pill")}
             />
           ))}
         </div>

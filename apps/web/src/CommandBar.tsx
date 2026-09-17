@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { TimelinePage } from "@zammy/shared";
+import type { StorylineOpenSource } from "./analytics.js";
 import type { Reference, TopicQuery } from "./api.js";
 import { FilterChipRow, useFilterDefaults } from "./FilterChipRow.js";
 import { StorylinePills } from "./StorylinePills.js";
@@ -44,7 +45,7 @@ export function CommandBar({
   reference: Reference | undefined;
   onSearch: (topic: TopicQuery, options?: { replace?: boolean }) => void;
   onClear: () => void;
-  onOpenStorylineView: (storylineId: string, label: string | null) => void;
+  onOpenStorylineView: (storylineId: string, label: string | null, source: StorylineOpenSource) => void;
   /**
    * The label the click that opened this view already had in hand, for the
    * chip to show before `page` — the view's own topic, not yet fetched —

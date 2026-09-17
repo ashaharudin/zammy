@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { StorylineSummary } from "@zammy/shared";
+import type { StorylineOpenSource } from "./analytics.js";
 import type { RowMembership } from "./memberships.js";
 import { pillDetail, storylineSpan } from "./storylineLabels.js";
 import { MONO } from "./theme.js";
@@ -112,7 +113,7 @@ export function StorylineBraid({
    * the only thing that differs, so it is the only thing passed in.
    */
   subject: string;
-  onOpenStoryline: (storylineId: string, label: string | null) => void;
+  onOpenStoryline: (storylineId: string, label: string | null, source: StorylineOpenSource) => void;
   /** Tighter hit area for the disclosure's hairline, which has 0.9rem to give. */
   dense?: boolean;
 }) {
@@ -226,7 +227,7 @@ export function StorylineBraid({
             // re-open itself on something the reader never pressed. No focus
             // restore — the rail this trigger belongs to is being replaced.
             close(false);
-            onOpenStoryline(id, label);
+            onOpenStoryline(id, label, "braid");
           }}
         />
       )}
