@@ -13,7 +13,12 @@ import {
 } from "@zammy/storage";
 import { groupCreatedArticles } from "./grouping-service.js";
 import { labelWords } from "./storyline-label-merge.js";
-import { extractStorylineId, renderStorylinePage, SITE_ORIGIN } from "./render-storyline.js";
+import {
+  extractStorylineId,
+  renderStorylinePage,
+  SITE_ORIGIN,
+  WEBSITE_ID,
+} from "./render-storyline.js";
 import { storylineBar } from "./storyline-bar.js";
 import { createReadHarness, type ReadTestHarness } from "./test-support.js";
 
@@ -380,7 +385,7 @@ describe("renderStorylinePage", () => {
         name: string;
         description: string;
         url: string;
-        isPartOf: { "@type": string; url: string };
+        isPartOf: { "@id": string };
         mainEntity: {
           "@type": string;
           numberOfItems: number;
@@ -400,7 +405,11 @@ describe("renderStorylinePage", () => {
       expect(jsonLd.name).toBe("Hurricane Fausto");
       expect(jsonLd.description).toBe("Fausto weakened as it moved past the islands.");
       expect(jsonLd.url).toBe(`${SITE_ORIGIN}/storyline/${storyline}/hurricane-fausto`);
-      expect(jsonLd.isPartOf["@type"]).toBe("WebSite");
+      // A REFERENCE, not a second description. The static `WebSite` block in
+      // `apps/web/index.html` is inherited by every storyline page (that file
+      // is the template this one rewrites), so repeating the site's name and
+      // url here would put two unrelated nodes for one site on the page.
+      expect(jsonLd.isPartOf["@id"]).toBe(WEBSITE_ID);
 
       const items = jsonLd.mainEntity.itemListElement;
       expect(jsonLd.mainEntity["@type"]).toBe("ItemList");
@@ -429,6 +438,42 @@ describe("renderStorylinePage", () => {
       expect(byHostname.get("a.example")?.publisher?.name).toBe("a.example");
       expect(byHostname.get("a.example")?.name).toBe("Hurricane Fausto nears Hawaii");
       expect(byHostname.get("b.example")?.publisher?.name).toBe("b.example");
+    });
+
+    it("lists one entry per DAY, not every copy of the day's story", async () => {
+      // The guard on the trim. Measured before it: 9 days carrying 237
+      // articles serialized to 118kB of JSON-LD against a 108kB page, 48kB of
+      // it surviving gzip, for markup no search feature consumes. One entry
+      // per day describes the arc; 237 near-duplicate URLs describe how
+      // loudly the wire repeated itself.
+      //
+      // Two outlets on the SAME day is the case the other JSON-LD test cannot
+      // see — its fixture puts one article on each of two days, so a flatMap
+      // over every copy and a map over the leads produce the same two entries
+      // and it passes either way.
+      const groups = await seedGroups([
+        sighting({ domain: "a.example", title: "Fausto makes landfall", published: MONDAY }),
+        sighting({ domain: "b.example", title: "Hawaii braces as Fausto lands", published: MONDAY }),
+      ]);
+      const storyline = await storylineOf(groups, "Hurricane Fausto");
+
+      const result = await renderStorylinePage(harness.deps, {
+        path: `/storyline/${storyline}/hurricane-fausto`,
+        template: TEMPLATE,
+      });
+
+      const jsonLd = readJsonLd(result.body) as {
+        mainEntity: { numberOfItems: number; itemListElement: unknown[] };
+      };
+      expect(result.status).toBe(200);
+      expect(jsonLd.mainEntity.itemListElement).toHaveLength(1);
+      expect(jsonLd.mainEntity.numberOfItems).toBe(1);
+
+      // And nothing is hidden by trimming: the BODY still links both outlets,
+      // each with its own attribution. The JSON-LD is a summary of the arc,
+      // not the page's only account of what it holds.
+      expect(result.body).toContain("Fausto makes landfall");
+      expect(result.body).toContain("Hawaii braces as Fausto lands");
     });
 
     it("keeps exactly one script tag when a label AND a day summary carry a literal </script>", async () => {

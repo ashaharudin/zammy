@@ -51,6 +51,21 @@ describe("apps/web/index.html's WebSite + SearchAction JSON-LD", () => {
     expect(jsonLd.url).toBe("https://www.zammy.info/");
   });
 
+  it("gives the WebSite the @id the storyline pages point their isPartOf at", () => {
+    // This file is the TEMPLATE `render-storyline.ts` renders storyline pages
+    // from, so every storyline page carries this block AND its own
+    // `CollectionPage` whose `isPartOf` names this id. Two nodes for one site
+    // is what a mismatch here silently produces — both scripts still valid,
+    // both still parsing, describing a site that appears to be two.
+    //
+    // The expected value is retyped rather than imported: `@zammy/api` is not
+    // a dependency of `@zammy/web` and must not become one for a test. The
+    // pairing is asserted from the API side too, where `WEBSITE_ID` IS the
+    // real constant — see `render-storyline.test.ts`.
+    const [jsonLd] = readJsonLdBlocks() as [{ "@id": string }];
+    expect(jsonLd["@id"]).toBe("https://www.zammy.info/#website");
+  });
+
   it("targets a SearchAction at the query parameter route.ts actually reads", () => {
     const [jsonLd] = readJsonLdBlocks() as [
       { potentialAction: { "@type": string; target: string; "query-input": string } },

@@ -43,6 +43,14 @@ export const SITE_ORIGIN = "https://www.zammy.info";
 
 const SITE_TITLE = "Zammy";
 
+/**
+ * The site-wide `WebSite` node's identity, shared with the static block in
+ * `apps/web/index.html` so the two agree they are one entity. A fragment on
+ * the origin, which is the ordinary spelling for a node that is not itself a
+ * retrievable page.
+ */
+export const WEBSITE_ID = "https://www.zammy.info/#website";
+
 /** `apps/web/index.html`'s own description, repeated here for the pages that fall back to it. */
 const DEFAULT_DESCRIPTION =
   "Trace any story back to where it started. Zammy groups headlines from across the news " +
@@ -377,26 +385,48 @@ function storylineJsonLd(params: {
   view: TimelineReadResult;
 }): unknown {
   const storyline = params.view.storylines[0];
-  const items = params.view.items.flatMap((entry) =>
-    [entry.article, ...entry.related, ...entry.moreCoverage].map((article) => ({
-      "@type": "WebPage",
-      url: article.url,
-      name: article.title,
-      // Absent rather than a made-up value: `sourceDomain` is null for the
-      // rare upstream row that never carried one (`Article`, `@zammy/shared`),
-      // and a `publisher` naming nothing would be worse than no publisher.
-      ...(article.sourceDomain !== null
-        ? { publisher: { "@type": "Organization", name: article.sourceDomain } }
-        : {}),
-    })),
-  );
+  // ONE ENTRY PER DAY — the slot's own lead article, not every syndicated copy
+  // the body lists under it.
+  //
+  // Measured on a live storyline before this was trimmed: 9 days carrying 237
+  // articles between them serialized to 118kB of JSON-LD against a 108kB page,
+  // and 48kB of that survived gzip, because a list of distinct URLs is exactly
+  // the content compression cannot help with. It roughly doubled every
+  // storyline page for markup no search feature consumes — `CollectionPage`
+  // and `ItemList` of `WebPage` earn no rich result; they are read, if at all,
+  // by something parsing the page for meaning.
+  //
+  // Which is also the argument for what to keep. A slot is one storyline-day,
+  // and its lead is the article chosen to head that day (`@zammy/representative`);
+  // the rest are the same story as other outlets ran it. One per day describes
+  // the shape of the arc — the thing this page is actually about, and the thing
+  // `docs/SEO.md` calls the original content here — where 237 near-duplicate
+  // URLs describe how loudly the wire repeated itself. The body still lists
+  // every one of them, each an outbound link with its own attribution; nothing
+  // is hidden, it is just not restated in JSON.
+  const items = params.view.items.map((entry) => ({
+    "@type": "WebPage",
+    url: entry.article.url,
+    name: entry.article.title,
+    // Absent rather than a made-up value: `sourceDomain` is null for the
+    // rare upstream row that never carried one (`Article`, `@zammy/shared`),
+    // and a `publisher` naming nothing would be worse than no publisher.
+    ...(entry.article.sourceDomain !== null
+      ? { publisher: { "@type": "Organization", name: entry.article.sourceDomain } }
+      : {}),
+  }));
   return {
     "@context": "https://schema.org",
     "@type": "CollectionPage",
     name: params.label ?? "Storyline",
     description: params.description,
     url: params.canonicalUrl,
-    isPartOf: { "@type": "WebSite", name: SITE_TITLE, url: `${SITE_ORIGIN}/` },
+    // `@id` matching the static `WebSite` block in `apps/web/index.html`, which
+    // this page INHERITS: that block lives in the template `render-storyline.ts`
+    // rewrites, so a storyline page carries two ld+json scripts and would
+    // otherwise describe the same site as two unrelated nodes. A shared `@id`
+    // is what tells a consumer they are one thing.
+    isPartOf: { "@id": WEBSITE_ID },
     ...(storyline ? { dateCreated: storyline.from, dateModified: storyline.to } : {}),
     mainEntity: {
       "@type": "ItemList",

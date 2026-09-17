@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { HEAD_CLOSE_TAG, HEAD_FIELDS, ROOT_DIV } from "./render-storyline.js";
+import { HEAD_CLOSE_TAG, HEAD_FIELDS, ROOT_DIV, WEBSITE_ID } from "./render-storyline.js";
 
 /**
  * The half of the storyline page that is not TypeScript.
@@ -75,6 +75,17 @@ describe("apps/web/index.html, as render-storyline.ts expects to find it", () =>
     // class, an attribute, or a space added to the real tag would leave every
     // storyline page with an empty body and every other test green.
     expect(markup).toContain(ROOT_DIV);
+  });
+
+  it("carries the same WebSite @id the storyline pages reference", () => {
+    // The pairing that makes two ld+json blocks describe ONE site. This file
+    // is the template `render-storyline.ts` renders from, so a storyline page
+    // carries the static `WebSite` below AND a `CollectionPage` whose
+    // `isPartOf` points at `WEBSITE_ID`. A mismatch leaves both scripts valid,
+    // both parsing, and the site described twice as two different things —
+    // which is why it is asserted here, against the REAL constant, rather
+    // than trusted to two hand-typed strings staying equal.
+    expect(markup).toContain(`"@id": "${WEBSITE_ID}"`);
   });
 
   it("closes its head exactly once, where injectJsonLd writes the structured data", () => {
