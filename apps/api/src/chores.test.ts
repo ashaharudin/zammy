@@ -44,7 +44,6 @@ const SUMMARIZER: Omit<SummarizerDeps, "db"> = {
   maxAttempts: 3,
   settlingDays: 3,
   recomputeDelta: 4,
-  cliffDays: 8,
 };
 const SUMMARY_GATE = { windowDays: 8, minArticlesExclusive: 4, minGroups: 2 };
 const TZ = { timeZone: "UTC" };

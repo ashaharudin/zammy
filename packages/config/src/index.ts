@@ -784,10 +784,31 @@ const EnvSchema = z
      * the same headline. 2 is the lowest bar that means "more than one telling".
      */
     SUMMARY_MIN_GROUPS: z.coerce.number().int().min(1).default(2),
-    /** Articles per quarter that reach the prompt. The labeler's sample, minus
-     * two: a quarter is a sixth of a day, so its coverage is narrower than a
-     * whole storyline's and eight of it is already the long tail. */
-    SUMMARY_SEGMENT_SAMPLE: z.coerce.number().int().min(1).max(40).default(8),
+    /**
+     * Articles that reach the prompt — a DAY's worth since ADR-0027.
+     *
+     * It was `SUMMARY_SEGMENT_SAMPLE`, it was 8, and 8 was the right number for
+     * a sixth of a day. One call now carries the whole day, so the question is
+     * no longer "how much of a quarter" but "how much of a day, at what rate".
+     *
+     * 12 is where the token window puts it, and the arithmetic is worth having
+     * written down because it couples this knob to `SUMMARY_MAX_RPM`:
+     *
+     *   measured, under the quarters: ~490 input tokens per call averaged over
+     *   four article calls and one cheap call over their sentences, so an
+     *   8-article call is ~580 and an article is ~60 of that.
+     *
+     *   12 articles ≈ 820 tokens. At `SUMMARY_MAX_RPM` 18 that is ~14.8k
+     *   against the key's 16k input-tokens-per-minute ceiling — the same ~14k
+     *   the old shape sat at, which is the number to hold.
+     *
+     * **Raising this means lowering `SUMMARY_MAX_RPM` by the same product.** The
+     * pacer counts CALLS and the key also meters TOKENS, so a sample raised on
+     * its own buys a rate limit nothing in this process can see: the pass would
+     * keep its spacing and the key would start refusing, which reads here as
+     * `unavailable` — no row, no attempt, and a night that quietly writes less.
+     */
+    SUMMARY_DAY_SAMPLE: z.coerce.number().int().min(1).max(40).default(12),
     /**
      * Asks one span gets before it is retired.
      *
@@ -799,50 +820,51 @@ const EnvSchema = z
      */
     SUMMARY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
     /**
-     * Days after which an article's published TIME is no longer trustworthy, so
-     * a day is summarised whole rather than by its quarters.
-     *
-     * 8, from the measured Google News behaviour: beyond roughly eight days the
-     * feed drops the pubDate time and 89.4% of those rows come back stamped
-     * midnight US Pacific — which is 07:00 or 08:00 UTC, so nearly every one of
-     * them lands in the "morning" quarter. Four sentences off that would be
-     * four sentences about a bucket boundary. The day row's `segmented` column
-     * records which kind of day it was.
-     */
-    SUMMARY_CLIFF_DAYS: z.coerce.number().int().min(1).max(365).default(8),
-    /**
      * How far back one nightly summary pass looks for qualifying days.
      *
-     * 8, deliberately equal to `SUMMARY_CLIFF_DAYS`: the nightly pass covers
-     * exactly the span over which quarters are still honest, and everything
-     * older is the backfill CLI's business (day sentences only). It is wider
-     * than `SUMMARY_SETTLING_DAYS` on purpose — the window governs which days
+     * 8, and it needs its own reason now. It used to have a borrowed one — it
+     * was deliberately equal to `SUMMARY_CLIFF_DAYS`, so that the nightly pass
+     * covered exactly the span over which the six-hour quarters were still
+     * honest. ADR-0027 removed the quarters and with them the cliff, so that
+     * argument is gone and the number is not.
+     *
+     * What justifies it now is the split between UNATTENDED and ATTENDED spend.
+     * This window bounds what the nightly pass sweeps across every arc with
+     * nobody watching; a reader opening a storyline submits that arc's own
+     * unsummarised days whatever their age (ADR-0027's click plane), so the
+     * window is no longer the only thing that can reach an old day. It buys a
+     * predictable night rather than completeness, and completeness now has its
+     * own path.
+     *
+     * Wider than `SUMMARY_SETTLING_DAYS` on purpose — that governs which days
      * are still open to REVISION, this governs which are still looked at, and a
      * slow story that only crosses the article bar on its fourth day still needs
      * to be seen.
      */
     SUMMARY_WINDOW_DAYS: z.coerce.number().int().min(1).max(90).default(8),
     /**
-     * Model calls one nightly summary pass may spend. A day costs between 1 and
-     * 5 of them, so this is not a count of days.
+     * Model calls one nightly summary pass may spend. Since ADR-0027 a day costs
+     * exactly one, so this IS a count of days — it keeps the name because what
+     * the key meters is calls.
      *
      * **It is a SPEND bound, and `SUMMARY_BUDGET_MS` is the clock bound — the
      * same split `CHORE_MAX_LABELS` and `CHORE_LABEL_BUDGET_MS` make, and the
      * same warning applies: do not read this number as a duration.** The budget
      * is what should stop a healthy night; this is the backstop behind it.
      *
-     * **So it has to stay ABOVE what a firing can physically spend, and that is
-     * now a live constraint rather than a comfortable one.** The pacer caps a
-     * firing at `SUMMARY_MAX_RPM / 60 * SUMMARY_BUDGET_MS` — 128 calls at 28 rpm
-     * and 275 s. 120 was safe while a call cost 3.3 s and a firing reached ~72;
-     * at 128 it would have become the bound, and the pass would have reported
-     * `max-summaries` on nights the budget was meant to end. 200 puts it back
-     * behind the clock with room for either number to move.
-     *
-     * Raising `SUMMARY_MAX_RPM` or `SUMMARY_BUDGET_MS` means re-checking that
-     * product. A spend bound that quietly becomes the binding one is not a
+     * **So it has to stay ABOVE what a firing can physically spend.** The pacer
+     * caps a firing at `SUMMARY_MAX_RPM / 60 * SUMMARY_BUDGET_MS` — ~82 calls at
+     * 18 rpm and 275 s, down from 128 when the rate was 28. The ceiling is
+     * further above the clock than it has ever been, which is the right side to
+     * err on: a spend bound that quietly becomes the binding one is not a
      * failure anything reports — the night just ends early, correctly, for a
      * reason nobody chose.
+     *
+     * Note what those ~82 calls now BUY, because the units changed underneath
+     * this number: 82 days, where the same firing used to reach 14-25 of them.
+     *
+     * Raising `SUMMARY_MAX_RPM` or `SUMMARY_BUDGET_MS` means re-checking that
+     * product.
      *
      * What a bounded night costs is bounded too, and deliberately so: the walk
      * spends a bounded share on the newest days and the rest OLDEST-day-first,
@@ -880,17 +902,26 @@ const EnvSchema = z
      * rate is the rate actually achieved, and a pass configured at the key's
      * ceiling would leave nothing for anything else on that key.
      *
-     * 28 rather than 30 is that margin: the drain's organic label promotions
-     * are ~5 a night in these hours and they share both the rpm window and the
-     * 16k input-tokens-per-minute one, which at 28 calls of ~490 tokens sits at
-     * ~14k. A label that cannot queue takes the bigram fallback, and a bigram
+     * **18, down from 28, and the reason is tokens rather than calls.** The
+     * drain's organic label promotions are ~5 a night in these hours and they
+     * share both the rpm window and the 16k input-tokens-per-minute one. Under
+     * the quarters a call averaged ~490 tokens and 28 of them sat at ~14k; under
+     * ADR-0027 every call carries a whole day's sample, ~820 tokens at
+     * `SUMMARY_DAY_SAMPLE` 12, and 28 of those would be ~23k — over the ceiling,
+     * which the pacer cannot see because it counts calls. 18 puts it back to
+     * ~14.8k. A label that cannot queue takes the bigram fallback, and a bigram
      * label is sticky until membership doubles.
      *
-     * With `SUMMARY_API_KEY` set the lanes do not compete and this could be the
-     * key's full ceiling — but the token limit is per key too, so 28 is still
-     * the more comfortable number.
+     * **A lower rate is not less work here.** A day cost up to five calls and
+     * now costs one, so 18 calls a minute is ~18 days a minute against the ~5.6
+     * that 28 bought — the rate went down and the throughput more than tripled.
+     *
+     * This knob and `SUMMARY_DAY_SAMPLE` are two halves of one budget; moving
+     * either without the other is what silently pushes the key over its token
+     * ceiling. With `SUMMARY_API_KEY` set the lanes do not compete on the rpm
+     * window — but the token limit is per key too, so the product still binds.
      */
-    SUMMARY_MAX_RPM: z.coerce.number().int().min(1).max(10_000).default(28),
+    SUMMARY_MAX_RPM: z.coerce.number().int().min(1).max(10_000).default(18),
     /**
      * Days at the NEWEST end of the window the nightly pass walks first, newest
      * first, before its oldest-first walk over the whole window. 0 turns the
@@ -911,15 +942,89 @@ const EnvSchema = z
      * cannot wait, and an unbounded fresh phase could spend a whole night on the
      * newest end and lose them for good.
      *
-     * At 0.6, a 128-call firing reserves ~77 calls for the newest days and ~51
-     * for the old end — ~231 and ~153 across the three nightly firings. Both
-     * sides of that were sized against measured demand: one new UTC day costs
-     * 107-211 calls, and the largest back-history burst seen was ~400, which the
-     * old end's own share drains in under three nights and faster than that in
-     * practice, because a fresh phase with nothing left to do yields its
-     * remainder rather than holding it.
+     * At 0.6, an ~82-call firing reserves ~49 calls for the newest days and ~33
+     * for the old end. Both sides of that were sized against measured demand,
+     * and ADR-0027 divided that demand by five: one new UTC day cost 107-211
+     * calls under the quarters and costs ~21-42 now, and the largest
+     * back-history burst seen was ~400 calls, which is ~80 days. So a single
+     * firing's fresh share now covers a new UTC day outright, where it used to
+     * take several — which is the starvation this phase was added to fix,
+     * fixed again from the other end.
      */
     SUMMARY_FRESH_SHARE: z.coerce.number().min(0).max(1).default(0.6),
+    /**
+     * Model calls ONE storyline open may submit (ADR-0027's click plane).
+     *
+     * A click hands the arc's unsummarised qualifying days to the queue; this is
+     * how many of them one click buys. The rest wait for the next open, which is
+     * a deferral rather than a loss — a reader who keeps coming back to an arc
+     * is exactly the reader whose arc is worth summarising.
+     *
+     * 8 by the same logic ADR-0017 used for the refresh plane it rides beside:
+     * a click buys the part of the history a reader can see, and typing the
+     * words is what buys the rest. It is the number to change if click-driven
+     * summaries turn out to be the cheap way to backfill, and the number to
+     * watch if they turn out to be the expensive way to drain a key.
+     *
+     * **What bounds this ACROSS arcs is the per-IP ceiling and nothing else**,
+     * which is stated rather than defended. Every open of a distinct UUID is its
+     * own 8, and UUIDs are public on every timeline page.
+     *
+     * The pacer is NOT a second guard here, and it is worth being exact because
+     * the obvious reading is wrong: `createPacer` holds its window in memory and
+     * is built once per process (`wiring.ts`), so concurrent consumer
+     * invocations are concurrent PACERS. `SUMMARY_MAX_RPM` bounds one job, not
+     * the key. At `RATE_LIMIT_PER_MINUTE` 120 the demand one IP can queue is
+     * well above what the key allows in a day, and what absorbs the excess is
+     * the model refusing — which reads here as `unavailable`, writes no row and
+     * spends no attempt, so nothing is corrupted and the labeler's promotions
+     * fall back to the bigram extractor.
+     *
+     * ADR-0017 accepted the same shape for its own plane and the note there
+     * applies: a global daily ceiling is the fix if this bites. The difference
+     * worth flagging is that ADR-0017's budget refills daily and this one is
+     * shared with the labeler in the same minutes.
+     */
+    SUMMARY_CLICK_MAX_DAYS: z.coerce.number().int().min(0).max(200).default(8),
+    /**
+     * Wall-clock ceiling on one click's summary job, in ms.
+     *
+     * Its own knob rather than `SUMMARY_BUDGET_MS`, because the two run under
+     * different platform deadlines and the whole point of a budget is to sit
+     * under the one that actually applies. The nightly pass runs on
+     * `api/chores.ts`; this runs on the queue consumer — and, for an orphaned
+     * pending entry, on `api/drain.ts`, which is the tighter of the two and the
+     * one that sizes this number.
+     *
+     * **45 s, because the drain's headroom is 60 s.** `DRAIN_DEADLINE_MS` is
+     * 240 s against a 300 s `maxDuration` and is checked BETWEEN jobs, never
+     * inside one — its own comment sizes that gap as "room for one long fill
+     * plus the response". A job dispatched at 239 s therefore gets 60 s before
+     * the function is killed, and being killed there costs every later entry in
+     * that pass its settle. With `runSummarizeJob`'s abort ten seconds past this
+     * budget plus one unabortable backoff (≤ 500 ms), the worst case is ~55.5 s,
+     * which fits. At 120 s it was ~130 s, which did not.
+     *
+     * It is not tight for the WORK: the job's total is
+     * `max(7 × spacing + latency, 8 × latency)` — spacing runs from a call's
+     * START, so latency overlaps it until latency exceeds the interval — which
+     * at `SUMMARY_MAX_RPM` 18 and the measured ~1.3 s is ~24.6 s.
+     *
+     * **The bound binds when average latency passes ~5.6 s**, at which point the
+     * eighth call is refused and the job reports `budget`. That is the number to
+     * hold in mind rather than the 45: `GEMINI_TIMEOUT_MS` is 20 s with two
+     * retries, so one pathological call can now consume the whole budget where
+     * at 120 s it could not. The consequence is self-healing — the abort reads
+     * as `unreachable`, writes no row and spends no attempt, so the next open
+     * plans those days again — which is why the tighter budget is the right
+     * trade against being killed mid-pass on the drain.
+     */
+    SUMMARY_CLICK_BUDGET_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(300_000)
+      .default(45_000),
     /**
      * How many live storylines must share one label before the ingest tail runs
      * the label-agreement merge for that label, without waiting for the nightly

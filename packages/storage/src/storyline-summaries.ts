@@ -6,9 +6,14 @@ import type { Database, SummarySegment } from "./database.js";
  * ADR-0023, docs/STORYLINE-SUMMARIES.md).
  *
  * Everything time-shaped in here is UTC and says so. `storyline_days.day_key`
- * is an APP_TIMEZONE day and this module deliberately does not read it: the
- * segments are UTC quarters, so the day they add up to has to be the UTC day or
- * the fifth sentence covers a span the other four do not.
+ * is an APP_TIMEZONE day and this module deliberately does not read it: a
+ * sentence is written over a UTC day, and the view matches the two by DATE
+ * LABEL rather than by instants (docs/STORYLINE-SUMMARIES.md, "Two calendars").
+ *
+ * **There are no quarters any more (ADR-0027).** A day is one sentence over its
+ * own articles. `SummarySegment` still holds the five values and the rows
+ * written under the old shape are still here, unread — see the migration and
+ * `readArcDaySummaries`, which has always selected `segment = 'day'` alone.
  *
  * The day is expressed to Postgres as a HALF-OPEN INSTANT RANGE derived in
  * TypeScript, never as `to_char(published at time zone 'UTC') = '2026-08-29'`.
@@ -17,11 +22,6 @@ import type { Database, SummarySegment } from "./database.js";
  * label rather than arithmetic (0007's argument) — the arithmetic belongs in one
  * place, `summaryDayBounds`, rather than in every query that mentions a day.
  */
-
-/** The four quarters, in the order a day reads. `day` is not one of them. */
-export const SUMMARY_QUARTERS = ["night", "morning", "afternoon", "evening"] as const;
-
-export type SummaryQuarter = (typeof SUMMARY_QUARTERS)[number];
 
 /** YYYY-MM-DD of `instant` in UTC — this table's day key, always. */
 export function summaryDayKey(instant: Date): string {
@@ -38,14 +38,6 @@ export function summaryDayBounds(dayKey: string): { from: Date; to: Date } {
   const from = new Date(`${dayKey}T00:00:00.000Z`);
   if (Number.isNaN(from.getTime())) throw new Error(`not a day key: ${dayKey}`);
   return { from, to: new Date(from.getTime() + 86_400_000) };
-}
-
-/** Which quarter a UTC hour falls in. `floor(hour / 6)`, named. */
-export function quarterOfUtcHour(hour: number): SummaryQuarter {
-  const index = Math.floor(hour / 6);
-  const quarter = SUMMARY_QUARTERS[index];
-  if (quarter === undefined) throw new Error(`hour out of range: ${hour}`);
-  return quarter;
 }
 
 /** A storyline-day that cleared the gate, with the numbers the gate read. */
@@ -199,6 +191,115 @@ export async function readSummaryCandidateDays(
   }));
 }
 
+/**
+ * The days of ONE arc that qualify for a sentence and do not have one — the
+ * click plane's whole plan (ADR-0027).
+ *
+ * The nightly pass discovers work by walking a window across every arc; this
+ * answers the opposite question, asked about one arc at a reader's request, and
+ * it is a different query rather than a narrowing of `readSummaryCandidateDays`
+ * for two reasons that both matter:
+ *
+ *  - **No window.** ADR-0027 gives a click the arc's whole history, so there are
+ *    no `from`/`to` bounds here at all. The nightly window exists to bound
+ *    UNATTENDED spend across every arc; a click is one reader asking about one
+ *    arc, and it is bounded by `limit` instead.
+ *  - **`not exists` rather than a per-day read.** The pass reads a day's stored
+ *    rows and calls `decideSpan`, which is right when it may also RETRY and
+ *    RECOMPUTE. The click only ever writes a day that has no sentence, so asking
+ *    the database that question once beats two round trips per day to be told to
+ *    skip — an arc with forty summarised days would otherwise cost eighty
+ *    queries to find nothing.
+ *
+ * **A row with a null `summary` counts as having one.** It is a REFUSAL — the
+ * model was asked and would not answer (migration 0024's three states) — and
+ * retrying refusals is the pass's business, bounded by `SUMMARY_MAX_ATTEMPTS`.
+ * A click that retried them would spend an arc's whole attempt budget in as many
+ * opens as it takes to click three times, on a table nothing can rebuild.
+ *
+ * **The alias chain, downward, exactly as `readArcDaySummaries` walks it.** The
+ * preserve never follows a merge, so a winner's day can already be described by
+ * a sentence written under a loser's id; membership DID follow the merge, so the
+ * article gate reads the winner alone. Reading the winner's summaries alone
+ * would re-buy sentences the arc already has, once per click, for ever.
+ *
+ * Newest day first: a reader who opened this arc is looking at its present, and
+ * a bounded click should spend itself on the days they can see. The ordering
+ * argument that makes the nightly pass go oldest-first is about days falling out
+ * of a window, and there is no window here to fall out of.
+ */
+export async function readArcDaysAwaitingSummary(
+  db: Kysely<Database>,
+  options: {
+    storylineId: string;
+    minArticlesExclusive: number;
+    minGroups: number;
+    limit: number;
+    /** Exclusive upper bound on `published` — the caller excludes today. */
+    before: Date;
+  },
+): Promise<SummaryCandidateDay[]> {
+  const { rows } = await sql<{
+    storyline_id: string;
+    day_key: string;
+    article_count: number;
+    group_count: number;
+    label: string | null;
+  }>`
+    with recursive arc(id, depth) as (
+      select id, 0 from storylines where id = ${options.storylineId}::uuid
+      union all
+      select loser.id, arc.depth + 1
+      from storylines loser join arc on loser.merged_into = arc.id
+      where arc.depth < 32
+    ),
+    -- The gate, as its own result set. Anti-joining in a HAVING clause would
+    -- have to repeat the day-key expression to stay a grouping expression, and
+    -- a second copy of that to_char() is the one place this query could drift
+    -- out of agreement with itself about which day a row belongs to.
+    days as (
+      select sg.storyline_id,
+             to_char(a.published at time zone 'UTC', 'YYYY-MM-DD') as day_key,
+             count(*)::int                        as article_count,
+             count(distinct sg.group_id)::int     as group_count,
+             s.label
+        from storyline_groups sg
+        join articles   a on a.group_id = sg.group_id
+        join storylines s on s.id = sg.storyline_id
+       where sg.storyline_id = ${options.storylineId}::uuid
+         -- The same two lifecycle clauses the nightly gate applies. A click can
+         -- reach a provisional arc (the gutter renders label-less arcs and lets
+         -- a reader click them), and a provisional arc is one group that has not
+         -- been shown to be a story at all — no history to preserve yet.
+         and s.merged_into is null
+         and s.status <> 'provisional'
+         and a.published < ${options.before}
+       group by sg.storyline_id, 2, s.label
+      having count(*) > ${options.minArticlesExclusive}
+         and count(distinct sg.group_id) >= ${options.minGroups}
+    )
+    select d.storyline_id, d.day_key, d.article_count, d.group_count, d.label
+      from days d
+     where not exists (
+       select 1
+         from storyline_day_summaries existing
+        where existing.storyline_id in (select id from arc)
+          and existing.day_key = d.day_key
+          and existing.segment = 'day'
+     )
+     order by d.day_key desc
+     limit ${options.limit}
+  `.execute(db);
+
+  return rows.map((row) => ({
+    storylineId: row.storyline_id,
+    dayKey: row.day_key,
+    articleCount: row.article_count,
+    groupCount: row.group_count,
+    label: row.label,
+  }));
+}
+
 /** One article as a summary prompt renders it. */
 export interface SummaryMember {
   title: string;
@@ -208,36 +309,42 @@ export interface SummaryMember {
   sightingCount: number;
 }
 
-/** One populated quarter of a day: everything in it, and the sample of it. */
-export interface SummarySegmentInput {
-  segment: SummaryQuarter;
-  /** Every article in the quarter, not just the sampled ones. */
+/** A day's coverage: how much of it there is, and the sample the model sees. */
+export interface SummaryDayInput {
+  /** Every article the arc holds on that UTC day, not just the sampled ones. */
   articleCount: number;
   /** Up to `sampleSize` of them, oldest first. */
   members: SummaryMember[];
 }
 
 /**
- * The day's articles, split into its populated quarters.
+ * One storyline-day's articles: the whole count, and a sample of them.
  *
- * Empty quarters are absent from the result rather than present and empty, which
- * is the whole skip rule expressed once, here, instead of at every caller.
+ * This replaced `readStorylineDaySegments` when the quarters went (ADR-0027).
+ * The shape of the read is the same one it always made for a single quarter —
+ * count everything, rank a sample — with the `partition by quarter` removed, so
+ * the window functions now run over the day.
  *
- * The sample is `sighting_count DESC` — the dominant coverage of the quarter
- * rather than whatever happened to be published first — then re-sorted oldest
- * first for rendering, the same two-step the labeler's `selectLabelMembers`
- * makes and for the same reason: what to SHOW the model and what ORDER to show
- * it in are different questions.
+ * The sample is `sighting_count DESC` — the dominant coverage of the day rather
+ * than whatever happened to be published first — then re-sorted oldest first for
+ * rendering, the same two-step the labeler's `selectLabelMembers` makes and for
+ * the same reason: what to SHOW the model and what ORDER to show it in are
+ * different questions.
+ *
+ * **The sample now carries the whole day's weight.** Under the quarters a busy
+ * day reached the model as four samples and the day sentence was written over
+ * their four sentences, so `sampleSize` bounded a quarter; here it bounds the
+ * day, which is why `SUMMARY_DAY_SAMPLE` is not the 8 that `SUMMARY_SEGMENT_SAMPLE`
+ * was. See its comment for the token arithmetic.
  */
-export async function readStorylineDaySegments(
+export async function readStorylineDayArticles(
   db: Kysely<Database>,
   input: { storylineId: string; dayKey: string; sampleSize: number },
-): Promise<SummarySegmentInput[]> {
+): Promise<SummaryDayInput> {
   const { from, to } = summaryDayBounds(input.dayKey);
 
   const { rows } = await sql<{
-    quarter: number;
-    segment_count: number;
+    day_count: number;
     title: string;
     description: string | null;
     published: Date;
@@ -248,8 +355,7 @@ export async function readStorylineDaySegments(
              a.title,
              a.description,
              a.published,
-             a.sighting_count,
-             (floor(extract(hour from (a.published at time zone 'UTC')) / 6))::int as quarter
+             a.sighting_count
         from storyline_groups sg
         join articles a on a.group_id = sg.group_id
        where sg.storyline_id = ${input.storylineId}::uuid
@@ -258,39 +364,30 @@ export async function readStorylineDaySegments(
     ),
     ranked as (
       select d.*,
-             count(*) over (partition by d.quarter)::int as segment_count,
+             count(*) over ()::int as day_count,
              row_number() over (
-               partition by d.quarter
                order by d.sighting_count desc, d.published asc, d.id asc
              ) as rank
         from day_articles d
     )
-    select quarter, segment_count, title, description, published, sighting_count
+    select day_count, title, description, published, sighting_count
       from ranked
      where rank <= ${input.sampleSize}
-     order by quarter asc, published asc, id asc
+     order by published asc, id asc
   `.execute(db);
 
-  const bySegment = new Map<SummaryQuarter, SummarySegmentInput>();
-  for (const row of rows) {
-    const segment = quarterOfUtcHour(row.quarter * 6);
-    let entry = bySegment.get(segment);
-    if (entry === undefined) {
-      entry = { segment, articleCount: row.segment_count, members: [] };
-      bySegment.set(segment, entry);
-    }
-    entry.members.push({
+  return {
+    // No rows is no coverage, and the count is what the caller compares against
+    // a stored `article_count`. `rows[0]` rather than `rows.length`: the sample
+    // is capped and the count is not.
+    articleCount: rows[0]?.day_count ?? 0,
+    members: rows.map((row) => ({
       title: row.title,
       description: row.description,
       published: row.published,
       sightingCount: row.sighting_count,
-    });
-  }
-
-  // Chronological order of the quarters, not the order the rows arrived in.
-  return SUMMARY_QUARTERS.map((segment) => bySegment.get(segment)).filter(
-    (entry): entry is SummarySegmentInput => entry !== undefined,
-  );
+    })),
+  };
 }
 
 /** A stored summary row, as the pass reads one back. */

@@ -106,15 +106,13 @@ describe("createSummarizer", () => {
         GEMINI_API_KEY: "one-key",
         SUMMARY_SETTLING_DAYS: "5",
         SUMMARY_RECOMPUTE_DELTA: "9",
-        SUMMARY_CLIFF_DAYS: "20",
         SUMMARY_MAX_ATTEMPTS: "2",
-        SUMMARY_SEGMENT_SAMPLE: "3",
+        SUMMARY_DAY_SAMPLE: "3",
       }),
     );
     expect(summarizer).toMatchObject({
       settlingDays: 5,
       recomputeDelta: 9,
-      cliffDays: 20,
       maxAttempts: 2,
       sampleSize: 3,
     });

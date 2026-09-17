@@ -139,7 +139,98 @@ export interface DeepenJob {
   to: string;
 }
 
-export type IngestJob = SegmentJob | SampleJob | DeepenJob;
+/**
+ * The click plane's unit of work (ADR-0027): summarise one arc's unsummarised
+ * days.
+ *
+ * **The odd one out in this file, and the exception is worth naming.** Every
+ * other job here is an upstream FETCH — §9.1's whole subject is deferred
+ * ingestion, and the three above differ only in what they fetch and what
+ * records the completion. This one calls no provider and writes no article. It
+ * is here anyway, on the same topic and through the same consumer, because what
+ * it needs is exactly what this queue already is: at-least-once delivery of
+ * work a request path must not wait for, deduplicated by a content address,
+ * behind a function with 300 s rather than the API's 60.
+ *
+ * A second topic would have bought a second Vercel Queues topic, a second
+ * consumer deployable and a second set of redelivery semantics to reason about,
+ * to carry one job kind that arrives on exactly the same trigger as the
+ * `deepen` beside it — a storyline being opened.
+ *
+ * **No day list on the payload, deliberately.** The days are planned at the far
+ * end, not here: a payload naming its days would be a plan made at click time
+ * and executed later, so two clicks a second apart would carry the same days and
+ * spend twice on them. Planning in the consumer means the second delivery reads
+ * what the first one wrote.
+ *
+ * At-least-once therefore costs a re-plan and nothing else. The re-plan is
+ * exact rather than merely safe, because `readArcDaysAwaitingSummary` selects on
+ * the absence of a row: a redelivery after a successful job finds the days it
+ * wrote and returns them to nobody. (Vercel Queues DO redeliver — a consumer's
+ * 200 proves nothing about the lease, which is a platform constant that moves.)
+ *
+ * **`at` is a SNAPPED clock, and leaving it out was a bug.** This job first
+ * addressed the arc alone, on the reasoning that repeated clicks should collapse
+ * while one is outstanding and a later click should queue again. Only the first
+ * half of that is how the transport behaves: `enqueueSummarize` publishes under
+ * `idempotencyKey: ingestJobId(job)` with `retentionSeconds:
+ * INGEST_RETENTION_SECONDS`, so the dedup window is a fixed **900 seconds from
+ * the PUBLISH**, not from the job finishing. `ingest-queue-vercel.ts` says so
+ * itself: "a re-plan inside that window is deduplicated against this very
+ * message and never sees a delivery — it only re-adds the pending entry".
+ *
+ * Under the arc-only address a cold arc therefore drained at
+ * `SUMMARY_CLICK_MAX_DAYS` per **fifteen minutes** however often it was opened,
+ * and the un-delivered republishes left pending entries for `api/drain.ts` to
+ * pick up — making the manual drain route the click plane's real executor on a
+ * hot arc, which nothing intended.
+ *
+ * Snapping to `SUMMARIZE_SNAP_MS` keeps the property that was actually wanted
+ * (readers opening one arc in the same minute cost one job) and restores the one
+ * that was assumed (the next minute's click is a different message, so it is
+ * delivered). It is the same trick `ingestJobId` already plays on a segment's
+ * span, and the same minute ADR-0017's freshness gate uses.
+ */
+export interface SummarizeJob {
+  kind: "summarize";
+  /** The arc to summarise. Resolved through aliases before enqueue. */
+  storylineId: string;
+  /**
+   * When this was asked for, snapped down to `SUMMARIZE_SNAP_MS` — ISO-8601,
+   * because job payloads cross a transport as JSON.
+   *
+   * It is in the CONTENT ADDRESS and nowhere else: no consumer reads it, and
+   * the plan is made against the rows as they stand when the job runs.
+   */
+  at: string;
+}
+
+/**
+ * The grid a summarize job's clock is snapped onto: one minute.
+ *
+ * Small enough that a reader re-opening an arc gets a fresh job rather than a
+ * silently swallowed one, large enough that the readers who open a storyline
+ * together cost one. ADR-0017 drew its freshness gate at the same minute and for
+ * the same reason.
+ *
+ * Deliberately NOT `WINDOW_SNAP_MS` (15 minutes), which is a span grid for
+ * fetches planned against coverage. Reusing it here would reproduce exactly the
+ * fifteen-minute stall this constant exists to remove.
+ */
+export const SUMMARIZE_SNAP_MS = 60_000;
+
+/** A `SummarizeJob` for one arc, with its clock snapped onto the grid. */
+export function summarizeJob(storylineId: string, now: Date): SummarizeJob {
+  return {
+    kind: "summarize",
+    storylineId,
+    at: new Date(
+      Math.floor(now.getTime() / SUMMARIZE_SNAP_MS) * SUMMARIZE_SNAP_MS,
+    ).toISOString(),
+  };
+}
+
+export type IngestJob = SegmentJob | SampleJob | DeepenJob | SummarizeJob;
 
 export type IngestHandler = (job: IngestJob) => Promise<void>;
 
@@ -166,6 +257,12 @@ export function ingestJobId(job: IngestJob): string {
   // same identity rather than a fresh job per poll.
   if (job.kind === "deepen") {
     return `deep_${job.storylineId}_${Date.parse(job.from)}_${Date.parse(job.to)}`;
+  }
+  // The arc and the minute it was asked in. The minute is what makes a later
+  // click a DIFFERENT message rather than one the transport's 900-second dedup
+  // swallows — see `SummarizeJob`, where leaving it out is recorded as a bug.
+  if (job.kind === "summarize") {
+    return `sum_${job.storylineId}_${Date.parse(job.at)}`;
   }
   // The plane sits right after the prefix, where it cannot be confused with the
   // fingerprint: plane names are `[a-z]+` and carry no underscore, so
@@ -217,6 +314,13 @@ export function parseIngestJobId(id: string, now: Date): IngestJob | null {
     const date = new Date(Number(ms));
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
   };
+
+  if (parts[0] === "sum" && parts.length === 3) {
+    const [, storylineId, atMs] = parts;
+    const at = asIso(atMs!);
+    if (!storylineId || !at) return null;
+    return { kind: "summarize", storylineId, at };
+  }
 
   if (parts[0] === "deep" && parts.length === 4) {
     const [, storylineId, fromMs, toMs] = parts;
@@ -274,12 +378,14 @@ export function pendingIdOf(job: IngestJob): string {
   // against — counting it under one would make a timeline read report work it
   // has no way to wait for, and would let a deepening job's settle decrement a
   // count a reader is watching.
-  if (job.kind === "deepen") return storylinePendingId(job);
+  // Both arc-subject jobs count under the arc's own registry rather than any
+  // topic's — see the note above, which applies to this one identically.
+  if (job.kind === "deepen" || job.kind === "summarize") return storylinePendingId(job);
   return job.fingerprint;
 }
 
 /** The pending-set identity a storyline's own outstanding work is counted under. */
-export function storylinePendingId(job: Pick<DeepenJob, "storylineId">): string {
+export function storylinePendingId(job: { storylineId: string }): string {
   return `storyline_${job.storylineId}`;
 }
 
@@ -307,6 +413,14 @@ export function parseIngestJob(payload: unknown): IngestJob | null {
           from: candidate.from,
           to: candidate.to,
         }
+      : null;
+  }
+  if (candidate.kind === "summarize") {
+    return typeof candidate.storylineId === "string" &&
+      candidate.storylineId.length > 0 &&
+      typeof candidate.at === "string" &&
+      candidate.at.length > 0
+      ? { kind: "summarize", storylineId: candidate.storylineId, at: candidate.at }
       : null;
   }
   if (candidate.kind === "sample") {
@@ -423,6 +537,17 @@ export interface IngestQueue {
    * call per click.
    */
   enqueueDeepen(job: DeepenJob): Promise<void>;
+
+  /**
+   * Enqueue one arc's summary work (ADR-0027), deduplicated by the arc and the
+   * MINUTE it was asked in.
+   *
+   * The days are planned in the consumer, so clicks close enough together must
+   * collapse into one job rather than plan the same days twice — and clicks
+   * further apart must not, which is what the minute buys. `SummarizeJob`
+   * records why an arc-only identity was wrong.
+   */
+  enqueueSummarize(job: SummarizeJob): Promise<void>;
 
   /**
    * Outstanding jobs for a topic — meta.ingest.pendingJobs (§6.1) — or for a

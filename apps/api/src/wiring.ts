@@ -368,11 +368,10 @@ export function createSummarizer(
         })
       : null,
     modelId: apiKey ? config.SUMMARY_MODEL : null,
-    sampleSize: config.SUMMARY_SEGMENT_SAMPLE,
+    sampleSize: config.SUMMARY_DAY_SAMPLE,
     maxAttempts: config.SUMMARY_MAX_ATTEMPTS,
     settlingDays: config.SUMMARY_SETTLING_DAYS,
     recomputeDelta: config.SUMMARY_RECOMPUTE_DELTA,
-    cliffDays: config.SUMMARY_CLIFF_DAYS,
     logger,
   };
 }

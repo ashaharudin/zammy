@@ -22,10 +22,15 @@ import {
   createLabeler,
   createLabelMergeRules,
   createLinkerConfig,
+  createSummarizer,
 } from "./wiring.js";
 import { createQuotaGovernors } from "./quota-redis.js";
 import { watchRateLimitFailOpen } from "./rate-limit-fail-open.js";
 import { processSegmentJob } from "./coverage-fill.js";
+import {
+  processSummarizeJob,
+  type SummarizeJobDeps,
+} from "./storyline-summary-job.js";
 import { processDeepenJob } from "./storyline-deepening.js";
 import { processSampleJob, type TrendingDeps } from "./trending-service.js";
 
@@ -137,6 +142,13 @@ export interface Services {
    */
   deps: QueryRouteDeps;
   trendingDeps: TrendingDeps;
+  /**
+   * The click plane (ADR-0027). Its own field rather than a slice of `deps`,
+   * because it is the one plane that makes no upstream call and holds no
+   * `CurrentsClient` — it needs a summariser, a gate and two bounds, and
+   * nothing `QueryRouteDeps` carries.
+   */
+  summarizeDeps: SummarizeJobDeps;
   close: () => Promise<void>;
 }
 
@@ -326,6 +338,31 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
       now: () => new Date(),
       log,
     } satisfies QueryRouteDeps;
+    // The summariser the click plane spends, built from the same factory the
+    // nightly pass uses — so a sentence written behind a click is written under
+    // the same prompt, contract, model and sample as one written at 05:00. It
+    // gets its own pacer because `createSummarizer` is handed none here: the API
+    // instance has no label pass to share a window with, and the ceiling the
+    // client builds for itself is `GEMINI_MAX_RPM`.
+    const summarizeDeps: SummarizeJobDeps = {
+      db,
+      redis,
+      summarizer: createSummarizer(config, log),
+      enabled: config.SUMMARIES_ENABLED,
+      gate: {
+        minArticlesExclusive: config.SUMMARY_MIN_ARTICLES_PER_DAY,
+        minGroups: config.SUMMARY_MIN_GROUPS,
+      },
+      maxDays: config.SUMMARY_CLICK_MAX_DAYS,
+      budgetMs: config.SUMMARY_CLICK_BUDGET_MS,
+      // The summary pass's rate, not the key's ceiling: this shares a key with
+      // the labeler and with the nightly pass, and `SUMMARY_MAX_RPM` is the
+      // number that was sized against both (see its comment).
+      ratePerMinute: config.SUMMARY_MAX_RPM,
+      now: () => new Date(),
+      log,
+    };
+
     const trendingDeps: TrendingDeps = {
       ...deps,
       trending: {
@@ -356,7 +393,7 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
       if (!pool.ending) await pool.end();
     };
 
-    return { pool, redis, currents, queue, deps, trendingDeps, close };
+    return { pool, redis, currents, queue, deps, trendingDeps, summarizeDeps, close };
   } catch (error) {
     await Promise.allSettled(abandon.reverse().map((release) => release()));
     throw error;
@@ -375,6 +412,7 @@ export function ingestDispatch(services: Services): IngestHandler {
   return (job) => {
     if (job.kind === "sample") return processSampleJob(services.trendingDeps, job);
     if (job.kind === "deepen") return processDeepenJob(services.deps, job);
+    if (job.kind === "summarize") return processSummarizeJob(services.summarizeDeps, job);
     return processSegmentJob(services.deps, job);
   };
 }
@@ -494,6 +532,7 @@ export async function buildApp(
     await registerQueryRoutes(app, {
       deps: services.deps,
       defaultLanguage: config.DEFAULT_LANGUAGE,
+      summariesEnabled: config.SUMMARIES_ENABLED,
     });
     registerTrendingRoute(app, { deps: services.trendingDeps });
 

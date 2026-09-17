@@ -130,17 +130,25 @@ async function printSummaries(
     console.log("no summaries for that storyline");
     return;
   }
+  // `segment` is still printed, and for one reason: ADR-0027 stopped WRITING
+  // quarters and deliberately did not delete the ones already written, so an
+  // arc summarised before it still has four rows a reader of this output would
+  // otherwise see collapsed into an unexplained repeat of the same day.
+  let sawQuarter = false;
   for (const row of rows) {
-    const marker = row.segment === "day" ? (row.segmented ? "DAY" : "DAY*") : row.segment;
+    if (row.segment !== "day") sawQuarter = true;
     console.log(
-      `${row.dayKey}  ${marker.padEnd(10)} ${String(row.articleCount).padStart(3)}a  ` +
+      `${row.dayKey}  ${row.segment.padEnd(10)} ${String(row.articleCount).padStart(3)}a  ` +
         (row.summary ?? `— refused after ${row.attempts} attempt(s)`),
     );
   }
-  // The asterisk is the one thing a reader of this output has to be told, and
-  // it is the difference between "that day had no evening" and "we could not
-  // tell when that day's coverage landed".
-  console.log("\n* day summarised without segments (past the pubDate cliff)");
+  if (sawQuarter) {
+    console.log(
+      "\nRows above named night/morning/afternoon/evening are six-hour quarters " +
+        "written before ADR-0027. Nothing reads them and nothing writes them now; " +
+        "the `day` row is the sentence this arc is shown under.",
+    );
+  }
 }
 
 async function run(

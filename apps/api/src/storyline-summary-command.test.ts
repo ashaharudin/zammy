@@ -22,9 +22,10 @@ import { spec } from "./storyline-summary-command.js";
  * imported it connected to Postgres.
  *
  * `--show` is the branch worth pinning because its output has a convention in
- * it: `DAY*` means "summarised without segments, past the Google News pubDate
- * cliff", which is the difference between "that day had no evening" and "we
- * could not tell when that day's coverage landed".
+ * it: a row named after a six-hour quarter is one written before ADR-0027, and
+ * the footnote is the only thing that tells a reader why the same day appears
+ * twice. Nothing writes those rows now and nothing reads them; the `day` row is
+ * the sentence the arc is shown under.
  */
 
 const BASE = {
@@ -105,11 +106,11 @@ describe("summaries:storylines --show", () => {
 
     return spec.run(context([`--storyline=${uuid}`, "--show"], db, config)).then(() => {
       expect(out[0]).toContain("2026-08-18");
-      expect(out[0]).toContain("DAY*");
+      expect(out[0]).toContain("day");
       expect(out[1]).toContain("morning");
-      expect(out.at(-1)).toBe(
-        "\n* day summarised without segments (past the pubDate cliff)",
-      );
+      // The footnote appears because a quarter row was in the result, and it is
+      // what stops the second line reading as an unexplained repeat.
+      expect(out.at(-1)).toContain("written before ADR-0027");
     });
   });
 

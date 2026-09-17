@@ -4,9 +4,9 @@ import { migrateToLatest } from "./migrator.js";
 import { attachGroup, createProvisionalStoryline, promoteStoryline } from "./storylines.js";
 import {
   bumpSummaryAttempts,
-  quarterOfUtcHour,
   readArcDaySummaries,
-  readStorylineDaySegments,
+  readArcDaysAwaitingSummary,
+  readStorylineDayArticles,
   readStorylineDaySummaries,
   readStorylineSummaries,
   readSummaryCandidateDays,
@@ -20,14 +20,15 @@ import { createTestDatabase, type TestDatabase } from "./test-support.js";
  * The storage half of the historical preserve (ADR-0023, migration 0024).
  *
  * Real Postgres, and here the reason is not incidental: everything under test is
- * SQL that a fake would fake wrong — a UTC hour extracted from a timestamptz,
+ * SQL that a fake would fake wrong — a UTC day extracted from a timestamptz,
  * `count(distinct group_id)` as the thing that separates coverage from
- * syndication, a window function ranking each quarter's articles, and a keyset
- * over an AGGREGATE's grouping column.
+ * syndication, a window function ranking a day's articles, a keyset over an
+ * AGGREGATE's grouping column, and a recursive walk down an alias chain.
  *
- * The clock is fixed and the fixtures are placed at hours that straddle every
- * quarter boundary, because "which six-hour bucket" is the one question this
- * module exists to answer and off-by-one is its only interesting failure.
+ * The clock is fixed and the fixtures straddle UTC midnight, because "which UTC
+ * day" is the question this module exists to answer and off-by-one is its only
+ * interesting failure. They used to straddle every six-hour boundary too; the
+ * quarters went with ADR-0027.
  */
 
 let counter = 0;
@@ -105,7 +106,7 @@ describe("storyline day summaries in storage", () => {
     await harness.drop();
   });
 
-  describe("the UTC day and its quarters", () => {
+  describe("the UTC day", () => {
     it("keys a day by UTC, never by a local calendar", () => {
       // 23:30 in Vancouver on the 14th is 06:30 UTC on the 15th, and this table
       // says the 15th. `storyline_days.day_key` would say the 14th.
@@ -124,25 +125,16 @@ describe("storyline day summaries in storage", () => {
       expect(() => summaryDayBounds("not-a-day")).toThrow();
     });
 
-    it("splits the hours into even quarters, with night inside its own day", () => {
-      expect(quarterOfUtcHour(0)).toBe("night");
-      expect(quarterOfUtcHour(5)).toBe("night");
-      expect(quarterOfUtcHour(6)).toBe("morning");
-      expect(quarterOfUtcHour(11)).toBe("morning");
-      expect(quarterOfUtcHour(12)).toBe("afternoon");
-      expect(quarterOfUtcHour(17)).toBe("afternoon");
-      expect(quarterOfUtcHour(18)).toBe("evening");
-      expect(quarterOfUtcHour(23)).toBe("evening");
-    });
   });
 
-  describe("readStorylineDaySegments", () => {
+  describe("readStorylineDayArticles", () => {
     let arcId: string;
 
     beforeAll(async () => {
-      // Two groups, five articles, in three quarters: night 1, morning 3,
-      // evening 1 — and NOTHING in the afternoon, which is the case the whole
-      // feature is specified around.
+      // Two groups, five articles, spread across the day — the spread used to
+      // matter (it fell in three of four quarters, with the afternoon empty)
+      // and under ADR-0027 it does not. Kept as it was anyway: a day whose
+      // coverage is spread is the day this read has to count whole.
       const a = await article({ published: "2026-08-14T02:00:00.000Z" });
       await article({ published: "2026-08-14T07:00:00.000Z", groupId: a.groupId });
       const b = await article({
@@ -157,50 +149,51 @@ describe("storyline day summaries in storage", () => {
       arcId = await storyline([a.groupId, b.groupId], "Big Bend Wall Pause");
     });
 
-    it("returns only the populated quarters, in chronological order", async () => {
-      const segments = await readStorylineDaySegments(harness.db, {
+    it("counts the whole day and returns its articles oldest first", async () => {
+      const day = await readStorylineDayArticles(harness.db, {
         storylineId: arcId,
         dayKey: "2026-08-14",
         sampleSize: 8,
       });
-      expect(segments.map((entry) => entry.segment)).toEqual(["night", "morning", "evening"]);
-      expect(segments.map((entry) => entry.articleCount)).toEqual([1, 3, 1]);
+      expect(day.articleCount).toBe(5);
+      expect(day.members).toHaveLength(5);
+      const times = day.members.map((member) => member.published.getTime());
+      expect(times).toEqual([...times].sort((a, b) => a - b));
     });
 
     it("does not reach into the next UTC day", async () => {
-      const next = await readStorylineDaySegments(harness.db, {
+      const next = await readStorylineDayArticles(harness.db, {
         storylineId: arcId,
         dayKey: "2026-08-15",
         sampleSize: 8,
       });
-      expect(next.map((entry) => entry.articleCount)).toEqual([1]);
+      expect(next.articleCount).toBe(1);
     });
 
     it("samples the most-syndicated coverage but renders it oldest first", async () => {
-      const [, morning] = await readStorylineDaySegments(harness.db, {
+      const day = await readStorylineDayArticles(harness.db, {
         storylineId: arcId,
         dayKey: "2026-08-14",
         sampleSize: 2,
       });
-      // The count is the WHOLE quarter, not the sample — it is what the
-      // recompute trigger compares against.
-      expect(morning?.articleCount).toBe(3);
-      expect(morning?.members).toHaveLength(2);
-      // The 12-sighting article is in the sample...
-      expect(morning?.members.map((member) => member.title)).toContain("The syndicated one");
-      // ...and the sample is chronological, whatever order it was chosen in.
-      const times = morning!.members.map((member) => member.published.getTime());
+      // The count is the WHOLE day, not the sample — it is what the recompute
+      // trigger compares against, and capping it there would retire every
+      // rewrite on a day with more articles than the sample holds.
+      expect(day.articleCount).toBe(5);
+      expect(day.members).toHaveLength(2);
+      expect(day.members.map((member) => member.title)).toContain("The syndicated one");
+      const times = day.members.map((member) => member.published.getTime());
       expect(times).toEqual([...times].sort((a, b) => a - b));
     });
 
     it("is empty for a day the arc has no coverage on", async () => {
       expect(
-        await readStorylineDaySegments(harness.db, {
+        await readStorylineDayArticles(harness.db, {
           storylineId: arcId,
           dayKey: "2026-07-01",
           sampleSize: 8,
         }),
-      ).toEqual([]);
+      ).toEqual({ articleCount: 0, members: [] });
     });
   });
 
@@ -696,6 +689,177 @@ describe("storyline day summaries in storage", () => {
       const arc = await storyline([a.groupId], "Arc");
 
       expect(await readArcDaySummaries(harness.db, { storylineId: arc })).toEqual(new Map());
+    });
+  });
+
+  describe("readArcDaysAwaitingSummary", () => {
+    /** Every day this arc qualifies on, with no sentence written yet. */
+    const awaiting = (
+      storylineId: string,
+      overrides: { limit?: number; before?: Date } = {},
+    ): Promise<Array<{ dayKey: string }>> =>
+      readArcDaysAwaitingSummary(harness.db, {
+        storylineId,
+        minArticlesExclusive: 4,
+        minGroups: 2,
+        limit: overrides.limit ?? 8,
+        before: overrides.before ?? new Date("2026-09-01T00:00:00.000Z"),
+      });
+
+    /** Five articles across two groups on one UTC day — the gate, cleared. */
+    const qualifyingDay = async (day: string): Promise<[string, string]> => {
+      const a = await article({ published: `${day}T02:00:00.000Z` });
+      await article({ published: `${day}T07:00:00.000Z`, groupId: a.groupId });
+      const b = await article({ published: `${day}T08:00:00.000Z` });
+      await article({ published: `${day}T09:00:00.000Z`, groupId: b.groupId });
+      await article({ published: `${day}T20:00:00.000Z`, groupId: b.groupId });
+      return [a.groupId, b.groupId];
+    };
+
+    it("returns the arc's qualifying days, newest first, and no others", async () => {
+      const groups = await qualifyingDay("2026-07-02");
+      // A second qualifying day on the same groups.
+      await article({ published: "2026-07-04T02:00:00.000Z", groupId: groups[0] });
+      await article({ published: "2026-07-04T03:00:00.000Z", groupId: groups[0] });
+      await article({ published: "2026-07-04T04:00:00.000Z", groupId: groups[1] });
+      await article({ published: "2026-07-04T05:00:00.000Z", groupId: groups[1] });
+      await article({ published: "2026-07-04T06:00:00.000Z", groupId: groups[1] });
+      // A day that does NOT clear the article bar.
+      await article({ published: "2026-07-06T02:00:00.000Z", groupId: groups[0] });
+      const arc = await storyline([...groups], "July Arc");
+
+      expect((await awaiting(arc)).map((day) => day.dayKey)).toEqual([
+        "2026-07-04",
+        "2026-07-02",
+      ]);
+    });
+
+    it("has NO window: it reaches a day far older than the nightly pass looks", async () => {
+      // ADR-0027's click plane covers the arc's whole history. A day from March
+      // is outside any SUMMARY_WINDOW_DAYS the nightly pass would use.
+      const groups = await qualifyingDay("2026-03-11");
+      const arc = await storyline([...groups], "March Arc");
+      expect((await awaiting(arc)).map((day) => day.dayKey)).toEqual(["2026-03-11"]);
+    });
+
+    it("excludes a day that already has a day sentence", async () => {
+      const groups = await qualifyingDay("2026-07-12");
+      const arc = await storyline([...groups], "Written Arc");
+      await writeStorylineDaySummary(harness.db, {
+        storylineId: arc,
+        dayKey: "2026-07-12",
+        segment: "day",
+        summary: "The crews stood down.",
+        articleCount: 5,
+        label: "Written Arc",
+        modelId: "test",
+        attempts: 0,
+        segmented: false,
+        generatedAt: new Date("2026-07-13T00:00:00.000Z"),
+      });
+      expect(await awaiting(arc)).toEqual([]);
+    });
+
+    it("treats a REFUSAL as having one, so a click never retries it", async () => {
+      // The row exists with a null summary: the model was asked and would not
+      // answer. Retrying is the nightly pass's business, bounded by
+      // SUMMARY_MAX_ATTEMPTS — a reader clicking three times would otherwise
+      // retire the day for ever.
+      const groups = await qualifyingDay("2026-07-14");
+      const arc = await storyline([...groups], "Refused Arc");
+      await writeStorylineDaySummary(harness.db, {
+        storylineId: arc,
+        dayKey: "2026-07-14",
+        segment: "day",
+        summary: null,
+        articleCount: 5,
+        label: "Refused Arc",
+        modelId: "test",
+        attempts: 1,
+        segmented: false,
+        generatedAt: new Date("2026-07-15T00:00:00.000Z"),
+      });
+      expect(await awaiting(arc)).toEqual([]);
+    });
+
+    it("ignores a QUARTER row, which is not the sentence anything reads", async () => {
+      // ADR-0027 left the old quarter rows in place. A day whose only rows are
+      // quarters has never had a day sentence, so it is still owed one.
+      const groups = await qualifyingDay("2026-07-16");
+      const arc = await storyline([...groups], "Quartered Arc");
+      await writeStorylineDaySummary(harness.db, {
+        storylineId: arc,
+        dayKey: "2026-07-16",
+        segment: "morning",
+        summary: "Crews stood down at first light.",
+        articleCount: 3,
+        label: "Quartered Arc",
+        modelId: "test",
+        attempts: 0,
+        segmented: true,
+        generatedAt: new Date("2026-07-17T00:00:00.000Z"),
+      });
+      expect((await awaiting(arc)).map((day) => day.dayKey)).toEqual(["2026-07-16"]);
+    });
+
+    it("sees a sentence written under a LOSER's id, so a merge is not re-bought", async () => {
+      // The preserve never follows a merge; membership does. Reading the
+      // winner's summaries alone would re-buy every pre-merge sentence, once
+      // per click, for ever.
+      const winnerGroups = await qualifyingDay("2026-07-20");
+      const loserGroups = await qualifyingDay("2026-07-22");
+      const winner = await storyline([...winnerGroups], "Winner");
+      const loser = await storyline([...loserGroups], "Loser");
+      await writeStorylineDaySummary(harness.db, {
+        storylineId: loser,
+        dayKey: "2026-07-22",
+        segment: "day",
+        summary: "Written before the merge.",
+        articleCount: 5,
+        label: "Loser",
+        modelId: "test",
+        attempts: 0,
+        segmented: false,
+        generatedAt: new Date("2026-07-23T00:00:00.000Z"),
+      });
+      // The merge: the loser's groups follow, its summary row does not.
+      for (const groupId of loserGroups) {
+        await attachGroup(harness.db, { storylineId: winner, groupId, timeZone: "UTC" });
+      }
+      await harness.db
+        .updateTable("storylines")
+        .set({ merged_into: winner })
+        .where("id", "=", loser)
+        .execute();
+
+      const days = (await awaiting(winner)).map((day) => day.dayKey);
+      expect(days).toContain("2026-07-20");
+      expect(days).not.toContain("2026-07-22");
+    });
+
+    it("excludes days at or after `before`, which is how today is kept out", async () => {
+      const groups = await qualifyingDay("2026-08-20");
+      const arc = await storyline([...groups], "Today Arc");
+      expect(
+        await awaiting(arc, { before: new Date("2026-08-20T00:00:00.000Z") }),
+      ).toEqual([]);
+    });
+
+    it("stops at the limit, which is what bounds one click", async () => {
+      const groups = await qualifyingDay("2026-06-02");
+      for (const day of ["2026-06-04", "2026-06-06"]) {
+        await article({ published: `${day}T02:00:00.000Z`, groupId: groups[0] });
+        await article({ published: `${day}T03:00:00.000Z`, groupId: groups[0] });
+        await article({ published: `${day}T04:00:00.000Z`, groupId: groups[1] });
+        await article({ published: `${day}T05:00:00.000Z`, groupId: groups[1] });
+        await article({ published: `${day}T06:00:00.000Z`, groupId: groups[1] });
+      }
+      const arc = await storyline([...groups], "Bounded Arc");
+      // Newest first, so a bounded click spends itself on what a reader can see.
+      expect((await awaiting(arc, { limit: 2 })).map((day) => day.dayKey)).toEqual([
+        "2026-06-06",
+        "2026-06-04",
+      ]);
     });
   });
 });

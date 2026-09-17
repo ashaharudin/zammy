@@ -12,6 +12,7 @@ import {
   type IngestQueue,
   type SampleJob,
   type SegmentJob,
+  type SummarizeJob,
 } from "./ingest-queue.js";
 
 /**
@@ -303,6 +304,11 @@ export class VercelIngestQueue implements IngestQueue {
   }
 
   async enqueueDeepen(job: DeepenJob): Promise<void> {
+    await this.send(job);
+    await this.record(job);
+  }
+
+  async enqueueSummarize(job: SummarizeJob): Promise<void> {
     await this.send(job);
     await this.record(job);
   }

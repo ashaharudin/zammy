@@ -9,6 +9,7 @@ import {
   type IngestQueue,
   type SampleJob,
   type SegmentJob,
+  type SummarizeJob,
 } from "./ingest-queue.js";
 
 /**
@@ -48,6 +49,22 @@ export class BullMqIngestQueue implements IngestQueue {
       backoff: { type: "exponential", delay: 200 },
       // Completed ids free up for re-adds — a segment may legitimately be
       // fetched again later; dedup only needs to cover the pending window.
+      removeOnComplete: true,
+      removeOnFail: true,
+    });
+    await this.pending.add(job);
+  }
+
+  async enqueueSummarize(job: SummarizeJob): Promise<void> {
+    // A segment's options again, with one difference that matters: this job
+    // makes no upstream call, so a retry costs model calls rather than quota,
+    // and the days it would re-plan are the ones its failed attempt did not
+    // write. `attempts: 3` is therefore still right — the work is idempotent by
+    // construction (`readArcDaysAwaitingSummary` selects on absence).
+    await this.queue.add("summarize", job, {
+      jobId: ingestJobId(job),
+      attempts: 3,
+      backoff: { type: "exponential", delay: 200 },
       removeOnComplete: true,
       removeOnFail: true,
     });

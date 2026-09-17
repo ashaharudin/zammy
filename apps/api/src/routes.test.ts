@@ -5,6 +5,7 @@ import { encodeCursor, TimelinePage, TrendingResponse } from "@zammy/shared";
 import { readTopic } from "@zammy/storage";
 import { canonicalize } from "./canonical.js";
 import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
+import type { SummarizeJob } from "./ingest-queue.js";
 import type { TrendingDeps } from "./trending-service.js";
 import { createTestHarness, purgeTopicKeys, type TestHarness } from "./test-support.js";
 
@@ -38,8 +39,21 @@ const ROUTES_NOW = new Date("2026-08-06T12:00:00.000Z");
  * behind the first read. Stubbing the queue rather than draining it keeps the
  * two cache-header tests reading as one pair — same request, opposite state.
  */
-async function setup(options?: { settled?: boolean }): Promise<void> {
+/**
+ * Summarize jobs the route published (ADR-0027), recorded rather than drained.
+ *
+ * The harness holds a real BullMQ queue, so what a test wants to assert is the
+ * PLAN — the job the planner handed the transport — and not whatever a worker
+ * would later make of it. Reset by `setup`.
+ */
+let summarized: SummarizeJob[] = [];
+
+async function setup(options?: {
+  settled?: boolean;
+  summariesEnabled?: boolean;
+}): Promise<void> {
   harness = await createTestHarness({}, ROUTES_NOW);
+  summarized = [];
   app = Fastify({ logger: false });
   const trendingDeps: TrendingDeps = {
     ...harness.deps,
@@ -60,7 +74,24 @@ async function setup(options?: { settled?: boolean }): Promise<void> {
         }
       : {}),
   };
-  await registerQueryRoutes(app, { deps: harness.deps, defaultLanguage: "en" });
+  await registerQueryRoutes(app, {
+    deps: {
+      ...harness.deps,
+      queue: {
+        ...harness.deps.queue,
+        // Bound, because the methods below come off a class instance and lose
+        // their receiver through the spread above.
+        enqueueSegment: harness.deps.queue.enqueueSegment.bind(harness.deps.queue),
+        enqueueDeepen: harness.deps.queue.enqueueDeepen.bind(harness.deps.queue),
+        pendingCount: harness.deps.queue.pendingCount.bind(harness.deps.queue),
+        enqueueSummarize: async (job: SummarizeJob) => {
+          summarized.push(job);
+        },
+      },
+    },
+    defaultLanguage: "en",
+    ...(options?.summariesEnabled === true ? { summariesEnabled: true } : {}),
+  });
   registerTrendingRoute(app, { deps: trendingDeps });
   await app.ready();
 
@@ -216,6 +247,7 @@ describe("POST /api/v1/storylines/:id/refresh", () => {
     keywords: string[];
     fingerprint?: string;
     deepening: { status: string; queued: boolean };
+    summaries: { status: string; queued: boolean };
   }
 
   const refresh = (id: string): string => `/api/v1/storylines/${id}/refresh`;
@@ -246,6 +278,42 @@ describe("POST /api/v1/storylines/:id/refresh", () => {
     // the flag on. Its own end-to-end behaviour lives in
     // `storyline-deepening.test.ts`, where a provider is configured.
     expect(body.deepening).toEqual({ status: "unavailable", queued: false });
+    // And the THIRD plane (ADR-0027). `disabled` is the shipped default here
+    // for the same reason `unavailable` is above: the harness does not set
+    // `summariesEnabled`, so a click queues nothing and spends no model key.
+    expect(body.summaries).toEqual({ status: "disabled", queued: false });
+  });
+
+  it("queues the arc's summary work when SUMMARIES_ENABLED is on", async () => {
+    await setup({ summariesEnabled: true });
+    const read = await app.inject({ method: "GET", url: `${TIMELINE}?q=climate&${QS}` });
+    const storylineId = (TimelinePage.parse(read.json()).items[0] as { storylineId: string })
+      .storylineId;
+
+    const response = await app.inject({ method: "POST", url: refresh(storylineId) });
+
+    const body = response.json() as RefreshBody;
+    expect(body.summaries).toEqual({ status: "queued", queued: true });
+    expect(summarized).toMatchObject([{ kind: "summarize", storylineId }]);
+    // The identity is the arc AND the minute it was asked in, snapped onto the
+    // grid: readers opening one arc together cost one job, and the next minute's
+    // click is a different message rather than one the transport's dedup
+    // swallows.
+    expect(Date.parse(summarized[0]!.at) % 60_000).toBe(0);
+  });
+
+  it("queues NOTHING for a summary when the flag is off, whatever else it does", async () => {
+    // The plane is gated at the planner rather than at the consumer, so a
+    // deployment that has not turned the feature on never publishes the message
+    // — there is nothing to redeliver and nothing to drop at the far end.
+    await setup();
+    const read = await app.inject({ method: "GET", url: `${TIMELINE}?q=climate&${QS}` });
+    const storylineId = (TimelinePage.parse(read.json()).items[0] as { storylineId: string })
+      .storylineId;
+
+    await app.inject({ method: "POST", url: refresh(storylineId) });
+
+    expect(summarized).toEqual([]);
   });
 
   it("refreshes in the default language when the arc's own is not a query code", async () => {
