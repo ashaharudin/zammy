@@ -5,9 +5,17 @@ import { isTerminalPage } from "@zammy/shared";
 import { ApiError, type TopicQuery } from "./api.js";
 import { enterDelayMs } from "./articleEnter.js";
 import { readTimeZone } from "./browser.js";
-import { isCollapsed, nothingCollapsed, segmentKey, toggle } from "./dayCollapse.js";
+import {
+  combinedDayKey,
+  isCollapsed,
+  nothingCollapsed,
+  segmentKey,
+  toggle,
+} from "./dayCollapse.js";
+import { useDayParts } from "./dayPartsPreference.js";
 import { useDaySummaries } from "./daySummaryPreference.js";
 import {
+  combineSegments,
   groupByDay,
   hasLaterCoverage,
   readerDayKey,
@@ -63,6 +71,9 @@ export function TimelinePage({
   // are in different subtrees: the command bar owns the switch and the rail
   // owns what it switches.
   const { daySummaries, toggleDaySummaries } = useDaySummaries();
+  // The same split, for the same reason: the command bar owns the switch for
+  // the rail's parts of the day and the rail owns what it switches.
+  const { dayParts, toggleDayParts } = useDayParts();
 
   const pages = timeline.data?.pages ?? [];
   const latest = pages.at(-1);
@@ -155,6 +166,8 @@ export function TimelinePage({
         qualifiers={qualifiers}
         daySummaries={daySummaries}
         onToggleDaySummaries={toggleDaySummaries}
+        dayParts={dayParts}
+        onToggleDayParts={toggleDayParts}
       />
       <main style={{ maxWidth: "var(--page-max)", margin: "0 auto", padding: "1.5rem 1rem 3rem" }}>
         {timeline.isPending && <SkeletonRail />}
@@ -174,6 +187,7 @@ export function TimelinePage({
             qualifiers={qualifiers}
             memberships={memberships}
             daySummaries={daySummaries}
+            dayParts={dayParts}
             items={visible}
             newCount={newCount}
             onReveal={reveal}
@@ -398,6 +412,7 @@ function RailSpine({ charged }: { charged: boolean }) {
 function Rail({
   items,
   daySummaries,
+  dayParts,
   newCount,
   onReveal,
   onOpenStorylineView,
@@ -428,6 +443,12 @@ function Rail({
    * for it.
    */
   daySummaries: boolean;
+  /**
+   * The reader's parts-of-the-day setting (`dayPartsPreference`). Off pours
+   * each day's parts into one run; it hides nothing, so a day holds the same
+   * cards either way.
+   */
+  dayParts: boolean;
   ingesting: boolean;
   /** A refetch of what is already here, as opposed to upstream still arriving. */
   refreshing: boolean;
@@ -545,10 +566,15 @@ function Rail({
         // about what the coverage said is then the most useful thing the row
         // can still show — it is the reason to open it again.
         const summary = daySummaries ? day.summary : null;
+        // What the day draws under its heading: its parts, or the single run
+        // they combine into when the reader has turned the parts off. One shape
+        // either way (`combineSegments`), so nothing below needs a second path.
+        const parts = dayParts ? day.segments : combineSegments(day);
         // A day whose coverage all landed in one part of the day gets no
         // segment treatment: a divider that chunks nothing is noise. Read off
-        // the shape groupByDay already produced.
-        const segmented = day.segments.length >= 2;
+        // the shape in hand, which is also what makes a combined day
+        // divider-less without asking the preference a second time.
+        const segmented = parts.length >= 2;
         return (
           <section key={day.key} aria-label={day.day}>
             <RailEntry
@@ -625,8 +651,12 @@ function Rail({
               )}
             </RailEntry>
             {!dayCollapsed &&
-              day.segments.map((part) => {
-                const key = segmentKey(day.key, part.segment);
+              parts.map((part) => {
+                // Only a DIVIDED day keys on its part. A combined one — and a
+                // day that holds one part anyway — keys on the day, which
+                // cannot move under it when progressive fill adds a newer part
+                // and takes every open disclosure down with it.
+                const key = segmented ? segmentKey(day.key, part.segment) : combinedDayKey(day.key);
                 const partCollapsed = segmented && isCollapsed(collapsed, key);
                 return (
                   // A landmark only where there is a segment to name: an

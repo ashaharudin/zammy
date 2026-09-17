@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isCollapsed, nothingCollapsed, segmentKey, toggle } from "./dayCollapse.js";
+import {
+  combinedDayKey,
+  isCollapsed,
+  nothingCollapsed,
+  segmentKey,
+  toggle,
+} from "./dayCollapse.js";
 
 // Sections are keyed by the day's YYYY-MM-DD key, never by the label the rail
 // renders — labels move at midnight, keys do not.
@@ -42,5 +48,22 @@ describe("rail collapse", () => {
     expect(isCollapsed(collapsed, TODAY)).toBe(true);
     expect(isCollapsed(collapsed, morning)).toBe(true);
     expect(isCollapsed(toggle(collapsed, TODAY), morning)).toBe(true);
+  });
+});
+
+describe("combined day key", () => {
+  it("cannot collide with any part of that day", () => {
+    // The combined run shares the key namespace with the segments it replaces,
+    // and `all` is not one of them — so a reader who turned the parts off
+    // cannot land on a key some collapsed segment already holds.
+    const keys = (["Night", "Morning", "Afternoon", "Evening"] as const).map((segment) =>
+      segmentKey(TODAY, segment),
+    );
+
+    expect(keys).not.toContain(combinedDayKey(TODAY));
+  });
+
+  it("keeps one day's run apart from another's", () => {
+    expect(combinedDayKey(TODAY)).not.toBe(combinedDayKey(YESTERDAY));
   });
 });
