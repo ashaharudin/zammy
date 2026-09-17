@@ -77,62 +77,27 @@ export const PILL_EXIT_MS = 180;
 export const PILL_MOVE_MS = 300;
 
 /**
- * How far out of the row a moving pill bows on its way. Enough to read as a
- * pill rising past its neighbours rather than sliding through them, and not so
- * far that it leaves the chrome it belongs to.
- */
-export const PILL_ARC_PX = 8;
-
-/**
- * The path a pill takes to its new place: it BUBBLES there.
- *
- * A straight line between two slots is the cheapest reading of a reorder and
- * the least legible one — two pills swapping places pass through each other and
- * the row reads as a shuffle. A pill moving UP the order (earlier in the row,
- * or up a wrapped line) rises out of the row, travels, and settles back into
- * it; a pill moving DOWN sinks below it and comes back up. The direction of the
- * bow is the whole message: the reader sees which way each pill went, not just
- * that the row is different now.
+ * The path a pill takes to its new place: a straight SLIDE.
  *
  * `dx`/`dy` are FLIP deltas — where the pill WAS, relative to where it now is —
- * so the path starts displaced and ends at `none`, its own resting place. The
- * bow is a parabola (`4t(1-t)`, zero at both ends, one in the middle) sampled
- * at quarters, because a single mid keyframe interpolates as a triangle and a
- * pill with a corner in its trajectory reads as a glitch rather than a rise.
+ * so the path starts displaced and ends at `none`, its own resting place. Two
+ * keyframes, and the browser draws the line between them.
  *
- * The rising pill also swells a little and the sinking one shrinks, by the same
- * parabola: nearer and further, which is what makes it a bubble rather than a
- * detour. The riser is lifted over its neighbours for the trip, too — a flex
- * item honours `z-index`, and without it the pill would pass BEHIND the ones it
- * overtakes, since after the commit it is already the earlier sibling. Rising
- * in front and sinking behind is the whole of what "up" and "down" mean in a
- * row that has no third dimension.
+ * It used to bubble: rise out of the row, swell, travel over its neighbours and
+ * settle back, so that two pills swapping places on a new search were seen to
+ * pass around each other. The view's row now changes one pill at a time — a
+ * taken pill leaves, the rest close ranks, a newcomer fades in at the end
+ * (ADR-0028) — and on that motion the bow read as the whole row jumping every
+ * time a chip was added to the prompt. A slide says "closed ranks" and nothing
+ * more, which is all that happened. The reorder-on-search case lost a little
+ * legibility and kept its direction: a pill still visibly travels left or
+ * right to its new place.
  */
 export function pillMoveKeyframes(dx: number, dy: number): Keyframe[] {
-  // Up a wrapped line is unambiguous; along one line, leftward is earlier.
-  // The sub-pixel band is the same one the caller uses to decide a pill moved
-  // at all, so a pill that only shifted sideways is never called a riser by a
-  // fraction of a pixel of vertical noise.
-  const rising = dy > 1 || (Math.abs(dy) <= 1 && dx > 0);
-  const arc = rising ? -PILL_ARC_PX : PILL_ARC_PX;
-  const swell = rising ? 0.04 : -0.03;
-
-  // Held for the whole trip rather than only over the peak: z-index is not
-  // interpolated, and a pill that changed depth halfway would flicker.
-  const lift = rising ? { zIndex: "1" } : {};
-
-  return [0, 0.25, 0.5, 0.75, 1].map((offset) => {
-    if (offset === 1) return { ...lift, offset, transform: "none" };
-    const remaining = 1 - offset;
-    const bow = 4 * offset * (1 - offset);
-    const x = round(dx * remaining);
-    const y = round(dy * remaining + bow * arc);
-    return {
-      ...lift,
-      offset,
-      transform: `translate(${x}px, ${y}px) scale(${round(1 + bow * swell)})`,
-    };
-  });
+  return [
+    { offset: 0, transform: `translate(${round(dx)}px, ${round(dy)}px)` },
+    { offset: 1, transform: "none" },
+  ];
 }
 
 const round = (value: number) => Math.round(value * 100) / 100;

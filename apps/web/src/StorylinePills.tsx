@@ -39,6 +39,12 @@ export function StorylinePills({
   qualifiers,
   onOpen,
 }: {
+  /**
+   * What the row offers. In a search, what it surfaced; inside a view, the
+   * matches the view does not already hold (ADR-0028, `storylineOffers`) —
+   * so the row STAYS in the view, and goes on being the way to take a second
+   * arc, while a taken arc is named by its chip rather than by a pill.
+   */
   storylines: readonly StorylineSummary[];
   qualifiers: Map<string, string>;
   onOpen: (storylineId: string, label: string | null, source: StorylineOpenSource) => void;
@@ -66,6 +72,10 @@ export function StorylinePills({
         <div
           ref={rowRef}
           style={{
+            // The FLIP's frame of reference: `measurePills` reads each pill's
+            // `offsetLeft`/`offsetTop`, and those are relative to the nearest
+            // POSITIONED ancestor, which this makes the row itself.
+            position: "relative",
             maxWidth: "var(--page-max)",
             margin: "0 auto",
             display: "flex",
@@ -135,10 +145,19 @@ function usePillRow(storylines: readonly StorylineSummary[]): PillRow {
  * and the reader may have scrolled between two commits, and a viewport
  * measurement would read that scroll as movement and animate every pill.
  *
+ * And they are LAYOUT positions (`offsetLeft`/`offsetTop`), not painted ones
+ * (`getBoundingClientRect`), which is the difference between a pill's place
+ * and where its running animation happens to be drawing it. The painted rect
+ * of a pill mid `scale(0.92)` — every pill, on first paint, for the length of
+ * its enter fade — sits several pixels in from its resting place; measured that
+ * way, the next commit "corrected" every pill with an 8px slide it never made,
+ * the commit after measured mid-slide and reversed it, and the row jittered on
+ * every change. Seen on the view's row each time a pill was taken (ADR-0028).
+ *
  * The move is a Web Animations call rather than a CSS class, because the path
- * is only known at the moment it is measured — `pillMoveKeyframes` bows it in
- * the direction the pill is travelling; `index.css` keeps the fades, which have
- * nothing to measure. Reduced motion is checked here for the same reason — an
+ * is only known at the moment it is measured — `pillMoveKeyframes` slides it
+ * from where it was; `index.css` keeps the fades, which have nothing to
+ * measure. Reduced motion is checked here for the same reason — an
  * animation built in script is not covered by the media query the stylesheet
  * honours.
  */
@@ -180,7 +199,6 @@ function measurePills(
     places.clear();
     return;
   }
-  const origin = container.getBoundingClientRect();
   const reduced = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
   const drawn = new Set<string>();
 
@@ -188,8 +206,10 @@ function measurePills(
     const id = pill.dataset.storylineId;
     if (!id) continue;
     drawn.add(id);
-    const box = pill.getBoundingClientRect();
-    const next = { x: box.left - origin.left, y: box.top - origin.top };
+    // Relative to the row, which is `position: relative` for exactly this
+    // read; transforms in flight do not move these, so an entering pill's
+    // place is its place.
+    const next = { x: pill.offsetLeft, y: pill.offsetTop };
     const previous = places.get(id);
     places.set(id, next);
     if (!previous || !options.animate || reduced || typeof pill.animate !== "function") continue;
@@ -197,9 +217,8 @@ function measurePills(
     const dy = previous.y - next.y;
     // Sub-pixel drift is layout noise, not a move.
     if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
-    // Bubbles rather than slides: `pillMoveKeyframes` bows the path out of the
-    // row in the direction the pill is going, so two pills trading places pass
-    // around each other instead of through each other.
+    // A straight slide (`pillMoveKeyframes`): the row closes ranks when a pill
+    // is taken, and that is all the motion should say.
     pill.animate(pillMoveKeyframes(dx, dy), { duration: PILL_MOVE_MS, easing: "ease-in-out" });
   }
 

@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { Article, TimelineEntry } from "@zammy/shared";
-import { isTerminalPage } from "@zammy/shared";
-import { ApiError, type TopicQuery } from "./api.js";
+import type { Article, StorylineSummary, TimelineEntry } from "@zammy/shared";
+import { isTerminalPage, MAX_VIEW_STORYLINES, STORYLINE_OFFER_COUNT } from "@zammy/shared";
+import { ApiError, topicStorylines, type TopicQuery } from "./api.js";
 import type { StorylineOpenSource } from "./analytics.js";
 import { enterDelayMs } from "./articleEnter.js";
 import { readTimeZone } from "./browser.js";
@@ -22,6 +22,7 @@ import {
   readerDayKey,
   relativeTime,
   timeLabel,
+  type DaySentence,
   type RailSlot,
   type Segment,
 } from "./format.js";
@@ -33,7 +34,8 @@ import { storylineQualifiers, visibleStorylines } from "./storylineLabels.js";
 import { collapseCopies, outletLinks } from "./relatedRows.js";
 import { MONO } from "./theme.js";
 import { CommandBar } from "./CommandBar.js";
-import { useReference, useTimeline } from "./useTimeline.js";
+import { useReference, useStorylineSearch, useTimeline } from "./useTimeline.js";
+import { growPool, offeredPills } from "./storylineOffers.js";
 
 /**
  * The open-topic screen: the time rail from the prototype verdict
@@ -47,27 +49,66 @@ import { useReference, useTimeline } from "./useTimeline.js";
  */
 export function TimelinePage({
   topic,
+  viewOrigin,
+  viewFind,
+  onFindStorylines,
   onSearch,
   onClear,
   onOpenStoryline,
-  viewLabelHint,
-  onLeaveStoryline,
+  onRemoveStoryline,
+  onResolveStorylines,
+  onStorylinesNamed,
+  viewLabelHints,
 }: {
   topic: TopicQuery;
+  /**
+   * In the STORYLINE VIEW, the search it was opened from, or null when there
+   * was none (a shared link, the hero's cloud). Its surfaced storylines stay in
+   * the bar as the way to add a second arc (ADR-0028).
+   */
+  viewOrigin: TopicQuery | null;
+  /**
+   * In the STORYLINE VIEW, the keywords typed into its search box, or null
+   * when nothing has been. A search FOR storylines (ADR-0028, amended): its
+   * matches take the pills row over the origin's.
+   */
+  viewFind: string | null;
+  /** The view's search box submitted: keywords, or null to clear them. */
+  onFindStorylines: (keywords: string | null) => void;
   onSearch: (topic: TopicQuery, options?: { replace?: boolean }) => void;
   onClear: () => void;
   onOpenStoryline: (storylineId: string, label: string | null, source: StorylineOpenSource) => void;
+  /** One arc out of the view: its chip dismissed, which is the only way out. */
+  onRemoveStoryline: (storylineId: string) => void;
   /**
-   * The label the reader clicked to get here, good only until the topic's own
-   * data says otherwise (`CommandBar`'s `viewLabel`) — a hand-off from the
-   * click, not a fact this page holds onto past that.
+   * The arcs the server actually served, when they differ from the ones asked
+   * for — an alias followed, a stale UUID dropped — so the URL can be made to
+   * say the same (`App.tsx`).
    */
-  viewLabelHint: string | null;
-  /** The keywords typed to leave the view, or null for a dismissed chip. */
-  onLeaveStoryline: (typed: string | null) => void;
+  onResolveStorylines: (served: readonly StorylineSummary[]) => void;
+  /** Every arc a loaded page names, so their labels can be remembered (`App.tsx`). */
+  onStorylinesNamed: (named: readonly StorylineSummary[]) => void;
+  /**
+   * The labels the clicks that built this view had in hand, by id, good only
+   * until the page's own data says otherwise (`CommandBar`'s chips) — a
+   * hand-off from the click, not a fact this page holds onto past that.
+   */
+  viewLabelHints: ReadonlyMap<string, string | null>;
 }) {
   const timeline = useTimeline(topic);
   const reference = useReference();
+  const storylineView = topic.q === "" && topic.storyline !== undefined;
+  // The arcs the view holds, as the URL states them — what the chips draw and
+  // the row leaves out. Empty on a search.
+  const selected = useMemo(() => new Set(topicStorylines(topic)), [topic]);
+  // The question the view's row answers: the words typed into its box, else
+  // the words of the search it was opened from. Null outside the view and for
+  // a view with neither (a shared link, the hero's cloud), where nothing is
+  // asked. A row's worth plus one per held arc, so the match that takes a
+  // picked pill's place is already in the answer (`storylineOffers`).
+  const offerQuery = storylineView ? (viewFind ?? viewOrigin?.q ?? null) : null;
+  const found = useStorylineSearch(offerQuery, STORYLINE_OFFER_COUNT + selected.size);
+  const pool = useOfferPool(offerQuery, found.storylines);
   // A standing reader preference, held at the top because the two halves of it
   // are in different subtrees: the command bar owns the switch and the rail
   // owns what it switches.
@@ -83,17 +124,39 @@ export function TimelinePage({
   // per render would defeat all of it.
   const items = useMemo(() => pages.flatMap((page) => page.items), [timeline.data]);
   const { visible, newCount, reveal } = useHeldNewItems(items, JSON.stringify(topic));
-  const surfaced = latest?.storylines ?? [];
+  // What the newest page NAMES: a search's surfaced storylines, or the view's
+  // own subjects (`TimelinePage.storylines`, both readings).
+  const named = latest?.storylines ?? NO_STORYLINES;
+  // The pills row. On a search, what it surfaced. In the VIEW, a pool of
+  // OFFERS (ADR-0028, amended): the matches for `offerQuery` that the view does
+  // not already hold, biggest first, a row's worth. A pill taken into the view
+  // leaves the row — its chip names it now — and the next match fills in; a
+  // chip dismissed puts its arc back and the smallest pill makes room.
+  // A FULL view offers nothing. The cap is the wire's — `TimelineQuery` refuses
+  // a `?storyline=` list longer than `MAX_VIEW_STORYLINES` — and the row tops
+  // itself up as pills are taken, so without this the reader is offered a
+  // thirteenth pill whose click 400s the view they spent twelve clicks
+  // building. The chips stay, so the way back under the cap is to dismiss one.
+  const offerCount = selected.size >= MAX_VIEW_STORYLINES ? 0 : STORYLINE_OFFER_COUNT;
+  const surfaced = useMemo<readonly StorylineSummary[]>(
+    () => (storylineView ? offeredPills(pool, selected, offerCount) : named),
+    [storylineView, pool, selected, offerCount, named],
+  );
+  // "Nothing matched" is only sayable once the answer is in: before that the
+  // row is empty because it is waiting, and a note would be a lie for a beat.
+  // Measured on what the search FOUND, not on what the row shows: a question
+  // whose every match is already held has an empty row and a true answer.
+  const findEmpty = viewFind !== null && found.settled && found.storylines.length === 0;
   // Merged over every LOADED page, not just the newest: `items` above is every
   // page's slots flattened, so a slot from page one must still find its group's
   // arcs after page four has arrived.
   const memberships = useMemo(() => mergeMemberships(pages), [timeline.data]);
   // The date qualifier each storyline needs, computed over everything ON SCREEN
-  // together — slots and pills alike — because "is this label ambiguous" is the
-  // condition ADR-0011 attaches the disambiguator to, and it is a question
-  // about the set rather than about any one storyline.
-  const qualifiers = storylineQualifiers(visibleStorylines(visible, surfaced));
-  const storylineView = topic.q === "" && topic.storyline !== undefined;
+  // together — slots, pills and chips alike — because "is this label ambiguous"
+  // is the condition ADR-0011 attaches the disambiguator to, and it is a
+  // question about the set rather than about any one storyline.
+  const qualifiers = storylineQualifiers(visibleStorylines(visible, [...surfaced, ...named]));
+  useResolvedStorylines(storylineView, topic, latest, onResolveStorylines, onStorylinesNamed);
   // Both gates in one place and out of this file: what they include and exclude
   // is the part of the animation that can be silently wrong, and `railActivity`
   // is where that is written down and tested.
@@ -110,7 +173,9 @@ export function TimelinePage({
   // sentence are two sentences waiting to disagree.
   const emptyMessage = terminal
     ? storylineView
-      ? "This storyline has no coverage to show."
+      ? selected.size > 1
+        ? "These storylines have no coverage to show."
+        : "This storyline has no coverage to show."
       : `No articles yet for “${topic.q}”.`
     : "Nothing here yet.";
   // The condition, like the message, has ONE definition: `Rail` takes it as a
@@ -158,12 +223,16 @@ export function TimelinePage({
       <CommandBar
         topic={topic}
         page={latest}
+        surfaced={surfaced}
+        viewFind={viewFind}
+        findEmpty={findEmpty}
+        onFindStorylines={onFindStorylines}
         reference={reference.data}
         onSearch={onSearch}
         onClear={onClear}
         onOpenStorylineView={onOpenStoryline}
-        viewLabelHint={viewLabelHint}
-        onLeaveStorylineView={onLeaveStoryline}
+        onRemoveStoryline={onRemoveStoryline}
+        viewLabelHints={viewLabelHints}
         qualifiers={qualifiers}
         daySummaries={daySummaries}
         onToggleDaySummaries={toggleDaySummaries}
@@ -206,6 +275,63 @@ export function TimelinePage({
       </main>
     </>
   );
+}
+
+const NO_STORYLINES: readonly StorylineSummary[] = [];
+const NO_SENTENCES: DaySentence[] = [];
+
+/**
+ * Every storyline the view's question has ever been answered with, for as long
+ * as the question stands (`growPool`). Reset when the question changes — a
+ * new find is a new pool — and grown, never shrunk, while it does not.
+ */
+function useOfferPool(
+  query: string | null,
+  answered: readonly StorylineSummary[],
+): readonly StorylineSummary[] {
+  const [state, setState] = useState<{ query: string | null; pool: readonly StorylineSummary[] }>(
+    { query, pool: NO_STORYLINES },
+  );
+  // Derived during render rather than in an effect, for the reason
+  // `usePillRow` gives: `growPool` returns the same pool when nothing is new,
+  // which is what makes the render-phase update terminate.
+  const base = state.query === query ? state.pool : NO_STORYLINES;
+  const grown = growPool(base, answered);
+  if (state.query !== query || grown !== state.pool) setState({ query, pool: grown });
+  return grown;
+}
+
+/**
+ * Make the URL say what the server served (ADR-0028).
+ *
+ * The view asks for a list of UUIDs and the server answers with the arcs it
+ * could actually serve, in the same order: an alias followed to its survivor,
+ * a UUID it never held dropped. Usually the two agree and this does nothing.
+ * When they do not, the route is replaced with the served list — so a chip is
+ * never left standing for an arc that is not on the page, and a link shared
+ * from here carries ids that resolve. Compared as SETS, since order is not a
+ * difference worth a navigation, and only once the page has loaded: before
+ * that there is nothing to compare against, and an empty answer (an arc with
+ * no covered day, or a view mid-404) must not empty the URL.
+ */
+function useResolvedStorylines(
+  storylineView: boolean,
+  topic: TopicQuery,
+  latest: { storylines: readonly StorylineSummary[] } | undefined,
+  onResolve: (served: readonly StorylineSummary[]) => void,
+  onNamed: (named: readonly StorylineSummary[]) => void,
+): void {
+  const asked = topicStorylines(topic).join(",");
+  useEffect(() => {
+    if (!storylineView || !latest || latest.storylines.length === 0) return;
+    onNamed(latest.storylines);
+    const served = latest.storylines.map((storyline) => storyline.id);
+    const wanted = new Set(asked.split(","));
+    if (served.length === wanted.size && served.every((id) => wanted.has(id))) return;
+    onResolve(latest.storylines);
+    // `topic` rides on `asked` rather than on itself, as `useIngestPoll` does:
+    // a fresh object every render would re-run this on every one of them.
+  }, [storylineView, asked, latest, onResolve, onNamed]);
 }
 
 /**
@@ -566,7 +692,7 @@ function Rail({
         // day being COLLAPSED: collapsing hides the coverage, and a sentence
         // about what the coverage said is then the most useful thing the row
         // can still show — it is the reason to open it again.
-        const summary = daySummaries ? day.summary : null;
+        const summaries = daySummaries ? day.summaries : NO_SENTENCES;
         // What the day draws under its heading: its parts, or the single run
         // they combine into when the reader has turned the parts off. One shape
         // either way (`combineSegments`), so nothing below needs a second path.
@@ -630,7 +756,7 @@ function Rail({
                   {day.day}
                 </button>
               </h2>
-              {summary && (
+              {summaries.length > 0 && (
                 <span
                   style={{
                     // The heading's own casing and tracking are set for a label
@@ -647,7 +773,22 @@ function Rail({
                       `day.day` is a label everywhere else on the rail, and the
                       sentence is written to stand on its own. */}
                   {". "}
-                  {summary}
+                  {summaries.map((sentence, index) => (
+                    <Fragment key={sentence.storylineId}>
+                      {index > 0 && " "}
+                      {/* Whose sentence, only when the day has more than one
+                          (ADR-0028): a view of one arc reads exactly as it
+                          did, and a view of two says which arc each sentence
+                          is about before the reader has to work it out. */}
+                      {summaries.length > 1 && (
+                        <span style={{ fontFamily: MONO, fontSize: "0.75rem", opacity: 0.8 }}>
+                          {sentence.label ?? "storyline"}
+                          {": "}
+                        </span>
+                      )}
+                      {sentence.text}
+                    </Fragment>
+                  ))}
                 </span>
               )}
             </RailEntry>

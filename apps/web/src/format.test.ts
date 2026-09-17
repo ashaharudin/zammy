@@ -754,9 +754,9 @@ describe("groupByDay day summaries", () => {
       VANCOUVER,
     );
 
-    expect(days.map((day) => [day.key, day.summary])).toEqual([
-      ["2026-08-12", "Rescuers reached the valley."],
-      ["2026-08-11", null],
+    expect(days.map((day) => [day.key, day.summaries.map((s) => s.text)])).toEqual([
+      ["2026-08-12", ["Rescuers reached the valley."]],
+      ["2026-08-11", []],
     ]);
   });
 
@@ -772,15 +772,15 @@ describe("groupByDay day summaries", () => {
     );
 
     expect(days).toHaveLength(1);
-    expect(days[0]?.summary).toBe("Rescuers reached the valley.");
+    expect(days[0]?.summaries.map((s) => s.text)).toEqual(["Rescuers reached the valley."]);
   });
 
-  it("is null on a day the page sent no sentence for", () => {
+  it("is empty on a day the page sent no sentence for", () => {
     // Every ordinary search is this case (`TimelineEntry.daySummary`), and so
     // is a storyline-day the preserve has not written or the model refused.
     const days = groupByDay([entry("1", "2026-08-11T18:00:00.000Z")], now, VANCOUVER);
 
-    expect(days[0]?.summary).toBeNull();
+    expect(days[0]?.summaries).toEqual([]);
   });
 
   it("draws nothing for a sentence whose date this page has no day for", () => {
@@ -796,7 +796,7 @@ describe("groupByDay day summaries", () => {
       VANCOUVER, // 20:00 on the 11th
     );
 
-    expect(days.map((day) => [day.key, day.summary])).toEqual([["2026-08-11", null]]);
+    expect(days.map((day) => [day.key, day.summaries])).toEqual([["2026-08-11", []]]);
   });
 
   it("gives each day its own sentence when two land in one reader-day", () => {
@@ -816,8 +816,32 @@ describe("groupByDay day summaries", () => {
       "Pacific/Kiritimati", // UTC+14: both fall in the reader's 2026-08-12
     );
 
-    expect(days.map((day) => [day.key, day.summary])).toEqual([
-      ["2026-08-12", "The second day's sentence."],
+    expect(days.map((day) => [day.key, day.summaries.map((s) => s.text)])).toEqual([
+      ["2026-08-12", ["The second day's sentence."]],
+    ]);
+  });
+
+  it("keeps each arc's sentence when two storylines in one view share a day", () => {
+    // ADR-0028: a view of two arcs, both covered on the 11th and both with a
+    // sentence for it. Neither may overwrite the other, and each is attributed
+    // to its own arc so the rail can say whose is whose.
+    const days = groupByDay(
+      [
+        entry("flood", "2026-08-11T18:00:00.000Z", "2026-08-11T18:00:00.000Z", {
+          daySummary: ["2026-08-11", "Waters rose overnight."],
+        }),
+        entry("strike", "2026-08-11T16:00:00.000Z", "2026-08-11T16:00:00.000Z", {
+          daySummary: ["2026-08-11", "Trains stood still."],
+        }),
+      ],
+      now,
+      VANCOUVER,
+    );
+
+    expect(days).toHaveLength(1);
+    expect(days[0]?.summaries.map((s) => [s.storylineId, s.text])).toEqual([
+      ["flood", "Waters rose overnight."],
+      ["strike", "Trains stood still."],
     ]);
   });
 });

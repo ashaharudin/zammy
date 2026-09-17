@@ -1,13 +1,18 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
-import { STORYLINE_UUID } from "@zammy/shared";
+import { STORYLINE_UUID, type StorylineSummary } from "@zammy/shared";
 import { refreshStoryline, type TopicFilters } from "./api.js";
 import { trackStorylineOpen, type StorylineOpenSource } from "./analytics.js";
 import { Hero } from "./Hero.js";
 import {
+  findInView,
   leaveStorylineView,
   openStorylineView,
   parseLocation,
+  removeStorylineFromView,
+  routeStorylines,
   routeUrl,
+  viewIsFull,
+  withViewStorylines,
   type Route,
 } from "./route.js";
 import { TimelinePage } from "./TimelinePage.js";
@@ -74,38 +79,64 @@ function TopicApp() {
   //
   // `label` is the click's own hand-off — every entry point already renders
   // the storyline's name, so it costs nothing to carry — held here rather than
-  // in the route because it is a hint for the one transition in flight, not
-  // part of what a shared link should reproduce. `viewLabelHint` is only read
-  // while it matches the route's own storyline id, so a stale one from a
-  // dismissed view can never leak onto the next.
+  // in the route because it is a hint for the transitions in flight, not part
+  // of what a shared link should reproduce. One per storyline id, kept for the
+  // session: a view may hold several arcs (ADR-0028) and adding one is a fresh
+  // page, so for the beat before that page lands every chip already in the bar
+  // reads its name from here rather than blinking to "storyline". Keyed by id,
+  // so a hint can never name the wrong arc, only be absent.
   //
-  // It is ALSO the slug's source now (Tier 2 SEO, `route.ts`'s `routeUrl`): a
+  // It is ALSO the slug's source (Tier 2 SEO, `route.ts`'s `routeUrl`): a
   // `Route` names a storyline by id and nothing else, on purpose, so the label
   // for the address bar's cosmetic half has to come from somewhere state-side.
   // Declared above `navigate` so a filter change made from inside an open view
   // — `CommandBar`'s `onSearch({ ...topic, ...filters })`, which carries the
   // same storyline id straight through — still finds the label this hint set
   // when the view was opened, without `navigate` itself needing one passed in.
-  const [labelHint, setLabelHint] = useState<{ id: string; label: string | null } | null>(null);
+  const [labelHints, setLabelHints] = useState<ReadonlyMap<string, string | null>>(
+    () => new Map(),
+  );
+  const hint = useCallback((entries: readonly (readonly [string, string | null])[]) => {
+    setLabelHints((current) => {
+      // The same map back when nothing is new: this is also fed by every page
+      // the view loads (`onStorylinesNamed`), and a fresh map per page would
+      // re-render the app for a fact it already held.
+      if (entries.every(([id, label]) => current.has(id) && current.get(id) === label)) {
+        return current;
+      }
+      const next = new Map(current);
+      for (const [id, label] of entries) next.set(id, label);
+      return next;
+    });
+  }, []);
+
+  // Every page the view loads names its arcs (`TimelinePage.storylines`), and
+  // those names are remembered here too — so a view opened cold, by a shared
+  // link, still writes a real slug on its next replace navigation (a filter
+  // chip, a find) instead of falling back to `/storyline`.
+  const rememberNames = useCallback(
+    (named: readonly StorylineSummary[]) =>
+      hint(named.map((storyline) => [storyline.id, storyline.label] as const)),
+    [hint],
+  );
 
   // `replace` is for a transition the reader did not make — the detected
   // filter defaults land on whatever they are looking at, and a history entry
   // for that would make Back appear to do nothing. `label` is for the ONE
-  // transition that mints a fresh view (`openStoryline` below): `labelHint`
+  // transition that mints a fresh view (`openStoryline` below): `labelHints`
   // state is not yet updated on the same tick that sets it, so a slug built
-  // from the hint here would still be building the PREVIOUS view's slug (or
+  // from the hints here would still be building the PREVIOUS view's slug (or
   // none) for the view this very call is opening.
   const navigate = useCallback(
     (next: Route, options?: { replace?: boolean; label?: string | null }) => {
       const label =
-        options?.label ??
-        (labelHint !== null && labelHint.id === next.storyline ? labelHint.label : null);
+        options?.label ?? (next.storyline ? (labelHints.get(next.storyline) ?? null) : null);
       const url = routeUrl(next, label);
       if (options?.replace) window.history.replaceState(null, "", url);
       else window.history.pushState(null, "", url);
       setRoute(next);
     },
-    [labelHint],
+    [labelHints],
   );
 
   // A bookmarked or shared `?storyline=<uuid>` predates the pretty path, which
@@ -137,14 +168,71 @@ function TopicApp() {
     [navigate],
   );
 
+  // From a search this opens the view; from inside a view it ADDS the arc to
+  // it (ADR-0028) — `openStorylineView` decides which, and either way the click
+  // is one storyline opened, so it is tracked and refreshed exactly once. An arc
+  // the view already holds is left alone: the click was aimed at something on
+  // screen, and re-pushing the same view would make Back appear to do nothing.
+  // A FULL view is left alone too (`viewIsFull`) — the wire caps a view at
+  // `MAX_VIEW_STORYLINES` and the pills row stops offering there, but the rail's
+  // gutter labels and the braid's crossings do not, so the check is here rather
+  // than only in the row that usually produces the click.
   const openStoryline = useCallback(
     (storylineId: string, label: string | null, source: StorylineOpenSource) => {
+      if (routeStorylines(route).includes(storylineId) || viewIsFull(route)) return;
       trackStorylineOpen(source);
-      setLabelHint({ id: storylineId, label });
+      hint([[storylineId, label]]);
       refreshStoryline(storylineId);
-      navigate(openStorylineView(route, storylineId), { label });
+      // The slug names the PATH's storyline, which is the one clicked only when
+      // this click opens a fresh view; adding to an open one keeps its path.
+      const fresh = openStorylineView(route, storylineId);
+      navigate(fresh, fresh.storyline === storylineId ? { label } : undefined);
+    },
+    [navigate, route, hint],
+  );
+
+  // A chip dismissed: the one way an arc leaves the view, since a taken arc has
+  // no pill in the row to press again (`offeredPills` leaves out what the view
+  // holds). The last one out closes the view the way dismissing the single chip
+  // always has — back to the search it was opened from, or to the hero.
+  const removeStoryline = useCallback(
+    (storylineId: string) => {
+      const next = removeStorylineFromView(route, storylineId);
+      if (next === null) {
+        const { route: left, replace } = leaveStorylineView(route, null);
+        navigate(left, { replace });
+        return;
+      }
+      navigate(next);
     },
     [navigate, route],
+  );
+
+  // Typing inside the view asks which storylines say those words (ADR-0028,
+  // amended); the pills answer and the view stays put. `replace`, because the
+  // reader went nowhere — Back should leave the view, not retype for them.
+  const findStorylines = useCallback(
+    (keywords: string | null) => navigate(findInView(route, keywords), { replace: true }),
+    [navigate, route],
+  );
+
+  // The server answered with the arcs it actually served (`TimelinePage.storylines`):
+  // aliases followed to their survivors, UUIDs it never held dropped. The URL
+  // is made to say the same, silently — `replace`, since the reader went
+  // nowhere — so a shared link carries live ids and a chip is never left
+  // standing for an arc that is not on the page. `TimelinePage` calls this only
+  // when the two lists actually differ, so the common case costs nothing.
+  const resolveStorylines = useCallback(
+    (served: readonly StorylineSummary[]) => {
+      const next = withViewStorylines(
+        route,
+        served.map((storyline) => storyline.id),
+      );
+      if (next === null) return;
+      hint(served.map((storyline) => [storyline.id, storyline.label] as const));
+      navigate(next, { replace: true, label: served[0]?.label ?? null });
+    },
+    [navigate, route, hint],
   );
 
   // The storyline view has no keywords — it is opened by clicking a label, and
@@ -168,23 +256,41 @@ function TopicApp() {
         q: route.q ?? "",
         ...route.filters,
         ...(route.storyline ? { storyline: route.storyline } : {}),
+        ...(route.also ? { also: route.also } : {}),
       }}
-      // `storyline` splits off from the filters here rather than riding with
-      // them: the filters survive the transition, the seed belongs to the
-      // topic it opened (ADR-0010) and only travels when a caller passes it.
-      onSearch={({ q, storyline, ...filters }, options) =>
-        navigate({ q: q || null, filters, ...(storyline ? { storyline } : {}) }, options)
+      // The search the view was opened from, as a topic — what keeps its pills
+      // in the bar (`useStorylineSearch`). The filters are the route's,
+      // which are the ones that search ran under: they outlive the topic.
+      viewOrigin={storylineView && route.from ? { q: route.from, ...route.filters } : null}
+      viewFind={storylineView ? (route.find ?? null) : null}
+      onFindStorylines={findStorylines}
+      // `storyline` (and `also`) split off from the filters here rather than
+      // riding with them: the filters survive the transition, the storylines
+      // belong to the view they name and only travel when a caller passes them.
+      // A filter change made INSIDE the view keeps the view's origin too: the
+      // reader narrowed the search they will go back to, they did not leave it.
+      onSearch={({ q, storyline, also, ...filters }, options) =>
+        navigate(
+          {
+            q: q || null,
+            filters,
+            ...(storyline ? { storyline } : {}),
+            ...(storyline && also ? { also } : {}),
+            ...(storyline && storylineView && route.from ? { from: route.from } : {}),
+            ...(storyline && storylineView && route.find ? { find: route.find } : {}),
+          },
+          options,
+        )
       }
       onClear={() => navigate({ q: null, filters: route.filters })}
       // Entering and leaving the storyline view are transitions of the ROUTE,
       // not searches: only here is the search being left still in hand to be
       // recorded, and to be returned to.
       onOpenStoryline={openStoryline}
-      viewLabelHint={route.storyline && labelHint?.id === route.storyline ? labelHint.label : null}
-      onLeaveStoryline={(typed) => {
-        const { route: next, replace } = leaveStorylineView(route, typed);
-        navigate(next, { replace });
-      }}
+      onRemoveStoryline={removeStoryline}
+      onResolveStorylines={resolveStorylines}
+      onStorylinesNamed={rememberNames}
+      viewLabelHints={labelHints}
     />
   );
 }

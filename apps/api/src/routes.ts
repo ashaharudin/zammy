@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import {
   isStorylineView,
   STORYLINE_UUID,
+  StorylineSearchQuery,
+  viewStorylineIds,
   TimelineQuery,
   TrendingQuery,
 } from "@zammy/shared";
@@ -19,6 +21,7 @@ import {
   readStorylineView,
   readTimeline,
   type TimelineSearchDeps,
+  searchStorylines,
 } from "./timeline-read.js";
 import { queueStorylineRefresh, type StorylineRefreshDeps } from "./storyline-refresh.js";
 import {
@@ -120,14 +123,14 @@ export async function registerQueryRoutes(
       return reply.status(400).send({ error: { message: "invalid query", fields } });
     }
 
-    // The STORYLINE VIEW (ADR-0011): a UUID with an empty search box. It has no
-    // keywords, so it has no topic, no coverage and no fill — it is a read of
-    // one storyline's day slots and nothing else. Handled before
-    // canonicalization because there is nothing to canonicalize.
+    // The STORYLINE VIEW (ADR-0011): one UUID or several (ADR-0028) with an
+    // empty search box. It has no keywords, so it has no topic, no coverage and
+    // no fill — it is a read of those storylines' day slots and nothing else.
+    // Handled before canonicalization because there is nothing to canonicalize.
     if (isStorylineView(parsed.data)) {
       try {
         const view = await readStorylineView(deps, {
-          storylineId: parsed.data.storyline!,
+          storylineIds: viewStorylineIds(parsed.data),
           limit: parsed.data.limit,
           ...(parsed.data.cursor ? { cursorString: parsed.data.cursor } : {}),
         });
@@ -198,6 +201,27 @@ export async function registerQueryRoutes(
       }
       throw error;
     }
+  });
+
+  /**
+   * GET /api/v1/storylines?q= (ADR-0028, amended) — storylines by keyword, and
+   * nothing else. What the storyline VIEW's search box runs: the same match
+   * `GET /api/v1/timeline` makes beside a search's results, without the search
+   * — no topic minted, nothing fetched, no page. Registered before the
+   * `/storylines/:id/refresh` route below so the two cannot be confused: this
+   * one has no id, and a GET with one is not a route.
+   */
+  app.get("/api/v1/storylines", async (request, reply) => {
+    const parsed = StorylineSearchQuery.safeParse(request.query);
+    if (!parsed.success) {
+      const fields: Record<string, string> = {};
+      for (const issue of parsed.error.issues) {
+        fields[String(issue.path[0] ?? "query")] ??= issue.message;
+      }
+      return reply.status(400).send({ error: { message: "invalid query", fields } });
+    }
+    const storylines = await searchStorylines(deps, parsed.data.q, parsed.data.limit);
+    return reply.send({ storylines });
   });
 
   /**

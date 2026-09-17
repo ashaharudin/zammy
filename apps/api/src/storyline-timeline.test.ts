@@ -19,7 +19,7 @@ import {
 import type { CanonicalQuery } from "./canonical.js";
 import { groupCreatedArticles } from "./grouping-service.js";
 import { storylineBar } from "./storyline-bar.js";
-import { readStorylineView, readTimeline } from "./timeline-read.js";
+import { readStorylineView, readTimeline, searchStorylines } from "./timeline-read.js";
 import { createReadHarness, type ReadTestHarness } from "./test-support.js";
 import { labelWords } from "./storyline-label-merge.js";
 import { backfillLabelWords } from "./label-words-backfill.js";
@@ -429,7 +429,7 @@ describe("the storyline view", () => {
 
     const view = await readStorylineView(
       { db, now: () => NOW, config: { grouping: { timeZone: "UTC" } } },
-      { storylineId: storyline, limit: 25 },
+      { storylineIds: [storyline], limit: 25 },
     );
 
     expect(view!.items).toHaveLength(2);
@@ -443,7 +443,7 @@ describe("the storyline view", () => {
     ]);
     const storyline = await storylineOf(await groupIds(), "Hurricane Fausto");
 
-    const view = await readStorylineView(harness.deps, { storylineId: storyline, limit: 25 });
+    const view = await readStorylineView(harness.deps, { storylineIds: [storyline], limit: 25 });
 
     expect(view).not.toBeNull();
     expect(view!.items).toHaveLength(2);
@@ -464,7 +464,7 @@ describe("the storyline view", () => {
     await mergeStorylines(db, { winnerId: winner, loserId: loser.id, ...TZ });
 
     // The reader's bookmark holds the LOSER's UUID.
-    const view = await readStorylineView(harness.deps, { storylineId: loser.id, limit: 25 });
+    const view = await readStorylineView(harness.deps, { storylineIds: [loser.id], limit: 25 });
 
     expect(view).not.toBeNull();
     expect(view!.storylines[0]?.id).toBe(winner);
@@ -493,7 +493,7 @@ describe("the storyline view", () => {
       generatedAt: NOW,
     });
 
-    const view = await readStorylineView(harness.deps, { storylineId: storyline, limit: 25 });
+    const view = await readStorylineView(harness.deps, { storylineIds: [storyline], limit: 25 });
 
     // Newest day first, so Tuesday — which has no sentence — leads. The
     // sentence travels WITH the date it is about, because the browser cuts the
@@ -514,7 +514,7 @@ describe("the storyline view", () => {
 
   it("reports a UUID this database never held as absent, not as empty", async () => {
     const view = await readStorylineView(harness.deps, {
-      storylineId: "00000000-0000-4000-8000-000000000000",
+      storylineIds: ["00000000-0000-4000-8000-000000000000"],
       limit: 25,
     });
     // The route turns this into a 404: a stale link and an empty storyline are
@@ -538,7 +538,7 @@ describe("the storyline view", () => {
     let cursor: string | undefined;
     for (let page = 0; page < 10; page += 1) {
       const view = await readStorylineView(harness.deps, {
-        storylineId: storyline,
+        storylineIds: [storyline],
         limit: 2,
         ...(cursor ? { cursorString: cursor } : {}),
       });
@@ -566,15 +566,199 @@ describe("the storyline view", () => {
     );
     const storyline = await storylineOf(await groupIds(), "Hurricane Fausto");
 
-    const first = await readStorylineView(harness.deps, { storylineId: storyline, limit: 2 });
+    const first = await readStorylineView(harness.deps, { storylineIds: [storyline], limit: 2 });
     const second = await readStorylineView(harness.deps, {
-      storylineId: storyline,
+      storylineIds: [storyline],
       limit: 2,
       cursorString: first!.page.nextCursor!,
     });
 
     expect(first!.storylines[0]!.size).toBe(5);
     expect(second!.storylines[0]!.size).toBe(5);
+  });
+
+  /**
+   * A view of SEVERAL storylines (ADR-0028): a reader with one open clicks
+   * another, and the view holds both. Two arcs by hand — the storm on Monday
+   * and Wednesday, the strike on Tuesday — so the interleaving is visible.
+   */
+  async function twoArcs(): Promise<{ storm: string; strike: string }> {
+    await seed([
+      sighting({ domain: "a.example", title: "Hurricane Fausto nears Hawaii", published: MONDAY }),
+      sighting({ domain: "b.example", title: "Rail strike halts commuters", published: TUESDAY }),
+      sighting({
+        domain: "c.example",
+        title: "Fausto weakens over Hawaii",
+        published: "2026-08-12T09:00:00.000Z",
+      }),
+    ]);
+    const [monday, tuesday, wednesday] = await groupIds();
+    const storm = await storylineOf([monday!, wednesday!], "Hurricane Fausto");
+    const strike = await storylineOf([tuesday!], "Rail Strike");
+    return { storm, strike };
+  }
+
+  it("serves several storylines' days on one keyset, in time order across them", async () => {
+    const { storm, strike } = await twoArcs();
+
+    const view = await readStorylineView(harness.deps, { storylineIds: [storm, strike], limit: 25 });
+
+    expect(view!.items.map((item) => [item.storylineId, item.published.slice(0, 10)])).toEqual([
+      [storm, "2026-08-12"],
+      [strike, "2026-08-11"],
+      [storm, "2026-08-10"],
+    ]);
+  });
+
+  it("names every arc in the view, in the order asked", async () => {
+    const { storm, strike } = await twoArcs();
+
+    const view = await readStorylineView(harness.deps, { storylineIds: [strike, storm], limit: 25 });
+
+    // The browser reads these back against the list it asked for, so the
+    // order is part of the answer. The strike is provisional — a storyline of
+    // one — and is still NAMED here: it is the view's own subject, not an offer.
+    expect(view!.storylines.map((s) => s.id)).toEqual([strike, storm]);
+    expect(view!.storylines.map((s) => s.label)).toEqual([null, "Hurricane Fausto"]);
+    expect(view!.storylines.map((s) => s.size)).toEqual([1, 2]);
+  });
+
+  it("hands each slot its OWN arc's day sentence when two arcs share a day", async () => {
+    await seed([
+      sighting({ domain: "a.example", title: "Hurricane Fausto nears Hawaii", published: MONDAY }),
+      sighting({ domain: "b.example", title: "Rail strike halts commuters", published: MONDAY }),
+      sighting({ domain: "c.example", title: "Fausto weakens over Hawaii", published: TUESDAY }),
+    ]);
+    const [storm1, strike1, storm2] = await groupIds();
+    const storm = await storylineOf([storm1!, storm2!], "Hurricane Fausto");
+    const strike = await storylineOf([strike1!], "Rail Strike");
+    for (const [storylineId, summary] of [
+      [storm, "Fausto closed on the islands."],
+      [strike, "Commuters walked as the strike began."],
+    ] as const) {
+      await writeStorylineDaySummary(db, {
+        storylineId,
+        dayKey: "2026-08-10",
+        segment: "day",
+        summary,
+        articleCount: 1,
+        label: null,
+        modelId: "gemma-test",
+        attempts: 0,
+        segmented: true,
+        generatedAt: NOW,
+      });
+    }
+
+    const view = await readStorylineView(harness.deps, { storylineIds: [storm, strike], limit: 25 });
+
+    const monday = view!.items.filter((item) => item.published.startsWith("2026-08-10"));
+    expect(new Map(monday.map((item) => [item.storylineId, item.daySummary?.text]))).toEqual(
+      new Map([
+        [storm, "Fausto closed on the islands."],
+        [strike, "Commuters walked as the strike began."],
+      ]),
+    );
+  });
+
+  it("drops a UUID it has never held from a view of several, and serves the rest", async () => {
+    const { storm, strike } = await twoArcs();
+
+    const view = await readStorylineView(harness.deps, {
+      storylineIds: [storm, "00000000-0000-4000-8000-000000000000", strike],
+      limit: 25,
+    });
+
+    // One dead link in a shared list should not take the other two with it;
+    // `storylines` naming only what resolved is how the browser learns which
+    // chip to drop.
+    expect(view!.storylines.map((s) => s.id)).toEqual([storm, strike]);
+    expect(view!.items).toHaveLength(3);
+  });
+
+  it("folds two aliases of one survivor into one arc", async () => {
+    await seed([
+      sighting({ domain: "a.example", title: "Fausto nears Hawaii", published: MONDAY }),
+      sighting({ domain: "b.example", title: "Genevieve strengthens", published: TUESDAY }),
+    ]);
+    const [one, two] = await groupIds();
+    const winner = await storylineOf([one!], "Pacific Storms");
+    const loser = await createProvisionalStoryline(db, { groupId: two!, ...TZ });
+    await mergeStorylines(db, { winnerId: winner, loserId: loser.id, ...TZ });
+
+    const view = await readStorylineView(harness.deps, { storylineIds: [loser.id, winner], limit: 25 });
+
+    expect(view!.storylines.map((s) => s.id)).toEqual([winner]);
+    // Every slot once: the arc is read once, not once per name it was asked by.
+    const slots = view!.items.map((item) => `${item.storylineId}|${item.published}`);
+    expect(new Set(slots).size).toBe(slots.length);
+  });
+
+  it("pages a view of several without repeating or skipping a day", async () => {
+    const { storm, strike } = await twoArcs();
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 10; page += 1) {
+      const view = await readStorylineView(harness.deps, {
+        storylineIds: [storm, strike],
+        limit: 1,
+        ...(cursor ? { cursorString: cursor } : {}),
+      });
+      seen.push(...view!.items.map((item) => `${item.storylineId}|${item.published}`));
+      if (!view!.page.hasMore) break;
+      cursor = view!.page.nextCursor!;
+    }
+
+    expect(seen).toHaveLength(3);
+    expect(new Set(seen).size).toBe(3);
+  });
+});
+
+/**
+ * Storylines by keyword on their own (ADR-0028, amended): what the view's
+ * search box runs. The match is the SAME one a search makes beside its results,
+ * so the one thing worth pinning is that it agrees with `readTimeline` — and
+ * that asking it mints no topic.
+ */
+describe("searching for storylines", () => {
+  it("surfaces the same storylines a search would, without a page or a topic", async () => {
+    const query = await seed([
+      sighting({ domain: "a.example", title: "Hurricane Fausto nears Hawaii", published: MONDAY }),
+      sighting({
+        domain: "b.example",
+        title: "Hurricane Fausto weakens west of Hawaii",
+        published: TUESDAY,
+      }),
+    ]);
+    const storyline = await storylineOf(await groupIds(), "Hurricane Fausto");
+    const topicsBefore = await db.selectFrom("topics").select("fingerprint").execute();
+
+    const found = await searchStorylines(harness.deps, "Hurricane");
+
+    // Nothing was minted: a search beside a page upserts its topic; this must
+    // not, or every question typed into the view would leave a keyword-less
+    // row behind for retention to find.
+    const topicsAfter = await db.selectFrom("topics").select("fingerprint").execute();
+    expect(topicsAfter).toEqual(topicsBefore);
+
+    const beside = await readTimeline(harness.deps, { ...query, keywords: ["hurricane"] }, { limit: 25 });
+    expect(found.map((s) => s.id)).toEqual([storyline]);
+    expect(found).toEqual(beside.storylines);
+  });
+
+  it("folds and splits the words the way a search does", async () => {
+    await seed([
+      sighting({ domain: "a.example", title: "Hurricane Fausto nears Hawaii", published: MONDAY }),
+      sighting({ domain: "b.example", title: "Fausto weakens west of Hawaii", published: TUESDAY }),
+    ]);
+    const storyline = await storylineOf(await groupIds(), "Hurricane Fausto");
+
+    // Two words, capitals, a plural: the label's "Fausto" and the profile's
+    // "hawaii", found together, as the pill beside a search would be.
+    expect((await searchStorylines(harness.deps, "  FAUSTO Hawaii ")).map((s) => s.id)).toEqual([storyline]);
+    expect(await searchStorylines(harness.deps, "fausto tornado")).toEqual([]);
+    expect(await searchStorylines(harness.deps, "   ")).toEqual([]);
   });
 });
 
@@ -980,7 +1164,7 @@ describe("the storylines a page's groups are in", () => {
     // beside the map rather than being read off the items.
     const { shared, first, second } = await twoArcsSharingAGroup();
 
-    const view = (await readStorylineView(harness.deps, { storylineId: first, limit: 25 }))!;
+    const view = (await readStorylineView(harness.deps, { storylineIds: [first], limit: 25 }))!;
 
     expect(new Set(view.memberships.byGroup[shared])).toEqual(new Set([first, second]));
     expect(view.items.every((item) => item.storylineId === first)).toBe(true);

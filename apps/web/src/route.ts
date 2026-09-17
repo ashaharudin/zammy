@@ -1,4 +1,4 @@
-import { slugifyStoryline, STORYLINE_UUID } from "@zammy/shared";
+import { MAX_VIEW_STORYLINES, slugifyStoryline, STORYLINE_UUID } from "@zammy/shared";
 import type { TopicFilters } from "./api.js";
 
 /**
@@ -32,6 +32,50 @@ export interface Route {
    * there is a view to leave; a plain search has nothing behind it to restore.
    */
   from?: string;
+  /**
+   * The OTHER storylines a view holds beside `storyline` (ADR-0028): a reader
+   * with one arc open clicked another, and the view now pages both. In the URL
+   * as `?also=<uuid>,<uuid>` so a shared link opens the same set, and held
+   * apart from `storyline` rather than folded into one list because the pretty
+   * path (`/storyline/<uuid>/<slug>`) can name exactly one — the first the
+   * reader chose — and that one is also what the server-rendered page and its
+   * canonical link are about. Only ever present with a UUID `storyline`, never
+   * repeating it, and only ever UUIDs.
+   */
+  also?: string[];
+  /**
+   * The keywords typed into the STORYLINE VIEW's search box (ADR-0028,
+   * amended): a search FOR storylines, whose matches take the pills row, not a
+   * search of articles. In the URL because the pills are part of what the
+   * page is showing (§8.2), and only ever with a view — typing on a plain
+   * search is that search.
+   */
+  find?: string;
+}
+
+/**
+ * The `?also=` list as the URL spells it: UUIDs, comma-joined, no repeats, and
+ * no more than a view may hold.
+ *
+ * TRUNCATED rather than passed on whole, because the cap is the wire's
+ * (`TimelineQuery` refuses a list longer than `MAX_VIEW_STORYLINES`) and a
+ * hand-built or stale link that names thirteen arcs would otherwise 400 the
+ * whole view — an error page instead of the twelve the server would have
+ * served. The path's storyline is one of the twelve, so this keeps eleven.
+ */
+function parseAlso(params: URLSearchParams, primary: string): string[] {
+  const raw = params.get("also");
+  if (!raw) return [];
+  const ids = raw
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => STORYLINE_UUID.test(id) && id !== primary);
+  return [...new Set(ids)].slice(0, MAX_VIEW_STORYLINES - 1);
+}
+
+/** Is this the STORYLINE VIEW — a UUID standing in `storyline` (ADR-0011)? */
+function isView(route: Pick<Route, "storyline">): boolean {
+  return route.storyline !== undefined && STORYLINE_UUID.test(route.storyline);
 }
 
 /**
@@ -53,6 +97,9 @@ export function parseRoute(search: string): Route {
   const q = params.get("q")?.trim() || null;
   const storyline = params.get("storyline") ?? undefined;
   const from = params.get("from")?.trim() || undefined;
+  const view = storyline !== undefined && STORYLINE_UUID.test(storyline);
+  const also = view ? parseAlso(params, storyline) : [];
+  const find = params.get("find")?.trim() || undefined;
   return {
     q,
     filters: {
@@ -62,9 +109,12 @@ export function parseRoute(search: string): Route {
     // A SEED without keywords seeds nothing, and dropping it keeps the hero's
     // URL to the filters it is actually showing. A storyline VIEW is the
     // opposite: keyword-less is its normal state, so it survives on its own.
-    ...(storyline && (q || STORYLINE_UUID.test(storyline)) ? { storyline } : {}),
+    ...(storyline && (q || view) ? { storyline } : {}),
     // An origin only means something where there is a VIEW to leave.
-    ...(from && storyline && STORYLINE_UUID.test(storyline) ? { from } : {}),
+    ...(from && view ? { from } : {}),
+    // And so do further storylines: they widen a view, and nothing else.
+    ...(also.length > 0 ? { also } : {}),
+    ...(find && view ? { find } : {}),
   };
 }
 
@@ -75,9 +125,11 @@ export function routeSearch(route: Route): string {
     const value = route.filters[filter as keyof TopicFilters];
     if (value) params.set(key, value);
   }
-  const view = route.storyline && STORYLINE_UUID.test(route.storyline);
+  const view = isView(route);
   if (route.storyline && (route.q || view)) params.set("storyline", route.storyline);
   if (route.from && view) params.set("from", route.from);
+  if (route.also && route.also.length > 0 && view) params.set("also", route.also.join(","));
+  if (route.find && view) params.set("find", route.find);
   const search = params.toString();
   return search ? `?${search}` : "";
 }
@@ -119,6 +171,8 @@ export function parseLocation(pathname: string, search: string): Route {
 
   const params = new URLSearchParams(search);
   const from = params.get("from")?.trim() || undefined;
+  const also = parseAlso(params, pathStoryline);
+  const find = params.get("find")?.trim() || undefined;
   return {
     q: null,
     filters: {
@@ -127,6 +181,8 @@ export function parseLocation(pathname: string, search: string): Route {
     },
     storyline: pathStoryline,
     ...(from ? { from } : {}),
+    ...(also.length > 0 ? { also } : {}),
+    ...(find ? { find } : {}),
   };
 }
 
@@ -144,8 +200,7 @@ export function parseLocation(pathname: string, search: string): Route {
  * `routeSearch` unchanged.
  */
 export function routeUrl(route: Route, label: string | null = null): string {
-  const view = route.storyline !== undefined && STORYLINE_UUID.test(route.storyline);
-  if (!view) return `/${routeSearch(route)}`;
+  if (!isView(route)) return `/${routeSearch(route)}`;
 
   const params = new URLSearchParams();
   for (const [filter, key] of Object.entries(PARAM_KEYS)) {
@@ -153,20 +208,114 @@ export function routeUrl(route: Route, label: string | null = null): string {
     if (value) params.set(key, value);
   }
   if (route.from) params.set("from", route.from);
+  // The path names the FIRST storyline; the rest ride in the query string. A
+  // crawler following the path finds the one server-rendered page, which is
+  // about that storyline alone; a reader following the whole URL finds the
+  // view they were sent.
+  if (route.also && route.also.length > 0) params.set("also", route.also.join(","));
+  if (route.find) params.set("find", route.find);
   const search = params.toString();
   return `/storyline/${route.storyline}/${slugifyStoryline(label)}${search ? `?${search}` : ""}`;
 }
 
 /**
+ * The view with its search box set to `keywords` — the pills row becomes the
+ * storylines those words surface (ADR-0028, amended) — or, for null, back to
+ * whatever the view offered before anything was typed. The view itself does
+ * not move: same arcs, same origin.
+ */
+export function findInView(route: Route, keywords: string | null): Route {
+  const { find: _was, ...kept } = route;
+  const trimmed = keywords?.trim();
+  return trimmed ? { ...kept, find: trimmed } : kept;
+}
+
+/**
+ * Every storyline the STORYLINE VIEW holds, the path's first: what the view is
+ * a view OF. Empty for anything that is not a view — a search, the hero, or a
+ * bigint seed standing in `storyline`.
+ */
+export function routeStorylines(route: Route): string[] {
+  if (!isView(route)) return [];
+  return [route.storyline!, ...(route.also ?? [])];
+}
+
+/**
+ * Is the view holding as many arcs as one may hold (`MAX_VIEW_STORYLINES`)?
+ *
+ * The cap is the WIRE's — `TimelineQuery` refuses a longer `?storyline=` list —
+ * so a view that reached it must stop offering, or the next click sends a
+ * request the API answers 400 to and the reader loses the rail they built.
+ * ADR-0028 argued no cap was needed in the UI because a search surfaced at most
+ * eight; its amendment made the row a pool that tops itself up as pills are
+ * taken, and a reader can now click past eight, so the UI has to know the
+ * ceiling after all.
+ */
+export function viewIsFull(route: Route): boolean {
+  return routeStorylines(route).length >= MAX_VIEW_STORYLINES;
+}
+
+/**
+ * The view with exactly these storylines in it, first to the path and the
+ * rest to `also`, or null for an empty list — a view of nothing is not a view,
+ * and what to show instead (`leaveStorylineView`) is the caller's decision.
+ *
+ * Everything else about the route — filters, and the origin the view was
+ * opened from — is kept: the set changing is not the reader going anywhere.
+ *
+ * Trimmed to `MAX_VIEW_STORYLINES`, which is the wire's own cap: no route this
+ * function builds can name a set the API would refuse.
+ */
+export function withViewStorylines(route: Route, ids: readonly string[]): Route | null {
+  const [first, ...rest] = ids.slice(0, MAX_VIEW_STORYLINES);
+  if (first === undefined) return null;
+  const { storyline: _was, also: _were, ...kept } = route;
+  return { ...kept, storyline: first, ...(rest.length > 0 ? { also: rest } : {}) };
+}
+
+/**
+ * The view without one of its storylines — a chip dismissed, which is the one
+ * way an arc leaves a view: a taken pill is out of the row already
+ * (`offeredPills` leaves out what the view holds), so there is no pill to press
+ * again. Null when that was the last one, which is the caller's cue to leave
+ * the view altogether rather than show a view of nothing.
+ */
+export function removeStorylineFromView(route: Route, storylineId: string): Route | null {
+  return withViewStorylines(
+    route,
+    routeStorylines(route).filter((id) => id !== storylineId),
+  );
+}
+
+/**
  * The STORYLINE VIEW, opened from wherever the reader is now.
  *
- * The keywords they leave are kept as the view's origin rather than dropped:
- * the view is a step into one storyline, and the search that surfaced it is
- * where "out" leads. The filters carry as they always do; the view itself
- * ignores them (it is one storyline's own coverage, §api), but the search they
- * came from — and will return to — is still theirs.
+ * From a search: the keywords they leave are kept as the view's origin rather
+ * than dropped — the view is a step into one storyline, and the search that
+ * surfaced it is where "out" leads. The filters carry as they always do; the
+ * view itself ignores them (it is the storylines' own coverage, §api), but the
+ * search they came from — and will return to — is still theirs.
+ *
+ * From INSIDE a view: the storyline is ADDED rather than swapped in (ADR-0028).
+ * The reader had one arc open and asked for another, and the pills that
+ * offered it are still in the bar, so the natural reading of the click is
+ * "this too" rather than "this instead". The origin and the path's storyline
+ * both stay where they were; one already in the view is left alone — so a
+ * gutter label under the arc the reader is reading is a press that changes
+ * nothing, deliberately, rather than re-minting the view and losing its origin
+ * the way it used to.
  */
 export function openStorylineView(current: Route, storylineId: string): Route {
+  if (isView(current)) {
+    const held = routeStorylines(current);
+    if (held.includes(storylineId)) return current;
+    // A full view is left alone rather than widened past what the wire accepts:
+    // the row stops offering at this point (`viewIsFull`), so there should be
+    // nothing to click, and the rail's own gutter labels are the reason this is
+    // belt as well as braces.
+    if (held.length >= MAX_VIEW_STORYLINES) return current;
+    return { ...current, also: [...(current.also ?? []), storylineId] };
+  }
   return {
     q: null,
     filters: current.filters,
@@ -181,9 +330,9 @@ export function openStorylineView(current: Route, storylineId: string): Route {
  *
  * The view is somewhere the reader stepped INTO, not somewhere they searched
  * for, so leaving it is a step back out: dismissing restores the search that
- * opened it. Neither the storyline nor its origin travels onward — both are
- * provenance for what the reader was looking at, and belong to that view alone.
- * The filters do travel: they outlive the topic (see Route).
+ * opened it. Neither the storylines nor the origin travel onward — all of them
+ * are provenance for what the reader was looking at, and belong to that view
+ * alone. The filters do travel: they outlive the topic (see Route).
  */
 export function leaveStorylineView(
   route: Route,

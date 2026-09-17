@@ -386,6 +386,32 @@ describe("POST /api/v1/storylines/:id/refresh", () => {
   });
 });
 
+describe("GET /api/v1/storylines", () => {
+  it("answers a keyword search for storylines with the list and nothing else", async () => {
+    await setup();
+    const response = await app.inject({ method: "GET", url: "/api/v1/storylines?q=climate" });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(Object.keys(body)).toEqual(["storylines"]);
+    expect(Array.isArray(body.storylines)).toBe(true);
+  });
+
+  it("refuses an empty question", async () => {
+    await setup();
+    const response = await app.inject({ method: "GET", url: "/api/v1/storylines?q=%20" });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.fields.q).toBeDefined();
+  });
+
+  it("takes a limit, within the ceiling", async () => {
+    await setup();
+    expect((await app.inject({ method: "GET", url: "/api/v1/storylines?q=climate&limit=11" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/v1/storylines?q=climate&limit=0" })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/api/v1/storylines?q=climate&limit=999" })).statusCode).toBe(400);
+  });
+});
+
 describe("GET /api/v1/reference", () => {
   interface ReferenceBody {
     languages: Record<string, string>;

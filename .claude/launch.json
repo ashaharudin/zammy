@@ -2,22 +2,43 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "api",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "dev"
+      ],
+      "port": 3000
+    },
+    {
       "name": "web",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["dev:web"],
+      "runtimeArgs": [
+        "dev:web"
+      ],
       "port": 5173,
       "autoPort": true
     },
     {
       "name": "api-b",
       "runtimeExecutable": "env",
-      "runtimeArgs": ["PORT=3100", "pnpm", "--filter", "@zammy/api", "start"],
+      "runtimeArgs": [
+        "PORT=3100",
+        "pnpm",
+        "--filter",
+        "@zammy/api",
+        "start"
+      ],
       "port": 3100
     },
     {
       "name": "web-b",
       "runtimeExecutable": "env",
-      "runtimeArgs": ["PORT=5273", "VITE_API_ORIGIN=http://localhost:3100", "pnpm", "dev:web"],
+      "runtimeArgs": [
+        "PORT=5273",
+        "VITE_API_ORIGIN=http://localhost:3100",
+        "pnpm",
+        "dev:web"
+      ],
       "port": 5273
     }
   ]

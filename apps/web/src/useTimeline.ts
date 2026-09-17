@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { TimelinePage } from "@zammy/shared";
-import { fetchReference, fetchTimeline, type TopicQuery } from "./api.js";
+import type { StorylineSummary, TimelinePage } from "@zammy/shared";
+import { fetchReference, fetchStorylines, fetchTimeline, type TopicQuery } from "./api.js";
 import { isPageVisible } from "./browser.js";
 import { splicePolledPage, startIngestPoll, type LoadedTimeline } from "./ingestPoll.js";
 
@@ -26,13 +26,21 @@ function timelineKey(topic: TopicQuery | null) {
   return ["timeline", topic];
 }
 
-export function useTimeline(topic: TopicQuery | null) {
-  const timeline = useInfiniteQuery({
+/** The infinite query's shape: the key, the fetch, and how the next page is asked for. */
+function timelineQueryOptions(topic: TopicQuery | null) {
+  return {
     queryKey: timelineKey(topic),
     enabled: topic !== null,
-    queryFn: ({ pageParam, signal }) => fetchTimeline(topic!, pageParam, signal),
+    queryFn: ({ pageParam, signal }: { pageParam: string | undefined; signal: AbortSignal }) =>
+      fetchTimeline(topic!, pageParam, signal),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last: TimelinePage) => last.page.nextCursor ?? undefined,
+  };
+}
+
+export function useTimeline(topic: TopicQuery | null) {
+  const timeline = useInfiniteQuery({
+    ...timelineQueryOptions(topic),
     staleTime: TIMELINE_STALE_TIME_MS,
   });
 
@@ -104,6 +112,43 @@ function useIngestPoll(topic: TopicQuery | null, ingesting: boolean) {
     // `topic` rides on `topicKey` rather than on itself: a fresh object every
     // render would tear the poll down and restart it on every one of them.
   }, [topicKey, ingesting, client]);
+}
+
+const NO_STORYLINES: readonly StorylineSummary[] = [];
+
+/**
+ * Storylines by keyword, for the view's row of pills (ADR-0028, amended): the
+ * words of the search the view was opened from, or the words typed into the
+ * view's own box. Nothing while there is no query. `settled` is what separates
+ * "no match" from "not answered yet", which the bar needs before it may say
+ * nothing matched.
+ *
+ * `limit` is a row's worth plus one per arc the view holds, so that the match
+ * which takes a picked pill's place is already in hand (`offeredPills`). It is
+ * part of the key, so a larger ask is a new answer rather than a truncated old
+ * one; the pool that reads it (`TimelinePage`) keeps every answer it has seen.
+ *
+ * Not the origin search's own cache entry, which an earlier version read
+ * through a second observer: that entry holds exactly a row's worth and could
+ * never say what comes ninth.
+ */
+export function useStorylineSearch(
+  q: string | null,
+  limit: number,
+): {
+  storylines: readonly StorylineSummary[];
+  settled: boolean;
+} {
+  const search = useQuery({
+    queryKey: ["storylines", q, limit],
+    enabled: q !== null,
+    queryFn: ({ signal }) => fetchStorylines(q!, limit, signal),
+    staleTime: TIMELINE_STALE_TIME_MS,
+  });
+  return {
+    storylines: search.data?.storylines ?? NO_STORYLINES,
+    settled: q !== null && (search.isSuccess || search.isError),
+  };
 }
 
 /** Filter options for the command bar. Upstream refreshes daily (§9.1). */

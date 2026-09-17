@@ -4,6 +4,7 @@ import {
   cursorGeneration,
   decodeCursor,
   encodeCursor,
+  STORYLINE_OFFER_COUNT,
   type Article,
   type Cursor,
   type StorylineSummary,
@@ -15,14 +16,14 @@ import {
   readArcDaySummaries,
   readCoverage,
   readGroupMemberships,
-  readStorylineArticleCount,
+  describeStorylines,
   readStorylineTimelinePage,
   resolveStoryline,
   upsertTopic,
   type Database,
   type StorylineSlot,
 } from "@zammy/storage";
-import type { CanonicalQuery } from "./canonical.js";
+import { canonicalKeywords, type CanonicalQuery } from "./canonical.js";
 import { fillWindowForRead, type CoverageFillDeps } from "./coverage-fill.js";
 import { PLANNED_COVERAGE_PROVIDER } from "./coverage-gaps.js";
 import {
@@ -287,10 +288,7 @@ async function planAndRead(
   // construction (every emitted term came straight out of `profile_tokens`); now
   // it holds because of this fold. Removing it loses the pill for exactly the
   // click that produced the search.
-  const surfaced = await findSurfacedStorylines(deps.db, {
-    keywords: query.keywords.map((keyword) => labelWords(keyword).join(" ")),
-    limit: SURFACED_STORYLINE_LIMIT,
-  });
+  const surfaced = await surfacedBy(deps.db, query.keywords);
 
   // Which storylines the page's groups are filed in (`memberships`). After the
   // page is settled and over its groups alone, so it costs one indexed statement
@@ -359,6 +357,53 @@ async function planAndRead(
 }
 
 /**
+ * The storylines a set of keywords surfaces, folded the way the comment above
+ * `readTimeline`'s call describes — one function, because a search beside its
+ * results and a search FOR storylines (`searchStorylines`) must agree on what
+ * "matches" means, or a label a reader was just shown as a pill could fail to
+ * come back when typed into the view.
+ */
+async function surfacedBy(
+  db: Kysely<Database>,
+  keywords: readonly string[],
+  limit: number = SURFACED_STORYLINE_LIMIT,
+) {
+  return findSurfacedStorylines(db, {
+    keywords: keywords.map((keyword) => labelWords(keyword).join(" ")),
+    limit,
+  });
+}
+
+/**
+ * Storylines by keyword, on their own (ADR-0028, amended): what the storyline
+ * VIEW's search box runs. The same match `readTimeline` makes beside a page of
+ * results, without the page — so no topic is minted (`upsertTopic` is not
+ * called), no coverage is planned and nothing reaches upstream. A reader inside
+ * one arc typing "visa" is asking which arcs say visa, not for the visa
+ * articles, and the answer is a row of pills rather than a rail.
+ *
+ * Keywords are split exactly as a search's are (`canonicalKeywords`), so the
+ * words that surfaced a pill beside a search surface the same pill here.
+ * Language and country are deliberately not accepted: a storyline's vocabulary
+ * is not per-language, and the view ignores the reader's chips for the same
+ * reason (`useFilterDefaults` is off in it).
+ */
+export async function searchStorylines(
+  deps: Pick<StorylineViewDeps, "db">,
+  q: string,
+  /**
+   * How many. The view asks for a row's worth plus one per arc it holds, so
+   * the match that takes a picked pill's place is already in the answer
+   * (`STORYLINE_OFFER_COUNT`, ADR-0028 amended).
+   */
+  limit: number = SURFACED_STORYLINE_LIMIT,
+): Promise<StorylineSummary[]> {
+  const keywords = canonicalKeywords(q);
+  if (keywords.length === 0) return [];
+  return (await surfacedBy(deps.db, keywords, limit)).map(toSummary);
+}
+
+/**
  * A stored storyline → the slot the browser renders (§14.3, ADR-0009).
  *
  * Which member holds the headline is NOT decided here, and the reason is that
@@ -420,8 +465,16 @@ function toEntry(slot: {
 }
 
 /**
- * The STORYLINE VIEW (ADR-0011): the timeline filtered to one storyline,
- * alias-resolving, with the label echoed back.
+ * The STORYLINE VIEW (ADR-0011): the timeline filtered to one storyline — or
+ * to several at once (ADR-0028) — alias-resolving, with each label echoed back.
+ *
+ * Several arcs share the one keyset rather than being read one at a time and
+ * merged: `readStorylineTimelinePage` already orders by
+ * `(day_slot_published, storyline_id)` and the view only widens its predicate
+ * to `in (...)`, so two arcs' days interleave in time on the page the way
+ * they would on a search, and a cursor that stops between them resumes
+ * exactly where it stopped. Reading N arcs as N pages would have had to re-sort
+ * in memory and would have had no cursor that meant anything across them.
  *
  * It replaces ADR-0010's `?storyline=<bigint>` seeding, and the replacement is
  * a simplification rather than a translation. The seed had to enroll articles
@@ -431,68 +484,96 @@ function toEntry(slot: {
  * storyline's day slots. `attachStorylineToTopic` and its token gate went with
  * the cutover.
  *
- * Returns null for a UUID this database has never held — a stale link, which
- * the route turns into a 404. A MERGED one resolves to its survivor instead
- * and serves that: nothing holding a storyline UUID may dangle, which is the
- * whole reason the loser's row survives as an alias.
+ * Returns null when NONE of the UUIDs is one this database has held — a stale
+ * link, which the route turns into a 404. A MERGED one resolves to its survivor
+ * instead and serves that: nothing holding a storyline UUID may dangle, which
+ * is the whole reason the loser's row survives as an alias. In a view of
+ * several, an unknown UUID is dropped and the rest are served: one dead link
+ * in a shared list of three should not take the other two with it, and the
+ * response's `storylines` — which names only what resolved — is how the browser
+ * learns which chip to let go of.
  */
 export async function readStorylineView(
   deps: StorylineViewDeps,
-  request: { storylineId: string; limit: number; cursorString?: string },
+  request: { storylineIds: readonly string[]; limit: number; cursorString?: string },
 ): Promise<TimelineReadResult | null> {
   const now = deps.now();
   const cursor = takeCursor(request.cursorString);
 
-  const resolved = await resolveStoryline(deps.db, request.storylineId);
-  if (resolved === null) return null;
+  // Resolved in request order and folded AFTER resolving: two aliases of one
+  // survivor are one arc, and the order is what the browser reads the answer
+  // back against (`viewStorylineIds`).
+  //
+  // Concurrently, and the ORDER is then restored by walking the answers rather
+  // than the awaits: one alias lookup per arc is a round trip per arc, and a
+  // twelve-arc view awaiting them one at a time spends twelve serial latencies
+  // before the page read has started. They are independent reads of one table.
+  const survivors = await Promise.all(
+    request.storylineIds.map((storylineId) => resolveStoryline(deps.db, storylineId)),
+  );
+  const resolved: string[] = [];
+  for (const survivor of survivors) {
+    if (survivor !== null && !resolved.includes(survivor)) resolved.push(survivor);
+  }
+  if (resolved.length === 0) return null;
 
   const stored = await readStorylineTimelinePage(deps.db, {
     fingerprint: null,
-    storylineId: resolved,
+    storylineIds: resolved,
     ...(cursor ? { cursor } : {}),
     limit: request.limit,
     timeZone: deps.config.grouping.timeZone,
   });
 
-  const first = stored.items[0];
-  // Whole-life, so page two says what page one said (the wire contract's own
-  // wording). One extra count for a read that is already three statements deep.
-  const size = first ? await readStorylineArticleCount(deps.db, resolved) : 0;
+  // The view's own subjects, described whole-life so page two says what page
+  // one said (the wire contract's own wording), and in one statement for every
+  // arc in the view. Back in request order: the aggregate returns them in
+  // whatever order the planner liked, and the order is part of the answer.
+  const described = new Map(
+    (await describeStorylines(deps.db, resolved)).map((row) => [row.id, row]),
+  );
+  const subjects = resolved.flatMap((id) => {
+    const row = described.get(id);
+    return row ? [toSummary(row)] : [];
+  });
   const memberships = await readGroupMemberships(deps.db, groupsOn(stored.items));
   // The historical preserve's day sentences (ADR-0023), which only the VIEW
   // reads — `toEntry` leaves `daySummary` null for a search, and the wire
   // contract carries why.
   //
-  // The WHOLE arc, not this page's days. It is one small row per day of one
-  // storyline's life, the keyset pages by day so a second page is a second
-  // read, and the alternative — passing the page's day keys down as an `in`
-  // list — makes the query's cost depend on the page rather than on the arc.
-  // The map is then a lookup, and a day the preserve never got to is simply
-  // absent from it.
-  const daySummaries = await readArcDaySummaries(deps.db, { storylineId: resolved });
+  // The WHOLE arc, not this page's days, and one map PER ARC. It is one small
+  // row per day of one storyline's life, the keyset pages by day so a second
+  // page is a second read, and the alternative — passing the page's day keys
+  // down as an `in` list — makes the query's cost depend on the page rather
+  // than on the arc. Per arc rather than one map keyed by day, because two arcs
+  // in one view can both have a sentence for the same day, and a slot must be
+  // handed its OWN arc's. A day the preserve never got to is simply absent.
+  //
+  // One read per arc, concurrently for the reason the alias lookups above are:
+  // serially they are a round trip per arc on the hot path, and no arc's
+  // sentences depend on another's.
+  const daySummaries = new Map(
+    await Promise.all(
+      resolved.map(
+        async (storylineId) =>
+          [storylineId, await readArcDaySummaries(deps.db, { storylineId })] as const,
+      ),
+    ),
+  );
   return {
     // No topic: the view is not a search, and inventing a fingerprint for it
     // would put a keyword-less row in `topics` that nothing could ever hit
     // again. Coverage is null for the same reason — nothing was fetched FOR
     // this view; its articles were fetched for the searches that found them.
     topic: { fingerprint: EMPTY_FINGERPRINT, keywords: [], coverage: null },
-    storylines: first
-      ? [
-          {
-            id: resolved,
-            label: first.label,
-            from: first.spanFrom,
-            to: first.spanTo,
-            size,
-            dormant: first.status === "dormant",
-          },
-        ]
-      : [],
+    storylines: subjects,
     memberships: {
       byGroup: Object.fromEntries(memberships.byGroup),
       storylines: memberships.storylines.map(toSummary),
     },
-    items: stored.items.map((slot) => toStorylineEntry(slot, daySummaries)),
+    items: stored.items.map((slot) =>
+      toStorylineEntry(slot, daySummaries.get(slot.storylineId)),
+    ),
     page: {
       nextCursor: stored.nextCursor ? encodeCursor(stored.nextCursor) : null,
       hasMore: stored.hasMore,
@@ -581,7 +662,7 @@ const EMPTY_FINGERPRINT = "0".repeat(64);
  * is the mitigation the verdict already required; but eight is the point where
  * the row stops being chrome and starts being a screen.
  */
-const SURFACED_STORYLINE_LIMIT = 8;
+const SURFACED_STORYLINE_LIMIT = STORYLINE_OFFER_COUNT;
 
 /**
  * A storyline-DAY → the slot the browser renders (ADR-0011).

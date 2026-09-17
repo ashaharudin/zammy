@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import type { TimelinePage } from "@zammy/shared";
+import type { StorylineSummary, TimelinePage } from "@zammy/shared";
 import type { StorylineOpenSource } from "./analytics.js";
-import type { Reference, TopicQuery } from "./api.js";
+import { topicStorylines, type Reference, type TopicQuery } from "./api.js";
 import { FilterChipRow, useFilterDefaults } from "./FilterChipRow.js";
 import { StorylinePills } from "./StorylinePills.js";
 import { MONO } from "./theme.js";
@@ -29,12 +29,16 @@ import { upstreamHealthRecord } from "./upstreamHealth.js";
 export function CommandBar({
   topic,
   page,
+  surfaced,
+  viewFind,
+  findEmpty,
+  onFindStorylines,
   reference,
   onSearch,
   onClear,
   onOpenStorylineView,
-  viewLabelHint,
-  onLeaveStorylineView,
+  onRemoveStoryline,
+  viewLabelHints,
   qualifiers,
   daySummaries,
   onToggleDaySummaries,
@@ -44,19 +48,36 @@ export function CommandBar({
   topic: TopicQuery;
   /** The newest response — the authority on meta. */
   page: TimelinePage | undefined;
+  /**
+   * The pills row: what this search surfaced, or — in the view — the matches
+   * for its question that it does not already hold, a row's worth
+   * (ADR-0028, `storylineOffers`). `TimelinePage` decides which; this only
+   * draws it.
+   */
+  surfaced: readonly StorylineSummary[];
+  /**
+   * In the view, the keywords its search box last asked about (ADR-0028,
+   * amended) — what the box shows, and what `surfaced` is the answer to. Null
+   * when nothing has been typed, and always null outside the view.
+   */
+  viewFind: string | null;
+  /** Those keywords found nothing, and the answer is in — say so under the box. */
+  findEmpty: boolean;
+  /** The view's search box submitted: keywords, or null when emptied. */
+  onFindStorylines: (keywords: string | null) => void;
   reference: Reference | undefined;
   onSearch: (topic: TopicQuery, options?: { replace?: boolean }) => void;
   onClear: () => void;
   onOpenStorylineView: (storylineId: string, label: string | null, source: StorylineOpenSource) => void;
+  /** One arc out of the view: its chip dismissed. */
+  onRemoveStoryline: (storylineId: string) => void;
   /**
-   * The label the click that opened this view already had in hand, for the
-   * chip to show before `page` — the view's own topic, not yet fetched —
-   * has one of its own. `null` covers a reload or a shared link, which has no
-   * click to have carried it.
+   * The labels the clicks that built this view had in hand, by storyline id,
+   * for the chips to show before `page` — the view's own topic, not yet
+   * fetched — names them itself. Absent for a reload or a shared link, which
+   * has no click to have carried one.
    */
-  viewLabelHint: string | null;
-  /** The keywords typed to leave the view, or null for a dismissed chip. */
-  onLeaveStorylineView: (typed: string | null) => void;
+  viewLabelHints: ReadonlyMap<string, string | null>;
   /** storyline id → the date that separates it from its namesakes on screen. */
   qualifiers: Map<string, string>;
   /** Whether the rail draws its day sentences (`daySummaryPreference`). */
@@ -68,20 +89,29 @@ export function CommandBar({
 }) {
   const [q, setQ] = useState(topic.q);
   // The storyline view: opened by clicking a label, so there are no keywords
-  // and the box is empty by definition (ADR-0011).
-  const view = topic.q === "" && topic.storyline !== undefined ? topic.storyline : null;
+  // and the box is empty by definition (ADR-0011). One chip per arc it holds
+  // (ADR-0028), in the URL's order — the path's first.
+  const held = topic.q === "" ? topicStorylines(topic) : [];
+  const view = held.length > 0;
   // `page` is this view's own topic once loaded, and outranks the hint: a
   // storyline whose label generation genuinely failed reports that as `null`
-  // here, and the hint — good only until the real answer is in — must not
-  // paper over it. Before `page` arrives there is nothing to outrank yet, so
-  // the hint carries the chip instead of the "storyline" fallback.
-  const viewLabel = view ? (page ? (page.storylines[0]?.label ?? null) : viewLabelHint) : null;
+  // there, and the hint — good only until the real answer is in — must not
+  // paper over it. Before `page` names an arc there is nothing to outrank yet,
+  // so the hint carries its chip instead of the "storyline" fallback. Looked up
+  // BY ID rather than by position, because a page mid-add names the arcs it
+  // was asked for and a page that followed an alias names the survivor.
+  const chipLabel = (storylineId: string): string | null => {
+    const named = page?.storylines.find((storyline) => storyline.id === storylineId);
+    if (named) return named.label;
+    return viewLabelHints.get(storylineId) ?? null;
+  };
 
   // Back/forward (or a shared link) changes the topic from outside; the bar
-  // must follow the URL, not fight it.
+  // must follow the URL, not fight it. In the view the box holds the words the
+  // reader asked the pills with, which live beside the topic rather than in it.
   useEffect(() => {
-    setQ(topic.q);
-  }, [topic]);
+    setQ(view ? (viewFind ?? "") : topic.q);
+  }, [topic, view, viewFind]);
 
   useUpstreamHealthLog(page);
   // The reader's own browser for country, English for language (§8.1), on a
@@ -115,15 +145,14 @@ export function CommandBar({
           // the reader types next would keep enrolling that slot in unrelated
           // topics. The filter chips below DO keep it: they narrow this same
           // topic rather than starting another.
-          // Typing exits the storyline view, and drops the ADR-0010 seed for
-          // the same reason: both are provenance for what the reader was
-          // looking at, and neither belongs to what they type next.
+          // In the VIEW, typing is a search FOR storylines (ADR-0028, amended):
+          // the words go to the pills row, the view stays, and an emptied box
+          // hands the row back to whatever it offered before. The view is left
+          // by dismissing its chips or by the prompt, not by typing — a reader
+          // inside one arc who types "visa" is asking which arcs say visa.
+          if (view) return onFindStorylines(q.trim() || null);
           if (!q.trim()) return;
-          // Leaving the VIEW is its own transition (leaveStorylineView): the
-          // view stood between this search and the one that opened it, and it
-          // is that earlier search the reader's Back belongs to.
-          if (view) return onLeaveStorylineView(q.trim());
-          const { storyline: _held, ...carried } = topic;
+          const { storyline: _held, also: _also, ...carried } = topic;
           onSearch({ ...carried, q: q.trim() });
         }}
         style={{
@@ -131,6 +160,10 @@ export function CommandBar({
           margin: "0 auto",
           display: "flex",
           alignItems: "center",
+          // Several chips may not fit beside the prompt on a phone; the input
+          // then drops to its own line rather than shrinking to nothing. A
+          // single chip never wraps, since it is capped at half the row.
+          flexWrap: "wrap",
           gap: "0.5rem",
           padding: "0.75rem 1rem 0.35rem",
         }}
@@ -150,16 +183,23 @@ export function CommandBar({
         >
           zammy&gt;
         </button>
-        {view && (
+        {/* One chip per arc, each dismissible on its own: taking the last one
+            out is what leaves the view (`App.tsx`'s `removeStoryline`), so a
+            reader with one chip sees exactly the dismiss they always had. A
+            dismissed arc goes back to the pills row below (`storylineOffers`). */}
+        {held.map((storylineId) => (
           <StorylineChip
-            label={viewLabel}
-            onDismiss={() => onLeaveStorylineView(null)}
+            key={storylineId}
+            label={chipLabel(storylineId)}
+            qualifier={qualifiers.get(storylineId) ?? null}
+            crowded={held.length > 1}
+            onDismiss={() => onRemoveStoryline(storylineId)}
           />
-        )}
+        ))}
         <input
           value={q}
           onChange={(event) => setQ(event.target.value)}
-          placeholder={view ? "search to leave this storyline" : "search..."}
+          placeholder={view ? "find storylines..." : "search..."}
           aria-label="Search topics"
           style={{
             flex: 1,
@@ -168,7 +208,10 @@ export function CommandBar({
             fontFamily: MONO,
             fontSize: "0.95rem",
             padding: "0.25rem 0",
-            minWidth: 0,
+            // Beside several chips, wide enough to still be a search box —
+            // which is what sends it to its own line on a phone. Beside one
+            // chip it may shrink instead, as it always has, and never wraps.
+            minWidth: held.length > 1 ? "8rem" : 0,
             background: "transparent",
           }}
         />
@@ -209,14 +252,36 @@ export function CommandBar({
         )}
       </div>
       {/* S8's verdict: surfaced storylines live in the chrome, in the meta row
-          — never in the results, which they are not part of. Suppressed
-          in the view itself, which is already about one storyline. */}
-      {!view && (
-        <StorylinePills
-          storylines={page?.storylines ?? []}
-          qualifiers={qualifiers}
-          onOpen={onOpenStorylineView}
-        />
+          — never in the results, which they are not part of. Once suppressed
+          in the view itself; kept there now (ADR-0028) as a row of OFFERS: the
+          matches the view does not hold, so the reader can take a second one.
+          A taken pill's arc is named by its chip above, not by the row.
+          `TimelinePage` hands an empty list for a view with nothing to offer,
+          and the row then draws nothing at all. */}
+      <StorylinePills
+        storylines={surfaced}
+        qualifiers={qualifiers}
+        onOpen={onOpenStorylineView}
+      />
+      {/* The row's one wordless state that needs words: a question the box
+          asked and nothing answered. The row itself draws nothing when empty,
+          which on a search means "nothing surfaced" and needs no saying, but
+          a reader who just typed and pressed Enter needs to know they were
+          heard. */}
+      {findEmpty && (
+        <p
+          role="status"
+          style={{
+            maxWidth: "var(--page-max)",
+            margin: "0 auto",
+            padding: "0 1rem 0.45rem",
+            fontFamily: MONO,
+            fontSize: "0.7rem",
+            color: "var(--fg-faint)",
+          }}
+        >
+          no storylines say “{viewFind}”
+        </p>
       )}
     </header>
   );
@@ -310,17 +375,37 @@ function DayPartsToggle({ on, onToggle }: { on: boolean; onToggle: () => void })
 }
 
 /**
- * The storyline view's subject, as a dismissible chip in the prompt row
- * (ADR-0011). Dismissing steps back out to the search the view was opened
- * from, and to the hero only where there was none — a shared link.
+ * One of the storyline view's subjects, as a dismissible chip in the prompt
+ * row (ADR-0011; several of them since ADR-0028). Dismissing takes this arc
+ * out of the view; dismissing the last one steps back out to the search the
+ * view was opened from, and to the hero only where there was none — a shared
+ * link.
  *
  * Renders "storyline" when the label is null — a promoted storyline whose
  * label generation failed is still a storyline, and the chip is what tells the
- * reader why the box is empty.
+ * reader why the box is empty. The qualifier is the same date that separates
+ * two same-named arcs everywhere else on screen: two chips reading "Trump
+ * Administration" would otherwise be two chips the reader cannot tell apart.
  */
-function StorylineChip({ label, onDismiss }: { label: string | null; onDismiss: () => void }) {
+function StorylineChip({
+  label,
+  qualifier,
+  crowded,
+  onDismiss,
+}: {
+  label: string | null;
+  qualifier: string | null;
+  /** More than one chip in the row: each takes less of it, so the input keeps some. */
+  crowded: boolean;
+  onDismiss: () => void;
+}) {
+  const name = label ?? "storyline";
   return (
     <span
+      // Fades and slides in on mount (`index.css`): a chip is the pill the
+      // reader just took, arriving where it now lives. Keyed by storyline id
+      // upstream, so a chip that merely re-renders does not replay it.
+      className="storyline-chip-enter"
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -332,16 +417,17 @@ function StorylineChip({ label, onDismiss }: { label: string | null; onDismiss: 
         fontSize: "0.75rem",
         padding: "0.1rem 0.2rem 0.1rem 0.55rem",
         whiteSpace: "nowrap",
-        maxWidth: "50%",
+        maxWidth: crowded ? "34%" : "50%",
       }}
     >
       <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-        {label ?? "storyline"}
+        {name}
+        {qualifier && <span style={{ opacity: 0.6 }}> · {qualifier}</span>}
       </span>
       <button
         type="button"
         onClick={onDismiss}
-        aria-label={`Leave the storyline ${label ?? ""}`.trim()}
+        aria-label={`Remove the storyline ${name}${qualifier ? `, ${qualifier}` : ""} from the view`}
         style={{
           border: "none",
           background: "none",

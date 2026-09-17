@@ -452,6 +452,118 @@ describe("slots sharing a position", () => {
 });
 
 /**
+ * The storyline VIEW's read, over several arcs at once (ADR-0028): the same
+ * keyset, a wider predicate. What is under test is that widening the predicate
+ * is ALL it takes — the page comes out in time order across the arcs, and only
+ * the arcs asked for are on it.
+ */
+describe("a view of several storylines", () => {
+  let harness: TestDatabase;
+  const VIEW_TOPIC = testFingerprint("a11ce");
+  let flood: string;
+  let strike: string;
+  let bystander: string;
+
+  const story = (id: string, url: string, published: string, title: string): Sighting => ({
+    id,
+    url,
+    provider: "currents",
+    providerSightingId: url,
+    dedupKey: deriveDedupKey(url),
+    altKey: deriveAltKey(new URL(url).hostname, title, published),
+    title,
+    description: null,
+    author: null,
+    imageUrl: null,
+    language: "en",
+    categories: [],
+    sourceCategories: [],
+    sourceDomain: new URL(url).hostname,
+    published,
+    raw: { id },
+  });
+
+  beforeAll(async () => {
+    harness = await createTestDatabase();
+    await migrateToLatest(harness.db);
+    await upsertTopic(harness.db, { fingerprint: VIEW_TOPIC, keywords: ["news"] });
+
+    // Three arcs, each its own group per day. The flood runs the 4th and the
+    // 6th, the strike the 5th, the bystander the 5th too — so a view of the
+    // flood and the strike interleaves (6th, 5th, 4th) and must skip the
+    // bystander's 5th.
+    const ingested = await ingestSightings(harness.db, {
+      plane: "search",
+      timeZone: TZ,
+      fingerprint: VIEW_TOPIC,
+      sightings: [
+        story("00000000-0000-4000-8000-000000000031", "https://f.example/1", "2026-08-04T09:00:00.000Z", "Flood hits valley"),
+        story("00000000-0000-4000-8000-000000000032", "https://f.example/2", "2026-08-06T09:00:00.000Z", "Flood waters recede"),
+        story("00000000-0000-4000-8000-000000000033", "https://s.example/1", "2026-08-05T09:00:00.000Z", "Rail strike begins"),
+        story("00000000-0000-4000-8000-000000000034", "https://b.example/1", "2026-08-05T12:00:00.000Z", "Unrelated bystander"),
+      ],
+    });
+    const [flood1, flood2, strike1, bystander1] = ingested.createdArticles;
+
+    const floodArc = await createProvisionalStoryline(harness.db, { groupId: flood1!.id, timeZone: TZ });
+    await attachGroup(harness.db, { storylineId: floodArc.id, groupId: flood2!.id, timeZone: TZ });
+    flood = floodArc.id;
+    strike = (await createProvisionalStoryline(harness.db, { groupId: strike1!.id, timeZone: TZ })).id;
+    bystander = (await createProvisionalStoryline(harness.db, { groupId: bystander1!.id, timeZone: TZ })).id;
+  });
+
+  afterAll(async () => {
+    await harness.drop();
+  });
+
+  it("pages both arcs' days on one keyset, newest first across them", async () => {
+    const page = await readStorylineTimelinePage(harness.db, {
+      fingerprint: null,
+      storylineIds: [flood, strike],
+      limit: 25,
+      timeZone: TZ,
+    });
+
+    expect(page.items.map((slot) => [slot.storylineId, slot.dayKey])).toEqual([
+      [flood, "2026-08-06"],
+      [strike, "2026-08-05"],
+      [flood, "2026-08-04"],
+    ]);
+    expect(page.items.some((slot) => slot.storylineId === bystander)).toBe(false);
+  });
+
+  it("carries a cursor across the arcs, so a reader resumes between them", async () => {
+    const first = await readStorylineTimelinePage(harness.db, {
+      fingerprint: null,
+      storylineIds: [flood, strike],
+      limit: 1,
+      timeZone: TZ,
+    });
+    expect(first.hasMore).toBe(true);
+    const second = await readStorylineTimelinePage(harness.db, {
+      fingerprint: null,
+      storylineIds: [flood, strike],
+      limit: 1,
+      timeZone: TZ,
+      cursor: first.nextCursor!,
+    });
+
+    expect(first.items[0]!.storylineId).toBe(flood);
+    expect(second.items[0]!.storylineId).toBe(strike);
+  });
+
+  it("reads one arc exactly as the single view always did", async () => {
+    const page = await readStorylineTimelinePage(harness.db, {
+      fingerprint: null,
+      storylineIds: [strike],
+      limit: 25,
+      timeZone: TZ,
+    });
+    expect(page.items.map((slot) => slot.dayKey)).toEqual(["2026-08-05"]);
+  });
+});
+
+/**
  * `readGroupMemberships` — which storylines a group is filed in (ADR-0025).
  *
  * The fact CONTEXT.md states and the wire could not carry: "A group may belong
