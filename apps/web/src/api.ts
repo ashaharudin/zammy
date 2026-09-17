@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { isStorylineView, TimelinePage, TrendingResponse } from "@zammy/shared";
+import {
+  isStorylineView,
+  StorylineSearchResponse,
+  TimelinePage,
+  TrendingResponse,
+} from "@zammy/shared";
 
 /**
  * The browser's half of the wire contract (ARCHITECTURE 6.1). Responses are
@@ -30,6 +35,22 @@ export interface TopicQuery extends TopicFilters {
    * at, and typing replaces it.
    */
   storyline?: string;
+  /**
+   * The view's FURTHER subjects (ADR-0028), beside `storyline`: the arcs the
+   * reader added by clicking while the view was open. The same shape the
+   * route holds them in (`Route.also`), and part of the query key, so adding
+   * one is a new page rather than a mutation of the one on screen.
+   */
+  also?: string[];
+}
+
+/**
+ * Every storyline a view's topic is about, `storyline` first. Empty for a
+ * search, which is about keywords.
+ */
+export function topicStorylines(topic: TopicQuery): string[] {
+  if (!isStorylineView(topic)) return [];
+  return [topic.storyline!, ...(topic.also ?? [])];
 }
 
 export const Reference = z.object({
@@ -79,10 +100,11 @@ export async function fetchTimeline(
   cursor: string | undefined,
   signal: AbortSignal,
 ): Promise<TimelinePage> {
-  // The storyline view sends the UUID and nothing else: it is not a search, so
-  // it carries no keywords and no filters to narrow them with.
+  // The storyline view sends the UUIDs and nothing else: it is not a search, so
+  // it carries no keywords and no filters to narrow them with. Several arcs go
+  // as one comma-joined parameter, the shape `TimelineQuery` reads back.
   if (isStorylineView(topic)) {
-    const viewParams = new URLSearchParams({ storyline: topic.storyline! });
+    const viewParams = new URLSearchParams({ storyline: topicStorylines(topic).join(",") });
     if (cursor) viewParams.set("cursor", cursor);
     const viewResponse = await fetch(`/api/v1/timeline?${viewParams}`, { signal });
     if (!viewResponse.ok) await throwApiError(viewResponse);
@@ -144,6 +166,23 @@ export function refreshStoryline(storylineId: string): void {
   }).catch(() => {
     // See above: an un-refreshed arc is the status quo, never a reader's problem.
   });
+}
+
+/**
+ * Storylines by keyword, and nothing else (ADR-0028, amended): what the view's
+ * search box asks. Deliberately NOT `fetchTimeline` with the keywords — that
+ * would mint a topic and may spend an upstream call to fill a page nobody is
+ * going to look at.
+ */
+export async function fetchStorylines(
+  q: string,
+  limit: number,
+  signal: AbortSignal,
+): Promise<StorylineSearchResponse> {
+  const params = new URLSearchParams({ q, limit: String(limit) });
+  const response = await fetch(`/api/v1/storylines?${params}`, { signal });
+  if (!response.ok) await throwApiError(response);
+  return StorylineSearchResponse.parse(await response.json());
 }
 
 export async function fetchTrending(

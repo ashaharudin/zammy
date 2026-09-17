@@ -285,13 +285,28 @@ export interface DayGroup {
    * "FRIDAY, AUG 21", a heading contradicting the prose beside it. Verified in a
    * real browser, which is the only place the two calendars are visible at once.
    *
-   * Null unless the page carried a sentence for this date, which today is the
+   * Empty unless the page carried a sentence for this date, which today is the
    * storyline view alone (`TimelineEntry.daySummary`). A sentence whose date has
    * no group on this page is simply not drawn — it takes a day whose every
    * article ran in the few hours that fall outside the reader's like-named day.
+   *
+   * A LIST, one per storyline that had a sentence for this date, because a view
+   * may hold several storylines (ADR-0028) and two of them can both have
+   * covered the same day. Each carries the arc it is about so the rail can say
+   * whose sentence is whose when there is more than one; a view of one arc
+   * yields at most one here, drawn exactly as it always was. In the order the
+   * arcs first appear on the page, newest slot first.
    */
-  summary: string | null;
+  summaries: DaySentence[];
   segments: { segment: Segment; items: RailSlot[] }[];
+}
+
+/** One arc's sentence for one day (`TimelineEntry.daySummary`), with its arc. */
+export interface DaySentence {
+  storylineId: string;
+  /** The arc's label, for the rail to attribute the sentence by; null as the wire has it. */
+  label: string | null;
+  text: string;
 }
 
 /**
@@ -331,9 +346,21 @@ export function groupByDay(items: TimelineEntry[], now: Date, timeZone: string):
   // Built before the walk because a day's sentence can arrive on a slot whose
   // cards all landed in a NEIGHBOURING group, and looked up by the group's own
   // key rather than pushed from the slot for the same reason.
-  const summaries = new Map<string, string>();
+  // Keyed by date, then by arc: two arcs in one view can both speak for one
+  // day, and one must not overwrite the other. A slot repeats its arc's sentence
+  // on every card the day holds, so the inner map is what folds those repeats.
+  const summaries = new Map<string, Map<string, DaySentence>>();
   for (const item of items) {
-    if (item.daySummary) summaries.set(item.daySummary.dayKey, item.daySummary.text);
+    if (!item.daySummary) continue;
+    const forDay = summaries.get(item.daySummary.dayKey) ?? new Map<string, DaySentence>();
+    if (!forDay.has(item.storylineId)) {
+      forDay.set(item.storylineId, {
+        storylineId: item.storylineId,
+        label: item.storyline?.label ?? null,
+        text: item.daySummary.text,
+      });
+    }
+    summaries.set(item.daySummary.dayKey, forDay);
   }
   const days = new Map<string, { at: string; parts: Map<Segment, RailSlot[]> }>();
   for (const item of items) {
@@ -356,7 +383,7 @@ export function groupByDay(items: TimelineEntry[], now: Date, timeZone: string):
         key,
         day: labelFor(key, group.at, todayKey, timeZone),
         dateSuffix: dateSuffixFor(key, group.at, todayKey, timeZone),
-        summary: summaries.get(key) ?? null,
+        summaries: [...(summaries.get(key)?.values() ?? [])],
         segments: SEGMENTS_DESC.flatMap((segment) => {
           const part = group.parts.get(segment);
           return part ? [{ segment, items: [...part].sort((a, b) => at(b) - at(a)) }] : [];

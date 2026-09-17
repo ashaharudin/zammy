@@ -91,7 +91,7 @@ export async function renderStorylinePage(
   const resolved = await resolveStoryline(deps.db, id);
   if (resolved === null) return notFoundPage(request.template);
 
-  const view = await readStorylineView(deps, { storylineId: resolved, limit: DEFAULT_PAGE_LIMIT });
+  const view = await readStorylineView(deps, { storylineIds: [resolved], limit: DEFAULT_PAGE_LIMIT });
   // `resolveStoryline` just proved `resolved` names a live row, so this can
   // only answer null if a merge lands between the two statements above —
   // `mergeStorylines` serializes on its own advisory lock rather than asking

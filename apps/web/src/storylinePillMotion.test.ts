@@ -4,7 +4,6 @@ import {
   EMPTY_PILL_ROW,
   exitedPills,
   orderStorylinePills,
-  PILL_ARC_PX,
   pillMoveKeyframes,
   receivePills,
 } from "./storylinePillMotion.js";
@@ -145,66 +144,25 @@ describe("receivePills", () => {
 });
 
 describe("pillMoveKeyframes", () => {
-  /** The y a straight line between the two slots would be at this offset. */
-  const straightY = (dy: number, offset: number) => dy * (1 - offset);
-  const y = (frame: Keyframe) =>
-    Number(/translate\((-?[\d.]+)px, (-?[\d.]+)px\)/.exec(String(frame.transform))?.[2]);
-  const x = (frame: Keyframe) =>
-    Number(/translate\((-?[\d.]+)px, (-?[\d.]+)px\)/.exec(String(frame.transform))?.[1]);
-
   it("starts where the pill was and ends where it belongs", () => {
     const frames = pillMoveKeyframes(120, 0);
-    expect(frames.at(0)).toMatchObject({ offset: 0, transform: "translate(120px, 0px) scale(1)" });
+    expect(frames.at(0)).toMatchObject({ offset: 0, transform: "translate(120px, 0px)" });
     expect(frames.at(-1)).toMatchObject({ offset: 1, transform: "none" });
   });
 
-  it("bows a pill moving up the order out of the row, and one moving down under it", () => {
-    // FLIP deltas: where the pill WAS, relative to where it is now. A positive
-    // dx means it used to be further right — it has moved earlier in the row.
-    const up = pillMoveKeyframes(200, 0);
-    const down = pillMoveKeyframes(-200, 0);
-    expect(y(up[2]!)).toBe(-PILL_ARC_PX);
-    expect(y(down[2]!)).toBe(PILL_ARC_PX);
+  it("slides in a straight line, with no bow, swell or lift", () => {
+    // The bubble went (ADR-0028): a row that changes one pill at a time reads a
+    // bowed path as the whole row jumping. Two frames and a straight line
+    // between them is the whole of the motion now.
+    const frames = pillMoveKeyframes(-300, 26);
+    expect(frames).toHaveLength(2);
+    expect(frames[0]!.transform).toBe("translate(-300px, 26px)");
+    expect(frames.every((frame) => frame.zIndex === undefined)).toBe(true);
+    expect(frames.every((frame) => !String(frame.transform).includes("scale"))).toBe(true);
   });
 
-  it("reads a wrapped line as the direction, whatever the sideways travel", () => {
-    // Up a line and to the right: still a riser, because the line is what the
-    // reader sees it leave.
-    expect(y(pillMoveKeyframes(-300, 26)[2]!)).toBe(straightY(26, 0.5) - PILL_ARC_PX);
-    expect(y(pillMoveKeyframes(300, -26)[2]!)).toBe(straightY(-26, 0.5) + PILL_ARC_PX);
-  });
-
-  it("returns to the straight line at both ends, so the bow has no corner", () => {
-    const frames = pillMoveKeyframes(160, 26);
-    for (const [index, offset] of [0, 0.25, 0.5, 0.75].entries()) {
-      // The horizontal travel is the straight line throughout; only the
-      // crossways component bows.
-      expect(x(frames[index]!)).toBeCloseTo(160 * (1 - offset), 1);
-    }
-    const bow = (offset: number, frame: Keyframe) => y(frame) - straightY(26, offset);
-    expect(bow(0, frames[0]!)).toBe(0);
-    expect(bow(0.25, frames[1]!)).toBeCloseTo(-0.75 * PILL_ARC_PX, 5);
-    expect(bow(0.5, frames[2]!)).toBeCloseTo(-PILL_ARC_PX, 5);
-    expect(bow(0.75, frames[3]!)).toBeCloseTo(-0.75 * PILL_ARC_PX, 5);
-  });
-
-  it("carries the riser over the pills it overtakes, and lets the sinker go under", () => {
-    // After the commit the riser is already the earlier sibling, so without a
-    // lift it would travel BEHIND the pills it is passing.
-    expect(pillMoveKeyframes(200, 0).every((frame) => frame.zIndex === "1")).toBe(true);
-    expect(pillMoveKeyframes(-200, 0).every((frame) => frame.zIndex === undefined)).toBe(true);
-  });
-
-  it("swells the riser and shrinks the sinker, and leaves both at rest", () => {
-    const scale = (frame: Keyframe) =>
-      Number(/scale\(([\d.]+)\)/.exec(String(frame.transform))?.[1]);
-    const up = pillMoveKeyframes(200, 0);
-    const down = pillMoveKeyframes(-200, 0);
-    expect(scale(up[0]!)).toBe(1);
-    expect(scale(up[2]!)).toBeGreaterThan(1);
-    expect(scale(down[2]!)).toBeLessThan(1);
-    // Neither is left scaled: the last frame is the pill's own style.
-    expect(up.at(-1)!.transform).toBe("none");
-    expect(down.at(-1)!.transform).toBe("none");
+  it("rounds sub-pixel deltas rather than writing them into the transform", () => {
+    // `-0.004` rounds to negative zero, which stringifies as plain `0`.
+    expect(pillMoveKeyframes(12.3456, -0.004)[0]!.transform).toBe("translate(12.35px, 0px)");
   });
 });

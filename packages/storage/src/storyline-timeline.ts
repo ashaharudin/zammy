@@ -65,8 +65,13 @@ export interface StorylineTimelinePage {
 export interface StorylineTimelineQuery {
   /** sha256 hex fingerprint of the topic, or null for the storyline view. */
   fingerprint: string | null;
-  /** The storyline view's subject — already alias-resolved by the caller. */
-  storylineId?: string;
+  /**
+   * The storyline view's subjects — already alias-resolved by the caller, and
+   * already folded to a set. Several, because a view may hold more than one
+   * arc (ADR-0028): their days share the one keyset, so the page comes out in
+   * time order across all of them rather than as one list per arc.
+   */
+  storylineIds?: readonly string[];
   from?: Date;
   to?: Date;
   cursor?: Cursor;
@@ -80,7 +85,7 @@ export interface StorylineTimelineQuery {
  *
  * Two shapes in one function because they differ by a predicate, not by
  * structure: the ordinary timeline scopes to a topic's articles, the storyline
- * view scopes to one storyline and every article in it. Splitting them would
+ * view scopes to one or more storylines and every article in them. Splitting them would
  * mean two keyset implementations to keep in step, which is the bug this
  * codebase has already paid for once (§7.4).
  */
@@ -113,7 +118,11 @@ export async function readStorylineTimelinePage(
         : sql``
     }
     where true
-      ${query.storylineId ? sql`and sd.storyline_id = ${query.storylineId}::uuid` : sql``}
+      ${
+        query.storylineIds && query.storylineIds.length > 0
+          ? sql`and sd.storyline_id in (${sql.join(query.storylineIds.map((id) => sql`${id}::uuid`))})`
+          : sql``
+      }
       ${query.from ? sql`and a.published >= ${query.from}` : sql``}
       ${query.to ? sql`and a.published < ${query.to}` : sql``}
       ${
@@ -286,7 +295,7 @@ export async function readGroupMemberships(
   if (memberships.length === 0) return { byGroup: new Map(), storylines: [] };
 
   const named = [...new Set(memberships.flatMap((row) => row.storyline_ids))];
-  const storylines = await readStorylineSummaries(db, named);
+  const storylines = await describeStorylines(db, named);
 
   // Reconcile rather than trust: the contract is that every id in `byGroup` is
   // described in `storylines`, and a storyline the second statement could not
@@ -313,8 +322,18 @@ export async function readGroupMemberships(
  * behind them, asked by ID instead of by keyword — the size subquery counts
  * member articles per storyline, which is a fact about the story rather than
  * about whatever put it on this page.
+ *
+ * Exported for the storyline VIEW, which names its own subjects in the same
+ * list a search names what it surfaced (`TimelinePage.storylines`) and, since
+ * a view may hold several arcs (ADR-0028), needs them described in one
+ * statement rather than one count per arc. Not `readStorylineSummaries`: that
+ * name is taken by the day SENTENCES (`storyline-summaries.ts`), and a summary
+ * here is the wire's `StorylineSummary` — a description, not prose. A
+ * storyline with no covered day is
+ * absent from the answer — the join enforces it — so callers must not read the
+ * result's length as the input's.
  */
-async function readStorylineSummaries(
+export async function describeStorylines(
   db: Kysely<Database>,
   ids: readonly string[],
 ): Promise<StorylineSummaryRow[]> {

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { TimelinePage, groupStorylines } from "./timeline.js";
+import {
+  MAX_VIEW_STORYLINES,
+  TimelineQuery,
+  TimelinePage,
+  groupStorylines,
+  isStorylineView,
+  viewStorylineIds,
+} from "./timeline.js";
 
 /**
  * The wire contract's own readings — the parts of it that are a RULE rather
@@ -74,5 +81,51 @@ describe("TimelinePage.memberships", () => {
       memberships: { byGroup: { "42": [ARC_A, ARC_B] }, storylines: [] },
     });
     expect(parsed.storylines).toEqual([]);
+  });
+});
+
+/**
+ * `?storyline=` names the view's subjects: one UUID, or several joined by
+ * commas (ADR-0028). The list is the whole of what a multi-storyline view puts
+ * on the wire, so the shape it accepts and the shape it refuses are the contract.
+ */
+describe("TimelineQuery.storyline", () => {
+  it("accepts one storyline with no keywords, as it always did", () => {
+    const parsed = TimelineQuery.safeParse({ storyline: ARC_A });
+    expect(parsed.success).toBe(true);
+    expect(viewStorylineIds(parsed.data!)).toEqual([ARC_A]);
+  });
+
+  it("accepts several storylines joined by commas, in the order given", () => {
+    const parsed = TimelineQuery.safeParse({ storyline: `${ARC_B},${ARC_A}` });
+    expect(parsed.success).toBe(true);
+    expect(isStorylineView(parsed.data!)).toBe(true);
+    expect(viewStorylineIds(parsed.data!)).toEqual([ARC_B, ARC_A]);
+  });
+
+  it("folds a repeated storyline, so a,b,a is a view of two", () => {
+    expect(viewStorylineIds({ storyline: `${ARC_A},${ARC_B},${ARC_A}` })).toEqual([ARC_A, ARC_B]);
+  });
+
+  it("refuses anything in the list that is not a UUID", () => {
+    // A bigint seed (ADR-0010) among the UUIDs, a trailing comma, an empty
+    // element: none of them may quietly mean something else.
+    for (const bad of [`${ARC_A},23905`, `${ARC_A},`, `,${ARC_A}`, `${ARC_A},,${ARC_B}`]) {
+      const parsed = TimelineQuery.safeParse({ storyline: bad });
+      expect(parsed.success, bad).toBe(false);
+    }
+  });
+
+  it("refuses a list longer than the view may hold", () => {
+    const ids = Array.from({ length: MAX_VIEW_STORYLINES + 1 }, (_, i) =>
+      `${String(i).padStart(8, "0")}-0000-4000-8000-000000000000`,
+    );
+    expect(TimelineQuery.safeParse({ storyline: ids.join(",") }).success).toBe(false);
+    expect(TimelineQuery.safeParse({ storyline: ids.slice(1).join(",") }).success).toBe(true);
+  });
+
+  it("answers an empty list for a request that is not a view", () => {
+    expect(viewStorylineIds({ q: "wildfires" } as { storyline?: string })).toEqual([]);
+    expect(viewStorylineIds({ storyline: "23905" })).toEqual([]);
   });
 });

@@ -433,6 +433,7 @@ Accepts front-end requests and turns them into the right upstream query — or, 
 | --- | --- |
 | `GET /api/v1/timeline` | The main read. Keywords + filters → time-ordered page of articles. |
 | `GET /api/v1/reference` | Cached `/available/*` values, for front-end filter controls. Languages and regions only — the category taxonomy is no longer served, because nothing can pick from it (ADR-0020). |
+| `GET /api/v1/storylines?q=` | Storylines by keyword, and nothing else: the same match the timeline makes beside a search's results, without the search — no topic minted, nothing fetched. What the storyline view's search box runs (ADR-0028, amended). `{ storylines: StorylineSummary[] }`. |
 | `GET /api/v1/topics/:fingerprint` | Topic metadata: coverage window, article count, freshness, summary. |
 | `POST /api/v1/storylines/:id/refresh` | Fire-and-forget: queue one background top-up of what this arc's coverage says (§9.1, ADR-0017), and — separately planned, against the arc itself — one deepening fetch (§9.1a, ADR-0019). A UUID is the whole request; the keywords and the language are derived from the arc, never sent. 202 with `{ queued, deepening: { status, queued } }`; nothing on the page reads it. |
 | `GET /healthz` · `GET /readyz` | Liveness, and dependency checks for Postgres/Redis/upstream — plus a `chores` digest saying which nightly passes are overdue or stalled (`chore-status.ts`). The digest is additive and never moves `status`: `ready`/`degraded`/`unready` stay a statement about Postgres and Redis alone. |
@@ -449,11 +450,13 @@ country    string   optional   validated against /available/regions
 from, to   ISO-8601 optional   timeline window
 cursor     opaque   optional   keyset cursor from a previous response
 limit      int      optional   default 25, max 100 — a CEILING, not a promise (§6.5)
-storyline  uuid     optional   the STORYLINE VIEW (ADR-0011): the timeline filtered to
-                              one storyline, alias-resolving. Carries no keywords —
-                              `q` is optional only for this — because the view's
-                              search box is empty by definition, and typing exits it.
-                              NOT part of the fingerprint; it has no topic at all.
+storyline  uuid[,…] optional   the STORYLINE VIEW (ADR-0011): the timeline filtered to
+                              one storyline — or several, comma-joined, at most 12
+                              (ADR-0028) — alias-resolving, their days on one keyset.
+                              Carries no keywords — `q` is optional only for this —
+                              because the view's search box is empty by definition,
+                              and typing exits it. NOT part of the fingerprint; it has
+                              no topic at all.
 ```
 
 There is no `category`, and its absence is load-bearing
@@ -475,8 +478,9 @@ Response:
 {
   "topic":  { "fingerprint": "…", "keywords": ["…"], "coverage": { "from": "…", "to": "…" } },
   // Storylines this SEARCH surfaced, beside the results rather than narrowing
-  // them (ADR-0011). The storyline VIEW fills it with one entry — the arc being
-  // viewed — which is where the command bar reads that chip's label from.
+  // them (ADR-0011). The storyline VIEW fills it with one entry PER ARC being
+  // viewed, in request order (ADR-0028) — where the command bar reads each
+  // chip's label from.
   "storylines": [ /* StorylineSummary */ ],
   // Which storylines each GROUP on this page is filed in, and the arcs those
   // ids resolve through (ADR-0025). A group with fewer than two NAMEABLE arcs is
@@ -1147,7 +1151,14 @@ keywords in, timeline out.
   alone because it is the only place with sentences to suppress.
 - **Storyline label** — every slot of a labelled storyline hangs its label in the gutter on the far
   side of the rail; clicking opens the **storyline view**: the timeline filtered to that UUID, the
-  label as a dismissible chip, the search box empty, typing exits (ADR-0011). The label's words are
+  label as a dismissible chip, the search box empty, typing exits (ADR-0011). Clicking another
+  storyline — a pill the search surfaced, which stays in the bar while the view is open, or a
+  gutter label — ADDS it: one chip per arc, the arcs' days interleaved on the rail, the URL
+  `/storyline/<first>/<slug>?also=<uuid>,…` (ADR-0028). The row is a pool of offers: a taken
+  pill leaves it for the prompt and the next match fills in; a dismissed chip returns to it and
+  the smallest pill makes room. Typing inside the view searches FOR storylines
+  (`GET /api/v1/storylines?q=&limit=`, `?find=` in the URL): the matches take the row, the view
+  stays; it is left by dismissing its chips or by the prompt. The label's words are
   never executed as a search — labels are non-unique, so only the UUID identifies the story — and
   the landing-page cloud is no exception (§10.5, ADR-0016): a cloud word opens its storyline the
   same way. When two same-label storylines are on screen together, a quiet date qualifier separates

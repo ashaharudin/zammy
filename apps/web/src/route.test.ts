@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  findInView,
   leaveStorylineView,
   openStorylineView,
   parseLocation,
   parseRoute,
+  removeStorylineFromView,
   routeSearch,
+  routeStorylines,
   routeUrl,
+  withViewStorylines,
 } from "./route.js";
 
 /**
@@ -300,5 +304,165 @@ describe("routeUrl", () => {
     // lifetime and has no route of its own to be pretty about.
     const route = { q: "mail-in voting", filters: {}, storyline: "23905" };
     expect(routeUrl(route)).toBe(`/${routeSearch(route)}`);
+  });
+});
+
+/**
+ * A view of SEVERAL storylines (ADR-0028): the path names the first, `?also=`
+ * carries the rest, and a click inside the view adds rather than swaps.
+ */
+describe("a view of several storylines", () => {
+  const A = "0192f3c4-5d6e-7f80-9123-456789abcdef";
+  const B = "11111111-1111-4111-8111-111111111111";
+  const C = "22222222-2222-4222-8222-222222222222";
+  const view = { q: null, filters: { language: "en", country: undefined }, storyline: A, from: "Trump" };
+
+  it("reads the further storylines from the pretty path's query string", () => {
+    expect(parseLocation(`/storyline/${A}/trump-upended`, `?from=Trump&also=${B},${C}`)).toEqual({
+      q: null,
+      filters: { language: undefined, country: undefined },
+      storyline: A,
+      from: "Trump",
+      also: [B, C],
+    });
+  });
+
+  it("reads them from the query form too, so an old-shaped link widens the same way", () => {
+    expect(parseRoute(`?storyline=${A}&also=${B}`)).toEqual({
+      q: null,
+      filters: { language: undefined, country: undefined },
+      storyline: A,
+      also: [B],
+    });
+  });
+
+  it("keeps only UUIDs in the list, never the path's own storyline, and no repeats", () => {
+    expect(parseLocation(`/storyline/${A}/x`, `?also=${A},${B},23905,${B},,junk`).also).toEqual([B]);
+  });
+
+  it("drops the list where there is no view for it to widen", () => {
+    // A bigint seed is not a view; a plain search is not a view. Neither may
+    // carry a second storyline into a page that holds none.
+    expect(parseRoute(`?q=voting&storyline=23905&also=${B}`)).toEqual({
+      q: "voting",
+      filters: { language: undefined, country: undefined },
+      storyline: "23905",
+    });
+    expect(parseRoute(`?q=voting&also=${B}`)).toEqual({
+      q: "voting",
+      filters: { language: undefined, country: undefined },
+    });
+  });
+
+  it("writes the first to the path and the rest to the query string", () => {
+    expect(routeUrl({ ...view, also: [B, C] }, "Trump Upended")).toBe(
+      `/storyline/${A}/trump-upended?lang=en&from=Trump&also=${B}%2C${C}`,
+    );
+  });
+
+  it("round-trips through parseLocation", () => {
+    const route = { ...view, also: [B, C] };
+    const [pathname, search] = routeUrl(route, "Trump Upended").split("?");
+    expect(parseLocation(pathname!, search ? `?${search}` : "")).toEqual(route);
+  });
+
+  it("lists what the view holds, the path's first", () => {
+    expect(routeStorylines({ ...view, also: [B] })).toEqual([A, B]);
+    expect(routeStorylines(view)).toEqual([A]);
+    expect(routeStorylines({ q: "voting", filters: {}, storyline: "23905" })).toEqual([]);
+    expect(routeStorylines({ q: "voting", filters: {} })).toEqual([]);
+  });
+
+  it("adds a storyline clicked from inside the view, keeping the path and the origin", () => {
+    expect(openStorylineView(view, B)).toEqual({ ...view, also: [B] });
+    expect(openStorylineView({ ...view, also: [B] }, C)).toEqual({ ...view, also: [B, C] });
+  });
+
+  it("leaves a view alone when the storyline clicked is already in it", () => {
+    expect(openStorylineView({ ...view, also: [B] }, A)).toEqual({ ...view, also: [B] });
+    expect(openStorylineView({ ...view, also: [B] }, B)).toEqual({ ...view, also: [B] });
+  });
+
+  it("still opens a fresh view from a search, as it always did", () => {
+    expect(openStorylineView({ q: "Trump", filters: { language: "en" } }, A)).toEqual({
+      q: null,
+      filters: { language: "en" },
+      storyline: A,
+      from: "Trump",
+    });
+  });
+
+  it("takes one storyline out, promoting the next to the path when it was the first", () => {
+    expect(removeStorylineFromView({ ...view, also: [B, C] }, B)).toEqual({ ...view, also: [C] });
+    expect(removeStorylineFromView({ ...view, also: [B, C] }, A)).toEqual({
+      ...view,
+      storyline: B,
+      also: [C],
+    });
+    expect(removeStorylineFromView({ ...view, also: [B] }, B)).toEqual(view);
+  });
+
+  it("answers null for the last one out, so the caller leaves the view", () => {
+    expect(removeStorylineFromView(view, A)).toBeNull();
+  });
+
+  it("can be told exactly which storylines it holds, keeping everything else", () => {
+    // What the URL becomes when the server's answer differs from what was
+    // asked — an alias followed, a stale id dropped.
+    expect(withViewStorylines({ ...view, also: [B] }, [C, A])).toEqual({ ...view, storyline: C, also: [A] });
+    expect(withViewStorylines({ ...view, also: [B] }, [])).toBeNull();
+  });
+});
+
+/**
+ * Typing inside the view is a search FOR storylines (ADR-0028, amended): the
+ * words ride in the URL as `?find=`, the view stays where it is, and the pills
+ * row answers.
+ */
+describe("finding storylines from inside the view", () => {
+  const A = "0192f3c4-5d6e-7f80-9123-456789abcdef";
+  const B = "11111111-1111-4111-8111-111111111111";
+  const view = { q: null, filters: { language: "en", country: undefined }, storyline: A, from: "Trump" };
+
+  it("reads the words from the pretty path's query string", () => {
+    expect(parseLocation(`/storyline/${A}/x`, `?from=Trump&find=visa+ban`).find).toBe("visa ban");
+    expect(parseRoute(`?storyline=${A}&find=visa`).find).toBe("visa");
+  });
+
+  it("writes them beside the view, and round-trips", () => {
+    const route = { ...view, also: [B], find: "visa ban" };
+    expect(routeUrl(route, "Trump Upended")).toBe(
+      `/storyline/${A}/trump-upended?lang=en&from=Trump&also=${B}&find=visa+ban`,
+    );
+    const [pathname, search] = routeUrl(route, "Trump Upended").split("?");
+    expect(parseLocation(pathname!, `?${search}`)).toEqual(route);
+  });
+
+  it("drops the words where there is no view to search from", () => {
+    // On a plain search the words typed ARE the search; `find` means nothing.
+    expect(parseRoute("?q=wildfires&find=visa")).toEqual({
+      q: "wildfires",
+      filters: { language: undefined, country: undefined },
+    });
+  });
+
+  it("sets and clears the words without moving the view", () => {
+    expect(findInView(view, " visa ban ")).toEqual({ ...view, find: "visa ban" });
+    expect(findInView({ ...view, find: "visa" }, null)).toEqual(view);
+    expect(findInView({ ...view, find: "visa" }, "   ")).toEqual(view);
+  });
+
+  it("does not carry the words out of the view", () => {
+    // Leaving is a step back to the search that opened the view; the words
+    // typed inside it were a question about storylines, not that search.
+    expect(leaveStorylineView({ ...view, find: "visa" }, null)).toEqual({
+      route: { q: "Trump", filters: { language: "en", country: undefined } },
+      replace: false,
+    });
+  });
+
+  it("survives adding and removing storylines", () => {
+    expect(openStorylineView({ ...view, find: "visa" }, B)).toEqual({ ...view, find: "visa", also: [B] });
+    expect(removeStorylineFromView({ ...view, find: "visa", also: [B] }, B)).toEqual({ ...view, find: "visa" });
   });
 });

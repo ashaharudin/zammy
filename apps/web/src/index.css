@@ -408,6 +408,23 @@ select {
   }
 }
 
+/*
+ * A storyline's chip arriving in the prompt (CommandBar) — the other half of a
+ * pill being taken (ADR-0028). A fade and a short slide in from the left, the
+ * direction the row below closes ranks in, so the two halves of one click read
+ * as one motion. Short, because the input beside it is already moving over to
+ * make room and two things arriving at different speeds is what jars.
+ */
+.storyline-chip-enter {
+  animation: storyline-chip-enter 180ms ease-out backwards;
+}
+@keyframes storyline-chip-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   /* Like the cards: the motion carries nothing the pills do not say by being
      where they are. The arrivals simply appear, and the leavers simply go —
@@ -420,6 +437,9 @@ select {
   .storyline-pill-exit {
     animation: none;
     opacity: 0;
+  }
+  .storyline-chip-enter {
+    animation: none;
   }
 }
 

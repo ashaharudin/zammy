@@ -6,8 +6,32 @@ export const DEFAULT_PAGE_LIMIT = 25;
 export const MAX_PAGE_LIMIT = 100;
 
 /** Query parameters accepted by `GET /api/v1/timeline` (ARCHITECTURE 6.1). */
-/** A storyline UUID: the only thing `?storyline=` accepts (ADR-0011). */
+/** A storyline UUID: what names a storyline everywhere (ADR-0011). */
 export const STORYLINE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * How many storylines one VIEW may hold at once (ADR-0028).
+ *
+ * A ceiling on the request, not a design target: a search surfaces at most
+ * eight (`SURFACED_STORYLINE_LIMIT`), and the gutter can add a few more, so
+ * twelve is past anything a reader assembles by clicking. It exists so that a
+ * hand-built URL cannot turn the view into a way to page the archive by
+ * listing every UUID it knows.
+ */
+export const MAX_VIEW_STORYLINES = 12;
+
+/**
+ * One UUID, or several joined by commas: the shape `?storyline=` accepts.
+ *
+ * Commas rather than a repeated parameter because the browser's `TopicQuery`
+ * and the route both hold the view's subjects as a list already, and one
+ * parameter spelling that list is one thing to read back rather than a
+ * querystring parser's opinion about repeated keys. The count is not checked
+ * here — `TimelineQuery` refines it — so the pattern stays a shape check that
+ * callers building a query by hand can reuse.
+ */
+const STORYLINE_UUID_LIST =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(,[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})*$/i;
 
 export const TimelineQuery = z.object({
   /**
@@ -35,16 +59,29 @@ export const TimelineQuery = z.object({
   /** Opaque keyset cursor from a previous response. */
   cursor: z.string().max(512).optional(),
   /**
-   * The STORYLINE VIEW's subject: a UUID, and the timeline is filtered to it
-   * (ADR-0011). It carries no keywords — the view's search box is empty — so
-   * it is a sibling of `q` rather than a filter, and typing replaces it.
+   * The STORYLINE VIEW's subjects: one UUID, or several joined by commas, and
+   * the timeline is filtered to them (ADR-0011, widened by ADR-0028). It
+   * carries no keywords — the view's search box is empty — so it is a sibling
+   * of `q` rather than a filter, and typing replaces it.
+   *
+   * Several, because a reader who has one storyline open and clicks another
+   * ADDS it: the view then pages both arcs' days on the one keyset, so their
+   * slots interleave in time rather than standing as two lists. Read the list
+   * with `viewStorylineIds`, which is also where duplicates are folded.
    *
    * It once also accepted a bigint, ADR-0010's seed, which enrolled a
    * day-bounded storyline's articles into the topic. That model is gone
-   * (migration 0012) and so is the seed; anything that is not a UUID is now
-   * rejected rather than quietly meaning something else.
+   * (migration 0012) and so is the seed; anything that is not a UUID list is
+   * now rejected rather than quietly meaning something else.
    */
-  storyline: z.string().trim().regex(STORYLINE_UUID, "must be a storyline UUID").optional(),
+  storyline: z
+    .string()
+    .trim()
+    .regex(STORYLINE_UUID_LIST, "must be a storyline UUID, or several joined by commas")
+    .refine((list) => list.split(",").length <= MAX_VIEW_STORYLINES, {
+      message: `at most ${MAX_VIEW_STORYLINES} storylines in one view`,
+    })
+    .optional(),
   /**
    * A CEILING, not a promise. One upstream call is 20 raw sightings, which after
    * collapsing can be as few as 6 articles — so a short page is normal. Distinguish
@@ -59,15 +96,63 @@ export const TimelineQuery = z.object({
 export type TimelineQuery = z.infer<typeof TimelineQuery>;
 
 /**
- * Is this the STORYLINE VIEW — the timeline filtered to one storyline by UUID
- * (ADR-0011)?
+ * Is this the STORYLINE VIEW — the timeline filtered to one or more storylines
+ * by UUID (ADR-0011, ADR-0028)?
  *
  * The schema now admits nothing else in `storyline`, so this is a presence
  * check with a shape check kept for callers that build a query by hand.
  */
 export function isStorylineView(query: { storyline?: string | undefined }): boolean {
-  return query.storyline !== undefined && STORYLINE_UUID.test(query.storyline);
+  return query.storyline !== undefined && STORYLINE_UUID_LIST.test(query.storyline);
 }
+
+/**
+ * The view's subjects as a list, in the order the request named them, with
+ * repeats folded — `a,b,a` is a view of two, not three.
+ *
+ * Request order is kept rather than sorted because the browser reads the
+ * response's `storylines` back against the list it asked for: the first is the
+ * one the pretty path names, and a server that reordered them would move the
+ * reader's address bar under them. Empty for anything that is not a view.
+ */
+export function viewStorylineIds(query: { storyline?: string | undefined }): string[] {
+  if (!isStorylineView(query)) return [];
+  return [...new Set(query.storyline!.split(","))];
+}
+
+/**
+ * `GET /api/v1/storylines?q=` — storylines by keyword, and nothing else
+ * (ADR-0028, amended). The same match a search runs beside its results
+ * (`TimelinePage.storylines`), asked on its own: no topic is minted, nothing is
+ * fetched, no page of articles comes back. What the storyline VIEW's search box
+ * runs, so a reader inside one arc can find another without leaving.
+ */
+/**
+ * How many storylines a row of pills offers at once: what a search surfaces
+ * beside its results, and what the storyline view's row is kept topped up to
+ * (ADR-0028, amended). S8 measured the row's cost at eight — see
+ * `SURFACED_STORYLINE_LIMIT` in `apps/api`, which is this same number.
+ */
+export const STORYLINE_OFFER_COUNT = 8;
+
+/** The most one storyline search may ask for: a row's worth plus a view's worth of held arcs. */
+export const MAX_STORYLINE_SEARCH_LIMIT = STORYLINE_OFFER_COUNT + MAX_VIEW_STORYLINES + 4;
+
+export const StorylineSearchQuery = z.object({
+  q: z.string().trim().min(1).max(MAX_KEYWORDS_LENGTH),
+  /**
+   * How many to return. The view asks for a row's worth PLUS one per arc it
+   * already holds, so that when a pill is taken into the view the next match
+   * is already in hand to take its place.
+   */
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_STORYLINE_SEARCH_LIMIT)
+    .default(STORYLINE_OFFER_COUNT),
+});
+export type StorylineSearchQuery = z.infer<typeof StorylineSearchQuery>;
 
 export const ServedFrom = z.enum(["cache", "store", "upstream"]);
 export type ServedFrom = z.infer<typeof ServedFrom>;
@@ -287,13 +372,15 @@ export const TimelinePage = z.object({
    * Surfaced, never filtered: a search is never limited to a storyline, so
    * these sit beside the results rather than narrowing them.
    *
-   * The STORYLINE VIEW fills it with exactly one entry — the arc being viewed —
-   * and that is not a search result but the view's own subject: it is where the
-   * command bar reads the chip's label from (`apps/web/src/CommandBar.tsx`), so
-   * a reader who arrived by UUID still sees the story's name. This comment said
-   * "empty for the storyline view" from ADR-0011 until the view started
-   * answering its own name, and the claim outlived the code by long enough to
-   * be copied into ARCHITECTURE 6.1.
+   * The STORYLINE VIEW fills it with one entry PER ARC BEING VIEWED, in the
+   * order the request named them and with aliases resolved to their survivors
+   * (ADR-0028) — not search results but the view's own subjects: it is where
+   * the command bar reads each chip's label from (`apps/web/src/CommandBar.tsx`),
+   * so a reader who arrived by UUID still sees the story's name. A UUID the
+   * database has never held is simply absent from it, which is how the browser
+   * learns to drop that chip. This comment said "empty for the storyline view"
+   * from ADR-0011 until the view started answering its own name, and the claim
+   * outlived the code by long enough to be copied into ARCHITECTURE 6.1.
    */
   storylines: z.array(StorylineSummary).default(() => []),
   /**
@@ -367,6 +454,12 @@ export const TimelinePage = z.object({
   meta: ResponseMeta,
 });
 export type TimelinePage = z.infer<typeof TimelinePage>;
+
+/** `GET /api/v1/storylines` response: the matches, busiest-and-freshest first. */
+export const StorylineSearchResponse = z.object({
+  storylines: z.array(StorylineSummary),
+});
+export type StorylineSearchResponse = z.infer<typeof StorylineSearchResponse>;
 
 /** True only when the store is exhausted AND nothing further is being ingested. */
 export function isTerminalPage(page: TimelinePage): boolean {
