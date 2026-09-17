@@ -1794,7 +1794,7 @@ volume score, limited (`packages/storage/src/trending-storylines.ts`). It also c
 storyline's `profile_tokens` out, which is what the service turns into each word's `query`
 (`apps/api/src/cloud-query.ts`).
 
-`GET /api/v1/trending?language=&limit=50` → `{ windowStart, windowEnd, language, storylines: [{ id,
+`GET /api/v1/trending?language=&limit=60` → `{ windowStart, windowEnd, language, storylines: [{ id,
 label, query, windowArticles, windowSources, size, sourceCount, lastUpdated }], meta }`, with the
 same `meta.ingest` block as §6.1 so the front end can show a warming cloud with existing machinery.
 Redis-cached under `<queue>:trending:<language>` for ~15 minutes — scoped to the ingest queue as its
@@ -1818,6 +1818,81 @@ apart see the same cloud.
 
 `d3-cloud` for spiral layout and collision handling; hand-rolling that is a poor use of effort.
 
+- **The board is a STRIP, and its words drift right to left.** It used to be a fixed 700×340
+  picture scaled down to whatever the viewport gave it — everything the reader could see at once,
+  and everything there was, which made the board's capacity the real limit on how many storylines
+  the cloud carried. Now the layout board is as wide as its words need (`cloudBoard.boardWidth`:
+  40px per word, clamped to `[700, 3200]`), a 700px window looks onto it, and the words are given a
+  turn instead of all being shrunk to fit. Each band is drawn twice, side by side, and every span is
+  floored at the window's own width so a compact cloud on a wide desktop cannot run out of board.
+- **The unit of motion is a LANE, and the lanes are laid out rather than found.** Each is a band of
+  the board's height with its own d3-cloud run inside it (`cloudLanes`), its own width, and its own
+  speed (`cloudBoard.laneDriftSeconds`, 26–62 layout px/s). A band holds two copies of its own
+  content and travels exactly one copy per cycle, so the second lands where the first began and
+  there is no seam. Up to four bands, bounded by `FONT_MAX`: 340 ÷ 4 is 85px, and a band shorter
+  than the tallest word it might be dealt starts dropping words in silence.
+- **The bands are different LENGTHS, spread a third either side of the board's width and shuffled.**
+  Equal lengths make the cloud a set of shutters: every lane returns at the same distance and only
+  the speeds keep them apart. Spread — measured live at 1220, 1655, 2104 and 2594px — two lanes are
+  back in step only when their lengths and speeds agree at once. The ladder of widths is fixed and
+  then shuffled rather than drawn at random, because four random draws are quite likely to come out
+  nearly equal, which is the one outcome the spread exists to avoid. The mean is the board's own
+  width, so the total room for words is unchanged, and words are dealt in proportion to each band's
+  width (11 / 6 / 13 / 8 for those four) — equal piles in unequal bands would draw the same words
+  further apart in the wide ones, making density an accident of where a word landed.
+- **The window's edges are a FADE, not a cut, and a different fade per lane per side** (6–18% of
+  the window, `cloudLanes.edgeFades`). Every band is clipped by the same two x positions, so a hard
+  edge slices four rows of words at identical places — and those shared vertical lines are what
+  makes the bands read as bands rather than as a cloud passing by. One fade for the whole board only
+  softens that line; a fade per lane per side leaves nothing to join up, one lane letting a word go
+  before another has started on its own. Spread across the range and shuffled rather than drawn
+  independently, for the reason the widths are: four draws from a range came out 6.3, 8.7, 12.8 and
+  13.5%, with nothing at the wide end.
+- **It is one mask on the window with a layer per lane, not a mask per lane.** A lane is the element
+  that moves, so a mask on it would travel with it and sweep its own fade across the board. The
+  layers are sized and positioned to tile the window's height exactly (verified at mobile scale:
+  bands at 0/41.65/83.3/124.95px against lanes at 0/42/83/125), each carrying its own horizontal
+  gradient, and `mask-repeat: no-repeat` is load-bearing — one tiling layer would cover the window
+  and hide every other lane's fade. A mask paints without hit-testing, so a faded word stays as
+  clickable as a half-cut one was, and on a scroll container it is anchored to the box rather than
+  to what has been scrolled past, so the reduced-motion pan keeps its edges.
+- **Per-WORD speeds were tried first and cost too much.** d3-cloud only promises that words do not
+  collide *where it put them*, and two words at different speeds leave that arrangement
+  immediately: they pass through each other, and the board thins as they shear apart. Drawing the
+  overlap (an opaque plate per word, stacked by size) makes it legible but not correct. A lane moves
+  rigidly, so inside it the packing and the guarantee both survive, and two bands are disjoint
+  slices of the height — verified on the live board: four lanes spanning 27–87, 100–170, 190–255
+  and 269–341px, no two overlapping.
+- **Lanes cannot be recovered from a finished board, which is why the band comes first.** Grouping a
+  laid-out cloud by which words' vertical spans touch would give safe lanes for free. Measured on
+  the live English cloud, it gives two groups with 38 of the 43 words in the first: the spiral fills
+  outward from one centre and the result is a single connected mass with nothing to cut.
+- **Speed is drawn from nothing the board means, and that is also measured.** Deriving it from the
+  word's SIZE empties the middle of the cloud: d3-cloud spirals outward from the centre, so size and
+  position are correlated, and giving the big words their own speed marches the whole centre off the
+  left edge together — twenty seconds in, the top half of the board was gone. An uncorrelated
+  per-lane draw claims nothing, which is the honest state for a channel with nothing to say: size
+  answers "how much", colour "how recently" (ADR-0013), and a word's place in the cloud was always
+  arbitrary.
+- **Banding costs some of the spiral's interlocking, and that is the trade.** A 2D spiral threads
+  small words into the gaps around big ones; four independent bands cannot, so the board reads
+  airier — 19–23 words in the window at any moment against the 21 the old still board showed all at
+  once, with 38 of 50 placed. What it buys is a board that recomposes itself without a single
+  collision. The width spread does not itself cost placements: a third and a fifth both placed 38,
+  the handful d3-cloud turns away moving between the lanes rather than growing in number.
+- **The 40px per word is measured, and the curve has a cliff in it.** d3-cloud abandons a word once
+  its spiral leaves the board, so a strip slightly too short does not crowd the cloud — it drops a
+  third of it in silence. Measured against the live English cloud (2026-09-16): 24px/word placed 21
+  of the 50 words the old default asked for, and against 60 words, 32px placed 41, 40px placed 59
+  and 56px placed all 60. The last word costs another 960px of strip, which is 24 seconds of a
+  reader's time, and it is still in the list either way.
+- **The drift has three ways out** (WCAG 2.2.2, motion that starts by itself and never stops).
+  `prefers-reduced-motion: reduce` replaces it with the same strip, still, pannable by hand and
+  opened at its middle — not a scaled-to-fit board, which at 60 words would draw the tail at 6px.
+  Hovering pauses every lane, not just the one under the pointer — pausing one alone would let a
+  neighbouring band keep going and slide over the word the reader is aiming at. The list toggle hides it outright. The preference is read in the component, because the
+  fallback is a different layout rather than a paused one, AND in the stylesheet, which is what
+  holds where `matchMedia` does not answer.
 - Font size from **`sqrt(windowArticles)`**, ramped into `[12px, 56px]` relative to the board's own
   extremes — linear scaling makes the busiest storyline absurd and the tail illegible, and a board
   where every storyline gained the same count draws every word mid-range rather than at either end.

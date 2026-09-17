@@ -251,6 +251,59 @@ select {
   }
 }
 
+/*
+ * The landing cloud, drifting right to left (TrendingCloud).
+ *
+ * One animation per LANE — a horizontal band of the board, laid out on its own
+ * and moved as a piece. A lane element holds exactly two copies of its own
+ * content, so `-50%` of it is one copy: the second lands where the first began
+ * and there is no seam to see. That is also why the distance is a percentage
+ * rather than a length. Each lane measures its own content and so has its own
+ * width, and `--cloud-lane-duration` turns that width into the lane's speed
+ * (`cloudBoard.laneDriftSeconds`).
+ *
+ * Moving a lane rather than a word is what keeps the layout intact: inside a
+ * lane nothing moves relative to anything else, so d3-cloud's promise that the
+ * words do not collide survives the motion, and the lanes cannot reach each
+ * other because they are disjoint strips of the board's height.
+ *
+ * Linear, because a continuous drift with an eased curve reads as the page
+ * stuttering — and here it would also make every lane breathe in unison, which
+ * is the one thing separate speeds are for avoiding.
+ */
+.cloud-lane {
+  animation: cloud-lane-drift var(--cloud-lane-duration, 60s) linear infinite;
+  will-change: transform;
+}
+
+/* A word the reader is reaching for should stop being a moving target — and so
+   should the lanes around it, or the word they are aiming at disappears behind
+   one that kept going. The cloud is aria-hidden and its words are not tabbable
+   (the list below is the keyboard path), so a pointer is the only thing that
+   can be aiming at one. */
+.cloud-strip:hover .cloud-lane {
+  animation-play-state: paused;
+}
+
+@keyframes cloud-lane-drift {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* TrendingCloud checks this query itself and lays the board out to be panned by
+   hand instead. This is the half that still has to hold where `matchMedia` does
+   not answer — a server render, a test environment — since a cloud drifting
+   past a reader who asked for stillness is the failure that matters. */
+@media (prefers-reduced-motion: reduce) {
+  .cloud-lane {
+    animation: none;
+  }
+}
+
 /* Motion is the whole message here, so the reduced-motion fallback has to hold
    every part still in a state that still reads as "something is pending". */
 @media (prefers-reduced-motion: reduce) {
