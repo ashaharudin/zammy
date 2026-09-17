@@ -43,6 +43,14 @@ export const SITE_ORIGIN = "https://www.zammy.info";
 
 const SITE_TITLE = "Zammy";
 
+/**
+ * The site-wide `WebSite` node's identity, shared with the static block in
+ * `apps/web/index.html` so the two agree they are one entity. A fragment on
+ * the origin, which is the ordinary spelling for a node that is not itself a
+ * retrievable page.
+ */
+export const WEBSITE_ID = "https://www.zammy.info/#website";
+
 /** `apps/web/index.html`'s own description, repeated here for the pages that fall back to it. */
 const DEFAULT_DESCRIPTION =
   "Trace any story back to where it started. Zammy groups headlines from across the news " +
@@ -113,9 +121,12 @@ function okPage(
   const title = pageTitle(params.label);
   const description = pageDescription(params.label, params.view.items);
   const canonicalUrl = `${SITE_ORIGIN}${params.canonicalPath}`;
-  const html = injectBody(
-    injectHead(template, { title, description, canonicalUrl }),
-    renderBody(params.label, params.view),
+  const html = injectJsonLd(
+    injectBody(
+      injectHead(template, { title, description, canonicalUrl }),
+      renderBody(params.label, params.view),
+    ),
+    jsonLdScript(storylineJsonLd({ label: params.label, description, canonicalUrl, view: params.view })),
   );
   return {
     status: 200,
@@ -216,6 +227,13 @@ export const HEAD_FIELDS: readonly HeadField[] = [
 /** The empty mount point `injectBody` writes into, exported for the same check. */
 export const ROOT_DIV = '<div id="root"></div>';
 
+/** Where `injectJsonLd` inserts the structured-data script, exported for the
+ * same reason `ROOT_DIV` is: this is an injection point whose target lives in
+ * the real template, and `render-storyline-template.test.ts` checks it is
+ * there exactly once rather than assuming any HTML document must have one —
+ * the same rule the file already applies to every `HEAD_FIELDS` tag. */
+export const HEAD_CLOSE_TAG = "</head>";
+
 function injectHead(
   html: string,
   head: { title: string; description: string; canonicalUrl: string },
@@ -286,6 +304,140 @@ function injectBody(html: string, bodyHtml: string): string {
   // does not get to choose, so the only safe form is the one that does no
   // substitution at all.
   return html.replace(ROOT_DIV, () => `<div id="root">${bodyHtml}</div>`);
+}
+
+/**
+ * Inserts a `<script type="application/ld+json">` block right before
+ * `</head>`.
+ *
+ * Not inside `#root` — `injectBody` writes there, and React empties that node
+ * on its first commit (`createRoot`, not `hydrateRoot`), which would delete
+ * the structured data the instant the app mounts even though nothing renders
+ * that fast for a crawler that never runs JavaScript. The head survives for
+ * the lifetime of the response, which is exactly as long as anything reading
+ * this markup needs it to.
+ */
+function injectJsonLd(html: string, scriptTag: string): string {
+  // A REPLACER FUNCTION, not a string — `jsonLdScript`'s own escaping deals
+  // with `<`, `>` and `&`, which is what keeps `</script>` out of the
+  // serialized JSON; it does nothing about `$`. A headline reading
+  // `Oil at $' a barrel` survives `JSON.stringify` as a literal `$'`, and a
+  // STRING replacement passed to `html.replace` reads that as "insert
+  // whatever came after the match" — the same trap `injectBody` and `setAttr`
+  // already guard against, on text this file does not get to choose either.
+  return html.replace(HEAD_CLOSE_TAG, () => `${scriptTag}${HEAD_CLOSE_TAG}`);
+}
+
+// ---------------------------------------------------------------------------
+// JSON-LD structured data (`docs/SEO.md`, "What comes next" 1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Serializes a JSON-LD payload for embedding in a `<script
+ * type="application/ld+json">` element.
+ *
+ * **This is deliberately not `escapeHtml`.** That function escapes for HTML
+ * text and attribute content, and the inside of this script element is JSON,
+ * not HTML — `escapeHtml` would turn a literal `&` in a headline into
+ * `&amp;` and a `"` into `&quot;`, and both of those are now wrong on two
+ * counts: they are not what JSON escaping calls for, and a `&quot;` sitting
+ * where JSON expects a bare `"` either breaks a string's boundary or survives
+ * as four garbage characters inside a value nobody meant to put there.
+ *
+ * The hazard that actually matters runs the other way. A `</script>`
+ * sequence anywhere in upstream text — a storyline label, a day summary —
+ * closes this element early and drops the rest of the JSON into the document
+ * as markup, and `JSON.stringify` will not save you: JSON has no notion of
+ * "this string is about to sit inside a `<script>` tag". The standard fix is
+ * escaping every `<` in the ALREADY-SERIALIZED JSON as its six-character
+ * Unicode escape — `>` and `&` get the same treatment, by convention and for
+ * symmetry, though only `<` is load-bearing here. `JSON.parse` reads the
+ * escape back to the literal character, so the parsed value is byte-for-byte
+ * what went in, but the raw HTML this function returns cannot contain the
+ * three characters that give markup its meaning — `</script>` included.
+ */
+function jsonLdScript(data: unknown): string {
+  const json = JSON.stringify(data)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026");
+  return `<script type="application/ld+json">${json}</script>`;
+}
+
+/**
+ * `CollectionPage` + `ItemList`, making the same claim `docs/SEO.md` insists
+ * on machine-readable: the storyline — the synthesized arc and the day
+ * summaries (ADR-0023) — is the original content on this page, and the
+ * headlines are a list of links out to the outlets that actually wrote them.
+ *
+ * **Deliberately not `NewsArticle`.** Zammy did not write these headlines,
+ * does not host their text, and a rich-result type built for "this page is a
+ * news article" is a claim of authorship this page must not make about
+ * somebody else's work — thin aggregator pages that do are exactly the
+ * ranking liability `docs/SEO.md` names. Each entry is a plain `ListItem`
+ * pointing at the outlet's own URL, with a `publisher` naming the outlet —
+ * attribution without authorship.
+ */
+function storylineJsonLd(params: {
+  label: string | null;
+  description: string;
+  canonicalUrl: string;
+  view: TimelineReadResult;
+}): unknown {
+  const storyline = params.view.storylines[0];
+  // ONE ENTRY PER DAY — the slot's own lead article, not every syndicated copy
+  // the body lists under it.
+  //
+  // Measured on a live storyline before this was trimmed: 9 days carrying 237
+  // articles between them serialized to 118kB of JSON-LD against a 108kB page,
+  // and 48kB of that survived gzip, because a list of distinct URLs is exactly
+  // the content compression cannot help with. It roughly doubled every
+  // storyline page for markup no search feature consumes — `CollectionPage`
+  // and `ItemList` of `WebPage` earn no rich result; they are read, if at all,
+  // by something parsing the page for meaning.
+  //
+  // Which is also the argument for what to keep. A slot is one storyline-day,
+  // and its lead is the article chosen to head that day (`@zammy/representative`);
+  // the rest are the same story as other outlets ran it. One per day describes
+  // the shape of the arc — the thing this page is actually about, and the thing
+  // `docs/SEO.md` calls the original content here — where 237 near-duplicate
+  // URLs describe how loudly the wire repeated itself. The body still lists
+  // every one of them, each an outbound link with its own attribution; nothing
+  // is hidden, it is just not restated in JSON.
+  const items = params.view.items.map((entry) => ({
+    "@type": "WebPage",
+    url: entry.article.url,
+    name: entry.article.title,
+    // Absent rather than a made-up value: `sourceDomain` is null for the
+    // rare upstream row that never carried one (`Article`, `@zammy/shared`),
+    // and a `publisher` naming nothing would be worse than no publisher.
+    ...(entry.article.sourceDomain !== null
+      ? { publisher: { "@type": "Organization", name: entry.article.sourceDomain } }
+      : {}),
+  }));
+  return {
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    name: params.label ?? "Storyline",
+    description: params.description,
+    url: params.canonicalUrl,
+    // `@id` matching the static `WebSite` block in `apps/web/index.html`, which
+    // this page INHERITS: that block lives in the template `render-storyline.ts`
+    // rewrites, so a storyline page carries two ld+json scripts and would
+    // otherwise describe the same site as two unrelated nodes. A shared `@id`
+    // is what tells a consumer they are one thing.
+    isPartOf: { "@id": WEBSITE_ID },
+    ...(storyline ? { dateCreated: storyline.from, dateModified: storyline.to } : {}),
+    mainEntity: {
+      "@type": "ItemList",
+      numberOfItems: items.length,
+      itemListElement: items.map((item, index) => ({
+        "@type": "ListItem",
+        position: index + 1,
+        item,
+      })),
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------

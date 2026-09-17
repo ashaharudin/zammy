@@ -158,14 +158,35 @@ it and serves a `301` to the survivor's canonical path instead of a dead end or 
 This used to be the "unusually good link-equity behaviour being left unused" paragraph — Tier 2 is
 what used it.
 
+## What JSON-LD shipped
+
+The last item this doc had queued: `CollectionPage` + `ItemList` per storyline
+(`render-storyline.ts`), `WebSite` + `SearchAction` on the landing page (`apps/web/index.html`).
+
+The honest-framing constraint drove the shape of the storyline markup, not just its presence.
+Zammy links out rather than hosting article text, and thin aggregator pages are a real ranking
+liability — so the headlines are never `NewsArticle`s claimed by this site. Each is a plain
+`ListItem` wrapping a `WebPage` at the outlet's own URL, with a `publisher` naming that outlet:
+attribution without authorship. The `CollectionPage` itself is what carries the actual claim of
+originality — its `name` and `description` are the storyline's label and the day's own sentence
+(ADR-0023), the same content `render-storyline.ts`'s body already leads with for the same reason.
+
+The landing page's `WebSite` + `SearchAction` is static markup, not code that runs per request:
+every value in it — the site's name, its origin, the `?q=` target `route.ts` reads — is a constant
+this repo already owns, so unlike the storyline page there is no upstream text in it to escape.
+
+**The escaping is not `escapeHtml`.** That function is for HTML text and attributes; the inside of
+a `<script type="application/ld+json">` block is JSON, and `escapeHtml`'s entities
+(`&amp;`, `&quot;`) are simply wrong content for a JSON string. The hazard that matters is
+`</script>` itself: any upstream text — a label, a day summary — containing that literal sequence
+would close the element early and spill the rest of the JSON into the page as markup, and
+`JSON.stringify` does nothing to prevent it. The fix is escaping `<` (and, for symmetry, `>` and
+`&`) as a Unicode escape in the already-serialized JSON: it round-trips through `JSON.parse`
+unchanged, and makes `</script>` unrepresentable in the raw HTML. `render-storyline.test.ts` proves
+this with a label and a day summary that both contain a literal `</script>`.
+
 ## What comes next
 
-Tier 2 (pretty routes, server-rendered head and skeleton, a generated sitemap) shipped above. What is
-left, in order of how much it would actually move:
-
-1. `CollectionPage` + `ItemList` JSON-LD per storyline; `WebSite` + `SearchAction` on the landing
-   page. The honest framing matters here: Zammy links out rather than hosting article text, and thin
-   aggregator pages are a real ranking liability. The original content is the storyline — the
-   synthesized arc and the day summaries (ADR-0023) — not the headlines, and the markup should say
-   so. `render-storyline.ts`'s body already leads with the day's own sentence for exactly this
-   reason; the structured data should make the same claim machine-readable.
+Nothing queued. This is the last item Tier 2 through this one left open; the next thing worth
+doing here is watching what Search Console and server logs say about the tiers already shipped,
+not adding another one speculatively.
