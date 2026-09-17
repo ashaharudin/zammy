@@ -276,14 +276,12 @@ select {
   will-change: transform;
 }
 
-/* A word the reader is reaching for should stop being a moving target — and so
-   should the lanes around it, or the word they are aiming at disappears behind
-   one that kept going. The cloud is aria-hidden and its words are not tabbable
-   (the list below is the keyboard path), so a pointer is the only thing that
-   can be aiming at one. */
-.cloud-strip:hover .cloud-lane {
-  animation-play-state: paused;
-}
+/* A word the reader is reaching for slows to a crawl rather than stopping dead
+   — see `HOVER_CRAWL_RATE` in TrendingCloud, which does it by playback rate
+   rather than from here. `animation-duration` cannot do it: progress is
+   elapsed ÷ duration, so lengthening the duration under a running animation
+   recomputes the fraction and every lane jumps backwards mid-stride. A
+   playback rate changes the speed and leaves the position alone. */
 
 @keyframes cloud-lane-drift {
   from {

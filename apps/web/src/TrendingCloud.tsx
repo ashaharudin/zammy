@@ -5,7 +5,7 @@ import type { TrendingResponse, TrendingStoryline } from "@zammy/shared";
 import type { StorylineOpenSource } from "./analytics.js";
 import { fetchTrending } from "./api.js";
 import { cloudDetail, windowPhrase } from "./cloudLabels.js";
-import { boardWidth, laneDriftSeconds } from "./cloudBoard.js";
+import { HOVER_CRAWL_RATE, boardWidth, laneDriftSeconds } from "./cloudBoard.js";
 import { dealIntoLanes, edgeFades, laneCount, laneWidths } from "./cloudLanes.js";
 import { FONT_MIN, fontSizes } from "./cloudFont.js";
 import { layoutSeed } from "./layoutSeed.js";
@@ -398,6 +398,43 @@ export function TrendingCloud({
   const laneCopies = (lane: number) =>
     reduced ? Math.max(1, Math.ceil(widestLane / laneSpan(lane))) : 2;
 
+  /**
+   * A WORD BEING AIMED AT SLOWS TO A CRAWL — it does not stop.
+   *
+   * By playback RATE, which is the only way to change a running animation's
+   * speed without moving it. `animation-duration` cannot: progress is elapsed ÷
+   * duration, so lengthening the duration under a running animation recomputes
+   * the fraction and every lane jumps backwards mid-stride, which is a worse
+   * thing to do to a reader reaching for a word than anything it fixes.
+   * `updatePlaybackRate` is the seamless form of the same change — the lane
+   * keeps its position and only its speed moves.
+   *
+   * Every lane slows, not just the one under the pointer: a neighbouring band
+   * still at full speed slides its own words over the one being aimed at.
+   *
+   * The cloud is aria-hidden and its words are not tabbable (the list below is
+   * the keyboard path), so a pointer is the only thing that can be aiming at
+   * one; there is no focus equivalent to mirror here.
+   */
+  const crawling = useRef(false);
+  const setLaneRate = (rate: number) => {
+    crawling.current = rate !== 1;
+    for (const lane of laneRefs.current) {
+      for (const animation of lane?.getAnimations() ?? []) {
+        if (typeof animation.updatePlaybackRate === "function") animation.updatePlaybackRate(rate);
+        else animation.playbackRate = rate;
+      }
+    }
+  };
+
+  // A commit that replaces the lane elements — a language change, a lane
+  // opening or closing — hands back animations at full speed, under a pointer
+  // that has not moved. Re-applied rather than remembered by the DOM.
+  useLayoutEffect(() => {
+    if (crawling.current) setLaneRate(HOVER_CRAWL_RATE);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [placed, lanes]);
+
   // Panning starts in the middle rather than at the left edge: d3-cloud fills
   // outward from the centre, so the edge a scroll container would otherwise
   // open on is the sparsest part of each lane.
@@ -540,6 +577,8 @@ export function TrendingCloud({
         <div
           ref={viewportRef}
           aria-hidden="true"
+          onMouseEnter={() => setLaneRate(HOVER_CRAWL_RATE)}
+          onMouseLeave={() => setLaneRate(1)}
           style={{
             position: "relative",
             width: "100%",

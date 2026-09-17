@@ -1889,8 +1889,13 @@ apart see the same cloud.
 - **The drift has three ways out** (WCAG 2.2.2, motion that starts by itself and never stops).
   `prefers-reduced-motion: reduce` replaces it with the same strip, still, pannable by hand and
   opened at its middle — not a scaled-to-fit board, which at 60 words would draw the tail at 6px.
-  Hovering pauses every lane, not just the one under the pointer — pausing one alone would let a
-  neighbouring band keep going and slide over the word the reader is aiming at. The list toggle hides it outright. The preference is read in the component, because the
+  Hovering slows every lane to a crawl (`HOVER_CRAWL_RATE`, a twelfth: 2–5 layout px/s, so a word
+  moves a pixel or two during a click) rather than stopping it dead, which reads as a board the
+  reader's own arrival has broken. Every lane, not just the one under the pointer — a neighbouring
+  band at full speed slides its own words over the one being aimed at. It is done by playback RATE
+  through the Web Animations API, because `animation-duration` cannot: progress is elapsed ÷
+  duration, so lengthening the duration under a running animation recomputes the fraction and every
+  lane jumps backwards mid-stride. The list toggle hides it outright. The preference is read in the component, because the
   fallback is a different layout rather than a paused one, AND in the stylesheet, which is what
   holds where `matchMedia` does not answer.
 - Font size from **`sqrt(windowArticles)`**, ramped into `[12px, 56px]` relative to the board's own
