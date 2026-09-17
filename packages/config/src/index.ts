@@ -1005,11 +1005,19 @@ const EnvSchema = z
      * budget plus one unabortable backoff (≤ 500 ms), the worst case is ~55.5 s,
      * which fits. At 120 s it was ~130 s, which did not.
      *
-     * It is not tight for the WORK: 8 calls at `SUMMARY_MAX_RPM` 18 is seven
-     * gaps of 3.3 s, so ~24 s including model latency. What 45 s gives up is
-     * headroom for an unusually slow model, and giving that up costs a click
-     * some of its days rather than anything durable — the abort reads as
-     * `unreachable`, writes no row, and the next open plans them again.
+     * It is not tight for the WORK: the job's total is
+     * `max(7 × spacing + latency, 8 × latency)` — spacing runs from a call's
+     * START, so latency overlaps it until latency exceeds the interval — which
+     * at `SUMMARY_MAX_RPM` 18 and the measured ~1.3 s is ~24.6 s.
+     *
+     * **The bound binds when average latency passes ~5.6 s**, at which point the
+     * eighth call is refused and the job reports `budget`. That is the number to
+     * hold in mind rather than the 45: `GEMINI_TIMEOUT_MS` is 20 s with two
+     * retries, so one pathological call can now consume the whole budget where
+     * at 120 s it could not. The consequence is self-healing — the abort reads
+     * as `unreachable`, writes no row and spends no attempt, so the next open
+     * plans those days again — which is why the tighter budget is the right
+     * trade against being killed mid-pass on the drain.
      */
     SUMMARY_CLICK_BUDGET_MS: z.coerce
       .number()

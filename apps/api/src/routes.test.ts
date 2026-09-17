@@ -294,11 +294,11 @@ describe("POST /api/v1/storylines/:id/refresh", () => {
 
     const body = response.json() as RefreshBody;
     expect(body.summaries).toEqual({ status: "queued", queued: true });
-    // The identity is the ARC alone, with no span and no clock in it, so a
-    // storyline several readers open in one window is one job.
     expect(summarized).toMatchObject([{ kind: "summarize", storylineId }]);
-    // The clock is snapped onto the minute grid, so readers opening one arc
-    // together cost one job and the next minute's click is still delivered.
+    // The identity is the arc AND the minute it was asked in, snapped onto the
+    // grid: readers opening one arc together cost one job, and the next minute's
+    // click is a different message rather than one the transport's dedup
+    // swallows.
     expect(Date.parse(summarized[0]!.at) % 60_000).toBe(0);
   });
 

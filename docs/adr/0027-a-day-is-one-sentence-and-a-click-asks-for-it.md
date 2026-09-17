@@ -303,6 +303,9 @@ attended spend, and completeness has its own path for the first time.
   ~6.7%, which is the share of newly-reachable old days that land a refusal
   instead of a sentence.
 - **A day summary written today and one written last month were produced
-  differently**, and nothing in the row says which. `model_id` and `generated_at`
-  are what an operator has; the `segmented` column distinguishes them in
-  practice, since only pre-ADR-0027 days can carry `true`.
+  differently**, and nothing in the row settles which. `model_id` and
+  `generated_at` are what an operator has. `segmented` narrows it and does not
+  decide it: `true` means that DAY has quarter rows, so the day was reached
+  before this ADR — but the sentence beside it may still have been written today,
+  because a day inside its settling window can be recomputed and carries the
+  column forward. See the two edges above.

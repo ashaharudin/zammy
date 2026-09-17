@@ -91,8 +91,10 @@ export type StorylineSummaryOutcome =
  * stand when it runs, which is later and therefore more correct anyway, and an
  * arc with nothing to do costs one delivery and two queries there.
  *
- * The job's identity is the arc alone, so a storyline several readers open in
- * the same window is one job (`ingestJobId`).
+ * The job's identity is the arc and the MINUTE it was asked in, so readers
+ * opening one storyline together cost one job while a later click still gets
+ * delivered (`ingestJobId`, and `SummarizeJob` for why an arc-only address was
+ * wrong).
  */
 export async function queueStorylineSummaries(
   deps: StorylineSummaryJobDeps,
@@ -156,6 +158,10 @@ export interface SummarizeJobDeps {
    * How long past `budgetMs` an in-flight call is allowed before it is aborted.
    * Defaults to `SUMMARIZE_ABORT_GRACE_MS`; a test shortens it so the abort is
    * observable without waiting ten seconds for it.
+   *
+   * It also scales the single-flight TTL, which is `budgetMs + this + 10 s` —
+   * the lock has to outlive the job's own worst case, and this is half of what
+   * that worst case is made of. Lowering it shortens both.
    */
   abortGraceMs?: number;
   log?: {
@@ -314,6 +320,13 @@ export async function runSummarizeJob(
   if (token === null) {
     // Another delivery is summarising this arc. Not a failure and not worth a
     // redelivery: whatever it does not reach, the next open plans again.
+    //
+    // **`locked` also covers a Redis outage**, because `tryAcquire` swallows the
+    // error and answers null. Failing closed is right on a spend path — failing
+    // open would mean unbounded duplicate calls during a blip — but the reason
+    // is then misreported, and an operator reading a run of `locked` lines with
+    // no concurrent job would hunt a phantom. The publish path does not need
+    // Redis to deliver, so jobs keep arriving throughout.
     tally.stoppedBy = "locked";
     return tally;
   }
