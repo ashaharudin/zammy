@@ -539,11 +539,13 @@ export interface IngestQueue {
   enqueueDeepen(job: DeepenJob): Promise<void>;
 
   /**
-   * Enqueue one arc's summary work (ADR-0027), deduplicated by the ARC alone.
+   * Enqueue one arc's summary work (ADR-0027), deduplicated by the arc and the
+   * MINUTE it was asked in.
    *
-   * Unlike the three above, the identity carries no span — the days are planned
-   * in the consumer, so two clicks a second apart must collapse into one job
-   * rather than plan the same days twice. See `SummarizeJob`.
+   * The days are planned in the consumer, so clicks close enough together must
+   * collapse into one job rather than plan the same days twice — and clicks
+   * further apart must not, which is what the minute buys. `SummarizeJob`
+   * records why an arc-only identity was wrong.
    */
   enqueueSummarize(job: SummarizeJob): Promise<void>;
 

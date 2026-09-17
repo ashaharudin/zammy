@@ -120,6 +120,7 @@ function jobDeps(
 ): SummarizeJobDeps {
   return {
     db,
+    redis: harness.redis,
     summarizer: {
       generator,
       modelId: "gemma-test",
@@ -449,6 +450,102 @@ describe("running one click's summary job", () => {
     expect(tally.stoppedBy).toBe("max-days");
     expect(tally.planned).toBe(0);
     expect(model.prompts).toEqual([]);
+  });
+
+  it("skips a day that gained a row WHILE the job was running", async () => {
+    // The race `onlyMissing` exists for, at the level that decides it. The plan
+    // query cannot cover this: it selects days with no row, and the row appears
+    // after it has run. The stub is the sequencing hook — it writes 08-13's row
+    // during 08-14's call.
+    //
+    // Without `onlyMissing` the second day reads as a RECOMPUTE (a stored count
+    // of 0 against the day's 6, past SUMMARY_RECOMPUTE_DELTA) and costs a third
+    // call. This test fails if the job stops passing the flag.
+    const id = await arcAcrossDays(["2026-08-12", "2026-08-13", "2026-08-14"]);
+    const prompts: string[] = [];
+    const racing: TextGenerator = {
+      async generate(request: GenerateRequest): Promise<GenerateResult> {
+        prompts.push(request.prompt);
+        if (prompts.length === 1) {
+          await sql`
+            insert into storyline_day_summaries
+              (storyline_id, day_key, segment, summary, article_count, label,
+               model_id, attempts, segmented, generated_at)
+            values (${id}::uuid, '2026-08-13', 'day', 'Written by somebody else.',
+                    0, 'Big Bend Wall Pause', 'gemma-test', 0, false,
+                    '2026-08-15T00:00:00Z'::timestamptz)
+          `.execute(db);
+        }
+        return { ok: true, text: "A sentence." };
+      },
+    };
+
+    const tally = await runSummarizeJob(jobDeps(racing), job(id));
+
+    // 08-14 and 08-12 only: the day that gained a row mid-run is left alone.
+    expect(prompts).toHaveLength(2);
+    expect(tally.skipped).toBe(1);
+    expect((await rowsFor(id, "2026-08-13"))[0]?.summary).toBe("Written by somebody else.");
+  });
+
+  it("aborts a call still in flight past the budget, costing the day nothing", async () => {
+    // `budgetMs` only bounds ADMISSION; an unaborted in-flight call runs to
+    // three GEMINI_TIMEOUT_MS attempts plus backoff. This hangs until its own
+    // signal fires, so it fails if the signal is not threaded through and fails
+    // if the timer never arms.
+    const id = await arcAcrossDays(["2026-08-14"]);
+    const hanging: TextGenerator = {
+      generate(request: GenerateRequest): Promise<GenerateResult> {
+        return new Promise((resolve) => {
+          request.signal?.addEventListener("abort", () =>
+            resolve({ ok: false, reason: "aborted", failure: "unreachable" }),
+          );
+        });
+      },
+    };
+
+    const tally = await runSummarizeJob(
+      jobDeps(hanging, { budgetMs: 50, abortGraceMs: 50, now: () => new Date() }),
+      job(id),
+    );
+
+    // An abort reads as unreachable: no row, no attempt, and the next open
+    // plans the day again.
+    expect(tally.unavailable).toBe(1);
+    expect(tally.written).toBe(0);
+    expect(await rowsFor(id, "2026-08-14")).toEqual([]);
+  }, 10_000);
+
+  it("does nothing when another delivery already holds the arc", async () => {
+    // Two clicks either side of a minute boundary are two live messages with
+    // different keys, so on a push-mode queue they are two concurrent
+    // invocations. Without the lock both plan the same days and both call.
+    const id = await arcAcrossDays(["2026-08-13", "2026-08-14"]);
+    const model = stub(["Should never be asked."]);
+
+    const held = await harness.redis.set(
+      `lock:summarize:${id}`,
+      "somebody-else",
+      "PX",
+      30_000,
+      "NX",
+    );
+    expect(held).toBe("OK");
+
+    try {
+      const tally = await runSummarizeJob(jobDeps(model), job(id));
+      expect(tally.stoppedBy).toBe("locked");
+      expect(tally.model).toBe(0);
+      expect(model.prompts).toEqual([]);
+    } finally {
+      await harness.redis.del(`lock:summarize:${id}`);
+    }
+  });
+
+  it("releases the arc's lock when it finishes, so the next click can run", async () => {
+    const id = await arcAcrossDays(["2026-08-14"]);
+    await runSummarizeJob(jobDeps(stub(["A sentence."])), job(id));
+    expect(await harness.redis.get(`lock:summarize:${id}`)).toBeNull();
   });
 
   it("stops at the wall-clock budget", async () => {

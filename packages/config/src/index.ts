@@ -992,21 +992,31 @@ const EnvSchema = z
      * Its own knob rather than `SUMMARY_BUDGET_MS`, because the two run under
      * different platform deadlines and the whole point of a budget is to sit
      * under the one that actually applies. The nightly pass runs on
-     * `api/chores.ts`; this runs on the queue consumer, whose `maxDuration` is
-     * also 300 s but which is carrying other jobs' redeliveries besides.
+     * `api/chores.ts`; this runs on the queue consumer — and, for an orphaned
+     * pending entry, on `api/drain.ts`, which is the tighter of the two and the
+     * one that sizes this number.
      *
-     * 120 s holds 8 calls at 18 rpm — seven gaps, so ~23 s of pacing — with room
-     * for the model to be slow, and leaves the consumer most of its function to
-     * other work. `runSummarizeJob` arms an abort ten seconds past it, so the
-     * job's worst case is ~130 s rather than the ~181 s an unaborted in-flight
-     * call would reach against `api/drain.ts`'s tighter ceiling.
+     * **45 s, because the drain's headroom is 60 s.** `DRAIN_DEADLINE_MS` is
+     * 240 s against a 300 s `maxDuration` and is checked BETWEEN jobs, never
+     * inside one — its own comment sizes that gap as "room for one long fill
+     * plus the response". A job dispatched at 239 s therefore gets 60 s before
+     * the function is killed, and being killed there costs every later entry in
+     * that pass its settle. With `runSummarizeJob`'s abort ten seconds past this
+     * budget plus one unabortable backoff (≤ 500 ms), the worst case is ~55.5 s,
+     * which fits. At 120 s it was ~130 s, which did not.
+     *
+     * It is not tight for the WORK: 8 calls at `SUMMARY_MAX_RPM` 18 is seven
+     * gaps of 3.3 s, so ~24 s including model latency. What 45 s gives up is
+     * headroom for an unusually slow model, and giving that up costs a click
+     * some of its days rather than anything durable — the abort reads as
+     * `unreachable`, writes no row, and the next open plans them again.
      */
     SUMMARY_CLICK_BUDGET_MS: z.coerce
       .number()
       .int()
       .min(1_000)
       .max(300_000)
-      .default(120_000),
+      .default(45_000),
     /**
      * How many live storylines must share one label before the ingest tail runs
      * the label-agreement merge for that label, without waiting for the nightly

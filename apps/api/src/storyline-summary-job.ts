@@ -7,7 +7,9 @@ import {
   type Database,
   type SummaryCandidateDay,
 } from "@zammy/storage";
+import type { Redis } from "ioredis";
 import { summarizeJob, type IngestQueue, type SummarizeJob } from "./ingest-queue.js";
+import { release, tryAcquire } from "./single-flight.js";
 import {
   summarizeStorylineDay,
   type CallGate,
@@ -128,11 +130,13 @@ export interface SummarizeJobTally {
   model: number;
   /** Days whose processing threw. One day's failure never fails the job. */
   failures: number;
-  stoppedBy: "exhausted" | "max-days" | "budget" | "no-model" | "disabled";
+  stoppedBy: "exhausted" | "max-days" | "budget" | "no-model" | "disabled" | "locked";
 }
 
 export interface SummarizeJobDeps {
   db: Kysely<Database>;
+  /** For the per-arc single-flight lock. See `runSummarizeJob`. */
+  redis: Redis;
   /** The same summariser the nightly pass uses, with `onlyMissing` forced on. */
   summarizer: Omit<SummarizerDeps, "db" | "onlyMissing">;
   enabled: boolean;
@@ -148,6 +152,12 @@ export interface SummarizeJobDeps {
   ratePerMinute: number;
   now: () => Date;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * How long past `budgetMs` an in-flight call is allowed before it is aborted.
+   * Defaults to `SUMMARIZE_ABORT_GRACE_MS`; a test shortens it so the abort is
+   * observable without waiting ten seconds for it.
+   */
+  abortGraceMs?: number;
   log?: {
     info?(fields: Record<string, unknown>, message: string): void;
     warn(fields: Record<string, unknown>, message: string): void;
@@ -165,24 +175,41 @@ export interface SummarizeJobDeps {
  * sentence — and `readArcDaysAwaitingSummary` answers it in a single query. A
  * walk here would read every summarised day of the arc to be told to skip it.
  *
- * **It takes no advisory lock, and that is a considered position rather than an
- * omission.** The nightly pass takes `CHORE_LOCK_KEYS.summaries` because two
- * full passes deciding independently what a span should say, with the loser
- * overwriting the winner, is not a race worth having. This job cannot enter that
- * race in the damaging direction:
+ * **It single-flights on the ARC, and does not take the nightly pass's lock.**
+ * Two different questions, answered differently.
+ *
+ * *Click against click* needs a lock, and an earlier version of this plane
+ * argued it did not. That argument rested on the queue's dedup making a
+ * collision rare — "one job per arc while one is outstanding" — and snapping the
+ * job's clock onto a minute grid (`SummarizeJob`) is exactly what removed that
+ * property. Two clicks either side of a minute boundary are now two live
+ * messages with different keys, and on a push-mode queue each delivery is its
+ * own invocation: both would plan the same unsummarised days, because neither
+ * has written yet, and both would call the model for every one of them.
+ * `onlyMissing` does not help — both read before either writes — so the
+ * collision is up to `maxDays` duplicated calls rather than the one the old note
+ * claimed. A per-arc `tryAcquire` costs one Redis round trip and removes it.
+ * `storyline-deepening.ts` single-flights the same way on the same subject.
+ *
+ * It **returns** rather than throwing when the lock is held, which is where it
+ * differs from the deepening consumer. A throw would spend one of three
+ * deliveries to discover that another job is already doing this arc's work,
+ * where the days the holder does not reach are picked up by the next open — the
+ * deferral this plane is built around. The deepening consumer throws because its
+ * job names a SPAN that nothing else will re-plan.
+ *
+ * *Click against the nightly pass* needs no lock, and this is the part the
+ * earlier argument got right:
  *
  *  - it only writes days with NO row, so the sentence it could overwrite does
  *    not exist when it plans;
  *  - `writeStorylineDaySummary` will not let a null summary replace one that
  *    stands, in SQL, which is the one unrecoverable outcome;
- *  - the worst real collision is the nightly pass and a click both writing a
- *    first sentence for the same day, which costs one duplicate model call and
- *    leaves a valid sentence either way.
+ *  - the worst collision is the pass and a click both writing a first sentence
+ *    for one day, which costs one duplicate call and leaves a valid sentence.
  *
- * Taking the global lock instead would mean every click during a five-minute
- * nightly pass is dropped, and taking a per-arc lock would add a Redis
- * round-trip to prevent a collision the queue's own dedup already makes rare
- * (one job per arc while one is outstanding).
+ * Taking `CHORE_LOCK_KEYS.summaries` instead would drop every click during a
+ * five-minute nightly pass, to prevent that.
  */
 export async function runSummarizeJob(
   deps: SummarizeJobDeps,
@@ -278,6 +305,19 @@ export async function runSummarizeJob(
     },
   };
 
+  // Single-flight on the arc, for the click-against-click race above. The TTL
+  // outlives this job's own worst case (budget + grace) so the lock cannot lapse
+  // while the holder is still working; a holder that dies releases it by TTL.
+  const lockKey = `lock:summarize:${job.storylineId}`;
+  const graceMs = deps.abortGraceMs ?? SUMMARIZE_ABORT_GRACE_MS;
+  const token = await tryAcquire(deps.redis, lockKey, deps.budgetMs + graceMs + 10_000);
+  if (token === null) {
+    // Another delivery is summarising this arc. Not a failure and not worth a
+    // redelivery: whatever it does not reach, the next open plans again.
+    tally.stoppedBy = "locked";
+    return tally;
+  }
+
   // **The deadline the PLATFORM enforces, as an abort the model call can hear.**
   //
   // `budgetMs` stops this job ADMITTING calls and cannot stop one already in
@@ -294,10 +334,7 @@ export async function runSummarizeJob(
   // An abort costs the preserve nothing: it surfaces as `unreachable`, which
   // writes no row and spends no attempt, and the next open re-plans the day.
   const controller = new AbortController();
-  const deadlineTimer = setTimeout(
-    () => controller.abort(),
-    deps.budgetMs + SUMMARIZE_ABORT_GRACE_MS,
-  );
+  const deadlineTimer = setTimeout(() => controller.abort(), deps.budgetMs + graceMs);
   // Never the reason this process stays alive.
   deadlineTimer.unref?.();
 
@@ -352,6 +389,7 @@ export async function runSummarizeJob(
     }
   } finally {
     clearTimeout(deadlineTimer);
+    await release(deps.redis, lockKey, token);
   }
 
   return tally;

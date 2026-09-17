@@ -185,21 +185,55 @@ unsummarised days?" on the request path would put a grouped scan over the arc's
 whole history on a fire-and-forget POST a reader is waiting behind, to save a
 Redis publish. A warm arc costs one delivery and one query at the far end.
 
-### No advisory lock, and what that risks
+### One lock, per arc — and not the nightly pass's
 
-The nightly pass takes `CHORE_LOCK_KEYS.summaries` because two full passes
-deciding independently what a span should say, with the loser overwriting the
-winner, is not a race worth having. This job does not take it, and cannot enter
-that race in the damaging direction: it only writes days with NO row, so the
-sentence it could overwrite does not exist when it plans;
+Two different races, answered differently.
+
+**Click against click needs a lock**, and an earlier draft of this ADR argued it
+did not. That argument rested on the queue's dedup making a collision rare —
+"one job per arc while one is outstanding" — and snapping the job's clock onto a
+minute grid is exactly what removed that property. Two clicks either side of a
+minute boundary are two live messages with different keys, and on a push-mode
+queue each delivery is its own invocation: both plan the same unsummarised days,
+because neither has written yet, and both call the model for every one of them.
+`onlyMissing` does not prevent it — both read before either writes — so the
+collision is up to `SUMMARY_CLICK_MAX_DAYS` duplicated calls, not the one the
+draft claimed. The fix removing the dedup is the fix that has to restore the
+guarantee, so `runSummarizeJob` takes a per-arc `tryAcquire` for the length of
+the job. `storyline-deepening.ts` single-flights the same way on the same
+subject.
+
+It **returns** when the lock is held rather than throwing, which is where it
+differs from the deepening consumer. A throw would spend one of three deliveries
+to discover another job is already doing this arc; the days the holder does not
+reach are picked up by the next open, which is the deferral this plane is built
+around. The deepening consumer throws because its job names a SPAN that nothing
+else will re-plan.
+
+**Click against the nightly pass needs no lock.** It only writes days with NO
+row, so the sentence it could overwrite does not exist when it plans;
 `writeStorylineDaySummary` refuses in SQL to let a null summary replace one that
-stands, which is the one unrecoverable outcome; and the worst real collision is
-the pass and a click both writing a first sentence for the same day, which costs
-one duplicate model call and leaves a valid sentence either way.
+stands, which is the one unrecoverable outcome; and the worst collision is the
+pass and a click both writing a first sentence for one day, which costs one
+duplicate call and leaves a valid sentence either way. Taking
+`CHORE_LOCK_KEYS.summaries` instead would drop every click during a five-minute
+nightly pass to prevent that.
 
-Taking the global lock instead would drop every click during a five-minute
-nightly pass. A per-arc lock would add a Redis round trip to prevent a collision
-the queue's own dedup already makes rare.
+### The budget is sized by the DRAIN, not by the consumer
+
+`SUMMARY_CLICK_BUDGET_MS` is 45 s, and the number comes from the tightest
+function this job can land on rather than the obvious one. A job orphaned in the
+pending set — a same-minute republish that arrived after that minute's job had
+settled — is collected by `api/drain.ts`, whose `DRAIN_DEADLINE_MS` is 240 s
+against a 300 s `maxDuration` and is checked BETWEEN jobs. Its own comment sizes
+that 60 s gap as "room for one long fill plus the response". With the abort ten
+seconds past the budget the worst case is ~55.5 s, which fits; at the 120 s this
+first shipped with it was ~130 s, which did not, and being killed there costs
+every later entry in that pass its settle.
+
+45 s is not tight for the work — 8 calls at `SUMMARY_MAX_RPM` 18 is ~24 s
+including latency. What it gives up is headroom for an unusually slow model, and
+that costs a click some of its days rather than anything durable.
 
 ## The budget
 

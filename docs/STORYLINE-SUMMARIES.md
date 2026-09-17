@@ -440,10 +440,16 @@ Three properties worth knowing:
 - **An abort is armed ten seconds past the budget**, as the nightly pass arms
   one: the budget stops the job ADMITTING calls and cannot stop one in flight,
   which runs to three `GEMINI_TIMEOUT_MS` attempts plus backoff.
-- **No advisory lock.** The nightly pass takes one; this cannot enter that race
-  in the damaging direction, because it only writes days with no row and the
-  upsert refuses in SQL to let a null replace a standing sentence. ADR-0027 has
-  the full argument.
+- **A per-arc single-flight lock**, held for the length of the job. Two clicks
+  either side of a minute boundary are two live messages, and on a push-mode
+  queue that is two concurrent invocations planning the same days — so the minute
+  grid that fixed the stall is what made this lock necessary. It does NOT take
+  the nightly pass's lock: against the pass it only writes days with no row, and
+  the upsert refuses in SQL to let a null replace a standing sentence. ADR-0027
+  has both arguments.
+- **`SUMMARY_CLICK_BUDGET_MS` is sized by `api/drain.ts`**, not by the queue
+  consumer — the drain is the tighter function this job can land on, and it
+  checks its deadline only between jobs.
 
 ### Reading it
 

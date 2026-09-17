@@ -346,6 +346,7 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
     // client builds for itself is `GEMINI_MAX_RPM`.
     const summarizeDeps: SummarizeJobDeps = {
       db,
+      redis,
       summarizer: createSummarizer(config, log),
       enabled: config.SUMMARIES_ENABLED,
       gate: {
