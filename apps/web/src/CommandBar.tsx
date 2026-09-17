@@ -38,6 +38,8 @@ export function CommandBar({
   qualifiers,
   daySummaries,
   onToggleDaySummaries,
+  dayParts,
+  onToggleDayParts,
 }: {
   topic: TopicQuery;
   /** The newest response — the authority on meta. */
@@ -60,6 +62,9 @@ export function CommandBar({
   /** Whether the rail draws its day sentences (`daySummaryPreference`). */
   daySummaries: boolean;
   onToggleDaySummaries: () => void;
+  /** Whether the rail divides each day into parts of the day (`dayPartsPreference`). */
+  dayParts: boolean;
+  onToggleDayParts: () => void;
 }) {
   const [q, setQ] = useState(topic.q);
   // The storyline view: opened by clicking a label, so there are no keywords
@@ -191,6 +196,11 @@ export function CommandBar({
           reference={reference}
           onChange={(filters) => onSearch({ ...topic, ...filters })}
         />
+        {/* Unconditional, unlike the sentences below: every rail has days and
+            every day has parts, so this control has something behind it on a
+            search and in the view alike. First in the pair for the same reason
+            — the one that is always here must not move when the other appears. */}
+        <DayPartsToggle on={dayParts} onToggle={onToggleDayParts} />
         {/* Only in the VIEW, because only the view has sentences to draw
             (`TimelineEntry.daySummary`): a search's slots carry none, so the
             same control on a search would be a switch with nothing behind it. */}
@@ -250,6 +260,51 @@ function DaySummaryToggle({ on, onToggle }: { on: boolean; onToggle: () => void 
       }}
     >
       {on ? "▤" : "▢"}
+    </button>
+  );
+}
+
+/**
+ * The switch for the rail's parts of the day (§8.1's segment dividers): on, a
+ * day is chunked into Night/Morning/Afternoon/Evening; off, it is one run of
+ * cards under the day heading alone.
+ *
+ * A pressed-state toggle, the same shape and chip as `DaySummaryToggle` above,
+ * and for the same reason: two states of one setting rather than two actions.
+ *
+ * Icon only, though, where the summary toggle carries its word. "Summary" is a
+ * noun a reader already has — the sentence is right there beside the day
+ * heading — but the parts of the day have no name in the interface, and the
+ * three-line glyph shows the chunking it stands for more directly than any
+ * label short enough to sit in this row would say it. The name is still
+ * written: `aria-label` carries it for a screen reader, which never sees the
+ * glyph, and `title` says what pressing does for everyone hovering. So the
+ * glyph is `aria-hidden` — it is the picture of the label, not a second one.
+ */
+function DayPartsToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={on}
+      aria-label="Split each day into parts of the day"
+      title={on ? "Combine the day's articles" : "Split each day into parts of the day"}
+      style={{
+        border: "1px solid var(--border)",
+        borderRadius: "999px",
+        background: on ? "var(--chip-bg)" : "transparent",
+        color: "inherit",
+        cursor: "pointer",
+        font: "inherit",
+        lineHeight: 1.3,
+        opacity: on ? 1 : 0.7,
+        // Wider than it is tall by less than the summary chip beside it: a lone
+        // glyph needs the pill to read as square-ish rather than as a word that
+        // went missing.
+        padding: "0.05rem 0.45rem",
+      }}
+    >
+      <span aria-hidden="true">{"\u2261"}</span>
     </button>
   );
 }

@@ -366,6 +366,33 @@ export function groupByDay(items: TimelineEntry[], now: Date, timeZone: string):
 }
 
 /**
+ * A day's parts, poured into the one undivided run the rail draws when the
+ * reader has turned the parts of the day off (`dayPartsPreference`).
+ *
+ * Sorted, not concatenated. Concatenation happens to be right today — segments
+ * do not wrap midnight, so `SEGMENTS_DESC` already runs newest-first across a
+ * whole day — but that is a property of the segment table rather than of this
+ * function, and what the rail needs from it is strict published order.
+ *
+ * The result is a `segments` list of ONE, which is the shape an unsegmented day
+ * already produces: the rail draws no divider over a single part, so combining
+ * needs no second code path in the renderer. The `segment` it carries is the
+ * day's newest and nothing draws it; the run's identity comes from
+ * `combinedDayKey`, which cannot move under progressive fill the way that name
+ * can.
+ */
+export function combineSegments(day: DayGroup): DayGroup["segments"] {
+  const newest = day.segments[0];
+  if (!newest) return [];
+  return [
+    {
+      segment: newest.segment,
+      items: day.segments.flatMap((part) => part.items).sort((a, b) => at(b) - at(a)),
+    },
+  ];
+}
+
+/**
  * One slot, cut into the days and parts of day its coverage actually reaches.
  *
  * A HEADLINE is what gets placed, not an article. `moreCoverage` is every

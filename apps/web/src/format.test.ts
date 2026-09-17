@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Article, TimelineEntry } from "@zammy/shared";
-import { dayLabel, groupByDay, hasLaterCoverage, segmentOf } from "./format.js";
+import { combineSegments, dayLabel, groupByDay, hasLaterCoverage, segmentOf } from "./format.js";
 
 /**
  * Day and part-of-day bucketing over timeline slots (§8.1's rail dividers).
@@ -819,5 +819,58 @@ describe("groupByDay day summaries", () => {
     expect(days.map((day) => [day.key, day.summary])).toEqual([
       ["2026-08-12", "The second day's sentence."],
     ]);
+  });
+});
+
+describe("combineSegments", () => {
+  const now = new Date("2026-08-12T19:00:00.000Z"); // noon in Vancouver
+
+  it("pours a day's parts into one run, newest first", () => {
+    // What the reader gets with the parts of the day turned off: the same
+    // cards, in the same order the divided rail ran them in, with nothing
+    // between them.
+    const days = groupByDay(
+      [
+        entry("1", "2026-08-12T02:00:00.000Z"), // 19:00 — Evening
+        entry("2", "2026-08-11T20:00:00.000Z"), // 13:00 — Afternoon
+        entry("3", "2026-08-11T14:00:00.000Z"), // 07:00 — Morning
+      ],
+      now,
+      VANCOUVER,
+    );
+
+    const combined = combineSegments(days[0]!);
+
+    expect(combined).toHaveLength(1);
+    expect(combined[0]?.items.map((item) => item.storylineId)).toEqual(["1", "2", "3"]);
+  });
+
+  it("sorts by the cards' own times rather than trusting the parts' order", () => {
+    // A slot's COVERAGE is filed by each article's own time, so a card can
+    // reach a part its slot never did. The run is in published order because
+    // it is sorted into one, not because the parts happened to arrive that way.
+    const days = groupByDay(
+      [
+        entry("1", "2026-08-11T14:00:00.000Z", "2026-08-11T14:00:00.000Z", {
+          moreCoverage: [article("late", "2026-08-11T23:00:00.000Z")], // 16:00 — Afternoon
+        }),
+      ],
+      now,
+      VANCOUVER,
+    );
+
+    expect(days[0]?.segments.map((part) => part.segment)).toEqual(["Afternoon", "Morning"]);
+    expect(combineSegments(days[0]!)[0]?.items.map((item) => item.article.id)).toEqual([
+      "late",
+      "1",
+    ]);
+  });
+
+  it("leaves an undivided day exactly as it found it", () => {
+    // Turning the parts off must be a no-op on a day that had none: the
+    // renderer draws no divider over one part either way.
+    const days = groupByDay([entry("1", "2026-08-11T18:00:00.000Z")], now, VANCOUVER);
+
+    expect(combineSegments(days[0]!)).toEqual(days[0]?.segments);
   });
 });

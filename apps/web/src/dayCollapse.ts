@@ -41,3 +41,20 @@ export function toggle(collapsed: CollapsedSections, key: string): CollapsedSect
   if (!next.delete(key)) next.add(key);
   return next;
 }
+
+/**
+ * The key for a day drawn as ONE run — the reader turned the parts of the day
+ * off (`dayPartsPreference`), so the cards under this day have no part to be
+ * keyed by.
+ *
+ * `all` is not a `Segment`, so this can never collide with a real segment key,
+ * and it is stable while the day is: keying the combined run on whichever part
+ * happened to lead it would remount every card — closing the reader's open
+ * disclosures — the moment progressive fill added a newer one.
+ *
+ * It is never put in a `CollapsedSections`: a combined day has no heading of
+ * its own to collapse, only the day's.
+ */
+export function combinedDayKey(dayKey: string): string {
+  return `${dayKey}·all`;
+}
