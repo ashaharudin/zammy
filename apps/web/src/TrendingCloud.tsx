@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import cloud from "d3-cloud";
 import type { TrendingResponse, TrendingStoryline } from "@zammy/shared";
+import type { StorylineOpenSource } from "./analytics.js";
 import { fetchTrending } from "./api.js";
 import { cloudDetail, windowPhrase } from "./cloudLabels.js";
 import { FONT_MIN, fontSizes } from "./cloudFont.js";
@@ -145,7 +146,7 @@ export function TrendingCloud({
 }: {
   /** The cloud's language, already made concrete (see cloudLanguage). */
   language: string;
-  onOpenStoryline: (storylineId: string, label: string | null) => void;
+  onOpenStoryline: (storylineId: string, label: string | null, source: StorylineOpenSource) => void;
 }) {
   const trending = useTrending(language);
   const [asList, setAsList] = useState(false);
@@ -333,7 +334,7 @@ export function TrendingCloud({
               <button
                 key={word.storyline.id}
                 tabIndex={-1}
-                onClick={() => onOpenStoryline(word.storyline.id, word.storyline.label)}
+                onClick={() => onOpenStoryline(word.storyline.id, word.storyline.label, "hero_cloud")}
                 title={cloudDetail(word.storyline, bounds)}
                 style={{
                   position: "absolute",
@@ -397,7 +398,7 @@ export function TrendingCloud({
           {storylines.map((storyline) => (
             <li key={storyline.id} style={{ marginBottom: "0.3rem" }}>
               <button
-                onClick={() => onOpenStoryline(storyline.id, storyline.label)}
+                onClick={() => onOpenStoryline(storyline.id, storyline.label, "hero_cloud")}
                 style={{
                   border: "none",
                   background: "none",

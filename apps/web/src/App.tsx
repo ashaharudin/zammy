@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { STORYLINE_UUID } from "@zammy/shared";
 import { refreshStoryline, type TopicFilters } from "./api.js";
+import { trackStorylineOpen, type StorylineOpenSource } from "./analytics.js";
 import { Hero } from "./Hero.js";
 import {
   leaveStorylineView,
@@ -137,7 +138,8 @@ function TopicApp() {
   );
 
   const openStoryline = useCallback(
-    (storylineId: string, label: string | null) => {
+    (storylineId: string, label: string | null, source: StorylineOpenSource) => {
+      trackStorylineOpen(source);
       setLabelHint({ id: storylineId, label });
       refreshStoryline(storylineId);
       navigate(openStorylineView(route, storylineId), { label });

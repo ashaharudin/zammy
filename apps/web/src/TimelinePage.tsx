@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import type { Article, TimelineEntry } from "@zammy/shared";
 import { isTerminalPage } from "@zammy/shared";
 import { ApiError, type TopicQuery } from "./api.js";
+import type { StorylineOpenSource } from "./analytics.js";
 import { enterDelayMs } from "./articleEnter.js";
 import { readTimeZone } from "./browser.js";
 import { isCollapsed, nothingCollapsed, segmentKey, toggle } from "./dayCollapse.js";
@@ -47,7 +48,7 @@ export function TimelinePage({
   topic: TopicQuery;
   onSearch: (topic: TopicQuery, options?: { replace?: boolean }) => void;
   onClear: () => void;
-  onOpenStoryline: (storylineId: string, label: string | null) => void;
+  onOpenStoryline: (storylineId: string, label: string | null, source: StorylineOpenSource) => void;
   /**
    * The label the reader clicked to get here, good only until the topic's own
    * data says otherwise (`CommandBar`'s `viewLabel`) — a hand-off from the
@@ -416,7 +417,7 @@ function Rail({
   items: TimelineEntry[];
   newCount: number;
   onReveal: () => void;
-  onOpenStorylineView: (storylineId: string, label: string | null) => void;
+  onOpenStorylineView: (storylineId: string, label: string | null, source: StorylineOpenSource) => void;
   /** storyline id → the date that separates it from its namesakes on screen. */
   qualifiers: Map<string, string>;
   /** Which storylines each group on the page is filed in (ADR-0025). */
@@ -774,7 +775,7 @@ function GroupCard({
   entry: RailSlot;
   /** This card's place in the run of cards under its heading (`articleEnter.ts`). */
   index: number;
-  onOpenStorylineView: (storylineId: string, label: string | null) => void;
+  onOpenStorylineView: (storylineId: string, label: string | null, source: StorylineOpenSource) => void;
   /** storyline id → the date that separates it from its namesakes on screen. */
   qualifiers: Map<string, string>;
   /** Which storylines each group on the page is filed in (ADR-0025). */
@@ -841,7 +842,9 @@ function GroupCard({
             <StorylineLabel
               label={entry.storyline.label}
               qualifier={qualifiers.get(entry.storylineId) ?? null}
-              onOpen={() => onOpenStorylineView(entry.storylineId, entry.storyline?.label ?? null)}
+              onOpen={() =>
+                onOpenStorylineView(entry.storylineId, entry.storyline?.label ?? null, "storyline_label")
+              }
             />
           )}
           <ArticleCard
