@@ -72,6 +72,31 @@
     <link rel="manifest" href="/site.webmanifest" />
 
     <!--
+      JSON-LD, Tier 4 SEO's first piece (`docs/SEO.md`, "What comes next" 1):
+      `WebSite` + `SearchAction`, so a search engine that already understands
+      this markup can offer a search box for Zammy directly in a result,
+      targeting the one search this app has — `?q=` (`apps/web/src/route.ts`).
+
+      Static and hand-written, unlike `render-storyline.ts`'s per-storyline
+      JSON-LD: every value here is a constant this file already owns (the
+      site's own name and origin), so there is no upstream text to escape and
+      no reason to build this with code that runs per request.
+    -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "Zammy",
+        "url": "https://www.zammy.info/",
+        "potentialAction": {
+          "@type": "SearchAction",
+          "target": "https://www.zammy.info/?q={search_term_string}",
+          "query-input": "required name=search_term_string"
+        }
+      }
+    </script>
+
+    <!--
       Google Analytics (GA4, G-T2Q1KDQ9QS).
 
       `config` fires one page_view on load and no more: this app never reloads,

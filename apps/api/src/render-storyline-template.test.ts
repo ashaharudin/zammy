@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { HEAD_FIELDS, ROOT_DIV } from "./render-storyline.js";
+import { HEAD_CLOSE_TAG, HEAD_FIELDS, ROOT_DIV } from "./render-storyline.js";
 
 /**
  * The half of the storyline page that is not TypeScript.
@@ -75,5 +75,14 @@ describe("apps/web/index.html, as render-storyline.ts expects to find it", () =>
     // class, an attribute, or a space added to the real tag would leave every
     // storyline page with an empty body and every other test green.
     expect(markup).toContain(ROOT_DIV);
+  });
+
+  it("closes its head exactly once, where injectJsonLd writes the structured data", () => {
+    // Exactly once for the same reason every `HEAD_FIELDS` check above is
+    // exact rather than "at least": `String.replace` with a non-global
+    // pattern rewrites the FIRST match, so a second `</head>` earlier in the
+    // document — inside a conditional comment, say — would catch the JSON-LD
+    // script and leave the real head without it.
+    expect(occurrences(new RegExp(HEAD_CLOSE_TAG))).toHaveLength(1);
   });
 });

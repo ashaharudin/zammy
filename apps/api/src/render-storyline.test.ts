@@ -288,6 +288,19 @@ describe("renderStorylinePage", () => {
     expect([...result.body.matchAll(/<title>/g)]).toHaveLength(1);
     expect(result.body).toContain("Oil at $&#39; a barrel, say traders");
     expect(result.body).toContain("<title>Crude $&quot; Rally — Zammy</title>");
+
+    // `injectJsonLd` takes a replacer FUNCTION for the identical reason: the
+    // JSON-LD script tag it inserts carries this same `$' a barrel` text —
+    // `jsonLdScript` escapes `<`, `>` and `&`, never `$` or `'` — so a STRING
+    // replacement here would read `$'` as "insert everything before the
+    // match", splicing the whole `<head>` into the middle of the JSON.
+    expect([...result.body.matchAll(/<script type="application\/ld\+json">/g)]).toHaveLength(1);
+    const jsonLdMatch = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/.exec(
+      result.body,
+    );
+    expect(jsonLdMatch).not.toBeNull();
+    const jsonLd = JSON.parse(jsonLdMatch![1]!) as { name: string };
+    expect(jsonLd.name).toBe(`Crude $" Rally`);
   });
 
   it("301s a merged (aliased) uuid to the survivor's own canonical path", async () => {
@@ -324,5 +337,145 @@ describe("renderStorylinePage", () => {
     });
 
     expect(result.status).toBe(200);
+  });
+
+  describe("JSON-LD (docs/SEO.md, \"What comes next\" 1)", () => {
+    /** Pulls the one `application/ld+json` block out of a rendered page and
+     * parses it — round-tripping through `JSON.parse` is the check that the
+     * escaping in `jsonLdScript` produced valid JSON and not merely
+     * HTML-safe-looking text. */
+    function readJsonLd(body: string): unknown {
+      const match = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/.exec(body);
+      if (match === null) throw new Error("no application/ld+json script in the page");
+      return JSON.parse(match[1]!);
+    }
+
+    it("emits a CollectionPage whose ItemList links out to each outlet, not to Zammy", async () => {
+      const groups = await seedGroups([
+        sighting({ domain: "a.example", title: "Hurricane Fausto nears Hawaii", published: MONDAY }),
+        sighting({ domain: "b.example", title: "Fausto weakens over Hawaii", published: TUESDAY }),
+      ]);
+      const storyline = await storylineOf(groups, "Hurricane Fausto");
+      await writeStorylineDaySummary(db, {
+        storylineId: storyline,
+        dayKey: "2026-08-11",
+        segment: "day",
+        summary: "Fausto weakened as it moved past the islands.",
+        articleCount: 2,
+        label: "Hurricane Fausto",
+        modelId: "test-model",
+        attempts: 0,
+        segmented: true,
+        generatedAt: NOW,
+      });
+
+      const result = await renderStorylinePage(harness.deps, {
+        path: `/storyline/${storyline}/hurricane-fausto`,
+        template: TEMPLATE,
+      });
+
+      const jsonLd = readJsonLd(result.body) as {
+        "@context": string;
+        "@type": string;
+        name: string;
+        description: string;
+        url: string;
+        isPartOf: { "@type": string; url: string };
+        mainEntity: {
+          "@type": string;
+          numberOfItems: number;
+          itemListElement: Array<{
+            "@type": string;
+            position: number;
+            item: { "@type": string; url: string; name: string; publisher?: { name: string } };
+          }>;
+        };
+      };
+
+      expect(jsonLd["@context"]).toBe("https://schema.org");
+      expect(jsonLd["@type"]).toBe("CollectionPage");
+      // The storyline — the arc and the day's own sentence — is the subject
+      // of the page, exactly as `render-storyline.test.ts`'s own body test
+      // already asserts of the HTML this markup describes.
+      expect(jsonLd.name).toBe("Hurricane Fausto");
+      expect(jsonLd.description).toBe("Fausto weakened as it moved past the islands.");
+      expect(jsonLd.url).toBe(`${SITE_ORIGIN}/storyline/${storyline}/hurricane-fausto`);
+      expect(jsonLd.isPartOf["@type"]).toBe("WebSite");
+
+      const items = jsonLd.mainEntity.itemListElement;
+      expect(jsonLd.mainEntity["@type"]).toBe("ItemList");
+      expect(jsonLd.mainEntity.numberOfItems).toBe(items.length);
+      expect(items.length).toBe(2);
+      // Positions are 1-based and in order, the way `ListItem.position` is
+      // meant to be read.
+      expect(items.map((i) => i.position)).toEqual([1, 2]);
+
+      // The honest-framing constraint: every linked-out headline is a
+      // `WebPage`, never a `NewsArticle` — Zammy did not write these and must
+      // not claim to have — and each one's `url` is the OUTLET's own page,
+      // attributed to the outlet that ran it rather than to Zammy.
+      //
+      // Hostnames, not full URLs: `sighting()`'s url carries a file-wide
+      // sequence number this test does not control, so the domain is the
+      // stable part.
+      const hostnames = new Set(items.map((i) => new URL(i.item.url).hostname));
+      expect(hostnames).toEqual(new Set(["a.example", "b.example"]));
+      for (const { item } of items) {
+        expect(item["@type"]).toBe("WebPage");
+        expect(item["@type"]).not.toBe("NewsArticle");
+        expect(item.publisher?.name).not.toBe("Zammy");
+      }
+      const byHostname = new Map(items.map((i) => [new URL(i.item.url).hostname, i.item] as const));
+      expect(byHostname.get("a.example")?.publisher?.name).toBe("a.example");
+      expect(byHostname.get("a.example")?.name).toBe("Hurricane Fausto nears Hawaii");
+      expect(byHostname.get("b.example")?.publisher?.name).toBe("b.example");
+    });
+
+    it("keeps exactly one script tag when a label AND a day summary carry a literal </script>", async () => {
+      // The regression this feature did not have before it existed. Escaping
+      // `<` is what makes `</script>` unrepresentable in the serialized JSON
+      // (`jsonLdScript`'s own comment); if that ever regressed, either of
+      // these two strings — one from `setStorylineLabel`, one from
+      // `writeStorylineDaySummary`, both upstream text this file does not
+      // choose — would close the script element early and spill the rest of
+      // the JSON into the page as markup.
+      const groups = await seedGroups([
+        sighting({ domain: "a.example", title: "An ordinary headline", published: MONDAY }),
+      ]);
+      const label = `Breaking </script><script>alert(document.cookie)</script> News`;
+      const storyline = await storylineOf(groups, label);
+      const summary = `A sentence that tries to end the tag early: </script><script>alert(2)</script>`;
+      await writeStorylineDaySummary(db, {
+        storylineId: storyline,
+        dayKey: "2026-08-10",
+        segment: "day",
+        summary,
+        articleCount: 1,
+        label,
+        modelId: "test-model",
+        attempts: 0,
+        segmented: true,
+        generatedAt: NOW,
+      });
+
+      const result = await renderStorylinePage(harness.deps, {
+        path: `/storyline/${storyline}/x`,
+        template: TEMPLATE,
+      });
+
+      expect(result.status).toBe(200);
+      // The TEMPLATE fixture carries no <script> tag of its own (unlike the
+      // real apps/web/index.html, which also has the GA snippet) — so on this
+      // template, exactly one open and one close means exactly one script
+      // element exists at all: the JSON-LD block, intact.
+      expect([...result.body.matchAll(/<script[^>]*>/g)]).toHaveLength(1);
+      expect([...result.body.matchAll(/<\/script>/g)]).toHaveLength(1);
+
+      const jsonLd = readJsonLd(result.body) as { name: string };
+      // And the escaped text survives the round trip as the literal string it
+      // always was — this is attribution, not sanitization; the label really
+      // does contain a `</script>`, and JSON-LD is allowed to say so.
+      expect(jsonLd.name).toBe(label);
+    });
   });
 });
