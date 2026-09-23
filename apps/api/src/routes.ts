@@ -33,6 +33,7 @@ import {
   type StorylineDeepeningDeps,
 } from "./storyline-deepening.js";
 import { readTrending, type TrendingDeps } from "./trending-service.js";
+import { scopedDeps } from "./trace-http.js";
 
 /**
  * The public HTTP surface (ARCHITECTURE 6.1). Thin on purpose: parse with the
@@ -111,9 +112,15 @@ export async function registerQueryRoutes(
   app: FastifyInstance,
   options: QueryRouteOptions,
 ): Promise<void> {
-  const { deps } = options;
+  // The BOOT deps. Each traceable handler takes `scopedDeps(request, boot)` as
+  // its first act: the boot bag itself, by identity, for every request that is
+  // not traced (and for all of them while tracing is off), or a copy that
+  // records for one that is (ADR-0029). `/topics` is not traceable and keeps
+  // `boot` as it is.
+  const { deps: boot } = options;
 
   app.get("/api/v1/timeline", async (request, reply) => {
+    const deps = scopedDeps(request, boot);
     const parsed = TimelineQuery.safeParse(request.query);
     if (!parsed.success) {
       const fields: Record<string, string> = {};
@@ -212,6 +219,7 @@ export async function registerQueryRoutes(
    * one has no id, and a GET with one is not a route.
    */
   app.get("/api/v1/storylines", async (request, reply) => {
+    const deps = scopedDeps(request, boot);
     const parsed = StorylineSearchQuery.safeParse(request.query);
     if (!parsed.success) {
       const fields: Record<string, string> = {};
@@ -246,6 +254,7 @@ export async function registerQueryRoutes(
   app.post<{ Params: { id: string } }>(
     "/api/v1/storylines/:id/refresh",
     async (request, reply) => {
+      const deps = scopedDeps(request, boot);
       const { id } = request.params;
       if (!STORYLINE_UUID.test(id)) {
         return reply.status(400).send({
@@ -422,14 +431,14 @@ export async function registerQueryRoutes(
     },
   );
 
-  app.get("/api/v1/reference", async (_request, reply) => {
+  app.get("/api/v1/reference", async (request, reply) => {
     // Verbatim upstream CODES for what a reader can still narrow by: languages
     // and regions. The category taxonomy is no longer served (ADR-0020) — a
     // list nothing can be picked from is an offer, not information. The region
     // and language NAMES are spell-checked (`repairedRegions`,
     // `repairedLanguages`) — they are display text, and five of them are typed
     // wrong upstream.
-    return reply.send(await loadReference(deps));
+    return reply.send(await loadReference(scopedDeps(request, boot)));
   });
 
   app.get<{ Params: { fingerprint: string } }>(
@@ -442,19 +451,19 @@ export async function registerQueryRoutes(
         });
       }
 
-      const topic = await readTopic(deps.db, fingerprint);
+      const topic = await readTopic(boot.db, fingerprint);
       if (!topic) {
         return reply.status(404).send({ error: { message: "unknown topic" } });
       }
 
       const [articleCount, coverage] = await Promise.all([
-        countTopicArticles(deps.db, fingerprint),
+        countTopicArticles(boot.db, fingerprint),
         // The planner's provider, so an operator reading this route sees the
         // spans the fetcher actually treats as done. Other providers' rows are
         // real and are deliberately not summed in here: coverage stopped having
         // a single answer (ADR-0019), and a union of two providers' spans would
         // be a number that describes no provider's walk.
-        readCoverage(deps.db, fingerprint, PLANNED_COVERAGE_PROVIDER),
+        readCoverage(boot.db, fingerprint, PLANNED_COVERAGE_PROVIDER),
       ]);
       const first = coverage[0];
       const last = coverage.at(-1);
@@ -527,7 +536,7 @@ export function registerTrendingRoute(
       return reply.status(400).send({ error: { message: "invalid query", fields } });
     }
 
-    const cloud = await readTrending(options.deps, {
+    const cloud = await readTrending(scopedDeps(request, options.deps), {
       language: parsed.data.language,
       limit: parsed.data.limit,
     });

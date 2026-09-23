@@ -82,7 +82,17 @@ export class ApiError extends Error {
   }
 }
 
-async function throwApiError(response: Response): Promise<never> {
+/**
+ * Turn a non-ok response into the `ApiError` every read throws, with the
+ * server's own message and field errors when the body carries them.
+ *
+ * Exported for the playback view's trace read (ADR-0029, `playback/traceFetch.ts`),
+ * which lives in its own lazy chunk and must fail the same way these reads do
+ * rather than growing a second error shape. Its callers own the statuses that
+ * mean something else to them (a trace read's 404 is "gone", not an error),
+ * and branch on those BEFORE calling this.
+ */
+export async function throwApiError(response: Response): Promise<never> {
   let message = `request failed (${response.status})`;
   let fields: Record<string, string> = {};
   try {

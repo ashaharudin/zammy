@@ -15,6 +15,7 @@ import {
   withViewStorylines,
   type Route,
 } from "./route.js";
+import { parsePlaybackLocation } from "./playback/playbackRoute.js";
 import { TimelinePage } from "./TimelinePage.js";
 
 /**
@@ -41,11 +42,34 @@ const StorylinesPrototype = lazy(() =>
 const showStorylinesPrototype =
   !import.meta.env.PROD && window.location.pathname.startsWith("/prototype/storylines");
 
+// Request playback (ADR-0029): `/?trace`, `/?trace=<example>`, `/?trace#t=<id>`. An
+// operator's view of how one API request is served, drawn as a 16-bit warehouse, in its own
+// lazy chunk — the reader's main chunk gains only `playbackRoute.ts`, which imports nothing,
+// and never the trace schemas. No PROD guard: with tracing off (the default) the built-in
+// examples are the whole page, and recording a real request needs the operator's token.
+const PlaybackPage = lazy(() =>
+  import("./playback/PlaybackPage.js").then((m) => ({ default: m.PlaybackPage })),
+);
+// Read once at load, like the prototype's check. Entry and exit are full page loads: the
+// page only ever REPLACES its own URL, so there is no transition into or out of it to follow.
+const playbackTarget = parsePlaybackLocation(
+  window.location.pathname,
+  window.location.search,
+  window.location.hash,
+);
+
 export function App() {
   if (showStorylinesPrototype) {
     return (
       <Suspense fallback={null}>
         <StorylinesPrototype />
+      </Suspense>
+    );
+  }
+  if (playbackTarget) {
+    return (
+      <Suspense fallback={null}>
+        <PlaybackPage initial={playbackTarget} />
       </Suspense>
     );
   }

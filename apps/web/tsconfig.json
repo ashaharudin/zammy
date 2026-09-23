@@ -9,6 +9,7 @@
     "declaration": false,
     "declarationMap": false,
     "noEmit": true,
+    "resolveJsonModule": true,
     "types": ["vite/client"]
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],

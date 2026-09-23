@@ -298,6 +298,105 @@ describe("loadConfig", () => {
   });
 });
 
+// Request traces (ADR-0029). The token is the whole of the opt-in, so each way it
+// can be wrong has to refuse the boot: a tracer that silently never opens is an
+// afternoon lost, and one that opens for anyone is a leak.
+describe("loadConfig: request traces", () => {
+  const TOKEN = "t".repeat(32);
+
+  it("leaves tracing off by default, and refuses a misspelt switch", () => {
+    expect(loadConfig({ ...base } as NodeJS.ProcessEnv).REQUEST_TRACE_ENABLED).toBe(false);
+    expect(() =>
+      loadConfig({ ...base, REQUEST_TRACE_ENABLED: "ture" } as NodeJS.ProcessEnv),
+    ).toThrow(ConfigError);
+  });
+
+  it("refuses to enable tracing without a token, in every environment", () => {
+    expect(() =>
+      loadConfig({ ...base, REQUEST_TRACE_ENABLED: "true" } as NodeJS.ProcessEnv),
+    ).toThrow(/REQUEST_TRACE_TOKEN/);
+    // Present-and-empty is what `.env.example` ships, and must read as unset.
+    expect(() =>
+      loadConfig({
+        ...base,
+        REQUEST_TRACE_ENABLED: "true",
+        REQUEST_TRACE_TOKEN: "",
+      } as NodeJS.ProcessEnv),
+    ).toThrow(/REQUEST_TRACE_TOKEN is required/);
+  });
+
+  it("says a missing token stops the boot, not that it merely disables tracing", () => {
+    // The operator reading this line is looking at every function crashing on
+    // deploy; a message that says tracing was switched off understates an outage.
+    let message = "";
+    try {
+      loadConfig({ ...base, REQUEST_TRACE_ENABLED: "true" } as NodeJS.ProcessEnv);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toMatch(/refuses to start/);
+    expect(message).toMatch(/REQUEST_TRACE_ENABLED=false/);
+    expect(message).not.toMatch(/disables tracing/);
+  });
+
+  it("refuses a token shorter than 24 characters and accepts one of 24", () => {
+    expect(() =>
+      loadConfig({
+        ...base,
+        REQUEST_TRACE_ENABLED: "true",
+        REQUEST_TRACE_TOKEN: "a".repeat(23),
+      } as NodeJS.ProcessEnv),
+    ).toThrow(/at least 24 characters/);
+    expect(
+      loadConfig({
+        ...base,
+        REQUEST_TRACE_ENABLED: "true",
+        REQUEST_TRACE_TOKEN: "a".repeat(24),
+      } as NodeJS.ProcessEnv).REQUEST_TRACE_TOKEN,
+    ).toBe("a".repeat(24));
+  });
+
+  it("refuses a token with whitespace inside it, which no header could carry", () => {
+    expect(() =>
+      loadConfig({
+        ...base,
+        REQUEST_TRACE_ENABLED: "true",
+        REQUEST_TRACE_TOKEN: `abc def${"g".repeat(24)}`,
+      } as NodeJS.ProcessEnv),
+    ).toThrow(/must not contain whitespace/);
+  });
+
+  it("accepts a token while tracing is off, so a flip is a one-variable change", () => {
+    const config = loadConfig({ ...base, REQUEST_TRACE_TOKEN: TOKEN } as NodeJS.ProcessEnv);
+    expect(config.REQUEST_TRACE_ENABLED).toBe(false);
+    expect(config.REQUEST_TRACE_TOKEN).toBe(TOKEN);
+  });
+
+  it("keeps traces an hour by default, and never less than a drained run needs", () => {
+    // A drained run arrives 15–25 minutes after its enqueue; a TTL below 1800 s
+    // would let the link expire before the run could find it.
+    expect(loadConfig({ ...base } as NodeJS.ProcessEnv).REQUEST_TRACE_TTL_SECONDS).toBe(3600);
+    expect(
+      loadConfig({ ...base, REQUEST_TRACE_TTL_SECONDS: "7200" } as NodeJS.ProcessEnv)
+        .REQUEST_TRACE_TTL_SECONDS,
+    ).toBe(7200);
+    for (const ttl of ["1799", "86401"]) {
+      expect(() =>
+        loadConfig({ ...base, REQUEST_TRACE_TTL_SECONDS: ttl } as NodeJS.ProcessEnv),
+      ).toThrow(ConfigError);
+    }
+  });
+
+  it("keeps 240 touches by default, and may lower the shared ceiling but never raise it", () => {
+    expect(loadConfig({ ...base } as NodeJS.ProcessEnv).REQUEST_TRACE_MAX_TOUCHES).toBe(240);
+    for (const cap of ["31", "401"]) {
+      expect(() =>
+        loadConfig({ ...base, REQUEST_TRACE_MAX_TOUCHES: cap } as NodeJS.ProcessEnv),
+      ).toThrow(ConfigError);
+    }
+  });
+});
+
 describe("redactConfig", () => {
   it("removes the API key and database credentials", () => {
     const config = loadConfig({
@@ -335,5 +434,21 @@ describe("redactConfig", () => {
     const redacted = redactConfig(config);
     expect(redacted.DATABASE_CA_CERT).toBe("[present]");
     expect(redactConfig(loadConfig({ ...base } as NodeJS.ProcessEnv)).DATABASE_CA_CERT).toBeNull();
+  });
+
+  // The trace token opens traces for whoever holds it (ADR-0029), and the boot
+  // line is logged on every instance start.
+  it("removes the request-trace token", () => {
+    const token = "t".repeat(32);
+    const config = loadConfig({
+      ...base,
+      REQUEST_TRACE_ENABLED: "true",
+      REQUEST_TRACE_TOKEN: token,
+    } as NodeJS.ProcessEnv);
+
+    const redacted = redactConfig(config);
+    expect(JSON.stringify(redacted)).not.toContain(token);
+    expect(redacted.REQUEST_TRACE_TOKEN).toBe("[redacted]");
+    expect(redactConfig(loadConfig({ ...base } as NodeJS.ProcessEnv)).REQUEST_TRACE_TOKEN).toBeNull();
   });
 });

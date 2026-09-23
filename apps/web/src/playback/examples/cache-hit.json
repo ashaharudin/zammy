@@ -1,0 +1,58 @@
+{
+  "slug": "cache-hit",
+  "title": "A cached search",
+  "summary": "A search someone ran recently, answered from the Redis page cache without touching Postgres or Currents. Timings are illustrative; the path is the code's.",
+  "mirrors": [
+    {
+      "at": "apps/api/src/timeline-read.ts:231-234",
+      "begins": "const cached = await readCachedPage"
+    },
+    {
+      "at": "apps/api/src/routes.ts:600-613",
+      "begins": "async function cachedReference("
+    }
+  ],
+  "response": {
+    "trace": {
+      "v": 1,
+      "id": "00000000-0000-4000-8000-000000000002",
+      "route": "timeline_search",
+      "method": "GET",
+      "queryKeys": ["q"],
+      "status": 200,
+      "startedAt": "2026-09-01T12:00:00.000Z",
+      "ms": 9.8,
+      "overheadMs": 0,
+      "origin": {
+        "instanceSequence": 214,
+        "redisAtStart": "ready",
+        "environment": {
+          "queue": "vercel",
+          "currents": "live",
+          "gnews": false,
+          "googleNews": "live",
+          "summaries": true,
+          "labeler": true
+        }
+      },
+      "meta": {
+        "servedFrom": "cache",
+        "stale": false,
+        "degraded": null,
+        "ingest": {
+          "state": "complete",
+          "pendingJobs": 0
+        }
+      },
+      "planes": null,
+      "touches": [
+        {"station":"rate_limit","at":0,"ms":1.9,"outcome":"counted","inferred":true,"limit":120,"remaining":117},
+        {"station":"redis","at":2.3,"ms":1,"outcome":"hit","command":"MGET","key":"reference"},
+        {"station":"redis","at":3.6,"ms":1.2,"outcome":"hit","command":"GET","key":"page_cache"}
+      ],
+      "elided": null
+    },
+    "runs": [],
+    "expiresAt": "2099-12-31T23:59:59.000Z"
+  }
+}

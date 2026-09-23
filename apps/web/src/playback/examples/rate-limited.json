@@ -1,0 +1,44 @@
+{
+  "slug": "rate-limited",
+  "title": "A reader over the limit",
+  "summary": "The 121st request in a minute from one address: the rate limiter answers 429 before any route runs, so nothing else is touched. Timings are illustrative; the path is the code's.",
+  "mirrors": [
+    {
+      "at": "apps/api/src/server.ts:538-554",
+      "begins": "await app.register(rateLimit, {"
+    }
+  ],
+  "response": {
+    "trace": {
+      "v": 1,
+      "id": "00000000-0000-4000-8000-000000000004",
+      "route": "timeline_search",
+      "method": "GET",
+      "queryKeys": ["q"],
+      "status": 429,
+      "startedAt": "2026-09-01T12:00:00.000Z",
+      "ms": 2.9,
+      "overheadMs": 0,
+      "origin": {
+        "instanceSequence": 214,
+        "redisAtStart": "ready",
+        "environment": {
+          "queue": "vercel",
+          "currents": "live",
+          "gnews": false,
+          "googleNews": "live",
+          "summaries": true,
+          "labeler": true
+        }
+      },
+      "meta": null,
+      "planes": null,
+      "touches": [
+        {"station":"rate_limit","at":0,"ms":2.2,"outcome":"limited","inferred":true,"limit":120,"remaining":0}
+      ],
+      "elided": null
+    },
+    "runs": [],
+    "expiresAt": "2099-12-31T23:59:59.000Z"
+  }
+}
