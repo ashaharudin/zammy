@@ -197,12 +197,24 @@ describe("sceneOps", () => {
     // snapped to whole pixels passes through every x a waiting crate stands at, so the belt
     // dropped to its still frame for a frame or two several times a ride. What rides is the
     // timeline's to say (a trip is under way), so this reads it from there, not from `frame.ts`.
+    //
+    // Sampled every 3 ms only where the answer can change — across each crate's ride and a
+    // margin either side, which is where the old guess went wrong — and every 50 ms elsewhere.
+    // A 3 ms sweep of the WHOLE timeline was tens of thousands of scenes: 1.8 s locally and
+    // past vitest's 5 s budget on CI's arm64 runner, for no instant this sweep leaves out.
     for (const slug of ["cold-search", "storyline-open"]) {
       const timeline = buildTimeline(response(slug), { pace: "readable" });
       const riding = (t: number) => timeline.crates.some((c) => c.t0 <= t && t < c.t1);
+      const instants = new Set<number>();
+      for (let t = 0; t <= timeline.duration; t += 50) instants.add(t);
+      for (const crate of timeline.crates) {
+        const from = Math.max(0, Math.floor(crate.t0) - 30);
+        for (let t = from; t <= crate.t1 + 30; t += 3) instants.add(t);
+      }
+      expect(timeline.crates.length, slug).toBeGreaterThan(0);
       for (const layout of LAYOUTS) {
         const wrong: string[] = [];
-        for (let t = 0; t <= timeline.duration; t += 3) {
+        for (const t of [...instants].sort((a, b) => a - b)) {
           for (const motion of MOTIONS) {
             const ops = sceneOps(layout, frameAt(timeline, layout, t, motion), INK_FALLBACK);
             const belt = ops.find((op) => op.op === "sprite" && op.id === "belt");

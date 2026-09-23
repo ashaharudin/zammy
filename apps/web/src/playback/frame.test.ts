@@ -343,23 +343,36 @@ describe("frameAt", () => {
     // `drawList.ts` runs the belt off this flag: a riding crate snapped to whole
     // pixels passes through the very x a waiting crate stands at (a CRATE_PITCH
     // step from the bay), so no reading of its position can stand in for it.
+    //
+    // The flag can only change at a trip's edges, so it is sampled every 5 ms across each
+    // trip and a margin either side, and every 50 ms elsewhere — a whole-timeline 5 ms sweep
+    // spent most of its time where nothing changes, and ran 1.5 s on CI's arm64 runner.
+    // Mismatches are collected and asserted once, not an `expect` per crate per instant.
     for (const slug of ["cold-search", "storyline-open"]) {
       const timeline = buildTimeline(response(slug), { pace: "readable" });
       const inTrip = (ref: string, t: number) =>
         timeline.crates.some((c) => c.ref === ref && c.t0 <= t && t < c.t1);
+      const instants = new Set<number>();
+      for (let t = 0; t <= timeline.duration; t += 50) instants.add(t);
+      for (const trip of timeline.crates) {
+        const from = Math.max(0, Math.floor(trip.t0) - 30);
+        for (let t = from; t <= trip.t1 + 30; t += 5) instants.add(t);
+      }
       for (const layout of LAYOUTS) {
         let rode = 0;
-        for (let t = 0; t <= timeline.duration; t += 5) {
+        const wrong: string[] = [];
+        for (const t of instants) {
           for (const crate of frameAt(timeline, layout, t, "full").crates) {
-            expect(crate.riding, `${slug} ${layout.name} crate ${crate.ref} at ${t}`).toBe(
-              inTrip(crate.ref, t),
-            );
+            if (crate.riding !== inTrip(crate.ref, t)) {
+              wrong.push(`crate ${crate.ref} at ${t}: riding ${crate.riding}`);
+            }
             if (crate.riding) rode += 1;
           }
           for (const crate of frameAt(timeline, layout, t, "reduced").crates) {
-            expect(crate.riding).toBe(false);
+            if (crate.riding) wrong.push(`reduced crate ${crate.ref} at ${t} rides`);
           }
         }
+        expect(wrong.slice(0, 5), `${slug} ${layout.name}`).toEqual([]);
         expect(rode, `${slug} ${layout.name}`).toBeGreaterThan(0);
       }
     }
