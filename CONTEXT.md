@@ -142,3 +142,37 @@ bridge's reach. A label is also a **match** surface, which is not the same as be
 search surfaces storylines whose profile tokens *or* label words contain every keyword (ADR-0011,
 amended), so a label the cloud showed can be typed back in and find its story.
 _Avoid_: term, keyword, phrase, tag, title
+
+### Operations
+
+**Trace**:
+One opted-in API request, recorded as the ordered touches it made and joined by the job runs of the
+jobs it enqueued. It holds what was touched, never what was asked: stations, key classes, table
+names, timings and outcome classes, and no key, URL, SQL value, header, id or search text
+(ADR-0029). A request is traced only when tracing is on and it presents the token; every other
+request is served exactly as it would be without the feature.
+_Avoid_: span, replay, recording, request log
+
+**Touch**:
+One call from our code to one station: when it started, how long it took, and an outcome class
+(`hit`, `acquired`, `refused`, …). Never its arguments. The rate-limit touch is inferred — from hook
+timing and the limiter's headers, since the limiter's own Redis command is never seen — and a
+touch with no observed end reads `open`, which for Postgres covers a failed statement too.
+_Avoid_: span, event, hop, call
+
+**Station**:
+A dependency a touch can reach: the CDN edge, the rate limiter, Redis, Postgres, the queue,
+Currents, Google News, Gemini. The playback page draws each as a machine. The edge is only ever
+drawn from what the browser saw, and no server records it: a CDN cache answer runs no function,
+and a platform 504 answers in place of one that never got to store a trace.
+_Avoid_: service, backend
+
+**Job run**:
+One attempt at a job a trace enqueued, by whichever consumer ran it: a queue delivery, a BullMQ
+attempt, or the drain. A redelivered job is several job runs under one ref, and a job two traces
+both asked for is one job run appended to each.
+_Avoid_: delivery (the platform's word, which excludes the drain), chore run
+
+**Playback**:
+The page at `/?trace` that animates a trace — a built-in example, or a recorded one by its id.
+_Avoid_: replay

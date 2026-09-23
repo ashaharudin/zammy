@@ -44,6 +44,50 @@ would hide exactly the bugs worth catching.
 
 To go online, set `CURRENTS_MODE=live` and `CURRENTS_API_KEY` in `.env`.
 
+## Watching a request
+
+Open [localhost:5173/?trace](http://localhost:5173/?trace). It plays one API request back as a
+16-bit warehouse — a robot carrying the request past the rate limiter, the Redis rack, the
+Postgres vault and the Currents mast, and worker robots carrying its jobs through the back room —
+with the same steps listed in words underneath. Seven built-in examples (a cache hit, a cold
+search, a storyline open, a 429, …) work with nothing configured; their timings are illustrative
+and their paths are pinned to the code by a test
+([ADR-0029](docs/adr/0029-a-traced-request-records-what-it-touched-never-what-it-asked.md)).
+
+To record your own, make a token, set `REQUEST_TRACE_ENABLED=true` and
+`REQUEST_TRACE_TOKEN=<the token>` in `.env` (both lines are already there from `.env.example`),
+and restart the api — the api refuses to boot with tracing on and no token, or with a token
+shorter than 24 characters or holding whitespace:
+
+```bash
+export TOKEN=$(openssl rand -hex 16) && echo "$TOKEN"
+```
+
+Then paste the token into **Record a real request** on the page, pick a route and run it: the
+page switches to the recorded trace and keeps polling it while its jobs run, for up to thirty
+minutes (after that, **Check again** reads it once more). Or from a shell — the response's
+`x-zammy-trace-id` header names the trace:
+
+```bash
+curl -s -o /dev/null -D - -H "x-zammy-trace: Bearer $TOKEN" \
+  'http://localhost:3000/api/v1/timeline?q=climate'
+# x-zammy-trace-id: 3f0c…   → open http://localhost:5173/?trace#t=3f0c…
+```
+
+A wrong token is not an error: the request is simply not traced, and the response carries no
+`x-zammy-trace-id` at all.
+
+A trace records which stations a request touched and how each answered — never keys, URLs, SQL
+values or search text — and a request without the header is served exactly as before. A
+recorded trace is a real request: a search nobody ran recently spends upstream quota in live
+mode. Traces expire after `REQUEST_TRACE_TTL_SECONDS` (an hour by default). In production
+tracing is turned on for a session and then off again
+([deploy/vercel/README.md](deploy/vercel/README.md)).
+
+The single-letter shortcuts (K, J, L, `[`, `]`, …) can be switched off with **Letter shortcuts**
+beside the key legend; the page remembers that per browser, and Space, the arrows, Home and End
+keep working.
+
 ## Layout
 
 ```
