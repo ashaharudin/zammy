@@ -1339,6 +1339,153 @@ describe("stamping the plane a fetch was made on", () => {
 });
 
 /**
+ * The orphan sweep: an article this batch created whose every sighting turned
+ * out to be a duplicate upstream UUID holds zero sightings, which the Article
+ * contract (sightingCount >= 1) forbids, and is deleted before commit.
+ *
+ * Not hypothetical: production deleted 50 of them between 2026-08-26 and
+ * 2026-09-24. And the sweep's REACH is asserted as carefully as its effect,
+ * because the table-wide version it replaced cost 1.28s per call on average
+ * (a seq scan of `articles` with no index on `sighting_count`) to find rows
+ * only this batch could have made.
+ */
+describe("sweeping an article left with no sightings", () => {
+  let harness: TestDatabase;
+  const TOPIC = testFingerprint("0f9a4000");
+
+  const emission = (input: { id: number; url: string }): Sighting => ({
+    id: `00000000-0000-4000-8000-${String(700 + input.id).padStart(12, "0")}`,
+    url: input.url,
+    provider: "currents",
+    providerSightingId: input.url,
+    dedupKey: deriveDedupKey(input.url),
+    altKey: null,
+    title: `Orphan fixture ${input.id}`,
+    description: null,
+    author: null,
+    imageUrl: null,
+    language: "en",
+    categories: [],
+    sourceCategories: [],
+    sourceDomain: "example.com",
+    published: "2026-08-28T09:00:00.000Z",
+    raw: { id: input.id },
+  });
+
+  const articleAt = (url: string) =>
+    harness.db
+      .selectFrom("articles")
+      .select(["id", "sighting_count"])
+      .where("dedup_key", "=", hexToBytea(deriveDedupKey(url)))
+      .executeTakeFirst();
+
+  beforeAll(async () => {
+    harness = writesDb;
+    await upsertTopic(harness.db, { fingerprint: TOPIC, keywords: ["orphan"] });
+  });
+
+  it("deletes the article a duplicate UUID under a new URL would have minted", async () => {
+    // The one shape known to reach it: upstream re-sends a UUID it already
+    // sent, under a URL nobody has seen. The URL mints an article, the UUID
+    // conflicts, and the fold that would have counted the sighting never runs.
+    await ingestSightings(harness.db, {
+      plane: "search",
+      timeZone: "UTC",
+      fingerprint: TOPIC,
+      sightings: [emission({ id: 1, url: "https://example.com/orphan-first" })],
+    });
+
+    const result = await ingestSightings(harness.db, {
+      plane: "search",
+      timeZone: "UTC",
+      fingerprint: TOPIC,
+      sightings: [emission({ id: 1, url: "https://example.com/orphan-reused-uuid" })],
+    });
+
+    expect(result).toEqual({
+      sightingsReceived: 1,
+      sightingsInserted: 0,
+      articlesCreated: 0,
+      createdArticles: [],
+    });
+    expect(await articleAt("https://example.com/orphan-reused-uuid")).toBeUndefined();
+    expect((await articleAt("https://example.com/orphan-first"))?.sighting_count).toBe(1);
+  });
+
+  it("finds the orphan wherever it falls among the batch's new articles", async () => {
+    // A real page mints several articles at once. The orphan is in the MIDDLE
+    // of the three, so a sweep that reached only the first or last id this
+    // batch created would leave it standing.
+    await ingestSightings(harness.db, {
+      plane: "search",
+      timeZone: "UTC",
+      fingerprint: TOPIC,
+      sightings: [emission({ id: 3, url: "https://example.com/orphan-earlier-page" })],
+    });
+
+    const result = await ingestSightings(harness.db, {
+      plane: "search",
+      timeZone: "UTC",
+      fingerprint: TOPIC,
+      sightings: [
+        emission({ id: 4, url: "https://example.com/orphan-page-first" }),
+        emission({ id: 3, url: "https://example.com/orphan-page-middle" }),
+        emission({ id: 5, url: "https://example.com/orphan-page-last" }),
+      ],
+    });
+
+    expect(result.sightingsInserted).toBe(2);
+    expect(result.articlesCreated).toBe(2);
+    expect(result.createdArticles).toHaveLength(2);
+    expect(await articleAt("https://example.com/orphan-page-middle")).toBeUndefined();
+    expect((await articleAt("https://example.com/orphan-page-first"))?.sighting_count).toBe(1);
+    expect((await articleAt("https://example.com/orphan-page-last"))?.sighting_count).toBe(1);
+  });
+
+  it("reaches only the articles this batch created", async () => {
+    // A zero-count row the batch did not make. Nothing in the app can commit
+    // one — every transaction sweeps its own first — so it is planted here
+    // directly, as the one row that tells a scoped sweep from a table-wide one.
+    // Table-wide, this batch deletes it AND subtracts it from
+    // `articlesCreated`, reporting 0 for a batch that created one.
+    const planted = await harness.db
+      .insertInto("articles")
+      .values({
+        dedup_key: hexToBytea(deriveDedupKey("https://example.com/orphan-planted")),
+        url: "https://example.com/orphan-planted",
+        title: "Planted with no sightings",
+        description: null,
+        author: null,
+        image_url: null,
+        language: "en",
+        categories: [],
+        source_category: [],
+        source_domain: "example.com",
+        published: new Date("2026-08-28T09:00:00.000Z"),
+        latest_seen: new Date("2026-08-28T09:00:00.000Z"),
+        sighting_count: 0,
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+
+    try {
+      const result = await ingestSightings(harness.db, {
+        plane: "search",
+        timeZone: "UTC",
+        fingerprint: TOPIC,
+        sightings: [emission({ id: 2, url: "https://example.com/orphan-bystander" })],
+      });
+
+      expect(result.articlesCreated).toBe(1);
+      expect(result.createdArticles).toHaveLength(1);
+      expect((await articleAt("https://example.com/orphan-planted"))?.id).toBe(planted.id);
+    } finally {
+      await harness.db.deleteFrom("articles").where("id", "=", planted.id).execute();
+    }
+  });
+});
+
+/**
  * The two claims an adapter may make about its own fields, and what the fold
  * does with them (ADR-0021; plan §G6 for the measurements).
  *
