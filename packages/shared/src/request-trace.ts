@@ -1,15 +1,18 @@
 /**
- * Request traces (ADR-0029): the wire contract of the playback view.
+ * Request traces (ADR-0029, ADR-0031): the wire contract of the playback view.
  *
- * A TRACE is one opted-in API request, recorded as the ordered TOUCHES it made
+ * A TRACE is one API request made while tracing was on, recorded as the ordered TOUCHES it made
  * — one call from our code to one STATION — and joined by the JOB RUNS of the
  * jobs it enqueued. The playback page (`/?trace`) draws each station as a
  * machine on a warehouse floor and animates the request walking between them.
  *
  * Vocabulary (CONTEXT.md, "Operations"):
- *  - TRACE — one opted-in API request, recorded as the ordered touches it made,
- *    joined by the job runs of the jobs it enqueued. It holds what was touched,
- *    never what was asked.
+ *  - TRACE — one API request made while tracing was on, recorded as the ordered
+ *    touches it made, joined by the job runs of the jobs it enqueued, and
+ *    labelled with its SUBJECT: what it asked for (ADR-0031).
+ *  - SUBJECT — what a traced request asked for: a search's keywords and
+ *    filters, or the storylines a view or an open named (with each one's label
+ *    where the reply carried it, and its id alone where it did not).
  *  - TOUCH — one call from our code to one station: a start offset, a duration,
  *    an outcome class, and never its arguments. The rate-limit touch is
  *    INFERRED from hooks and headers, not observed.
@@ -20,10 +23,13 @@
  * Never "span" (CONTEXT.md's Coverage owns that word) and never "replay"
  * (`apps/api/src/storyline-replay.ts` owns that one).
  *
- * **The schema IS the redaction boundary.** Every string a trace can hold is an
- * enum member or matches a pattern — no key, URL, SQL text, header, error
- * message, id or fingerprint has anywhere to go — and the server persists the
- * PARSE OUTPUT, never the draft it built. Objects are deliberately not
+ * **The schema IS the redaction boundary, with one deliberate opening.** Every
+ * string a TOUCH can hold is an enum member or matches a pattern — no key, URL,
+ * SQL text, header, error message, job id or fingerprint has anywhere to go —
+ * and the server persists the PARSE OUTPUT, never the draft it built. The
+ * opening is `subject` (ADR-0031, amending ADR-0029's "never what it asked"):
+ * the reader's keywords, filters, storyline ids and labels, bounded in length
+ * and held on the record alone, never on a touch or a job run. Objects are deliberately not
  * `.strict()` (for `timeline.ts`'s reason): zod strips unknown keys, and a
  * field a future recorder adds by mistake is dropped on the way to Redis rather
  * than stored. A fingerprint is a hash of the reader's search text, which is
@@ -43,22 +49,13 @@ export const TRACE_VERSION = 1 as const;
 
 // ── headers and routes ──────────────────────────────────────────────────────
 
-/**
- * The opt-in request header. Its value is `traceAuthorization(token)`, and
- * anything else — absent, malformed, the wrong token — means the request is
- * simply not traced: no error, no response header, nothing to probe.
- */
-export const TRACE_REQUEST_HEADER = "x-zammy-trace";
 /** Response header on a traced request: the stored trace's id, or `TRACE_UNSTORED`. */
 export const TRACE_ID_HEADER = "x-zammy-trace-id";
 /** What `TRACE_ID_HEADER` says when the request was traced but its record never reached the store. */
 export const TRACE_UNSTORED = "unstored";
 export const TRACE_ROUTE_PREFIX = "/api/v1/traces/";
-
-/** The opt-in header's value. The same `Bearer` shape `CRON_SECRET` travels in. */
-export function traceAuthorization(token: string): string {
-  return `Bearer ${token}`;
-}
+/** `GET` this for the newest traces (ADR-0031), newest first. */
+export const RECENT_TRACES_PATH = "/api/v1/traces";
 
 /** `GET` this for a stored trace. */
 export function traceReadPath(id: string): string {
@@ -69,6 +66,12 @@ export function traceReadPath(id: string): string {
 
 /** Touches one record may hold. `REQUEST_TRACE_MAX_TOUCHES` may lower it. */
 export const MAX_TRACE_TOUCHES = 400;
+/** Traces the recent list holds (ADR-0031). */
+export const MAX_RECENT_TRACES = 10;
+/** A subject's keywords (the search box's own bound, `MAX_KEYWORDS_LENGTH`). */
+export const MAX_SUBJECT_KEYWORDS = 200;
+/** A storyline label on a subject; a longer one is cut to this, not refused. */
+export const MAX_SUBJECT_LABEL = 200;
 /** Job runs one trace keeps. Redeliveries and the drain each add one. */
 export const MAX_TRACE_RUNS = 16;
 /** Traces one job run may be appended to (the queue deduplicated a job several asked for). */
@@ -383,12 +386,47 @@ export const PlaneStatuses = z.object({
 });
 export type PlaneStatuses = z.infer<typeof PlaneStatuses>;
 
+/** One storyline a subject names. `label` is absent where the reply did not carry it. */
+export const TraceSubjectStoryline = z.object({
+  id: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i),
+  label: z.string().max(MAX_SUBJECT_LABEL).nullable().optional(),
+});
+export type TraceSubjectStoryline = z.infer<typeof TraceSubjectStoryline>;
+
+/**
+ * What a traced request ASKED FOR (ADR-0031), read off its query, its route
+ * params and — for a storyline view's labels — its reply:
+ *
+ *   timeline_search, storylines_search  `keywords`, and `language`/`country`
+ *   timeline_view                       `storylines`, each with its label, then
+ *                                       any requested id the reply did not name
+ *   storyline_open                      `storylines`: the one id, no label
+ *   trending                            `language`, when one was asked for
+ *   reference                           nothing: the record's subject is null
+ *
+ * The values as the reader sent them, before canonicalization — a bad one is
+ * what a 400 was about — and cut to the bounds here rather than refused.
+ */
+export const TraceSubject = z.object({
+  keywords: z.string().max(MAX_SUBJECT_KEYWORDS).optional(),
+  language: z.string().max(8).optional(),
+  country: z.string().max(8).optional(),
+  storylines: z.array(TraceSubjectStoryline).max(MAX_VIEW_STORYLINES).optional(),
+});
+export type TraceSubject = z.infer<typeof TraceSubject>;
+
 export const RequestTrace = z.object({
   v: z.literal(TRACE_VERSION),
   id: TraceId,
   route: TraceRoute,
   method: z.enum(["GET", "POST"]),
   queryKeys: z.array(TraceQueryKey).max(8),
+  /**
+   * What the request asked for (ADR-0031). Null for a route that asks nothing
+   * (reference) and for a browser-synthesized trace; absent on a record from
+   * before ADR-0031, which is why it is optional rather than a `v` bump.
+   */
+  subject: TraceSubject.nullable().optional(),
   /** timeline_view only: how many storylines the view named. */
   viewStorylines: z.int().min(1).max(MAX_VIEW_STORYLINES).optional(),
   status: z.int().min(100).max(599),
@@ -441,6 +479,24 @@ export const TraceReadResponse = z.object({
 });
 export type TraceReadResponse = z.infer<typeof TraceReadResponse>;
 
+/** One entry of the recent list: enough to choose a trace by, not the trace. */
+export const TraceSummary = RequestTrace.pick({
+  id: true,
+  route: true,
+  method: true,
+  status: true,
+  startedAt: true,
+  ms: true,
+  subject: true,
+});
+export type TraceSummary = z.infer<typeof TraceSummary>;
+
+/** `GET /api/v1/traces` → 200: the newest traces still stored, newest first. */
+export const RecentTracesResponse = z.object({
+  traces: z.array(TraceSummary).max(MAX_RECENT_TRACES),
+});
+export type RecentTracesResponse = z.infer<typeof RecentTracesResponse>;
+
 // ── the fidelity signature: shared so both sides compare the SAME thing ─────
 
 /**
@@ -449,10 +505,10 @@ export type TraceReadResponse = z.infer<typeof TraceReadResponse>;
  * (warmth), and label-tail Gemini calls (fire-and-forget). Consecutive
  * duplicates collapse.
  *
- * It exists so the built-in examples the page ships can be pinned to what the
- * API actually records for the same request (`apps/api/src/trace-examples.test.ts`):
- * an example that drifts from the code fails a test rather than teaching a
- * reader a path the server no longer takes.
+ * A test's way of stating the path a request took without pinning its timing
+ * (`apps/api/src/trace-http.test.ts` reads a real cold search's with it). It
+ * pinned ADR-0029's built-in examples to the code until ADR-0031 took them off
+ * the page.
  */
 export function traceSignature(touches: readonly Touch[]): string[] {
   const tokens: string[] = [];

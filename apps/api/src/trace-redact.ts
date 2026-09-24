@@ -5,7 +5,10 @@ import {
   PgTable,
   PlaneStatuses,
   TraceMeta,
+  MAX_SUBJECT_KEYWORDS,
+  MAX_SUBJECT_LABEL,
   TraceQueryKey,
+  TraceSubjectStoryline,
   UpstreamFailure,
   type JobKind,
   type JobPlane,
@@ -17,6 +20,7 @@ import {
   type RedisStatus,
   type TraceEnvironment,
   type TraceRoute,
+  type TraceSubject,
 } from "@zammy/shared/request-trace";
 import type { Database } from "@zammy/storage";
 import type { IngestJob } from "./ingest-queue.js";
@@ -48,6 +52,13 @@ import { isFailOpen } from "./rate-limit-fail-open.js";
  * which is where a bound parameter's value sits; `upstreamFailureOf` reads an
  * error's `kind`, never its message (a Currents error message carries the
  * request URL, and the URL carries the reader's search text).
+ *
+ * **The one exception is the SUBJECT (ADR-0031)**: `subjectOf` and
+ * `withViewLabels` read the request's own query and params, and a storyline
+ * view's reply, and hand back what the request asked for — keywords, filters,
+ * storyline ids and labels — so an operator can tell the recent traces apart.
+ * They feed the record's `subject` and nothing else: no touch and no job run
+ * ever carries a value, and the keys, fingerprints, URLs and SQL above stay out.
  */
 
 // ── Postgres ────────────────────────────────────────────────────────────────
@@ -457,6 +468,108 @@ export function viewStorylinesOf(query: unknown): number | undefined {
   if (typeof storyline !== "string") return undefined;
   const count = storyline.split(",").length;
   return count >= 1 && count <= MAX_VIEW_STORYLINES ? count : undefined;
+}
+
+/** A query value as a bounded string, or undefined for anything else (absent, repeated, empty). */
+function boundedString(value: unknown, max: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed.slice(0, max);
+}
+
+/** The storyline ids a `storyline=` value names, UUIDs only, at most the view's width. */
+function storylineIdsOf(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  return value
+    .split(",")
+    .map((id) => id.trim().toLowerCase())
+    .filter((id) => TraceSubjectStoryline.shape.id.safeParse(id).success)
+    .slice(0, MAX_VIEW_STORYLINES);
+}
+
+/**
+ * What a request asked for (ADR-0031), from its query and route params alone:
+ * a search's keywords and filters, the storylines a view or an open named (ids
+ * only; a view's labels arrive with its reply, `withViewLabels`), a trending
+ * cloud's language. `null` for reference, which asks for nothing, and for a
+ * request that named nothing this can read.
+ *
+ * The values are the reader's own, before canonicalization, and each is cut
+ * to the schema's bound rather than refused, so an overlong query still
+ * stores. A value this cannot hold at all — a repeated parameter (which
+ * arrives as an array), a storyline that is not a UUID — is left out, so a
+ * 400 about one has no subject for it.
+ */
+export function subjectOf(route: TraceRoute, query: unknown, params: unknown): TraceSubject | null {
+  const q = queryRecord(query);
+  const subject: TraceSubject = {};
+  switch (route) {
+    case "timeline_search":
+    case "storylines_search": {
+      const keywords = boundedString(q.q, MAX_SUBJECT_KEYWORDS);
+      if (keywords !== undefined) subject.keywords = keywords;
+      break;
+    }
+    case "timeline_view": {
+      const ids = storylineIdsOf(q.storyline);
+      if (ids.length > 0) subject.storylines = ids.map((id) => ({ id }));
+      break;
+    }
+    case "storyline_open": {
+      // The open's 202 carries no label, so the id is the whole of it.
+      const ids = storylineIdsOf(queryRecord(params).id);
+      if (ids.length > 0) subject.storylines = ids.map((id) => ({ id }));
+      break;
+    }
+    case "trending":
+      break;
+    case "reference":
+      return null;
+  }
+  if (route === "timeline_search" || route === "trending") {
+    const language = boundedString(q.language, 8);
+    if (language !== undefined) subject.language = language;
+  }
+  if (route === "timeline_search") {
+    const country = boundedString(q.country, 8);
+    if (country !== undefined) subject.country = country;
+  }
+  return Object.keys(subject).length === 0 ? null : subject;
+}
+
+/**
+ * A storyline view's subject with the labels its reply carried: `storylines`,
+ * one entry per arc viewed, in the order asked and with aliases resolved to
+ * their survivors (`TimelinePage.storylines`), each with its label. A requested
+ * id the reply does not name — one the database never held, or an alias the
+ * reply answered under its survivor's id — follows, by its id alone, so an arc
+ * that was asked for is never missing from the subject. Where the reply names
+ * none (a 404, a 400) the requested ids stand as they were.
+ */
+export function withViewLabels(
+  route: TraceRoute,
+  subject: TraceSubject | null,
+  body: unknown,
+): TraceSubject | null {
+  if (route !== "timeline_view") return subject;
+  const named = queryRecord(body).storylines;
+  if (!Array.isArray(named)) return subject;
+  const storylines: TraceSubjectStoryline[] = [];
+  for (const entry of named) {
+    const record = queryRecord(entry);
+    const [id] = storylineIdsOf(record.id);
+    if (id === undefined) continue;
+    const label =
+      typeof record.label === "string" ? record.label.slice(0, MAX_SUBJECT_LABEL) : null;
+    storylines.push({ id, label });
+    if (storylines.length >= MAX_VIEW_STORYLINES) break;
+  }
+  if (storylines.length === 0) return subject;
+  for (const requested of subject?.storylines ?? []) {
+    if (storylines.length >= MAX_VIEW_STORYLINES) break;
+    if (!storylines.some((named) => named.id === requested.id)) storylines.push({ id: requested.id });
+  }
+  return { ...subject, storylines };
 }
 
 /**

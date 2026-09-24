@@ -1,18 +1,18 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
+  RECENT_TRACES_PATH,
   RequestTrace,
   TRACE_ID_HEADER,
   TRACE_ID_PATTERN,
-  TRACE_REQUEST_HEADER,
   TRACE_UNSTORED,
   type PlaneStatuses,
   type RedisStatus,
   type TraceMeta,
   type TraceQueryKey,
   type TraceRoute,
+  type TraceSubject,
 } from "@zammy/shared/request-trace";
-import { isAuthorized } from "./cron-route.js";
 import { TRACE_NOT_OPENED_MESSAGE } from "./observations.js";
 import { createTouchScope, type TouchScope } from "./trace-deps.js";
 import { createTouchRecorder, type TouchRecorder } from "./trace-recorder.js";
@@ -22,34 +22,36 @@ import {
   planesFromBody,
   queryKeysOf,
   rateLimitOutcome,
+  subjectOf,
   traceRouteOf,
   viewStorylinesOf,
+  withViewLabels,
 } from "./trace-redact.js";
 import { TraceStoreUnavailable, type TraceRuntime } from "./trace-store.js";
 
 /**
- * Request tracing on the HTTP surface (ADR-0029, "The change" 2, 5 and 7): the
- * opt-in, the lifecycle hooks that open and persist a trace, `scopedDeps`, and
- * the read route the playback page polls.
+ * Request tracing on the HTTP surface (ADR-0029, "The change" 2, 5 and 7, as
+ * amended by ADR-0031): the lifecycle hooks that open and persist a trace,
+ * `scopedDeps`, the read route the playback page polls, and the recent list its
+ * dropdown is filled from.
  *
  * **Registered only when `REQUEST_TRACE_ENABLED`.** `server.ts` calls
  * `registerRequestTracing` iff `Services.tracing` exists, so a deployment with
  * the flag off has no hook, no decorator and no `/api/v1/traces/:id` —
  * Fastify's own 404 — and runs the code it ran before this file existed.
  *
- * **With it on, an untraced request is unchanged, byte for byte and command for
- * command.** The hooks are callback-style (no promise per request), and for a
- * request without the header each does one counter increment or one property
- * read and calls `done`. No Redis command, no allocation of a scope, and
- * `scopedDeps` hands the handler the boot bag BY IDENTITY.
+ * **With it on, EVERY request to a traceable route is traced (ADR-0031).** There
+ * is no header and no token: the flag is the whole of the opt-in. Two
+ * per-instance bounds keep the cost of that bounded: `TRACE_OPENS_PER_MINUTE`
+ * opens in a fixed minute, and `MAX_OPEN_TRACES` at once. Beyond either the
+ * request is served untraced, with no signal.
  *
- * **The opt-in is a header, checked like the cron routes' bearer.**
- * `x-zammy-trace: Bearer <REQUEST_TRACE_TOKEN>` through `isAuthorized` — and a
- * wrong or missing token is simply "not traced": no error, no response header,
- * nothing to probe the token with. Past the token, two per-instance bounds keep
- * a leaked token cheap: `TRACE_OPENS_PER_MINUTE` opens in a fixed minute, and
- * `MAX_OPEN_TRACES` at once. Beyond either the request is served untraced,
- * again with no signal.
+ * **An untraced request is unchanged, byte for byte and command for command.**
+ * The hooks are callback-style (no promise per request), and for a request
+ * that is not traced — a route that is not traceable, or one past the bounds —
+ * each does one counter increment or one property read and calls `done`. No
+ * Redis command, no allocation of a scope, and `scopedDeps` hands the handler
+ * the boot bag BY IDENTITY.
  *
  * **Where each piece of a trace comes from:**
  *   - `onRequest` opens the scope. It runs before the rate limiter's route-level
@@ -58,16 +60,17 @@ import { TraceStoreUnavailable, type TraceRuntime } from "./trace-store.js";
  *     gap between the two plus its `x-ratelimit-*` headers, because the limiter
  *     holds the boot client and no proxy of ours ever sees its EVALSHA.
  *   - the handler runs over `scopedDeps(request, boot)`, which records.
- *   - `preSerialization` notes the body's `meta` and plane statuses — never the
- *     body itself.
+ *   - `preSerialization` notes the body's `meta`, plane statuses and — for a
+ *     storyline view — the labels of the arcs it named; never the body itself.
  *   - `onSend` seals, parses, stores, and adds `x-zammy-trace-id` and
  *     `cache-control: no-store`. The PAYLOAD IS UNCHANGED; only a traced reply's
  *     headers differ, and `no-store` is what keeps a CDN from handing the traced
  *     answer (and its id) to the next caller.
  *
  * What it deliberately does NOT do: trace HEAD, OPTIONS, `/topics`, the health
- * checks or its own read route; record the path, the query values, the IP or
- * any header; or let anything in here throw into a request. Every hook body is
+ * checks or its own routes; record the path, the IP or any header, or a query
+ * value anywhere but the record's `subject`; or let anything in here throw into
+ * a request. Every hook body is
  * in a try, and a failed persist is `x-zammy-trace-id: unstored` plus a
  * throttled warning.
  */
@@ -78,8 +81,16 @@ export const TRACE_OPENS_PER_MINUTE = 30;
 export const MAX_OPEN_TRACES = 8;
 /** The read route's own rate-limit bucket, so trace polling never spends a reader's allowance. */
 export const TRACE_READS_PER_MINUTE = 30;
+/**
+ * The recent list's bucket (ADR-0031), tighter than the read route's: the page reads it
+ * three times a minute, and each read costs an `LRANGE` and an `MGET` of up to ten records
+ * on an endpoint anyone can call.
+ */
+export const TRACE_LIST_READS_PER_MINUTE = 10;
 /** The read route's pattern (`TRACE_ROUTE_PREFIX` + `:id`). */
 export const TRACE_READ_ROUTE = "/api/v1/traces/:id";
+/** The recent list's route (ADR-0031). */
+export const TRACE_RECENT_ROUTE = RECENT_TRACES_PATH;
 
 /** What a handler can do with the request's trace: wrap its deps. The rest is the hooks'. */
 export interface RequestTraceScope {
@@ -124,6 +135,7 @@ class Scope implements RequestTraceScope {
     readonly method: "GET" | "POST",
     readonly queryKeys: TraceQueryKey[],
     readonly viewStorylines: number | undefined,
+    public subject: TraceSubject | null,
     private readonly onClose: () => void,
   ) {
     this.#touches = createTouchScope({ recorder, runtime, traceId: this.id, parentLinks: null });
@@ -137,6 +149,7 @@ class Scope implements RequestTraceScope {
   noteBody(payload: unknown): void {
     this.meta = metaFromBody(payload);
     this.planes = planesFromBody(this.route, payload);
+    this.subject = withViewLabels(this.route, this.subject, payload);
   }
 
   /** Seal if not already sealed, and give the slot back. Idempotent. */
@@ -194,7 +207,7 @@ export function registerRequestTracing(
   let window = -1;
   let opensInWindow = 0;
 
-  const notOpened = (reason: "token" | "budget" | "busy"): void => {
+  const notOpened = (reason: "budget" | "busy"): void => {
     try {
       app.log.debug({ reason }, TRACE_NOT_OPENED_MESSAGE);
     } catch {
@@ -208,11 +221,6 @@ export function registerRequestTracing(
     // Every request counts, traced or not: `instanceSequence` is "the Nth thing
     // this instance handled while tracing was on", and 1 is a cold instance.
     const sequence = runtime.nextSequence();
-    const header = request.headers[TRACE_REQUEST_HEADER];
-    if (typeof header !== "string") {
-      done();
-      return;
-    }
     try {
       const method = request.method;
       if (method !== "GET" && method !== "POST") {
@@ -221,11 +229,6 @@ export function registerRequestTracing(
       }
       const route = traceRouteOf(method, request.routeOptions.url, request.query);
       if (route === null) {
-        done();
-        return;
-      }
-      if (!isAuthorized(header, runtime.token)) {
-        notOpened("token");
         done();
         return;
       }
@@ -254,6 +257,7 @@ export function registerRequestTracing(
         method,
         queryKeysOf(request.query),
         viewStorylinesOf(request.query),
+        subjectOf(route, request.query, request.params),
         () => {
           openScopes -= 1;
         },
@@ -314,6 +318,7 @@ export function registerRequestTracing(
   });
 
   registerTraceReadRoute(app, runtime);
+  registerRecentTracesRoute(app, runtime);
 }
 
 /**
@@ -350,6 +355,7 @@ async function persist(runtime: TraceRuntime, scope: Scope, reply: FastifyReply)
       route: scope.route,
       method: scope.method,
       queryKeys: scope.queryKeys,
+      subject: scope.subject,
       ...(scope.viewStorylines === undefined ? {} : { viewStorylines: scope.viewStorylines }),
       status: reply.statusCode,
       startedAt: scope.startedAt.toISOString(),
@@ -390,9 +396,9 @@ async function persist(runtime: TraceRuntime, scope: Scope, reply: FastifyReply)
  *
  * Its own rate-limit bucket (`config.rateLimit`, which gives the limiter a child
  * key per method and URL), so a page polling a trace for half an hour never
- * spends the reader allowance a search needs. No token: the id is 122 random
- * bits and IS the capability, for one TTL, over data that names stations and
- * never content.
+ * spends the reader allowance a search needs. No token. The id is 122 random
+ * bits, but since ADR-0031 it is no capability: the recent list hands out the
+ * newest ids to anyone, and the record holds the request's subject.
  *
  * **GET only, so the bucket is one bucket.** Fastify clones every GET as a HEAD
  * with the same `config` unless told not to, and because the limiter keys a
@@ -435,6 +441,44 @@ function registerTraceReadRoute(app: FastifyInstance, runtime: TraceRuntime): vo
           return reply.status(404).send({ error: { message: "unknown trace" } });
         }
         return await reply.send(response);
+      } catch (error) {
+        if (error instanceof TraceStoreUnavailable) {
+          return reply.status(503).send({ error: { message: "trace store unavailable" } });
+        }
+        throw error;
+      }
+    },
+  );
+}
+
+/**
+ * `GET /api/v1/traces` — the newest traces still stored, newest first
+ * (ADR-0031): what the playback page's dropdown lists.
+ *
+ * The same posture as the read route and for the same reasons: its own
+ * rate-limit bucket (`TRACE_LIST_READS_PER_MINUTE`), GET only, `no-store` on
+ * every answer (a list a CDN held would hide the trace an operator just made),
+ * and a 503 rather than an empty list when Redis errors, so the page can say
+ * the store is down rather than that nothing was traced. No token, like
+ * everything since ADR-0031: while tracing is on, anyone who polls this can
+ * collect EVERY traced request's subject, ten at a time, and open each full
+ * record by its id until its TTL — which is what "on for a session, then off"
+ * is for.
+ */
+function registerRecentTracesRoute(app: FastifyInstance, runtime: TraceRuntime): void {
+  app.get(
+    TRACE_RECENT_ROUTE,
+    {
+      exposeHeadRoute: false,
+      config: { rateLimit: { max: TRACE_LIST_READS_PER_MINUTE, timeWindow: 60_000 } },
+      onSend: (_request, reply, payload, done) => {
+        reply.header("cache-control", "no-store");
+        done(null, payload);
+      },
+    },
+    async (_request, reply) => {
+      try {
+        return await reply.send({ traces: await runtime.readRecent() });
       } catch (error) {
         if (error instanceof TraceStoreUnavailable) {
           return reply.status(503).send({ error: { message: "trace store unavailable" } });

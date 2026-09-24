@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Station, type TraceReadResponse } from "@zammy/shared/request-trace";
 import { buildTimeline, type Pace, type Timeline } from "./choreography.js";
 import { overviewOps, sceneOps, stepRanges, type DrawOp } from "./drawList.js";
-import { EXAMPLE_TRACES, exampleBySlug } from "./exampleTraces.js";
+import { TRACE_FIXTURES, traceFixture } from "./fixtures/traceFixtures.js";
 import { frameAt, type FrameState, type Motion } from "./frame.js";
 import {
   STATION_FOOTPRINT,
@@ -51,7 +51,7 @@ const PACES: readonly Pace[] = ["readable", "real"];
 const MOTIONS: readonly Motion[] = ["full", "reduced"];
 
 function response(slug: string): TraceReadResponse {
-  const found = exampleBySlug(slug);
+  const found = traceFixture(slug);
   if (!found) throw new Error(`no example ${slug}`);
   return found.response;
 }
@@ -155,7 +155,7 @@ describe("STATION_SPRITE", () => {
 
 describe("sceneOps", () => {
   it("draws every example at eleven instants, on both plans, at both paces, in both motions, cleanly", () => {
-    for (const example of EXAMPLE_TRACES) {
+    for (const example of TRACE_FIXTURES) {
       for (const pace of PACES) {
         const timeline = buildTimeline(example.response, { pace });
         for (const layout of LAYOUTS) {
@@ -229,7 +229,7 @@ describe("sceneOps", () => {
   });
 
   it("paints every word after every piece of art, so no robot or machine ever hides one", () => {
-    for (const example of EXAMPLE_TRACES) {
+    for (const example of TRACE_FIXTURES) {
       const timeline = buildTimeline(example.response, { pace: "readable" });
       for (const layout of LAYOUTS) {
         for (const t of elevenInstants(timeline)) {
@@ -345,7 +345,7 @@ describe("sceneOps", () => {
   });
 
   it("never lets two bubbles cover each other in any example", () => {
-    for (const example of EXAMPLE_TRACES) {
+    for (const example of TRACE_FIXTURES) {
       const timeline = buildTimeline(example.response, { pace: "readable" });
       for (const layout of LAYOUTS) {
         for (const t of elevenInstants(timeline)) {
@@ -392,7 +392,7 @@ describe("overviewOps", () => {
   }
 
   it("numbers every step exactly once, for every example, on both plans", () => {
-    for (const example of EXAMPLE_TRACES) {
+    for (const example of TRACE_FIXTURES) {
       for (const pace of PACES) {
         const timeline = buildTimeline(example.response, { pace });
         const expected = timeline.steps.map((_, i) => i + 1);
@@ -407,7 +407,7 @@ describe("overviewOps", () => {
   });
 
   it("keeps the same contract as a scene: on the stage, whole pixels, words in ink", () => {
-    for (const example of EXAMPLE_TRACES) {
+    for (const example of TRACE_FIXTURES) {
       const timeline = buildTimeline(example.response, { pace: "readable" });
       for (const layout of LAYOUTS) {
         for (const ink of INKS) {
@@ -419,7 +419,7 @@ describe("overviewOps", () => {
   });
 
   it("places no badge over another badge or over a station's sign", () => {
-    for (const example of EXAMPLE_TRACES) {
+    for (const example of TRACE_FIXTURES) {
       const timeline = buildTimeline(example.response, { pace: "readable" });
       for (const layout of LAYOUTS) {
         const ops = overviewOps(layout, timeline, INK_FALLBACK);

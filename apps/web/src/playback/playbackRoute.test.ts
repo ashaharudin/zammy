@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TRACE_ID_PATTERN } from "@zammy/shared/request-trace";
 import {
-  DEFAULT_EXAMPLE_SLUG,
   TRACE_ID_SOURCE,
   isTraceId,
   parsePlaybackLocation,
@@ -10,7 +9,7 @@ import {
 } from "./playbackRoute.js";
 
 /**
- * The playback view's place in the URL (ADR-0029).
+ * The playback view's place in the URL (ADR-0029, ADR-0031).
  *
  * Two regressions this exists to catch. The first is the view escaping its own
  * parameter: `/?q=x` or a storyline path suddenly rendering the playback page
@@ -23,18 +22,12 @@ import {
 const ID = "3f2b8c1e-9a4d-4e7f-8b21-0c5d6e7f8a9b";
 
 describe("parsePlaybackLocation", () => {
-  it("opens the default example on a bare /?trace", () => {
-    expect(parsePlaybackLocation("/", "?trace", "")).toEqual({
-      kind: "example",
-      slug: DEFAULT_EXAMPLE_SLUG,
-    });
+  it("opens the newest recorded trace on a bare /?trace", () => {
+    expect(parsePlaybackLocation("/", "?trace", "")).toEqual({ kind: "latest" });
   });
 
-  it("opens a named example", () => {
-    expect(parsePlaybackLocation("/", "?trace=cache-hit", "")).toEqual({
-      kind: "example",
-      slug: "cache-hit",
-    });
+  it("reads an old example link as the bare parameter", () => {
+    expect(parsePlaybackLocation("/", "?trace=cache-hit", "")).toEqual({ kind: "latest" });
   });
 
   it("opens a recorded trace from the fragment", () => {
@@ -44,29 +37,24 @@ describe("parsePlaybackLocation", () => {
     });
   });
 
-  it("lets a valid id in the fragment win over a slug in the query", () => {
-    // The id is the more specific ask: a link someone pasted after recording.
+  it("lets a valid id in the fragment win over a value in the query", () => {
     expect(parsePlaybackLocation("/", "?trace=cache-hit", `#t=${ID}`)).toEqual({
       kind: "recorded",
       id: ID,
     });
   });
 
-  it("falls back to the default example, noticed, on a fragment that is not an id", () => {
+  it("falls back to the newest, noticed, on a fragment that is not an id", () => {
     for (const junk of ["#t=junk", "#t=", `#t=${ID.toUpperCase()}`, `#t=${ID}x`]) {
       expect(parsePlaybackLocation("/", "?trace", junk)).toEqual({
-        kind: "example",
-        slug: DEFAULT_EXAMPLE_SLUG,
+        kind: "latest",
         notice: "bad_id",
       });
     }
   });
 
   it("ignores a fragment that carries no t key", () => {
-    expect(parsePlaybackLocation("/", "?trace=edge-hit", "#section")).toEqual({
-      kind: "example",
-      slug: "edge-hit",
-    });
+    expect(parsePlaybackLocation("/", "?trace", "#section")).toEqual({ kind: "latest" });
   });
 
   it("is not the playback view without the trace parameter", () => {
@@ -77,10 +65,7 @@ describe("parsePlaybackLocation", () => {
   });
 
   it("is the playback view when trace rides alongside a search", () => {
-    expect(parsePlaybackLocation("/", "?q=x&trace", "")).toEqual({
-      kind: "example",
-      slug: DEFAULT_EXAMPLE_SLUG,
-    });
+    expect(parsePlaybackLocation("/", "?q=x&trace", "")).toEqual({ kind: "latest" });
   });
 
   it("leaves every other path alone, the storyline route included", () => {
@@ -88,23 +73,12 @@ describe("parsePlaybackLocation", () => {
     expect(parsePlaybackLocation("/replay", "?trace", "")).toBeNull();
     expect(parsePlaybackLocation("/index.html", "?trace", "")).toBeNull();
   });
-
-  it("reads a value that is not slug-shaped as the default", () => {
-    const odd = ["?trace=", "?trace=Cache-Hit", "?trace=a%20b", `?trace=${"x".repeat(41)}`];
-    for (const search of odd) {
-      expect(parsePlaybackLocation("/", search, "")).toEqual({
-        kind: "example",
-        slug: DEFAULT_EXAMPLE_SLUG,
-      });
-    }
-  });
 });
 
 describe("playbackHref", () => {
   it("round-trips every target through parsePlaybackLocation", () => {
     const targets: PlaybackTarget[] = [
-      { kind: "example", slug: "cold-search" },
-      { kind: "example", slug: "rate-limited" },
+      { kind: "latest" },
       { kind: "recorded", id: ID },
     ];
     for (const target of targets) {
@@ -119,10 +93,8 @@ describe("playbackHref", () => {
     expect(url.hash).toBe(`#t=${ID}`);
   });
 
-  it("drops a notice, so a copied link opens on the example itself", () => {
-    expect(playbackHref({ kind: "example", slug: "cold-search", notice: "bad_id" })).toBe(
-      "/?trace=cold-search",
-    );
+  it("drops a notice, so a copied link opens on the page itself", () => {
+    expect(playbackHref({ kind: "latest", notice: "bad_id" })).toBe("/?trace");
   });
 });
 

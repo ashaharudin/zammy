@@ -1,89 +1,64 @@
 import { describe, expect, it } from "vitest";
 import type { TraceReadResponse } from "@zammy/shared/request-trace";
 import { ApiError } from "../api.js";
-import { exampleBySlug } from "./exampleTraces.js";
+import { traceFixture } from "./fixtures/traceFixtures.js";
 import {
   NOTICE_TEXT,
   offersCheckAgain,
   pollLine,
   readAnnouncement,
   readFailureNotice,
-  recordAnnouncement,
-  recordNotice,
+  BAD_ID_NOTICE,
+  recentFailureNotice,
+  refreshAnnouncement,
   spokenText,
   type ReadMemory,
   type ReadSettle,
 } from "./pageNotices.js";
-import { TraceNotFound, readRecordResult, type RecordResponse } from "./traceFetch.js";
+import { TraceNotFound, TracingOff } from "./traceFetch.js";
 import type { PolledTrace } from "./tracePoll.js";
 
 /**
- * What the playback page says (ADR-0029, "The page is an operator's view on `/`").
+ * What the playback page says (ADR-0029, "The page is an operator's view on `/`",
+ * as amended by ADR-0031).
  *
  * The regressions these catch are sentences that assert a cause the page does
- * not know: "the CDN answered, no function ran" for a 504 the platform sent
- * after stopping a function at its time limit; "the trace store did not answer
- * in time" for a draft that failed its own schema; "a trace expires an hour
- * after it is recorded" under a thirty-minute TTL. And the live region's: a
- * record run or a read that settles in silence, a failing poll said at every
+ * not know: "a trace expires an hour after it is recorded" under a thirty-minute
+ * TTL, or "tracing is off" for a store that is merely down. And the live
+ * region's: a read that settles in silence, a failing poll said at every
  * interval, and the same sentence twice in a row said only once.
  */
 
-const facts = (headers: Record<string, string>, status: number): RecordResponse => ({
-  headers: new Headers(headers),
-  status,
-  startedAt: new Date("2026-09-23T18:00:00.000Z"),
-  browserMs: 60_000,
-  route: "timeline_search",
-  method: "GET",
-  queryKeys: ["q"],
-});
-
-describe("recordNotice", () => {
-  it("never tells a platform 504 that no function ran", () => {
-    const text = recordNotice(readRecordResult(facts({ "x-vercel-cache": "MISS" }, 504)))!;
-    expect(text).toContain("504");
-    expect(text).toMatch(/time limit/);
-    expect(text).not.toMatch(/no function ran/i);
-    expect(text).not.toMatch(/CDN answered/i);
-  });
-
-  it("says the CDN answered only when its cache did", () => {
-    const text = recordNotice(readRecordResult(facts({ "x-vercel-cache": "HIT" }, 200)))!;
-    expect(text).toMatch(/CDN answered that request from its cache, so no function ran/);
-  });
-
-  it("names every cause of `unstored`, not one", () => {
-    const text = recordNotice({ kind: "unstored", status: 200 })!;
-    expect(text).toContain("status 200");
-    expect(text).not.toMatch(/did not answer in time/);
-    for (const cause of ["not ready", "write failed", "refused", "log says which"]) {
-      expect(text).toContain(cause);
-    }
-  });
-
-  it("names the untraced causes without choosing one", () => {
-    const text = recordNotice({ kind: "untraced", status: 429 })!;
-    expect(text).toContain("status 429");
-    expect(text).toMatch(/does not say which, on purpose/);
-  });
-
-  it("leaves a stored trace to its read, and a form error to the panel", () => {
-    expect(recordNotice({ kind: "traced", id: "x" })).toBeNull();
-    expect(recordNotice({ kind: "invalid", error: "Type some words." })).toBeNull();
+describe("recentFailureNotice", () => {
+  it("says tracing is off only when the list route is absent", () => {
+    expect(recentFailureNotice(new TracingOff())).toMatch(/REQUEST_TRACE_ENABLED=false/);
+    const down = recentFailureNotice(new ApiError(503, "down"));
+    expect(down).toBe("The list of recorded traces could not be read (status 503).");
+    expect(down).not.toMatch(/off/);
   });
 });
 
-describe("recordAnnouncement", () => {
-  it("says every outcome the plate shows, and that a stored trace is being read", () => {
-    expect(recordAnnouncement({ kind: "traced", id: "x" })).toBe("Recorded. Reading the trace…");
-    const untraced = { kind: "untraced", status: 200 } as const;
-    expect(recordAnnouncement(untraced)).toBe(recordNotice(untraced));
-    expect(recordAnnouncement({ kind: "unstored", status: 200 })).toMatch(/could not store/);
+describe("BAD_ID_NOTICE", () => {
+  it("does not claim a trace is showing, which it may not be", () => {
+    expect(BAD_ID_NOTICE).toMatch(/when there is one/);
+    expect(BAD_ID_NOTICE).not.toMatch(/is showing/);
   });
+});
 
-  it("leaves `invalid` to the panel's own alert", () => {
-    expect(recordAnnouncement({ kind: "invalid", error: "Type some words." })).toBeNull();
+describe("refreshAnnouncement", () => {
+  it("says how many traces the list holds, or why it could not be read", () => {
+    expect(refreshAnnouncement({ data: [], error: null })).toBe(
+      "List refreshed: no recorded traces.",
+    );
+    expect(refreshAnnouncement({ data: [1], error: null })).toBe(
+      "List refreshed: 1 recorded trace.",
+    );
+    expect(refreshAnnouncement({ data: [1, 2], error: null })).toBe(
+      "List refreshed: 2 recorded traces.",
+    );
+    expect(refreshAnnouncement({ data: [1], error: new TracingOff() })).toMatch(
+      /REQUEST_TRACE_ENABLED=false/,
+    );
   });
 });
 
@@ -95,7 +70,7 @@ describe("readFailureNotice", () => {
     expect(text).toMatch(/REQUEST_TRACE_TTL_SECONDS, an hour by default/);
     expect(text).toMatch(/mistyped/);
     expect(text).toMatch(/tracing may be off/);
-    expect(text).toMatch(/default example/);
+    expect(text).toMatch(/Pick another from the list/);
   });
 
   it("says a later 404 left the last copy playing", () => {
@@ -106,7 +81,7 @@ describe("readFailureNotice", () => {
 
   it("offers a retry for anything else, with its status when it has one", () => {
     expect(readFailureNotice(new ApiError(503, "down"), false)).toEqual({
-      text: "The trace could not be read (status 503). The default example is showing meanwhile.",
+      text: "The trace could not be read (status 503).",
       retry: true,
     });
     expect(readFailureNotice(new Error("offline"), true)).toEqual({
@@ -138,7 +113,7 @@ describe("pollLine and offersCheckAgain", () => {
 
 describe("readAnnouncement", () => {
   const ID = "3f2b7c1e-9a4d-4b6e-8c2f-1a2b3c4d5e6f";
-  const full = exampleBySlug("cold-search")!.response;
+  const full = traceFixture("cold-search")!.response;
   const startedAt = Date.parse(full.trace.startedAt);
   const withRuns = (n: number): TraceReadResponse => ({ ...full, runs: full.runs.slice(0, n) });
   const polled = (response: TraceReadResponse): PolledTrace => ({

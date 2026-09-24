@@ -83,7 +83,8 @@ thought of yet is noindex by default rather than by being remembered. (`vercel.j
 paragraph.)
 
 **`?trace` is an operator's view on `/`, and the view keeps itself out of the index.** `/?trace`
-([ADR-0029](adr/0029-a-traced-request-records-what-it-touched-never-what-it-asked.md)) plays an API
+([ADR-0029](adr/0029-a-traced-request-records-what-it-touched-never-what-it-asked.md),
+[ADR-0031](adr/0031-a-trace-says-what-was-asked-and-the-newest-ten-are-listed.md)) plays an API
 request back as a 16-bit animation — a tool for whoever runs the site, not a page for readers or
 crawlers. Nothing links to it: it is not in the landing page, the sitemap or `llms.txt`, and it
 has no route of its own, so its canonical is `/` like every other parameter route — it is the

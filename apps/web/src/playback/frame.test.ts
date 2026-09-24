@@ -8,7 +8,7 @@ import {
   type Step,
   type Timeline,
 } from "./choreography.js";
-import { EXAMPLE_TRACES, exampleBySlug } from "./exampleTraces.js";
+import { TRACE_FIXTURES, traceFixture } from "./fixtures/traceFixtures.js";
 import { CRATE_PITCH, frameAt, type FrameState, type Motion } from "./frame.js";
 import { TALL, WIDE, spotFor, type FloorLayout, type Point } from "./layout.js";
 
@@ -31,7 +31,7 @@ const LAYOUTS: readonly FloorLayout[] = [WIDE, TALL];
 const PACES: readonly Pace[] = ["readable", "real"];
 
 function response(slug: string): TraceReadResponse {
-  const found = exampleBySlug(slug);
+  const found = traceFixture(slug);
   if (!found) throw new Error(`no example ${slug}`);
   return found.response;
 }
@@ -86,7 +86,7 @@ const has = (points: readonly Point[], p: Point) => points.some((q) => q.x === p
 
 describe("frameAt", () => {
   it("stands every stop's actor on the station's spot mid-dwell, on both plans", () => {
-    for (const e of EXAMPLE_TRACES) {
+    for (const e of TRACE_FIXTURES) {
       for (const pace of PACES) {
         const timeline = buildTimeline(e.response, { pace });
         for (const layout of LAYOUTS) {
@@ -105,7 +105,7 @@ describe("frameAt", () => {
   });
 
   it("clamps before the start to the first frame, and past the end to the final one", () => {
-    for (const e of EXAMPLE_TRACES) {
+    for (const e of TRACE_FIXTURES) {
       const timeline = buildTimeline(e.response, { pace: "readable" });
       for (const layout of LAYOUTS) {
         for (const motion of ["full", "reduced"] as const) {
@@ -120,7 +120,7 @@ describe("frameAt", () => {
   });
 
   it("puts nothing between two places under reduced motion", () => {
-    for (const e of EXAMPLE_TRACES) {
+    for (const e of TRACE_FIXTURES) {
       for (const pace of PACES) {
         const timeline = buildTimeline(e.response, { pace });
         for (const layout of LAYOUTS) {
@@ -149,7 +149,7 @@ describe("frameAt", () => {
   });
 
   it("draws only what the pixel font can, with no '?' but an open call's", () => {
-    for (const e of EXAMPLE_TRACES) {
+    for (const e of TRACE_FIXTURES) {
       for (const pace of PACES) {
         const timeline = buildTimeline(e.response, { pace });
         for (const layout of LAYOUTS) {
@@ -446,7 +446,7 @@ describe("frameAt", () => {
   });
 
   it("uses whole pixels for every actor and crate", () => {
-    for (const e of EXAMPLE_TRACES) {
+    for (const e of TRACE_FIXTURES) {
       const timeline = buildTimeline(e.response, { pace: "readable" });
       for (const t of instants(timeline)) {
         const frame = frameAt(timeline, TALL, t, "full");

@@ -8,6 +8,7 @@ import { TRACE_UNSTORED_MESSAGE } from "./observations.js";
 import { captureLog } from "./test-support.js";
 import {
   TRACE_LINK_DEADLINE_MS,
+  TRACE_READY_BACKOFF_MS,
   TRACE_READY_WAIT_MS,
   TRACE_WARN_INTERVAL_MS,
   TRACE_WRITE_DEADLINE_MS,
@@ -15,6 +16,7 @@ import {
   createTraceRuntime,
   traceJobKey,
   traceKey,
+  traceRecentKey,
   traceRunsKey,
   type TraceRuntime,
 } from "./trace-store.js";
@@ -33,7 +35,6 @@ import {
  */
 
 const REDIS_URL = process.env.TEST_REDIS_URL ?? "redis://localhost:6379";
-const TOKEN = "t".repeat(32);
 
 const ENVIRONMENT: TraceEnvironment = {
   queue: "bullmq",
@@ -50,7 +51,6 @@ function traceConfig(overrides: Record<string, string> = {}): Config {
     REDIS_URL,
     CURRENTS_USER_AGENT: "zammy-tests/0.1",
     REQUEST_TRACE_ENABLED: "true",
-    REQUEST_TRACE_TOKEN: TOKEN,
     ...overrides,
   } as NodeJS.ProcessEnv);
 }
@@ -155,7 +155,6 @@ describe("createTraceRuntime", () => {
     const rt = freshRuntime(traceConfig({ REQUEST_TRACE_TTL_SECONDS: "7200" }));
     expect(rt.ttlMs).toBe(7_200_000);
     expect(rt.maxTouches).toBe(240);
-    expect(rt.token).toBe(TOKEN);
     expect(rt.defaultSource).toBe("bullmq");
     expect(freshRuntime(traceConfig({ INGEST_QUEUE_DRIVER: "vercel" })).defaultSource).toBe(
       "vercel_queue",
@@ -193,6 +192,56 @@ describe("putTrace and readTrace", () => {
       new Date(Date.parse("2026-09-01T12:00:00.000Z") + rt.ttlMs).toISOString(),
     );
   });
+
+  it("lists each stored id at the head of the recent list, with the record's TTL", async () => {
+    const rt = freshRuntime();
+    const first = randomUUID();
+    const second = randomUUID();
+    await rt.putTrace(record(first));
+    await rt.putTrace(record(second));
+
+    const key = traceRecentKey(queueName);
+    expect(key).toBe(`${queueName}:trace:recent`);
+    expect(await redis.lrange(key, 0, -1)).toEqual([second, first]);
+    const pttl = await redis.pttl(key);
+    expect(pttl).toBeGreaterThan(0);
+    expect(pttl).toBeLessThanOrEqual(rt.ttlMs);
+    expect((await rt.readRecent()).map((summary) => summary.id)).toEqual([second, first]);
+  });
+
+  it("does not repeat a ready-wait that ran out, for a minute", async () => {
+    freshRuntime();
+    const silent = await silentServer();
+    const cold = new Redis(`redis://127.0.0.1:${silent.port}`, {
+      lazyConnect: true,
+      enableOfflineQueue: false,
+      maxRetriesPerRequest: 2,
+    });
+    void cold.connect().catch(() => {});
+    let now = 1_000_000;
+    try {
+      const rt = createTraceRuntime(traceConfig(), {
+        redis: cold,
+        queueName,
+        environment: ENVIRONMENT,
+        log: captureLog().log,
+        clock: () => now,
+      });
+      expect(await rt.putTrace(record(randomUUID()))).toBe(false);
+      // Inside the backoff: refused at once, with no second wait.
+      let started = Date.now();
+      expect(await rt.putTrace(record(randomUUID()))).toBe(false);
+      expect(Date.now() - started).toBeLessThan(TRACE_READY_WAIT_MS / 2);
+      // Past it, the wait comes back — a cold handshake may have finished meanwhile.
+      now += TRACE_READY_BACKOFF_MS;
+      started = Date.now();
+      expect(await rt.putTrace(record(randomUUID()))).toBe(false);
+      expect(Date.now() - started).toBeGreaterThanOrEqual(TRACE_READY_WAIT_MS - 50);
+    } finally {
+      cold.disconnect();
+      await silent.close();
+    }
+  }, 10_000);
 
   it("answers null for an id it never stored", async () => {
     const rt = freshRuntime();

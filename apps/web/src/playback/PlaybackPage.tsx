@@ -15,7 +15,6 @@ import { MONO } from "../theme.js";
 import { useTheme } from "../ThemeProvider.js";
 import { ThemeToggle } from "../ThemeToggle.js";
 import { buildTimeline, stepAt, type Pace, type Timeline } from "./choreography.js";
-import { exampleBySlug, type ExampleTrace } from "./exampleTraces.js";
 import type { Motion } from "./frame.js";
 import { startLoop } from "./loop.js";
 import {
@@ -23,9 +22,10 @@ import {
   offersCheckAgain,
   pollLine,
   readAnnouncement,
+  BAD_ID_NOTICE,
   readFailureNotice,
-  recordAnnouncement,
-  recordNotice,
+  recentFailureNotice,
+  refreshAnnouncement,
   spokenText,
   type ReadMemory,
 } from "./pageNotices.js";
@@ -44,21 +44,19 @@ import {
 } from "./playbackClock.js";
 import { usePlaybackPreferences } from "./playbackPreferences.js";
 import {
-  DEFAULT_EXAMPLE_SLUG,
   parsePlaybackLocation,
   playbackHref,
   type PlaybackTarget,
 } from "./playbackRoute.js";
 import { PlaybackStage, type StageHandle } from "./PlaybackStage.js";
-import { RecordPanel } from "./RecordPanel.js";
-import { SourceBar } from "./SourceBar.js";
 import { StepList } from "./StepList.js";
-import { describeHeadline, describeStep, honestyNotes, type PlaybackSource } from "./stepText.js";
-import type { RecordResult } from "./traceFetch.js";
+import { describeHeadline, describeStep, describeSubject, honestyNotes } from "./stepText.js";
+import { TracePicker } from "./TracePicker.js";
 import {
   minutesLeft,
   nextClockChangeMs,
   pollStatus,
+  recentTracesQueryOptions,
   traceQueryOptions,
   traceTimeLeftMs,
   type PollState,
@@ -67,33 +65,32 @@ import {
 import { TransportBar } from "./TransportBar.js";
 
 /**
- * The request playback page, `/?trace` (ADR-0029, "The page is an operator's view on `/`"): a
- * trace played back as a 16-bit warehouse — a robot carrying the request past a turnstile, a
+ * The request playback page, `/?trace` (ADR-0029, "The page is an operator's view on `/`", as
+ * amended by ADR-0031): a recorded trace played back as a 16-bit warehouse — a robot carrying the request past a turnstile, a
  * rack of Redis bins, a Postgres vault, a Currents mast, and through a hatch onto a belt where
  * worker robots pick up the jobs it enqueued — with the same content as a list of steps in
  * words.
  *
  * Its own lazy chunk (`App.tsx`), so none of this, and none of the trace schemas, reaches a
  * reader's main chunk. Entry and exit are full page loads; inside, the page switches what it
- * plays with `history.replaceState` only (a new example, a recorded id, a fresh recording), so
- * Back leaves the page rather than walking through everything that was watched, and the
- * record panel stays mounted — its token survives from one recording to the next, and only
- * for this visit (`RecordPanel.tsx`). The one change from outside it follows is a new `#t=`
- * fragment, which a browser applies without a load.
+ * plays with `history.replaceState` only (another trace picked from the dropdown), so Back
+ * leaves the page rather than walking through everything that was watched. The one change
+ * from outside it follows is a new `#t=` fragment, which a browser applies without a load.
  *
- * What it plays comes from one of three places (`PlaybackSource`): a built-in example, a
- * recorded trace read back by id (`#t=<id>`) and polled while its job runs land
- * (`tracePoll.ts`), or a browser-only trace for a request no function could trace (a CDN
- * cache answer, or a platform 504). The status plate says which, always, and the legend under
- * the stage says what the page cannot see.
+ * What it plays is always a trace the API recorded (ADR-0031 took the built-in examples and
+ * the record panel off the page): picked from the dropdown of the newest ten
+ * (`TracePicker`, `GET /api/v1/traces`, re-read every `RECENT_POLL_MS`), or named by a `#t=`
+ * link, read back by id and polled while its job runs land (`tracePoll.ts`). A bare `/?trace`
+ * plays the newest. The status plate says what the trace asked for and how long it has left,
+ * and the legend under the stage says what the page cannot see.
  *
  * Motion is opt-out, never forced (WCAG 2.2.2): with motion allowed it autoplays once and
  * never loops, and Pause is always there; under `prefers-reduced-motion` it does not autoplay,
  * shows a static overview map first, and plays by holding each step and jumping to the next.
  * The keyboard drives all of it (`keyToAction`), its letter shortcuts can be turned off (WCAG
  * 2.1.4), and the one live region (`PlaybackAnnouncer`, mounted here so a new trace does not
- * wipe it) speaks once per event: a reader's action, a record run coming back, a read
- * settling with something new, the poll giving up (`pageNotices.ts`). A control that goes
+ * wipe it) speaks once per event: a reader's action, a read settling with something new,
+ * the poll giving up (`pageNotices.ts`). A control that goes
  * away under the reader's focus hands it on first — to the Play button or the status plate —
  * rather than dropping it on `<body>`.
  *
@@ -105,7 +102,6 @@ export function PlaybackPage({ initial }: { initial: PlaybackTarget }) {
   const [start] = useState(() => resolveInitial(initial));
   const [target, setTarget] = useState<PlaybackTarget>(start.target);
   const [notices, setNotices] = useState<readonly string[]>(start.notices);
-  const [local, setLocal] = useState<TraceReadResponse | null>(null);
   const prefs = usePlaybackPreferences();
   const reduced = usePrefersReducedMotion();
   const ink = usePageInk();
@@ -117,15 +113,13 @@ export function PlaybackPage({ initial }: { initial: PlaybackTarget }) {
   /** Set when the reader asks for a read ("Try again", "Check again"); spent by its settle. */
   const userAsked = useRef(false);
 
-  /** Show something else: an example, a recorded id, a fresh recording's trace. */
+  /** Show another recorded trace. */
   const pick = useCallback((next: PlaybackTarget) => {
-    setLocal(null);
     setNotices([]);
     setTarget(next);
   }, []);
 
-  // The URL says what is playing, always by replacement (see the header). A browser-only
-  // trace is never put in it: there is nothing stored to link to.
+  // The URL says what is playing, always by replacement (see the header).
   useEffect(() => {
     const href = playbackHref(target);
     const here = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -150,9 +144,17 @@ export function PlaybackPage({ initial }: { initial: PlaybackTarget }) {
     return () => window.removeEventListener("hashchange", onHashChange);
   }, [pick]);
 
-  // Read and polled only while it is what the page shows: a browser-only trace on screen
-  // leaves the recorded one behind it unread, rather than polled and announced unseen.
-  const recordedId = target.kind === "recorded" && local === null ? target.id : null;
+  // The dropdown's list: the newest traces the API still holds.
+  const recent = useQuery(recentTracesQueryOptions());
+  const newest = recent.data?.[0]?.id ?? null;
+
+  // A bare `/?trace` plays the newest trace as soon as the list names one. The notices that
+  // explain how the reader got here (a bad `#t=`) stay: they are about this arrival.
+  useEffect(() => {
+    if (target.kind === "latest" && newest !== null) setTarget({ kind: "recorded", id: newest });
+  }, [target.kind, newest]);
+
+  const recordedId = target.kind === "recorded" ? target.id : null;
   const recorded = useQuery(traceQueryOptions(recordedId));
   const pollState: PollState = { data: recorded.data, error: recorded.error };
   const nowMs = Date.now();
@@ -162,54 +164,14 @@ export function PlaybackPage({ initial }: { initial: PlaybackTarget }) {
   // with nothing else to re-render it (`nextClockChangeMs`), so a timer does.
   useRenderClock(recordedId === null ? null : nextClockChangeMs(pollState, nowMs));
 
-  const fallback = defaultExample();
-  const shown = ((): Shown | null => {
-    if (local) return { response: local, source: "browser", example: null };
-    if (target.kind === "example") {
-      const example = exampleBySlug(target.slug) ?? fallback;
-      return { response: example.response, source: "example", example };
-    }
-    if (recorded.data) {
-      return {
+  const shown: Shown | null = recorded.data
+    ? {
         response: recorded.data.response,
-        source: "recorded",
-        example: null,
         // A 404 after a good read outranks any estimate of the time left.
         gone: status.kind === "expired",
         minutesLeft: minutesLeft(traceTimeLeftMs(recorded.data, nowMs)),
-      };
-    }
-    // A recorded trace that could not be read leaves the page showing the default example —
-    // never an empty stage — with the reason above it.
-    if (recorded.isError)
-      return { response: fallback.response, source: "example", example: fallback };
-    return null;
-  })();
-
-  const onRecorded = useCallback(
-    (result: RecordResult) => {
-      const said = recordAnnouncement(result);
-      if (said !== null) say(said);
-      const notice = recordNotice(result);
-      switch (result.kind) {
-        case "traced":
-          pick({ kind: "recorded", id: result.id });
-          return;
-        case "browser":
-          setNotices(notice ? [notice] : []);
-          setLocal(result.response);
-          return;
-        case "unstored":
-        case "untraced":
-          setNotices(notice ? [notice] : []);
-          return;
-        case "invalid":
-          // The panel shows, and alerts, its own form errors.
-          return;
       }
-    },
-    [pick, say],
-  );
+    : null;
 
   // Each read that SETTLES is said once, if it brought something to say (`readAnnouncement`):
   // the first read's headline, job runs arriving, a failure — a poll failing the same way
@@ -244,8 +206,8 @@ export function PlaybackPage({ initial }: { initial: PlaybackTarget }) {
     if (line !== null) say(line);
   }, [recordedId, status.kind, line, say]);
 
-  // A read that failed with nothing read yet explains the fallback example; one that failed
-  // after a good read (a poll, "Check again") leaves the last copy playing and says so.
+  // A read that failed with nothing read yet leaves the stage empty and says why; one that
+  // failed after a good read (a poll, "Check again") leaves the last copy playing and says so.
   const readFailure = recorded.isError
     ? readFailureNotice(recorded.error, recorded.data !== undefined)
     : null;
@@ -297,14 +259,17 @@ export function PlaybackPage({ initial }: { initial: PlaybackTarget }) {
         </span>
       </header>
 
-      <SourceBar
-        current={
-          local === null && target.kind === "example" ? (shown?.example?.slug ?? null) : null
-        }
-        onExample={(slug) => pick({ kind: "example", slug })}
-        onRecorded={(id) => pick({ kind: "recorded", id })}
+      <TracePicker
+        current={recordedId}
+        traces={recent.data}
+        loading={recent.isPending}
+        failure={recent.isError ? recentFailureNotice(recent.error) : null}
+        onPick={(id) => pick({ kind: "recorded", id })}
+        onRefresh={async () => {
+          const result = await recent.refetch();
+          say(refreshAnnouncement(result));
+        }}
       />
-      <RecordPanel onResult={onRecorded} />
 
       <main style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}>
         <StatusPlate
@@ -317,9 +282,8 @@ export function PlaybackPage({ initial }: { initial: PlaybackTarget }) {
         />
         {shown && (
           <PlaybackView
-            key={`${shown.source}:${shown.response.trace.id}`}
+            key={shown.response.trace.id}
             response={shown.response}
-            source={shown.source}
             pace={prefs.pace}
             speed={prefs.speed}
             letters={prefs.letters}
@@ -331,7 +295,7 @@ export function PlaybackPage({ initial }: { initial: PlaybackTarget }) {
             say={say}
             playRef={playRef}
           >
-            {shown.source === "recorded" && (line !== null || offersCheckAgain(status)) && (
+            {(line !== null || offersCheckAgain(status)) && (
               <div style={POLL_ROW}>
                 {line !== null && <p style={{ ...NOTE, flex: "1 1 16rem" }}>{line}</p>}
                 {offersCheckAgain(status) && (
@@ -349,26 +313,13 @@ export function PlaybackPage({ initial }: { initial: PlaybackTarget }) {
   );
 }
 
-type Shown =
-  | { response: TraceReadResponse; source: "example" | "browser"; example: ExampleTrace | null }
-  | {
-      response: TraceReadResponse;
-      source: "recorded";
-      example: null;
-      /** A read after a good one answered 404: the API no longer has it, whatever the clock says. */
-      gone: boolean;
-      minutesLeft: number;
-    };
-
-function defaultExample(): ExampleTrace {
-  const found = exampleBySlug(DEFAULT_EXAMPLE_SLUG);
-  if (!found) throw new Error(`no default example ${DEFAULT_EXAMPLE_SLUG}`);
-  return found;
+/** The recorded trace on screen, and what its badge says of how long it has left. */
+interface Shown {
+  response: TraceReadResponse;
+  /** A read after a good one answered 404: the API no longer has it, whatever the clock says. */
+  gone: boolean;
+  minutesLeft: number;
 }
-
-const BAD_ID =
-  "That link named a recorded trace by something that is not a trace id, so the default " +
-  "example is showing instead.";
 
 /** The target the page opens on, and what to say about how it got there. */
 function resolveInitial(initial: PlaybackTarget): {
@@ -376,17 +327,7 @@ function resolveInitial(initial: PlaybackTarget): {
   notices: readonly string[];
 } {
   if (initial.kind === "recorded") return { target: initial, notices: [] };
-  if (initial.notice === "bad_id") {
-    return { target: { kind: "example", slug: DEFAULT_EXAMPLE_SLUG }, notices: [BAD_ID] };
-  }
-  if (!exampleBySlug(initial.slug)) {
-    const fallback = defaultExample();
-    return {
-      target: { kind: "example", slug: fallback.slug },
-      notices: [`There is no example called “${initial.slug}”, so “${fallback.title}” is showing.`],
-    };
-  }
-  return { target: { kind: "example", slug: initial.slug }, notices: [] };
+  return { target: { kind: "latest" }, notices: initial.notice === "bad_id" ? [BAD_ID_NOTICE] : [] };
 }
 
 /**
@@ -479,13 +420,17 @@ function StatusPlate({
 }) {
   const trace = shown?.response.trace;
   const env = trace?.origin?.environment ?? null;
+  const subject = describeSubject(trace?.subject);
+  // Nothing to say yet (waiting on the list for the newest trace, or a list with none, which the
+  // picker explains): the plate stays mounted — focus may be handed to it — but draws no box.
+  const empty = notices.length === 0 && !retry && !loading && !shown;
   return (
     <section
       ref={ref}
       tabIndex={-1}
       aria-label="Trace"
       style={{
-        display: "flex",
+        display: empty ? "none" : "flex",
         flexDirection: "column",
         gap: "0.5rem",
         padding: "0.8rem",
@@ -523,13 +468,12 @@ function StatusPlate({
               </Chip>
             )}
           </div>
-          <p style={{ margin: 0, color: "var(--fg)" }}>{describeHeadline(trace)}</p>
-          {shown.example && (
-            <p style={{ margin: 0, color: "var(--fg-muted)" }}>
-              <strong style={{ color: "var(--fg)" }}>{shown.example.title}.</strong>{" "}
-              {shown.example.summary}
+          {subject !== null && (
+            <p style={{ margin: 0, color: "var(--fg)" }}>
+              <strong>Asked for:</strong> {subject}
             </p>
           )}
+          <p style={{ margin: 0, color: "var(--fg)" }}>{describeHeadline(trace)}</p>
         </>
       )}
     </section>
@@ -537,17 +481,10 @@ function StatusPlate({
 }
 
 function sourceBadge(shown: Shown): string {
-  switch (shown.source) {
-    case "example":
-      return "Example — timings illustrative";
-    case "browser":
-      return "Browser-only — not saved";
-    case "recorded":
-      if (shown.gone) return "Recorded — no longer stored";
-      return shown.minutesLeft > 0
-        ? `Recorded — expires in ${shown.minutesLeft} min`
-        : "Recorded — expired";
-  }
+  if (shown.gone) return "Recorded — no longer stored";
+  return shown.minutesLeft > 0
+    ? `Recorded — expires in ${shown.minutesLeft} min`
+    : "Recorded — expired";
 }
 
 /** The configuration facts the trace carries about the process that recorded it. */
@@ -654,8 +591,8 @@ const sameView = (a: TransportView, b: TransportView) =>
   a.stepIndex === b.stepIndex && a.status === b.status && a.speed === b.speed && a.mode === b.mode;
 
 /**
- * One trace, played: the stage, the transport, the steps and the legend. Keyed by the trace
- * (`source:id`), so a different trace starts afresh — at the start, autoplaying if motion is
+ * One trace, played: the stage, the transport, the steps and the legend. Keyed by the trace's
+ * id, so a different trace starts afresh — at the start, autoplaying if motion is
  * welcome — while the SAME trace changing under it keeps its place: a pace change keeps the
  * step (by what the step is, `carryAcrossPace`, since the paces order the steps differently),
  * and job runs arriving by poll keep the instant (and offer to play on if it had ended).
@@ -671,7 +608,6 @@ const sameView = (a: TransportView, b: TransportView) =>
  */
 function PlaybackView({
   response,
-  source,
   pace,
   speed,
   letters,
@@ -685,7 +621,6 @@ function PlaybackView({
   children,
 }: {
   response: TraceReadResponse;
-  source: PlaybackSource;
   pace: Pace;
   speed: Speed;
   /** Whether the single-character shortcuts are on (`keyToAction`). */
@@ -705,7 +640,7 @@ function PlaybackView({
     () => timeline.steps.map((step) => describeStep(step, timeline)),
     [timeline],
   );
-  const notes = useMemo(() => honestyNotes(response, source), [response, source]);
+  const notes = useMemo(() => honestyNotes(response), [response]);
 
   const transportRef = useRef<Transport | null>(null);
   if (transportRef.current === null) {

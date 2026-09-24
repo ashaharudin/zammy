@@ -34,16 +34,15 @@ import {
   type TouchOutcome,
   type TraceEnvironment,
   type TraceReadResponse,
+  type TraceSubject,
+  type TraceSummary,
   type UpstreamFailure,
 } from "@zammy/shared/request-trace";
 import type { Step, Stop, Timeline } from "./choreography.js";
 
-/** Where the trace on screen came from: a built-in example, the API's store, or the browser. */
-export type PlaybackSource = "example" | "recorded" | "browser";
-
 /**
  * Longest caption a bubble can hold, in glyphs: what `ActorPose.bubble` promises
- * (`frame.ts`), and `frame.test.ts` holds every frame of every example to it.
+ * (`frame.ts`), and `frame.test.ts` holds every frame of every fixture to it.
  */
 export const CAPTION_MAX = 10;
 
@@ -570,15 +569,52 @@ export function describeHeadline(trace: RequestTrace): string {
 }
 
 /**
- * What a trace the BROWSER drew says answered it, read off its one edge touch —
- * or null for a trace a function recorded.
+ * What the request asked for, in words (ADR-0031), or null when it named nothing:
+ * `“quokka zebra” (en, AU)`, `storyline “Nepal Flash Floods”`, or — where the reply carried no
+ * label, as a storyline open's does not — the storyline's id.
+ */
+export function describeSubject(subject: TraceSubject | null | undefined): string | null {
+  if (!subject) return null;
+  const parts: string[] = [];
+  if (subject.keywords !== undefined) parts.push(`“${subject.keywords}”`);
+  if (subject.storylines && subject.storylines.length > 0) {
+    const names = subject.storylines.map((s) => (s.label ? `“${s.label}”` : s.id));
+    parts.push(`${subject.storylines.length === 1 ? "storyline" : "storylines"} ${names.join(", ")}`);
+  }
+  if (parts.length > 0) {
+    const filters = [subject.language, subject.country].filter((f) => f !== undefined);
+    if (filters.length > 0) parts.push(`(${filters.join(", ")})`);
+  } else {
+    // Filters alone (a trending cloud's language, a 400 whose keywords were refused): named.
+    if (subject.language !== undefined) parts.push(`language ${subject.language}`);
+    if (subject.country !== undefined) parts.push(`country ${subject.country}`);
+    return parts.length > 0 ? parts.join(", ") : null;
+  }
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+
+/**
+ * One recent trace as the dropdown lists it:
+ * "12:04:31 · search “quokka zebra” → 200 in 812 ms". `time` formats the start (a parameter so
+ * a test need not depend on the machine's time zone).
+ */
+export function describeSummary(summary: TraceSummary, time: (iso: string) => string): string {
+  const subject = describeSubject(summary.subject);
+  const kind = ROUTE_KINDS[summary.route];
+  const ask = subject === null ? kind : `${kind} ${subject}`;
+  return `${time(summary.startedAt)} · ${ask} → ${summary.status} in ${formatMs(summary.ms)}`;
+}
+
+/**
+ * What a trace with no origin says answered it, read off its one edge touch —
+ * or null for a trace a function recorded, which is every trace the API stores.
  *
- * Two different stories share `origin: null`, and telling them apart is the
- * point: an edge `hit`/`stale` is the CDN's cache answering, so no function ran;
- * an edge `miss` is how `browserOnlyTrace` draws a platform 504 with no trace id
- * (`traceFetch.ts`, cause `timeout`), where a function most likely DID run and
- * hit its time limit before its trace could be stored. Saying "no function ran"
- * of the second would be the one thing the page knows to be unlikely.
+ * Kept for the renderer's sake rather than the page's: the record panel that
+ * drew such traces in the browser (a CDN hit, a platform 504) went with
+ * ADR-0031, and only the `edge-hit` fixture still has one. Two stories share
+ * `origin: null`: an edge `hit`/`stale` is the CDN's cache answering, so no
+ * function ran; an edge `miss` was a platform 504, where a function most likely
+ * DID run and hit its time limit — and "no function ran" must never be said of it.
  */
 function edgeAnswer(trace: RequestTrace): "cache" | "timeout" | null {
   if (trace.origin !== null) return null;
@@ -598,19 +634,13 @@ export function routeLabel(trace: RequestTrace): string {
  * What the page cannot see, or is only guessing, about this trace — each note
  * present only when it applies. Shown under the stage as the legend.
  */
-export function honestyNotes(
-  response: TraceReadResponse,
-  source: PlaybackSource,
-): readonly string[] {
+export function honestyNotes(response: TraceReadResponse): readonly string[] {
   const { trace, runs } = response;
   const notes: string[] = [];
   const records = [trace, ...runs];
   const all = records.flatMap((r) => r.touches);
   const upstream = new Set<Station>(["queue", "currents", "google_news", "gemini"]);
 
-  if (source === "example") {
-    notes.push("Timings are illustrative; the path is the one the code takes.");
-  }
   const edge = edgeAnswer(trace);
   if (edge === "cache") {
     notes.push(

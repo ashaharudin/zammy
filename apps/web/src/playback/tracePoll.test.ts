@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryObserver, environmentManager } from "@tanstack/react-query";
 import { TraceReadResponse } from "@zammy/shared/request-trace";
-import { TraceNotFound } from "./traceFetch.js";
+import { TraceNotFound, TracingOff } from "./traceFetch.js";
 import {
   POLL_SCHEDULE,
   POLL_WINDOW_MS,
@@ -11,6 +11,8 @@ import {
   nextPollDelay,
   pollStatus,
   traceAgeMs,
+  RECENT_POLL_MS,
+  recentTracesQueryOptions,
   traceQueryOptions,
   traceTimeLeftMs,
   type PolledTrace,
@@ -483,6 +485,47 @@ describe("the page's trace query", () => {
     // The last read is the one scheduled from inside the window, one interval on.
     expect(Math.max(...reads) - firstRead).toBeLessThanOrEqual(POLL_WINDOW_MS + 60_000);
     expect(notFound).toBe(0);
+    stop();
+  });
+});
+
+/** The dropdown's list, as the page wires it (ADR-0031). */
+describe("the page's recent-traces query", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ now: T0 });
+    environmentManager.setIsServer(() => false);
+  });
+
+  afterEach(() => {
+    environmentManager.setIsServer(() => true);
+    vi.useRealTimers();
+  });
+
+  const observe = (read: () => Promise<[]>) => {
+    const client = new QueryClient();
+    const observer = new QueryObserver(client, recentTracesQueryOptions({ read }));
+    const unsubscribe = observer.subscribe(() => {});
+    return { observer, stop: () => (unsubscribe(), client.clear()) };
+  };
+
+  it("re-reads the list every RECENT_POLL_MS while tracing is on", async () => {
+    const read = vi.fn(async (): Promise<[]> => []);
+    const { stop } = observe(read);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(3 * RECENT_POLL_MS);
+    expect(read).toHaveBeenCalledTimes(4);
+    stop();
+  });
+
+  it("asks once when tracing is off, and never again: no retry, no poll", async () => {
+    const read = vi.fn(async (): Promise<[]> => {
+      throw new TracingOff();
+    });
+    const { observer, stop } = observe(read);
+    await vi.advanceTimersByTimeAsync(10 * RECENT_POLL_MS);
+    expect(observer.getCurrentResult().error).toBeInstanceOf(TracingOff);
+    expect(read).toHaveBeenCalledTimes(1);
     stop();
   });
 });

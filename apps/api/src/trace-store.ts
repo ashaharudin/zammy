@@ -3,6 +3,7 @@ import type { Config } from "@zammy/config";
 import {
   JOB_REF_PATTERN,
   JobRun,
+  MAX_RECENT_TRACES,
   MAX_RUN_LINKS,
   MAX_TRACE_RUNS,
   MAX_TRACE_TOUCHES,
@@ -13,6 +14,7 @@ import {
   type TraceEnvironment,
   type TraceOrigin,
   type TraceReadResponse,
+  type TraceSummary,
 } from "@zammy/shared/request-trace";
 import { TRACE_UNSTORED_MESSAGE } from "./observations.js";
 import { waitForRedis } from "./redis-ready.js";
@@ -22,13 +24,18 @@ import { redisStatusOf } from "./trace-redact.js";
 /**
  * Where traces live, and the per-process state tracing needs (ADR-0029).
  *
- * **Three keys per trace, all scoped by the queue's name** the way
- * `<queue>:trending:*` is — so production's are `ingest:trace:*`, and a test
- * harness's uniquely-named queue can never read or clobber them:
+ * **Three keys per trace and one shared list, all scoped by the queue's name**
+ * the way `<queue>:trending:*` is — so production's are `ingest:trace:*`, and a
+ * test harness's uniquely-named queue can never read or clobber them:
  *
  *   <q>:trace:<id>            the request record, a string, SET … PX ttl
  *   <q>:trace:<id>:runs       its job runs, a list, RPUSH (≤ MAX_TRACE_RUNS)
  *   <q>:trace:job:<jobId>     a SET of `<traceId>|<ref>` — which traces a job owes a run to
+ *   <q>:trace:recent          the newest trace ids, a list, LPUSH + LTRIM (≤ MAX_RECENT_TRACES)
+ *
+ * The recent list (ADR-0031) holds ids only; `readRecent` reads the records
+ * they name, so an entry whose record has expired simply drops out of the
+ * answer rather than being listed as a trace nobody can open.
  *
  * The job key is the whole of the linkage. A job's own id and payload are
  * untouched — `parseIngestJob` whitelists fields, so a `traceId` on the
@@ -62,6 +69,13 @@ import { redisStatusOf } from "./trace-redact.js";
 
 /** How long the trace write waits for a cold client's handshake. */
 export const TRACE_READY_WAIT_MS = 1_500;
+/**
+ * After a ready-wait that ran out, how long the next writes skip the wait and go straight
+ * to the (refused, instant) write. Since ADR-0031 every traceable reader request is traced,
+ * so a Redis that stays down would otherwise hold EVERY traced reply for the full wait; with
+ * this, an instance pays it at most once a minute and the rest answer `unstored` at once.
+ */
+export const TRACE_READY_BACKOFF_MS = 60_000;
 /** The trace write itself, once the client is ready (or given up on). */
 export const TRACE_WRITE_DEADLINE_MS = 300;
 /** A job link, the consumer's lookup, and a consumed link. */
@@ -78,6 +92,7 @@ export const traceKey = (queue: string, id: string): string => `${queue}:trace:$
 export const traceRunsKey = (queue: string, id: string): string => `${queue}:trace:${id}:runs`;
 export const traceJobKey = (queue: string, jobId: string): string =>
   `${queue}:trace:job:${jobId}`;
+export const traceRecentKey = (queue: string): string => `${queue}:trace:recent`;
 
 /** One trace a job owes a run to, and the ref that trace knows the job by. */
 export interface JobLink {
@@ -105,16 +120,14 @@ const LINK_MEMBER = new RegExp(
 );
 
 /**
- * Everything tracing needs that outlives one request: the token, the bounds,
- * the process's counter, and the store.
+ * Everything tracing needs that outlives one request: the bounds, the
+ * process's counter, and the store.
  *
  * Present on `Services` only when `REQUEST_TRACE_ENABLED` — its absence is how
  * every other module knows tracing is off, which is what makes "off" cost
  * nothing rather than a flag check per request.
  */
 export interface TraceRuntime {
-  /** The opt-in token (`REQUEST_TRACE_TOKEN`). Compared by `isAuthorized`, never logged. */
-  readonly token: string;
   readonly ttlMs: number;
   /** Config's cap, never above `MAX_TRACE_TOUCHES`. */
   readonly maxTouches: number;
@@ -128,7 +141,12 @@ export interface TraceRuntime {
   /** The boot client's status, folded. */
   redisStatus(): RedisStatus;
   origin(sequence: number, redisAtStart: RedisStatus): TraceOrigin;
-  /** Store a PARSED record. False on any failure; bounded by ready-wait + write deadline. */
+  /**
+   * Store a PARSED record and put its id at the head of the recent list. The
+   * answer is the RECORD's: true once it is stored, whatever became of the list
+   * entry (a trace missing from the dropdown can still be opened by its id).
+   * Bounded by ready-wait + write deadline.
+   */
   putTrace(trace: RequestTrace): Promise<boolean>;
   /** Write a job's links before it is published. False on any failure; no ready-wait. */
   linkJob(jobId: string, links: readonly JobLink[]): Promise<boolean>;
@@ -140,6 +158,12 @@ export interface TraceRuntime {
   consumeLinks(jobId: string, links: readonly JobLink[]): Promise<void>;
   /** The read route's body, or null for an unknown, expired or unparseable trace. */
   readTrace(id: string): Promise<TraceReadResponse | null>;
+  /**
+   * The recent list's body (ADR-0031): the newest records still stored, newest
+   * first, as summaries. Throws `TraceStoreUnavailable` on a Redis error, as
+   * `readTrace` does.
+   */
+  readRecent(): Promise<TraceSummary[]>;
   /**
    * `TRACE_UNSTORED_MESSAGE`, at most once per `TRACE_WARN_INTERVAL_MS`, with a
    * count of how many were folded into it. `fields` must be classes and paths,
@@ -191,15 +215,13 @@ export function createTraceRuntime(
   let sequence = 0;
   let lastWarnedAt: number | null = null;
   let folded = 0;
+  /** When the last ready-wait ran out, for `TRACE_READY_BACKOFF_MS`. */
+  let readyWaitFailedAt: number | null = null;
 
   const members = (links: readonly JobLink[]): string[] =>
     links.map((link) => `${link.traceId}|${link.ref}`);
 
   return {
-    // An unset token cannot happen while enabled (config refuses to boot), and
-    // `isAuthorized` answers false for an empty secret — so even a caller that
-    // built a runtime by hand fails closed.
-    token: config.REQUEST_TRACE_TOKEN ?? "",
     ttlMs,
     maxTouches: Math.min(config.REQUEST_TRACE_MAX_TOUCHES, MAX_TRACE_TOUCHES),
     queueName,
@@ -224,14 +246,36 @@ export function createTraceRuntime(
       try {
         // `end` is terminal — a client closed for good never becomes ready on its
         // own — so it is not worth the wait.
-        if (redis.status !== "ready" && redis.status !== "end") {
-          await waitForRedis(redis, TRACE_READY_WAIT_MS).catch(() => {});
+        // And a wait that ran out recently is not repeated: a Redis that is down stays down
+        // for longer than one request, and every traced reader would pay it.
+        const backingOff =
+          readyWaitFailedAt !== null && clock() - readyWaitFailedAt < TRACE_READY_BACKOFF_MS;
+        if (redis.status !== "ready" && redis.status !== "end" && !backingOff) {
+          await waitForRedis(redis, TRACE_READY_WAIT_MS).then(
+            () => {
+              readyWaitFailedAt = null;
+            },
+            () => {
+              readyWaitFailedAt = clock();
+            },
+          );
         }
-        await withDeadline(
-          redis.set(traceKey(queueName, trace.id), JSON.stringify(trace), "PX", ttlMs),
+        // One round trip, in order: the record lands before its id is listed,
+        // so a dropdown read between the two can never name a missing trace.
+        // A pipeline, not MULTI — nothing here needs the four to be atomic.
+        const recent = traceRecentKey(queueName);
+        const results = await withDeadline(
+          redis
+            .pipeline()
+            .set(traceKey(queueName, trace.id), JSON.stringify(trace), "PX", ttlMs)
+            .lpush(recent, trace.id)
+            .ltrim(recent, 0, MAX_RECENT_TRACES - 1)
+            .pexpire(recent, ttlMs)
+            .exec(),
           TRACE_WRITE_DEADLINE_MS,
         );
-        return true;
+        const [set] = results ?? [];
+        return set !== undefined && set[0] === null;
       } catch {
         return false;
       }
@@ -353,6 +397,48 @@ export function createTraceRuntime(
         runs: parsedRuns,
         expiresAt: new Date(Date.parse(trace.data.startedAt) + ttlMs).toISOString(),
       };
+    },
+
+    async readRecent() {
+      let summaries: TraceSummary[];
+      try {
+        const ids = [
+          ...new Set(
+            (await redis.lrange(traceRecentKey(queueName), 0, MAX_RECENT_TRACES - 1)).filter(
+              (id) => TRACE_ID_PATTERN.test(id),
+            ),
+          ),
+        ];
+        if (ids.length === 0) return [];
+        const raws = await redis.mget(...ids.map((id) => traceKey(queueName, id)));
+        summaries = [];
+        for (const [index, raw] of raws.entries()) {
+          if (raw === null) continue;
+          let record: unknown;
+          try {
+            record = JSON.parse(raw);
+          } catch {
+            continue;
+          }
+          const trace = RequestTrace.safeParse(record);
+          if (!trace.success || trace.data.id !== ids[index]) continue;
+          const { id, route, method, status, startedAt, ms, subject } = trace.data;
+          summaries.push({
+            id,
+            route,
+            method,
+            status,
+            startedAt,
+            ms,
+            ...(subject === undefined ? {} : { subject }),
+          });
+        }
+      } catch (error) {
+        throw new TraceStoreUnavailable(
+          error instanceof Error ? error.message : "trace store unavailable",
+        );
+      }
+      return summaries;
     },
 
     warnUnstored(fields) {
