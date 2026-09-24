@@ -301,14 +301,15 @@ export async function ingestSightings(
     // to a table-wide sweep either.
     //
     // Table-wide was a seq scan — no index covers `sighting_count` — of a
-    // 120 MB heap on every ingest with a new article: 1,276ms mean, 31.6s
-    // max over 3,480 calls, twice the total time of the next-costliest
-    // statement production runs, and 8.6s of one 14.2s cold search (trace
-    // 4e3a28c2). An
-    // index was the other fix and the worse one: every fold writes this
-    // column, so a predicate on it costs every fold its HOT update, which is
-    // what `fillfactor = 70` exists to buy. Scoped, it is a primary-key probe
-    // bounded by the page size, and a batch that created nothing skips it.
+    // 120 MB heap on every non-empty batch, a re-fetch that created nothing
+    // included: 1,276ms mean, 31.6s max over 3,480 calls, twice the total
+    // time of the next-costliest statement production runs, and 8.6s of one
+    // 14.2s cold search (trace 4e3a28c2). An index was the other fix and the
+    // worse one: every fold writes this column, so a predicate on it costs
+    // every fold its HOT update — the thing production's `fillfactor = 70` on
+    // this table (set by hand, in no migration) exists to buy. Scoped, it is
+    // a primary-key probe bounded by the page size, and a batch that created
+    // nothing skips it.
     if (createdIds.size > 0) {
       const orphans = await trx
         .deleteFrom("articles")

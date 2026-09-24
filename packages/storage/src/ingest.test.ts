@@ -1412,6 +1412,36 @@ describe("sweeping an article left with no sightings", () => {
     expect((await articleAt("https://example.com/orphan-first"))?.sighting_count).toBe(1);
   });
 
+  it("finds the orphan wherever it falls among the batch's new articles", async () => {
+    // A real page mints several articles at once. The orphan is in the MIDDLE
+    // of the three, so a sweep that reached only the first or last id this
+    // batch created would leave it standing.
+    await ingestSightings(harness.db, {
+      plane: "search",
+      timeZone: "UTC",
+      fingerprint: TOPIC,
+      sightings: [emission({ id: 3, url: "https://example.com/orphan-earlier-page" })],
+    });
+
+    const result = await ingestSightings(harness.db, {
+      plane: "search",
+      timeZone: "UTC",
+      fingerprint: TOPIC,
+      sightings: [
+        emission({ id: 4, url: "https://example.com/orphan-page-first" }),
+        emission({ id: 3, url: "https://example.com/orphan-page-middle" }),
+        emission({ id: 5, url: "https://example.com/orphan-page-last" }),
+      ],
+    });
+
+    expect(result.sightingsInserted).toBe(2);
+    expect(result.articlesCreated).toBe(2);
+    expect(result.createdArticles).toHaveLength(2);
+    expect(await articleAt("https://example.com/orphan-page-middle")).toBeUndefined();
+    expect((await articleAt("https://example.com/orphan-page-first"))?.sighting_count).toBe(1);
+    expect((await articleAt("https://example.com/orphan-page-last"))?.sighting_count).toBe(1);
+  });
+
   it("reaches only the articles this batch created", async () => {
     // A zero-count row the batch did not make. Nothing in the app can commit
     // one — every transaction sweeps its own first — so it is planted here
