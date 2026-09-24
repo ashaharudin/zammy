@@ -286,16 +286,38 @@ export async function ingestSightings(
       }
     }
 
-    // A duplicate upstream UUID arriving under a never-seen dedup_key would
-    // leave the article created above with zero sightings — visible to no
-    // timeline, but a row the Article contract (sightingCount >= 1) forbids.
-    // Unreachable from any payload observed so far; guarded because upstream
-    // has already shipped three things the spec says it can't.
-    const orphans = await trx
-      .deleteFrom("articles")
-      .where("sighting_count", "=", 0)
-      .executeTakeFirst();
-    result.articlesCreated -= Number(orphans.numDeletedRows);
+    // A duplicate upstream UUID arriving under a never-seen dedup_key leaves
+    // the article created above with zero sightings — visible to no timeline,
+    // but a row the Article contract (sightingCount >= 1) forbids. Once
+    // guarded as unreachable; production has since deleted 50 (2026-08-26 to
+    // 2026-09-24, `pg_stat_statements`).
+    //
+    // Scoped to what THIS batch created, because nothing else can be at zero:
+    // `insertArticle` is the only writer of a 0, every other write to the
+    // count increments it, nothing deletes or re-points a sighting, and every
+    // transaction runs this sweep before it commits — so no committed row
+    // holds a 0 for a later batch to find (production: none of 81,623 on
+    // 2026-09-24). A concurrent batch's uncommitted orphan was never visible
+    // to a table-wide sweep either.
+    //
+    // Table-wide was a seq scan — no index covers `sighting_count` — of a
+    // 120 MB heap on every non-empty batch, a re-fetch that created nothing
+    // included: 1,276ms mean, 31.6s max over 3,480 calls, twice the total
+    // time of the next-costliest statement production runs, and 8.6s of one
+    // 14.2s cold search (trace 4e3a28c2). An index was the other fix and the
+    // worse one: every fold writes this column, so a predicate on it costs
+    // every fold its HOT update — the thing production's `fillfactor = 70` on
+    // this table (set by hand, in no migration) exists to buy. Scoped, it is
+    // a primary-key probe bounded by the page size, and a batch that created
+    // nothing skips it.
+    if (createdIds.size > 0) {
+      const orphans = await trx
+        .deleteFrom("articles")
+        .where("id", "in", [...createdIds])
+        .where("sighting_count", "=", 0)
+        .executeTakeFirst();
+      result.articlesCreated -= Number(orphans.numDeletedRows);
+    }
 
     // Read back rather than remember: one batch can carry the same URL twice,
     // and the later sighting may have rewritten the title and published of a
