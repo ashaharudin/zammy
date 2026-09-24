@@ -49,6 +49,17 @@ export const NOTICE_TEXT: CSSProperties = {
   lineHeight: 1.5,
 };
 
+// ── arriving by a bad link ──────────────────────────────────────────────────
+
+/**
+ * A `#t=` that held something other than a trace id. The page then plays the newest trace —
+ * when the list has one, which it may not (tracing off, nothing stored), so this does not
+ * claim a trace is showing.
+ */
+export const BAD_ID_NOTICE =
+  "That link named a recorded trace by something that is not a trace id, so it opened no " +
+  "trace of its own; the newest recorded trace plays instead, when there is one.";
+
 // ── the recent list failing ─────────────────────────────────────────────────
 
 /**
@@ -64,6 +75,15 @@ export function recentFailureNotice(error: unknown): string {
   }
   const status = error instanceof ApiError ? ` (status ${error.status})` : "";
   return `The list of recorded traces could not be read${status}.`;
+}
+
+/** What "Refresh" says when its read settles: how many traces the list holds, or why it failed. */
+export function refreshAnnouncement(result: { data?: readonly unknown[]; error: unknown }): string {
+  if (result.error) return recentFailureNotice(result.error);
+  const n = result.data?.length ?? 0;
+  return n === 0
+    ? "List refreshed: no recorded traces."
+    : `List refreshed: ${n === 1 ? "1 recorded trace" : `${n} recorded traces`}.`;
 }
 
 // ── a read of a recorded trace failing ──────────────────────────────────────

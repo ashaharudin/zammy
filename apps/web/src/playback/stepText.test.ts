@@ -414,6 +414,9 @@ describe("describeSubject", () => {
       `storylines ${A}, ${A}`,
     );
     expect(describeSubject({ language: "fr" })).toBe("language fr");
+    // Filters alone are named for what they are.
+    expect(describeSubject({ country: "au" })).toBe("country au");
+    expect(describeSubject({ language: "en", country: "au" })).toBe("language en, country au");
   });
 
   it("is null for a trace that asked nothing, or predates subjects", () => {

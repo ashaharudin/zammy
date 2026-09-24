@@ -1102,8 +1102,9 @@ const EnvSchema = z
      * Off by default. When on, every request to a traceable route is recorded as
      * the stations it touched and what it asked for (ADR-0031), the newest ten are
      * listed, and any of them can be played back at `/?trace`. There is no token:
-     * the flag IS the opt-in, and turning it on exposes the last ten searches and
-     * storylines to anyone who can reach the API. An enum, not a truthiness test,
+     * the flag IS the opt-in, and while it is on anyone who can reach the API can
+     * collect every traced request's searches and storylines by polling the list,
+     * and read each trace by id until its TTL. An enum, not a truthiness test,
      * for the reason GROUPING_ENABLED gives: `REQUEST_TRACE_ENABLED=ture` must
      * refuse to boot.
      *

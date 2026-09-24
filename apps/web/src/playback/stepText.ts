@@ -42,7 +42,7 @@ import type { Step, Stop, Timeline } from "./choreography.js";
 
 /**
  * Longest caption a bubble can hold, in glyphs: what `ActorPose.bubble` promises
- * (`frame.ts`), and `frame.test.ts` holds every frame of every example to it.
+ * (`frame.ts`), and `frame.test.ts` holds every frame of every fixture to it.
  */
 export const CAPTION_MAX = 10;
 
@@ -581,9 +581,14 @@ export function describeSubject(subject: TraceSubject | null | undefined): strin
     const names = subject.storylines.map((s) => (s.label ? `“${s.label}”` : s.id));
     parts.push(`${subject.storylines.length === 1 ? "storyline" : "storylines"} ${names.join(", ")}`);
   }
-  const filters = [subject.language, subject.country].filter((f) => f !== undefined);
-  if (filters.length > 0) {
-    parts.push(parts.length > 0 ? `(${filters.join(", ")})` : `language ${filters.join(", ")}`);
+  if (parts.length > 0) {
+    const filters = [subject.language, subject.country].filter((f) => f !== undefined);
+    if (filters.length > 0) parts.push(`(${filters.join(", ")})`);
+  } else {
+    // Filters alone (a trending cloud's language, a 400 whose keywords were refused): named.
+    if (subject.language !== undefined) parts.push(`language ${subject.language}`);
+    if (subject.country !== undefined) parts.push(`country ${subject.country}`);
+    return parts.length > 0 ? parts.join(", ") : null;
   }
   return parts.length > 0 ? parts.join(" ") : null;
 }
@@ -601,15 +606,15 @@ export function describeSummary(summary: TraceSummary, time: (iso: string) => st
 }
 
 /**
- * What a trace the BROWSER drew says answered it, read off its one edge touch —
- * or null for a trace a function recorded.
+ * What a trace with no origin says answered it, read off its one edge touch —
+ * or null for a trace a function recorded, which is every trace the API stores.
  *
- * Two different stories share `origin: null`, and telling them apart is the
- * point: an edge `hit`/`stale` is the CDN's cache answering, so no function ran;
- * an edge `miss` is how `browserOnlyTrace` draws a platform 504 with no trace id
- * (`traceFetch.ts`, cause `timeout`), where a function most likely DID run and
- * hit its time limit before its trace could be stored. Saying "no function ran"
- * of the second would be the one thing the page knows to be unlikely.
+ * Kept for the renderer's sake rather than the page's: the record panel that
+ * drew such traces in the browser (a CDN hit, a platform 504) went with
+ * ADR-0031, and only the `edge-hit` fixture still has one. Two stories share
+ * `origin: null`: an edge `hit`/`stale` is the CDN's cache answering, so no
+ * function ran; an edge `miss` was a platform 504, where a function most likely
+ * DID run and hit its time limit — and "no function ran" must never be said of it.
  */
 function edgeAnswer(trace: RequestTrace): "cache" | "timeout" | null {
   if (trace.origin !== null) return null;

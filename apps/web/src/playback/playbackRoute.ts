@@ -14,9 +14,10 @@
  * examples) reads as the bare parameter: the examples are gone (ADR-0031).
  *
  * The recorded id travels in the FRAGMENT, never the query: a fragment is not sent
- * with the page's own request, so the id — a read capability for one TTL, an hour
- * by default — stays out of that request's query string, the static file's CDN
- * cache key and its log. It is not secret from the platform: every read the page
+ * with the page's own request, so the id stays out of that request's query
+ * string, the static file's CDN cache key and its log. It is no secret — since
+ * ADR-0031 the recent list hands the newest ids to anyone — but a page URL is
+ * copied and indexed in places an API path is not. It is not secret from the platform: every read the page
  * makes carries it in the read route's PATH, through the edge to the function and
  * its request log.
  *

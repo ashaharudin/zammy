@@ -69,6 +69,13 @@ import { redisStatusOf } from "./trace-redact.js";
 
 /** How long the trace write waits for a cold client's handshake. */
 export const TRACE_READY_WAIT_MS = 1_500;
+/**
+ * After a ready-wait that ran out, how long the next writes skip the wait and go straight
+ * to the (refused, instant) write. Since ADR-0031 every traceable reader request is traced,
+ * so a Redis that stays down would otherwise hold EVERY traced reply for the full wait; with
+ * this, an instance pays it at most once a minute and the rest answer `unstored` at once.
+ */
+export const TRACE_READY_BACKOFF_MS = 60_000;
 /** The trace write itself, once the client is ready (or given up on). */
 export const TRACE_WRITE_DEADLINE_MS = 300;
 /** A job link, the consumer's lookup, and a consumed link. */
@@ -208,6 +215,8 @@ export function createTraceRuntime(
   let sequence = 0;
   let lastWarnedAt: number | null = null;
   let folded = 0;
+  /** When the last ready-wait ran out, for `TRACE_READY_BACKOFF_MS`. */
+  let readyWaitFailedAt: number | null = null;
 
   const members = (links: readonly JobLink[]): string[] =>
     links.map((link) => `${link.traceId}|${link.ref}`);
@@ -237,8 +246,19 @@ export function createTraceRuntime(
       try {
         // `end` is terminal — a client closed for good never becomes ready on its
         // own — so it is not worth the wait.
-        if (redis.status !== "ready" && redis.status !== "end") {
-          await waitForRedis(redis, TRACE_READY_WAIT_MS).catch(() => {});
+        // And a wait that ran out recently is not repeated: a Redis that is down stays down
+        // for longer than one request, and every traced reader would pay it.
+        const backingOff =
+          readyWaitFailedAt !== null && clock() - readyWaitFailedAt < TRACE_READY_BACKOFF_MS;
+        if (redis.status !== "ready" && redis.status !== "end" && !backingOff) {
+          await waitForRedis(redis, TRACE_READY_WAIT_MS).then(
+            () => {
+              readyWaitFailedAt = null;
+            },
+            () => {
+              readyWaitFailedAt = clock();
+            },
+          );
         }
         // One round trip, in order: the record lands before its id is listed,
         // so a dropdown read between the two can never name a missing trace.

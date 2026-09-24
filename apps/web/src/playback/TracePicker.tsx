@@ -1,4 +1,4 @@
-import { useId, type CSSProperties } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import type { TraceSummary } from "@zammy/shared/request-trace";
 import { MONO } from "../theme.js";
 import { NOTICE_TEXT } from "./pageNotices.js";
@@ -14,15 +14,22 @@ import { describeSummary } from "./stepText.js";
  * fallen out of the newest ten (or was never in them) is listed at the top as the current
  * trace, rather than the select showing an option that is not the one playing.
  *
- * "Refresh" re-reads the list at once; the page also re-reads it on its own every
- * `RECENT_POLL_MS`. When the list cannot be read, the reason takes the dropdown's place.
+ * **A pick waits for the reader to settle** (`PICK_SETTLE_MS`). On a closed select, an arrow key
+ * fires `change` at once in Chrome and Firefox on Windows and Linux, so a pick per `change`
+ * would read, restart and announce every trace the reader arrows past. The select shows the
+ * draft straight away, and the page is told only once it has stopped moving; choosing with a
+ * mouse or a phone's picker lands the same way, a moment later.
+ *
+ * "Refresh" re-reads the list at once, and says when it is done (`onRefresh` resolves); the page
+ * also re-reads it on its own every `RECENT_POLL_MS`, which the button does not show. When the
+ * list cannot be read, the reason is written under it — as text, not a live region: the page has
+ * one (`PlaybackAnnouncer`), and a Refresh that fails is spoken there.
  */
 export function TracePicker({
   current,
   traces,
   loading,
   failure,
-  refreshing,
   onPick,
   onRefresh,
 }: {
@@ -32,13 +39,34 @@ export function TracePicker({
   loading: boolean;
   /** Why the list could not be read, or null. */
   failure: string | null;
-  refreshing: boolean;
   onPick: (id: string) => void;
-  onRefresh: () => void;
+  /** Re-read the list; resolves once the read has settled, however it went. */
+  onRefresh: () => Promise<void>;
 }) {
   const id = useId();
   const listed = traces ?? [];
-  const unlisted = current !== null && !listed.some((t) => t.id === current);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const settle = useRef<number | null>(null);
+  useEffect(() => () => window.clearTimeout(settle.current ?? undefined), []);
+  // A draft the page has caught up with, or overtaken, is spent.
+  useEffect(() => setDraft(null), [current]);
+
+  const shownId = draft ?? current;
+  // The trace on screen is always an option. "Not among the newest" is said only once the list
+  // has been read and does not hold it; until then it is simply "this trace".
+  const unlisted = shownId !== null && !listed.some((t) => t.id === shownId);
+  const unlistedLabel = traces === undefined ? "This trace" : "This trace (not among the newest)";
+
+  const choose = (value: string) => {
+    setDraft(value);
+    window.clearTimeout(settle.current ?? undefined);
+    settle.current = window.setTimeout(() => {
+      settle.current = null;
+      if (value !== current) onPick(value);
+      else setDraft(null);
+    }, PICK_SETTLE_MS);
+  };
 
   return (
     <div
@@ -55,14 +83,14 @@ export function TracePicker({
         <span style={{ color: "var(--fg-muted)" }}>Recorded trace</span>
         <select
           id={id}
-          value={current ?? ""}
+          value={shownId ?? ""}
           disabled={listed.length === 0 && !unlisted}
           onChange={(event) => {
-            if (event.target.value !== "") onPick(event.target.value);
+            if (event.target.value !== "") choose(event.target.value);
           }}
           style={FIELD}
         >
-          {current === null && (
+          {shownId === null && (
             <option value="" disabled>
               {loading
                 ? "Reading the list…"
@@ -71,7 +99,7 @@ export function TracePicker({
                   : "Choose a trace"}
             </option>
           )}
-          {unlisted && <option value={current}>This trace (not among the newest)</option>}
+          {unlisted && <option value={shownId}>{unlistedLabel}</option>}
           {listed.map((trace) => (
             <option key={trace.id} value={trace.id}>
               {describeSummary(trace, clockTime)}
@@ -82,7 +110,9 @@ export function TracePicker({
       <button
         type="button"
         onClick={() => {
-          if (!refreshing) onRefresh();
+          if (refreshing) return;
+          setRefreshing(true);
+          void onRefresh().finally(() => setRefreshing(false));
         }}
         // Not `disabled` while a read is in flight: that would throw focus to `<body>`.
         aria-disabled={refreshing}
@@ -101,7 +131,7 @@ export function TracePicker({
         {refreshing ? "Refreshing…" : "Refresh"}
       </button>
       {failure !== null && (
-        <p role="status" style={{ ...NOTICE_TEXT, flexBasis: "100%" }}>
+        <p style={{ ...NOTICE_TEXT, flexBasis: "100%" }}>
           {failure}
         </p>
       )}
@@ -116,6 +146,9 @@ export function TracePicker({
     </div>
   );
 }
+
+/** How long the select must be still before its value is played. */
+export const PICK_SETTLE_MS = 400;
 
 /** A trace's start as the reader's own clock shows it, to the second. */
 function clockTime(iso: string): string {

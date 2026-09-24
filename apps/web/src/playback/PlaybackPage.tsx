@@ -22,8 +22,10 @@ import {
   offersCheckAgain,
   pollLine,
   readAnnouncement,
+  BAD_ID_NOTICE,
   readFailureNotice,
   recentFailureNotice,
+  refreshAnnouncement,
   spokenText,
   type ReadMemory,
 } from "./pageNotices.js";
@@ -262,9 +264,11 @@ export function PlaybackPage({ initial }: { initial: PlaybackTarget }) {
         traces={recent.data}
         loading={recent.isPending}
         failure={recent.isError ? recentFailureNotice(recent.error) : null}
-        refreshing={recent.isFetching}
         onPick={(id) => pick({ kind: "recorded", id })}
-        onRefresh={() => void recent.refetch()}
+        onRefresh={async () => {
+          const result = await recent.refetch();
+          say(refreshAnnouncement(result));
+        }}
       />
 
       <main style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}>
@@ -317,17 +321,13 @@ interface Shown {
   minutesLeft: number;
 }
 
-const BAD_ID =
-  "That link named a recorded trace by something that is not a trace id, so the newest " +
-  "recorded trace is showing instead.";
-
 /** The target the page opens on, and what to say about how it got there. */
 function resolveInitial(initial: PlaybackTarget): {
   target: PlaybackTarget;
   notices: readonly string[];
 } {
   if (initial.kind === "recorded") return { target: initial, notices: [] };
-  return { target: { kind: "latest" }, notices: initial.notice === "bad_id" ? [BAD_ID] : [] };
+  return { target: { kind: "latest" }, notices: initial.notice === "bad_id" ? [BAD_ID_NOTICE] : [] };
 }
 
 /**
@@ -421,13 +421,16 @@ function StatusPlate({
   const trace = shown?.response.trace;
   const env = trace?.origin?.environment ?? null;
   const subject = describeSubject(trace?.subject);
+  // Nothing to say yet (waiting on the list for the newest trace, or a list with none, which the
+  // picker explains): the plate stays mounted — focus may be handed to it — but draws no box.
+  const empty = notices.length === 0 && !retry && !loading && !shown;
   return (
     <section
       ref={ref}
       tabIndex={-1}
       aria-label="Trace"
       style={{
-        display: "flex",
+        display: empty ? "none" : "flex",
         flexDirection: "column",
         gap: "0.5rem",
         padding: "0.8rem",

@@ -8,6 +8,7 @@ import { TRACE_UNSTORED_MESSAGE } from "./observations.js";
 import { captureLog } from "./test-support.js";
 import {
   TRACE_LINK_DEADLINE_MS,
+  TRACE_READY_BACKOFF_MS,
   TRACE_READY_WAIT_MS,
   TRACE_WARN_INTERVAL_MS,
   TRACE_WRITE_DEADLINE_MS,
@@ -207,6 +208,40 @@ describe("putTrace and readTrace", () => {
     expect(pttl).toBeLessThanOrEqual(rt.ttlMs);
     expect((await rt.readRecent()).map((summary) => summary.id)).toEqual([second, first]);
   });
+
+  it("does not repeat a ready-wait that ran out, for a minute", async () => {
+    freshRuntime();
+    const silent = await silentServer();
+    const cold = new Redis(`redis://127.0.0.1:${silent.port}`, {
+      lazyConnect: true,
+      enableOfflineQueue: false,
+      maxRetriesPerRequest: 2,
+    });
+    void cold.connect().catch(() => {});
+    let now = 1_000_000;
+    try {
+      const rt = createTraceRuntime(traceConfig(), {
+        redis: cold,
+        queueName,
+        environment: ENVIRONMENT,
+        log: captureLog().log,
+        clock: () => now,
+      });
+      expect(await rt.putTrace(record(randomUUID()))).toBe(false);
+      // Inside the backoff: refused at once, with no second wait.
+      let started = Date.now();
+      expect(await rt.putTrace(record(randomUUID()))).toBe(false);
+      expect(Date.now() - started).toBeLessThan(TRACE_READY_WAIT_MS / 2);
+      // Past it, the wait comes back — a cold handshake may have finished meanwhile.
+      now += TRACE_READY_BACKOFF_MS;
+      started = Date.now();
+      expect(await rt.putTrace(record(randomUUID()))).toBe(false);
+      expect(Date.now() - started).toBeGreaterThanOrEqual(TRACE_READY_WAIT_MS - 50);
+    } finally {
+      cold.disconnect();
+      await silent.close();
+    }
+  }, 10_000);
 
   it("answers null for an id it never stored", async () => {
     const rt = freshRuntime();

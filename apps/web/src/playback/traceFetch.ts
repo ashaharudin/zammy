@@ -33,8 +33,9 @@ import { throwApiError } from "../api.js";
  * 503 — the page stops asking rather than retrying, which is why it is a class
  * of its own rather than an `ApiError` with a status.
  *
- * It carries no id. The id is a read capability, and an error object is the
- * kind of thing that ends up in a console or an error report.
+ * It carries no id: an error object is the kind of thing that ends up in a
+ * console or an error report, and the record behind an id holds what a reader
+ * asked for (ADR-0031).
  */
 export class TraceNotFound extends Error {
   constructor() {

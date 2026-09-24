@@ -604,6 +604,12 @@ describe("subjectOf", () => {
     expect(subjectOf("storyline_open", {}, { id: "not-a-uuid" })).toBeNull();
   });
 
+  it("keeps a view's language out of its subject, since a view is not filtered by one", () => {
+    expect(subjectOf("timeline_view", { storyline: A, language: "en" }, {})).toEqual({
+      storylines: [{ id: A }],
+    });
+  });
+
   it("keeps trending's language, and nothing for reference or an empty ask", () => {
     expect(subjectOf("trending", { language: "fr", limit: "10" }, {})).toEqual({ language: "fr" });
     expect(subjectOf("trending", {}, {})).toBeNull();
@@ -629,6 +635,14 @@ describe("withViewLabels", () => {
         { id: A, label: null },
       ],
     });
+  });
+
+  it("keeps a requested id the reply did not name, by its id alone", () => {
+    // `?storyline=A,B` where B was never held: the reply names A only.
+    const subject = { storylines: [{ id: A }, { id: B }] };
+    expect(withViewLabels("timeline_view", subject, { storylines: [{ id: A, label: "L" }] })).toEqual(
+      { storylines: [{ id: A, label: "L" }, { id: B }] },
+    );
   });
 
   it("keeps the requested ids where the reply names none, and leaves other routes alone", () => {

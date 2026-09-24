@@ -69,7 +69,8 @@ curl -s 'http://localhost:3000/api/v1/traces'
 
 A trace records which stations a request touched and how each answered — never keys, URLs or
 SQL values — and, on the record alone, what it asked for. Because there is no token, anyone who
-can reach the API while tracing is on can read that list. Each instance traces at most 30
+can reach the API while tracing is on can poll that list and collect every traced request's
+subject, and read each trace by its id until it expires. Each instance traces at most 30
 requests a minute and 8 at once. Traces expire after `REQUEST_TRACE_TTL_SECONDS` (an hour by
 default). In production tracing is turned on for a session and then off again
 ([deploy/vercel/README.md](deploy/vercel/README.md)).

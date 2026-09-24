@@ -8,7 +8,9 @@ import {
   pollLine,
   readAnnouncement,
   readFailureNotice,
+  BAD_ID_NOTICE,
   recentFailureNotice,
+  refreshAnnouncement,
   spokenText,
   type ReadMemory,
   type ReadSettle,
@@ -33,6 +35,30 @@ describe("recentFailureNotice", () => {
     const down = recentFailureNotice(new ApiError(503, "down"));
     expect(down).toBe("The list of recorded traces could not be read (status 503).");
     expect(down).not.toMatch(/off/);
+  });
+});
+
+describe("BAD_ID_NOTICE", () => {
+  it("does not claim a trace is showing, which it may not be", () => {
+    expect(BAD_ID_NOTICE).toMatch(/when there is one/);
+    expect(BAD_ID_NOTICE).not.toMatch(/is showing/);
+  });
+});
+
+describe("refreshAnnouncement", () => {
+  it("says how many traces the list holds, or why it could not be read", () => {
+    expect(refreshAnnouncement({ data: [], error: null })).toBe(
+      "List refreshed: no recorded traces.",
+    );
+    expect(refreshAnnouncement({ data: [1], error: null })).toBe(
+      "List refreshed: 1 recorded trace.",
+    );
+    expect(refreshAnnouncement({ data: [1, 2], error: null })).toBe(
+      "List refreshed: 2 recorded traces.",
+    );
+    expect(refreshAnnouncement({ data: [1], error: new TracingOff() })).toMatch(
+      /REQUEST_TRACE_ENABLED=false/,
+    );
   });
 });
 

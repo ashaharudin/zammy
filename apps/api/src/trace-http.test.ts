@@ -27,6 +27,7 @@ import { captureLog, createTestHarness, type TestHarness } from "./test-support.
 import { traceRuns } from "./trace-dispatch.js";
 import {
   MAX_OPEN_TRACES,
+  TRACE_LIST_READS_PER_MINUTE,
   TRACE_OPENS_PER_MINUTE,
   TRACE_READS_PER_MINUTE,
   TRACE_READ_ROUTE,
@@ -513,6 +514,22 @@ describe("a traced request", () => {
     expect((await inject()).headers[TRACE_ID_HEADER]).toBeDefined();
   });
 
+  it("records a cache hit as three stations and nothing else", async () => {
+    const app = await tracedApp();
+    const url = `/api/v1/timeline?q=${uniqueWord()}&${HISTORICAL_QS}`;
+    const first = await app.inject({ method: "GET", url });
+    expect(TimelinePage.parse(first.json()).meta.ingest.state).toBe("complete");
+
+    const second = await app.inject({ method: "GET", url });
+    const { trace } = await readStored(second.headers[TRACE_ID_HEADER] as string);
+    // `cache-hit.json`'s path, which the playback tests still render.
+    expect(traceSignature(trace.touches)).toEqual([
+      "rate_limit:counted",
+      "redis:reference",
+      "redis:page_cache",
+    ]);
+  });
+
   it("records a cold search as the fixture fill decides it", async () => {
     const app = await tracedApp();
     const response = await app.inject({
@@ -664,11 +681,13 @@ describe("a traced request", () => {
     closed.disconnect();
     const app = await tracedApp({ runtime: makeRuntime(closed, capture.log) });
 
-    const plain = await app.inject({ method: "HEAD", url: "/api/v1/reference" });
+    const untraced = await tracedApp({ tracing: false });
+
+    const plain = await untraced.inject({ method: "GET", url: "/api/v1/reference" });
     const traced = await app.inject({ method: "GET", url: "/api/v1/reference" });
 
     expect(traced.statusCode).toBe(200);
-    expect(traced.headers["content-length"]).toBe(plain.headers["content-length"]);
+    expect(traced.body).toBe(plain.body);
     expect(traced.headers[TRACE_ID_HEADER]).toBe(TRACE_UNSTORED);
     expect(capture.warn.map((line) => line.message)).toContain(TRACE_UNSTORED_MESSAGE);
   });
@@ -852,6 +871,17 @@ describe("GET /api/v1/traces", () => {
       (await app.inject({ method: "GET", url: RECENT_TRACES_PATH })).json(),
     );
     expect(traces.map((t) => t.id)).toEqual(newest.filter((_, index) => index !== 3));
+  });
+
+  it("spends its own bucket of ten a minute, never a reader's", async () => {
+    const app = await tracedApp({ max: 100 });
+    const statuses: number[] = [];
+    for (let i = 0; i < TRACE_LIST_READS_PER_MINUTE + 1; i += 1) {
+      statuses.push((await app.inject({ method: "GET", url: RECENT_TRACES_PATH })).statusCode);
+    }
+    expect(statuses.slice(0, -1).every((status) => status === 200)).toBe(true);
+    expect(statuses.at(-1)).toBe(429);
+    expect((await app.inject({ method: "GET", url: "/api/v1/reference" })).statusCode).toBe(200);
   });
 
   it("answers 503 when the store cannot, and serves GET only", async () => {

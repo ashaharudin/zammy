@@ -398,7 +398,8 @@ export type TraceSubjectStoryline = z.infer<typeof TraceSubjectStoryline>;
  * params and — for a storyline view's labels — its reply:
  *
  *   timeline_search, storylines_search  `keywords`, and `language`/`country`
- *   timeline_view                       `storylines`, each with its label
+ *   timeline_view                       `storylines`, each with its label, then
+ *                                       any requested id the reply did not name
  *   storyline_open                      `storylines`: the one id, no label
  *   trending                            `language`, when one was asked for
  *   reference                           nothing: the record's subject is null

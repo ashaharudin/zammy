@@ -39,15 +39,16 @@ is a dropdown of them; the examples and the record panel are gone.**
    | --- | --- |
    | `timeline_search` | `keywords`, `language`, `country` |
    | `storylines_search` | `keywords` |
-   | `timeline_view` | `storylines`: each viewed arc's id and label, from the reply's `storylines` (aliases resolved to survivors); the requested ids, unlabelled, when the reply names none |
+   | `timeline_view` | `storylines`: each viewed arc's id and label, from the reply's `storylines` (aliases resolved to survivors), then any requested id the reply did not name, unlabelled; only the requested ids, unlabelled, when the reply names none |
    | `storyline_open` | `storylines`: the one id, **no label** |
    | `trending` | `language`, when one was asked for |
    | `reference` | none (`subject: null`) |
 
-   The values are the reader's own, before canonicalization, because a 400 is a trace too and
-   what it was about is the value it refused. Each is cut to its bound (200 characters for keywords
-   and labels, 8 for a filter, `MAX_VIEW_STORYLINES` storylines) rather than refused, so an
-   overlong query still stores. An open's 202 carries no label and the planner's read of it is not
+   The values are the reader's own, before canonicalization, each cut to its bound (200
+   characters for keywords and labels, 8 for a filter, `MAX_VIEW_STORYLINES` storylines) rather
+   than refused, so an overlong query still stores. A value the subject cannot hold at all — a
+   repeated parameter, which arrives as an array, or a storyline that is not a UUID — is left out,
+   so a 400 about one has no subject for it. An open's 202 carries no label and the planner's read of it is not
    threaded out, so an open names its storyline by id alone; widening the refresh reply or the
    planner's outcome for a diagnostic was the larger change and was not made.
 4. **The newest ten are listed.** `putTrace` now pipelines, in order, the record's `SET`, an
@@ -57,7 +58,7 @@ is a dropdown of them; the examples and the record panel are gone.**
    an entry whose record has expired drops out rather than being listed as a trace nobody can open,
    and answers `RecentTracesResponse`: `TraceSummary` rows (id, route, method, status, start,
    duration, subject — never the touches), newest first. It has the read route's posture: its own
-   rate-limit bucket of 30 a minute, GET only, `no-store` on every answer, 503 rather than an empty
+   rate-limit bucket (10 a minute), GET only, `no-store` on every answer, 503 rather than an empty
    list when Redis errors, and it exists only while tracing is on.
 5. **The page lists what was served.** `/?trace` is now a dropdown (`TracePicker.tsx`) of the
    recent list, each row "12:04:31 · search “quokka zebra” → 200 in 812 ms", re-read every 20 s
@@ -85,7 +86,7 @@ worth watching are the ones readers made. Keeping a token and adding a list woul
 token on the list, the dropdown and every poll: ADR-0029 kept the token out of the read route
 precisely because a token in a poll is a token in a URL, a log line and a query cache. The flag is
 already a deliberate act — a `vercel env` change and a redeploy — and "on for a session, then off"
-already bounds how long the list is readable.
+bounds how long requests are recorded; each record's TTL bounds how long it stays readable.
 
 ADR-0029 refused "a tokenless development mode" as one mis-set variable from an open tracer in
 production. That argument was about a mode keyed on `NODE_ENV` or `CURRENTS_MODE` opening tracing
@@ -98,8 +99,12 @@ it is off by default.
   schema-as-redaction-boundary held that a trace names stations, never content, and its sharpest
   argument was that "a hash of a two-word query is the query to anyone with a dictionary". Now the
   query itself is on the record, and the list that finds it needs nothing to read. That is the
-  point of the change and its cost: a session's last ten keywords and storylines, for the length of
-  a session, to anyone who can reach the API. **Keep sessions short.**
+  point of the change and its cost, and it is larger than ten rows: the list names the newest ten,
+  so anyone who polls it collects EVERY traced request's keywords and storylines for the session,
+  and each record stays readable by its id until its TTL — `REQUEST_TRACE_TTL_SECONDS`, up to a day,
+  and readable again if tracing is turned back on inside it. The trace id, which ADR-0029 called
+  the read capability, is no capability any more: the list hands the newest out. **Keep sessions
+  short, and the TTL at its default.**
 - **ADR-0029 refused sampling reader traffic** because it would turn the trace "from an operator's
   instrument into a record of reader behaviour". It is now exactly that, bounded by the flag, the
   TTL, the ten-row list and the per-instance budget.
@@ -115,8 +120,15 @@ it is off by default.
   traced. The alternative — letting a cached traced reply carry its id — would make the
   `x-zammy-trace-id` a CDN copy carries name someone else's trace.
 - **It costs more.** Four Redis commands per traced request (was one), and an open playback page
-  re-reads the list every 20 s at three commands a read (the limiter's, `LRANGE`, `MGET`). The
-  standing `SMEMBERS` per job delivery is unchanged.
+  re-reads the list every 20 s at three commands a read (the limiter's, `LRANGE`, `MGET`) — about
+  540 an hour. The list route's bucket is 10 a minute per address, tighter than the read route's
+  30, because anyone can call it; one address polling both routes flat out still spends about 120
+  commands a minute, which a long session on a free tier would feel.
+- **Readers can wait on a Redis that is down.** A traced reply is held until its record is written,
+  and a record write waits up to 1.5 s for a client still connecting (ADR-0029's cold-instance
+  ready-wait). That used to be paid by an operator's own requests; now it is paid by readers. So a
+  ready-wait that runs out is not repeated for a minute (`TRACE_READY_BACKOFF_MS`): an instance
+  whose Redis stays down pays it once a minute and answers the rest `unstored` at once.
 - **An untraced request is now the exception**: one past the bounds, or HEAD. The command-stream
   test that proves an untraced request is unchanged now drives HEAD through the same handler.
 

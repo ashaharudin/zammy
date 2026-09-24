@@ -494,9 +494,11 @@ function storylineIdsOf(value: unknown): string[] {
  * cloud's language. `null` for reference, which asks for nothing, and for a
  * request that named nothing this can read.
  *
- * The values are the reader's own, before canonicalization, because a 400 is
- * a trace too and what it was about is the invalid value. Each is cut to the
- * schema's bound rather than refused, so an overlong query still stores.
+ * The values are the reader's own, before canonicalization, and each is cut
+ * to the schema's bound rather than refused, so an overlong query still
+ * stores. A value this cannot hold at all — a repeated parameter (which
+ * arrives as an array), a storyline that is not a UUID — is left out, so a
+ * 400 about one has no subject for it.
  */
 export function subjectOf(route: TraceRoute, query: unknown, params: unknown): TraceSubject | null {
   const q = queryRecord(query);
@@ -524,7 +526,7 @@ export function subjectOf(route: TraceRoute, query: unknown, params: unknown): T
     case "reference":
       return null;
   }
-  if (route !== "storylines_search" && route !== "storyline_open") {
+  if (route === "timeline_search" || route === "trending") {
     const language = boundedString(q.language, 8);
     if (language !== undefined) subject.language = language;
   }
@@ -538,9 +540,11 @@ export function subjectOf(route: TraceRoute, query: unknown, params: unknown): T
 /**
  * A storyline view's subject with the labels its reply carried: `storylines`,
  * one entry per arc viewed, in the order asked and with aliases resolved to
- * their survivors (`TimelinePage.storylines`). Where the reply names arcs, its
- * ids and labels replace the requested ones; where it names none (a 404, a
- * 400) the requested ids stand, with no label.
+ * their survivors (`TimelinePage.storylines`), each with its label. A requested
+ * id the reply does not name — one the database never held, or an alias the
+ * reply answered under its survivor's id — follows, by its id alone, so an arc
+ * that was asked for is never missing from the subject. Where the reply names
+ * none (a 404, a 400) the requested ids stand as they were.
  */
 export function withViewLabels(
   route: TraceRoute,
@@ -561,6 +565,10 @@ export function withViewLabels(
     if (storylines.length >= MAX_VIEW_STORYLINES) break;
   }
   if (storylines.length === 0) return subject;
+  for (const requested of subject?.storylines ?? []) {
+    if (storylines.length >= MAX_VIEW_STORYLINES) break;
+    if (!storylines.some((named) => named.id === requested.id)) storylines.push({ id: requested.id });
+  }
   return { ...subject, storylines };
 }
 

@@ -416,9 +416,11 @@ With tracing off it has nothing to list. With it on, **every** search, storyline
 open, trending and reference request is traced — there is no header and no token — and the
 newest ten are in the page's dropdown. That is a session, not a setting:
 
-- **The last ten requests' keywords and storylines are public while it is on.**
-  `GET /api/v1/traces` needs nothing to read, and a trace now records what it asked for. Real
-  readers' searches are among them. Keep the session short.
+- **Every traced request's keywords and storylines are public while it is on.**
+  `GET /api/v1/traces` needs nothing to read and names the newest ten, so a script polling it
+  collects every traced request of the session, and each full trace stays readable by its id until
+  `REQUEST_TRACE_TTL_SECONDS` (up to a day, and again whenever tracing is turned back on inside it).
+  Real readers' searches are among them. Keep the session short, and the TTL at its default.
 - **Trending loses its edge cache for the session.** A traced response is `no-store` (so no CDN
   hands one reader's trace id to the next), and every trending request is now traced, so
   `s-maxage` is overridden on each one that is — the function answers every trending request

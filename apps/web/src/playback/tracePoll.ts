@@ -261,7 +261,7 @@ export function traceQueryOptions(id: string | null, deps: TraceQueryDeps = {}) 
 /**
  * How often the dropdown's list is re-read while the page is open (ADR-0031): three Redis
  * commands a read (the limiter's, `LRANGE`, `MGET`), so a page left open for an hour spends
- * about 360 — and "Refresh" is there for an operator who has just made a request.
+ * about 540 — and "Refresh" is there for an operator who has just made a request.
  */
 export const RECENT_POLL_MS = 20_000;
 

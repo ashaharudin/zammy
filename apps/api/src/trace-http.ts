@@ -81,6 +81,12 @@ export const TRACE_OPENS_PER_MINUTE = 30;
 export const MAX_OPEN_TRACES = 8;
 /** The read route's own rate-limit bucket, so trace polling never spends a reader's allowance. */
 export const TRACE_READS_PER_MINUTE = 30;
+/**
+ * The recent list's bucket (ADR-0031), tighter than the read route's: the page reads it
+ * three times a minute, and each read costs an `LRANGE` and an `MGET` of up to ten records
+ * on an endpoint anyone can call.
+ */
+export const TRACE_LIST_READS_PER_MINUTE = 10;
 /** The read route's pattern (`TRACE_ROUTE_PREFIX` + `:id`). */
 export const TRACE_READ_ROUTE = "/api/v1/traces/:id";
 /** The recent list's route (ADR-0031). */
@@ -390,9 +396,9 @@ async function persist(runtime: TraceRuntime, scope: Scope, reply: FastifyReply)
  *
  * Its own rate-limit bucket (`config.rateLimit`, which gives the limiter a child
  * key per method and URL), so a page polling a trace for half an hour never
- * spends the reader allowance a search needs. No token: the id is 122 random
- * bits and IS the capability, for one TTL, over data that names stations and
- * never content.
+ * spends the reader allowance a search needs. No token. The id is 122 random
+ * bits, but since ADR-0031 it is no capability: the recent list hands out the
+ * newest ids to anyone, and the record holds the request's subject.
  *
  * **GET only, so the bucket is one bucket.** Fastify clones every GET as a HEAD
  * with the same `config` unless told not to, and because the limiter keys a
@@ -450,19 +456,21 @@ function registerTraceReadRoute(app: FastifyInstance, runtime: TraceRuntime): vo
  * (ADR-0031): what the playback page's dropdown lists.
  *
  * The same posture as the read route and for the same reasons: its own
- * rate-limit bucket, GET only, `no-store` on every answer (a list a CDN held
- * would hide the trace an operator just made), and a 503 rather than an empty
- * list when Redis errors, so the page can say the store is down rather than
- * that nothing was traced. No token, like everything since ADR-0031: while
- * tracing is on, anyone who can reach the API can see the last ten requests'
- * subjects, and that is what "on for a session, then off" is for.
+ * rate-limit bucket (`TRACE_LIST_READS_PER_MINUTE`), GET only, `no-store` on
+ * every answer (a list a CDN held would hide the trace an operator just made),
+ * and a 503 rather than an empty list when Redis errors, so the page can say
+ * the store is down rather than that nothing was traced. No token, like
+ * everything since ADR-0031: while tracing is on, anyone who polls this can
+ * collect EVERY traced request's subject, ten at a time, and open each full
+ * record by its id until its TTL — which is what "on for a session, then off"
+ * is for.
  */
 function registerRecentTracesRoute(app: FastifyInstance, runtime: TraceRuntime): void {
   app.get(
     TRACE_RECENT_ROUTE,
     {
       exposeHeadRoute: false,
-      config: { rateLimit: { max: TRACE_READS_PER_MINUTE, timeWindow: 60_000 } },
+      config: { rateLimit: { max: TRACE_LIST_READS_PER_MINUTE, timeWindow: 60_000 } },
       onSend: (_request, reply, payload, done) => {
         reply.header("cache-control", "no-store");
         done(null, payload);
