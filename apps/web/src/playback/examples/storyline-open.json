@@ -1,22 +1,22 @@
 {
   "slug": "storyline-open",
   "title": "Opening a storyline",
-  "summary": "A reader opens a storyline and all three planes queue work: a top-up fill from Currents, a Google News deepening, and the day summaries from Gemini, running side by side. Planes 2 and 3 depend on flags that ship off (GOOGLE_NEWS_ENABLED, SUMMARIES_ENABLED), so a default install shows only the first. Timings are illustrative; the path is the code's.",
+  "summary": "A reader opens a storyline and all three planes queue work: a Google News deepening, a top-up fill from Currents, and the day summaries from Gemini, running side by side. The deepening is planned first because the top-up may defer to it (STORYLINE_REFRESH_DEFERS_TO_DEEPENING, off here). Planes 2 and 3 depend on flags that ship off (GOOGLE_NEWS_ENABLED, SUMMARIES_ENABLED), so a default install shows only the first. Timings are illustrative; the path is the code's.",
   "mirrors": [
     {
-      "at": "apps/api/src/routes.ts:254-432",
+      "at": "apps/api/src/routes.ts:262-467",
       "begins": "app.post<{ Params: { id: string } }>("
     },
     {
-      "at": "apps/api/src/storyline-refresh.ts:149-325",
+      "at": "apps/api/src/storyline-refresh.ts:155-355",
       "begins": "export async function queueStorylineRefresh("
     },
     {
-      "at": "apps/api/src/storyline-deepening.ts:150-219",
+      "at": "apps/api/src/storyline-deepening.ts:151-220",
       "begins": "export async function queueStorylineDeepening("
     },
     {
-      "at": "apps/api/src/storyline-deepening.ts:245-439",
+      "at": "apps/api/src/storyline-deepening.ts:318-525",
       "begins": "export async function processDeepenJob("
     },
     {
@@ -59,17 +59,17 @@
       },
       "touches": [
         {"station":"rate_limit","at":0,"ms":1.8,"outcome":"counted","inferred":true,"limit":120,"remaining":119},
-        {"station":"redis","at":2.1,"ms":0.9,"outcome":"hit","command":"MGET","key":"reference"},
-        {"station":"postgres","at":3.3,"ms":1.4,"outcome":"ok","operation":"raw","tables":["storylines"]},
-        {"station":"postgres","at":5,"ms":1.1,"outcome":"ok","operation":"select","tables":["storylines"]},
-        {"station":"postgres","at":6.4,"ms":1.9,"outcome":"ok","operation":"select","tables":["storyline_groups","articles"]},
-        {"station":"postgres","at":8.6,"ms":2,"outcome":"ok","operation":"insert","tables":["topics"]},
-        {"station":"postgres","at":10.9,"ms":1.2,"outcome":"ok","operation":"select","tables":["topic_coverage"]},
-        {"station":"queue","at":12.4,"ms":13.1,"outcome":"ok","job":"topup","plane":"deepening","ref":"1","linked":true},
-        {"station":"postgres","at":25.8,"ms":1.2,"outcome":"ok","operation":"raw","tables":["storylines"]},
-        {"station":"postgres","at":27.3,"ms":1,"outcome":"ok","operation":"select","tables":["storylines"]},
-        {"station":"postgres","at":28.6,"ms":1.1,"outcome":"ok","operation":"select","tables":["storyline_coverage"]},
-        {"station":"queue","at":30,"ms":9.4,"outcome":"ok","job":"deepen","ref":"2","linked":true},
+        {"station":"postgres","at":2.1,"ms":1.2,"outcome":"ok","operation":"raw","tables":["storylines"]},
+        {"station":"postgres","at":3.6,"ms":1,"outcome":"ok","operation":"select","tables":["storylines"]},
+        {"station":"postgres","at":4.9,"ms":1.1,"outcome":"ok","operation":"select","tables":["storyline_coverage"]},
+        {"station":"queue","at":6.3,"ms":9.4,"outcome":"ok","job":"deepen","ref":"1","linked":true},
+        {"station":"redis","at":16,"ms":0.9,"outcome":"hit","command":"MGET","key":"reference"},
+        {"station":"postgres","at":17.2,"ms":1.4,"outcome":"ok","operation":"raw","tables":["storylines"]},
+        {"station":"postgres","at":18.9,"ms":1.1,"outcome":"ok","operation":"select","tables":["storylines"]},
+        {"station":"postgres","at":20.3,"ms":1.9,"outcome":"ok","operation":"select","tables":["storyline_groups","articles"]},
+        {"station":"postgres","at":22.5,"ms":2,"outcome":"ok","operation":"insert","tables":["topics"]},
+        {"station":"postgres","at":24.8,"ms":1.2,"outcome":"ok","operation":"select","tables":["topic_coverage"]},
+        {"station":"queue","at":26.3,"ms":13.1,"outcome":"ok","job":"topup","plane":"deepening","ref":"2","linked":true},
         {"station":"postgres","at":39.7,"ms":1.1,"outcome":"ok","operation":"raw","tables":["storylines"]},
         {"station":"queue","at":41.1,"ms":7.2,"outcome":"ok","job":"summarize","ref":"3","linked":true}
       ],
@@ -78,7 +78,7 @@
     "runs": [
       {
         "v": 1,
-        "ref": "1",
+        "ref": "2",
         "job": "topup",
         "plane": "deepening",
         "source": "vercel_queue",
@@ -122,7 +122,7 @@
       },
       {
         "v": 1,
-        "ref": "2",
+        "ref": "1",
         "job": "deepen",
         "source": "vercel_queue",
         "startedAt": "2026-09-01T12:00:00.455Z",

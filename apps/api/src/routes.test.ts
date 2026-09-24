@@ -2,10 +2,11 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { sql } from "kysely";
 import { encodeCursor, TimelinePage, TrendingResponse } from "@zammy/shared";
-import { readTopic } from "@zammy/storage";
+import { mergeStorylines, readTopic, recordStorylineCoverage } from "@zammy/storage";
 import { canonicalize } from "./canonical.js";
 import { registerQueryRoutes, registerTrendingRoute } from "./routes.js";
-import type { SummarizeJob } from "./ingest-queue.js";
+import type { NewsClient } from "@zammy/news-client";
+import type { SearchFallbackJob, SegmentJob, SummarizeJob } from "./ingest-queue.js";
 import type { TrendingDeps } from "./trending-service.js";
 import { createTestHarness, purgeTopicKeys, type TestHarness } from "./test-support.js";
 
@@ -47,13 +48,37 @@ const ROUTES_NOW = new Date("2026-08-06T12:00:00.000Z");
  * would later make of it. Reset by `setup`.
  */
 let summarized: SummarizeJob[] = [];
+/** Topic-subject jobs the route published, recorded the same way and then delivered. */
+let segments: Array<SegmentJob | SearchFallbackJob> = [];
+
+/**
+ * A deepening provider that is never asked anything: the route only PLANS its
+ * fetch, so all a click needs from it is to exist.
+ */
+const idleDeepening: NewsClient = {
+  provider: "google-news",
+  limits: { maxPageSize: 100, maxRetrievableResults: 100, maxLookbackDays: 730, maxRangeDays: 730 },
+  search: async () => {
+    throw new Error("the route must not fetch");
+  },
+  quota: async () => ({
+    dailyRemaining: Number.POSITIVE_INFINITY,
+    burstRemaining: Number.POSITIVE_INFINITY,
+    resetAt: null,
+    observed: null,
+  }),
+  close: async () => {},
+};
 
 async function setup(options?: {
   settled?: boolean;
   summariesEnabled?: boolean;
+  refreshDefersToDeepening?: boolean;
+  deepening?: NewsClient;
 }): Promise<void> {
   harness = await createTestHarness({}, ROUTES_NOW);
   summarized = [];
+  segments = [];
   app = Fastify({ logger: false });
   const trendingDeps: TrendingDeps = {
     ...harness.deps,
@@ -77,11 +102,15 @@ async function setup(options?: {
   await registerQueryRoutes(app, {
     deps: {
       ...harness.deps,
+      ...(options?.deepening ? { deepening: options.deepening } : {}),
       queue: {
         ...harness.deps.queue,
         // Bound, because the methods below come off a class instance and lose
         // their receiver through the spread above.
-        enqueueSegment: harness.deps.queue.enqueueSegment.bind(harness.deps.queue),
+        enqueueSegment: async (job: SegmentJob | SearchFallbackJob) => {
+          segments.push(job);
+          await harness.deps.queue.enqueueSegment(job);
+        },
         enqueueDeepen: harness.deps.queue.enqueueDeepen.bind(harness.deps.queue),
         pendingCount: harness.deps.queue.pendingCount.bind(harness.deps.queue),
         enqueueSummarize: async (job: SummarizeJob) => {
@@ -91,6 +120,7 @@ async function setup(options?: {
     },
     defaultLanguage: "en",
     ...(options?.summariesEnabled === true ? { summariesEnabled: true } : {}),
+    ...(options?.refreshDefersToDeepening === true ? { refreshDefersToDeepening: true } : {}),
   });
   registerTrendingRoute(app, { deps: trendingDeps });
   await app.ready();
@@ -246,6 +276,7 @@ describe("POST /api/v1/storylines/:id/refresh", () => {
     queued: boolean;
     keywords: string[];
     fingerprint?: string;
+    refresh: { status: string; queued: boolean };
     deepening: { status: string; queued: boolean };
     summaries: { status: string; queued: boolean };
   }
@@ -360,6 +391,142 @@ describe("POST /api/v1/storylines/:id/refresh", () => {
     expect(response.statusCode).toBe(202);
     expect(harness.counting.searchCalls).toBe(calls);
     expect(harness.counting.referenceCalls).toBe(reference);
+  });
+
+  /**
+   * A storyline a reader opened, labelled with a word its own profile carries —
+   * so the deepening plane's confidence gate passes and it plans a fetch, which
+   * is the condition the refresh may defer to.
+   */
+  async function groundedArc(): Promise<string> {
+    const read = await app.inject({ method: "GET", url: `${TIMELINE}?q=climate&${QS}` });
+    const storylineId = (TimelinePage.parse(read.json()).items[0] as { storylineId: string })
+      .storylineId;
+    await groundLabel(storylineId);
+    // The read above planned its own segments; only the click's are asserted.
+    segments = [];
+    return storylineId;
+  }
+
+  /** Label the arc with a word its CURRENT profile carries, so the gate passes. */
+  async function groundLabel(storylineId: string): Promise<void> {
+    const row = await harness.deps.db
+      .selectFrom("storylines")
+      .select("profile_tokens")
+      .where("id", "=", storylineId)
+      .executeTakeFirstOrThrow();
+    const word = (row.profile_tokens as string[])[0]!;
+    await sql`update storylines set label = ${word} where id = ${storylineId}::uuid`.execute(
+      harness.deps.db,
+    );
+  }
+
+  /** What `processDeepenJob` leaves behind after walking an arc to a clean end. */
+  const served = (storylineId: string) =>
+    harness.redis.set(`deepening:served:${storylineId}`, "1", "EX", 60);
+
+  it("spends no Currents call on an arc the deepening plane has in hand, when deferral is on", async () => {
+    await setup({ refreshDefersToDeepening: true, deepening: idleDeepening });
+    const storylineId = await groundedArc();
+    await served(storylineId);
+
+    const response = await app.inject({ method: "POST", url: refresh(storylineId) });
+
+    expect(response.statusCode).toBe(202);
+    const body = response.json() as RefreshBody;
+    expect(body.deepening).toEqual({ status: "queued", queued: true });
+    expect(body.refresh).toEqual({ status: "deferred", queued: false });
+    expect(body.queued).toBe(false);
+    // The ask it would have made is still reported — only not spent.
+    expect(body.keywords.length).toBeGreaterThan(0);
+    expect(segments).toEqual([]);
+  });
+
+  it("defers to a deepening plane whose own coverage of the arc is fresh", async () => {
+    await setup({ refreshDefersToDeepening: true, deepening: idleDeepening });
+    const storylineId = await groundedArc();
+    await recordStorylineCoverage(harness.deps.db, storylineId, "google-news", {
+      from: new Date(ROUTES_NOW.getTime() - 31 * 86_400_000),
+      to: ROUTES_NOW,
+    });
+    await served(storylineId);
+
+    const body = (await app.inject({ method: "POST", url: refresh(storylineId) })).json() as RefreshBody;
+
+    expect(body.deepening.status).toBe("fresh");
+    expect(body.refresh.status).toBe("deferred");
+  });
+
+  it("does not defer to a deepening plane that will not trust the arc's label", async () => {
+    await setup({ refreshDefersToDeepening: true, deepening: idleDeepening });
+    const storylineId = await groundedArc();
+    // A label sharing no word with the profile: the deepening gate refuses it,
+    // and this refresh's profile-word fallback is exactly what such an arc needs.
+    await sql`update storylines set label = 'Zyxwv Qwerty' where id = ${storylineId}::uuid`.execute(
+      harness.deps.db,
+    );
+
+    const body = (await app.inject({ method: "POST", url: refresh(storylineId) })).json() as RefreshBody;
+
+    expect(body.deepening.status).toBe("ungrounded");
+    expect(body.refresh.status).not.toBe("deferred");
+  });
+
+  it("does not defer to an arc the deepening plane has not served lately, whatever it plans", async () => {
+    await setup({ refreshDefersToDeepening: true, deepening: idleDeepening });
+    const storylineId = await groundedArc();
+    // No mark: the first open of the arc, or one whose last fetch came back
+    // capped or refused. The plan below says `queued`, and that is not enough.
+
+    const body = (await app.inject({ method: "POST", url: refresh(storylineId) })).json() as RefreshBody;
+
+    expect(body.deepening.status).toBe("queued");
+    expect(body.refresh.status).not.toBe("deferred");
+  });
+
+  it("reads the mark of the SURVIVOR when an arc is opened through an alias", async () => {
+    await setup({ refreshDefersToDeepening: true, deepening: idleDeepening });
+    const survivor = await groundedArc();
+    const loser = await harness.deps.db
+      .selectFrom("storylines")
+      .select("id")
+      .where("id", "!=", survivor)
+      .executeTakeFirstOrThrow();
+    await mergeStorylines(harness.deps.db, {
+      winnerId: survivor,
+      loserId: loser.id,
+      timeZone: "UTC",
+    });
+    // The merge re-derives the survivor's profile; ground its label against that.
+    await groundLabel(survivor);
+    // Written against the survivor, as the consumer writes it.
+    await served(survivor);
+
+    const body = (await app.inject({ method: "POST", url: refresh(loser.id) })).json() as RefreshBody;
+
+    expect(body.storyline).toBe(survivor);
+    expect(body.refresh.status).toBe("deferred");
+  });
+
+  it("keeps ADR-0017's refresh when the deepening plane has nothing to offer the arc", async () => {
+    // No provider: `unavailable`, which a refresh never defers to.
+    await setup({ refreshDefersToDeepening: true });
+    const storylineId = await groundedArc();
+
+    const body = (await app.inject({ method: "POST", url: refresh(storylineId) })).json() as RefreshBody;
+
+    expect(body.deepening.status).toBe("unavailable");
+    expect(body.refresh.status).not.toBe("deferred");
+  });
+
+  it("keeps both refreshes when deferral is off, whatever the deepening plane does", async () => {
+    await setup({ deepening: idleDeepening });
+    const storylineId = await groundedArc();
+
+    const body = (await app.inject({ method: "POST", url: refresh(storylineId) })).json() as RefreshBody;
+
+    expect(body.deepening.status).toBe("queued");
+    expect(body.refresh.status).not.toBe("deferred");
   });
 
   it("is a 404 for a UUID this database has never held", async () => {

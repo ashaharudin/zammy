@@ -20,6 +20,8 @@ An upstream news API we fetch from — Currents, and optionally GNews. No provid
 records only the spans it actually walked, so "has this window been fetched?" is a question per
 provider and has no combined answer (ADR-0019, superseding ADR-0012's ranking). Which provider's
 answer a fetch is planned against is a separate choice the planner makes, and today it is Currents'.
+A search Currents refuses on quota may still be ASKED of Google News, as a fallback that records
+only Google News' own coverage (ADR-0030); that changes who answers, not what is planned.
 Distinct from **source**, the outlet that published an article: one provider reports many sources,
 and two providers report many of the same.
 _Avoid_: upstream (as a countable noun), API, feed, source

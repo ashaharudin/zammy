@@ -268,10 +268,11 @@ const EnvSchema = z
      * waited on have landed: G1's `alt_key` (migration 0020), without which a
      * Google News item cannot be collapsed onto the same story from Currents,
      * and G2's ranker isolation, without which the cloud would rank on its own
-     * fetching. What remains is G3's `storyline_coverage` and G5's wiring —
-     * nothing calls the factory yet. `createGoogleNewsClient` refuses to build a
-     * client while this is false, so the adapter is unreachable rather than
-     * merely unwired.
+     * fetching. G3's `storyline_coverage` and G5's wiring have landed too, so
+     * this is a real switch: on, a storyline open deepens its arc from Google
+     * News (and, with SEARCH_FALLBACK_ENABLED, a refused search can fall back to
+     * it — ADR-0030). `createGoogleNewsClient` refuses to build a client while
+     * this is false, so the adapter is unreachable rather than merely unwired.
      */
     GOOGLE_NEWS_ENABLED: z
       .enum(["true", "false"])
@@ -350,6 +351,49 @@ const EnvSchema = z
      * proportion CURRENTS_INTERACTIVE_RESERVE and GNEWS_INTERACTIVE_RESERVE hold.
      */
     GOOGLE_NEWS_INTERACTIVE_RESERVE: z.coerce.number().int().min(0).default(50),
+    /**
+     * A reader's search that Currents refused on quota is retried against Google
+     * News, for the part of it that is at most `SEARCH_FALLBACK_REACH_MS` old
+     * (ADR-0030, `search-fallback.ts`).
+     *
+     * Off by default, and turning it on is a decision about the archive rather
+     * than a tuning change: its articles are SEARCH-plane, so unlike the
+     * deepening plane's they are counted by the cloud and they form storylines
+     * of their own — which means labels. The ADR prices each. Needs
+     * GOOGLE_NEWS_ENABLED, because the provider it falls back to is that one.
+     */
+    SEARCH_FALLBACK_ENABLED: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+    /**
+     * Google News calls the fallback may spend per UTC day, across every topic.
+     *
+     * A share of GOOGLE_NEWS_DAILY_CALL_LIMIT rather than a budget of its own,
+     * because there is no second budget to draw on: the deepening plane spends
+     * the same 200 (a figure WE invented — see the limit). The governor holds
+     * back GOOGLE_NEWS_INTERACTIVE_RESERVE from both planes' background work
+     * alike, so 150 is what they share, and this keeps at least 100 of it for
+     * the plane that was there first.
+     */
+    SEARCH_FALLBACK_DAILY_CALL_LIMIT: z.coerce.number().int().min(1).default(50),
+    /**
+     * Opening a storyline stops spending a Currents call on the arc when the
+     * deepening plane has just planned it — queued a Google News fetch, or found
+     * the arc fresh (ADR-0017, amended).
+     *
+     * Every open used to buy BOTH: ADR-0017's top-up of the topic the arc's two
+     * grounded words name, and G5's deepening fetch of the arc itself. The two
+     * refresh one arc, and the first draws on the Currents budget readers'
+     * searches need — the background half of which a reader's deferred pages
+     * were refused on (trace 4e3a28c2…, 2026-09-24). Off by default; with no
+     * deepening provider it changes nothing, since the deepening plane then
+     * answers `unavailable` and the Currents refresh runs as it always has.
+     */
+    STORYLINE_REFRESH_DEFERS_TO_DEEPENING: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
 
     // --- ingestion budget (ARCHITECTURE 6.3, 9.4) ---
     SYNC_FILL_DEADLINE_MS: z.coerce.number().int().min(100).max(10_000).default(1200),
@@ -1652,6 +1696,19 @@ const EnvSchema = z
           `GOOGLE_NEWS_INTERACTIVE_RESERVE (${env.GOOGLE_NEWS_INTERACTIVE_RESERVE}) must be ` +
           `below GOOGLE_NEWS_DAILY_CALL_LIMIT (${env.GOOGLE_NEWS_DAILY_CALL_LIMIT}), ` +
           "or background ingestion can never draw on this provider.",
+      });
+    }
+
+    // Refused rather than left inert: a fallback switched on with nothing to
+    // fall back to would read as working in every log line that names the flag,
+    // and quietly fall back to nothing.
+    if (env.SEARCH_FALLBACK_ENABLED && !env.GOOGLE_NEWS_ENABLED) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["SEARCH_FALLBACK_ENABLED"],
+        message:
+          "SEARCH_FALLBACK_ENABLED needs GOOGLE_NEWS_ENABLED=true: the provider a " +
+          "refused search falls back to is Google News.",
       });
     }
 

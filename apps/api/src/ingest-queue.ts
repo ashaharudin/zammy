@@ -93,6 +93,35 @@ export function segmentJob(
 }
 
 /**
+ * A reader's search that Currents refused on quota, asked again of Google News
+ * (ADR-0030, `search-fallback.ts`): one span of one TOPIC, fetched from the
+ * other provider and recorded under that provider's own `topic_coverage` rows.
+ *
+ * Its subject is a segment's — a topic fingerprint — which is why it counts
+ * under the topic's pending registry and travels through `enqueueSegment`: the
+ * reader whose search was refused is polling exactly that registry, and should
+ * see this as work still owed to them. What differs is the provider and
+ * therefore the whole of the fetch: no page number (Google News has no offset),
+ * a span clipped to the leading edge, and coverage written only on a clean end
+ * of results — never by the frontier `onTruncated` records, which assumes a
+ * provider that answers newest-first and Google News does not.
+ *
+ * There is no `plane` field, and for `DeepenJob`'s reason: this job exists only
+ * on the SEARCH plane, so a field would be a value that can be set wrong where
+ * the type already cannot be.
+ *
+ * No `startPage` either, and for `DeepenJob`'s other reason: there is no page 2
+ * for a resume point to name.
+ */
+export interface SearchFallbackJob {
+  kind: "fallback";
+  fingerprint: string;
+  /** ISO-8601 — job payloads cross a transport as JSON. Both on the window grid. */
+  from: string;
+  to: string;
+}
+
+/**
  * The §10.1 breadth sample, triggered by the first landing-page visitor after
  * the last snapshot staled. One per language: the Redis first-visitor lock
  * elects the enqueuer and the job identity dedups whatever slips past it. No
@@ -230,7 +259,7 @@ export function summarizeJob(storylineId: string, now: Date): SummarizeJob {
   };
 }
 
-export type IngestJob = SegmentJob | SampleJob | DeepenJob | SummarizeJob;
+export type IngestJob = SegmentJob | SearchFallbackJob | SampleJob | DeepenJob | SummarizeJob;
 
 export type IngestHandler = (job: IngestJob) => Promise<void>;
 
@@ -263,6 +292,13 @@ export function ingestJobId(job: IngestJob): string {
   // swallows — see `SummarizeJob`, where leaving it out is recorded as a bug.
   if (job.kind === "summarize") {
     return `sum_${job.storylineId}_${Date.parse(job.at)}`;
+  }
+  // Both bounds, like a segment, and both are grid-snapped by the planner — so
+  // a quarter-hour of refused polls on one search is one message, and the next
+  // quarter-hour's is a different one rather than one the 900-second dedup
+  // swallows (`SummarizeJob` records what an address with no clock costs).
+  if (job.kind === "fallback") {
+    return `fall_${job.fingerprint}_${Date.parse(job.from)}_${Date.parse(job.to)}`;
   }
   // The plane sits right after the prefix, where it cannot be confused with the
   // fingerprint: plane names are `[a-z]+` and carry no underscore, so
@@ -328,6 +364,14 @@ export function parseIngestJobId(id: string, now: Date): IngestJob | null {
     const to = asIso(toMs!);
     if (!storylineId || !from || !to) return null;
     return { kind: "deepen", storylineId, from, to };
+  }
+
+  if (parts[0] === "fall" && parts.length === 4) {
+    const [, fingerprint, fromMs, toMs] = parts;
+    const from = asIso(fromMs!);
+    const to = asIso(toMs!);
+    if (!fingerprint || !from || !to) return null;
+    return { kind: "fallback", fingerprint, from, to };
   }
 
   if (parts[0] === "topup" && parts.length === 4) {
@@ -421,6 +465,19 @@ export function parseIngestJob(payload: unknown): IngestJob | null {
       typeof candidate.at === "string" &&
       candidate.at.length > 0
       ? { kind: "summarize", storylineId: candidate.storylineId, at: candidate.at }
+      : null;
+  }
+  if (candidate.kind === "fallback") {
+    return typeof candidate.fingerprint === "string" &&
+      candidate.fingerprint.length > 0 &&
+      typeof candidate.from === "string" &&
+      typeof candidate.to === "string"
+      ? {
+          kind: "fallback",
+          fingerprint: candidate.fingerprint,
+          from: candidate.from,
+          to: candidate.to,
+        }
       : null;
   }
   if (candidate.kind === "sample") {
@@ -524,8 +581,12 @@ export interface IngestQueue {
    * Enqueue a segment, deduplicated by content: every reader who arrives while
    * a gap is unfilled plans the same segments, and without dedup a popular cold
    * topic would enqueue once per reader and multiply quota spend.
+   *
+   * A search fallback travels through here too (ADR-0030). It is a TOPIC-subject
+   * fetch like a segment, planned by the same fill that plans segments, and a
+   * separate method would be a second name for the same publish.
    */
-  enqueueSegment(job: SegmentJob): Promise<void>;
+  enqueueSegment(job: SegmentJob | SearchFallbackJob): Promise<void>;
 
   /** Enqueue the breadth sample (§10.1). One per language. */
   enqueueSample(job: SampleJob): Promise<void>;

@@ -337,11 +337,14 @@ describe("truncation — a full final page means hidden history, not success", (
 
     await readTimeline(harness.deps, broadQuery(), { limit: 100 });
     harness.queue.startConsumer((job) =>
-      // Segment jobs only here; the breadth sample, the deepening fetch and the
-      // click plane's summary job have their own handlers (`processSampleJob`,
-      // `processDeepenJob`, `processSummarizeJob`), and the union is what the
-      // consumer is handed.
-      job.kind === "sample" || job.kind === "deepen" || job.kind === "summarize"
+      // Segment jobs only here; the breadth sample, the deepening fetch, the
+      // click plane's summary job and the search fallback have their own
+      // handlers (`processSampleJob`, `processDeepenJob`, `processSummarizeJob`,
+      // `processSearchFallbackJob`), and the union is what the consumer is handed.
+      job.kind === "sample" ||
+      job.kind === "deepen" ||
+      job.kind === "summarize" ||
+      job.kind === "fallback"
         ? Promise.resolve()
         : processSegmentJob(harness.deps, job),
     );
@@ -546,11 +549,14 @@ describe("refresh-on-read (§6.4) — freshness is repaired by the next reader",
 
     // The top-up closes the gap; the reader after them sees the fresher result.
     harness.queue.startConsumer((job) =>
-      // Segment jobs only here; the breadth sample, the deepening fetch and the
-      // click plane's summary job have their own handlers (`processSampleJob`,
-      // `processDeepenJob`, `processSummarizeJob`), and the union is what the
-      // consumer is handed.
-      job.kind === "sample" || job.kind === "deepen" || job.kind === "summarize"
+      // Segment jobs only here; the breadth sample, the deepening fetch, the
+      // click plane's summary job and the search fallback have their own
+      // handlers (`processSampleJob`, `processDeepenJob`, `processSummarizeJob`,
+      // `processSearchFallbackJob`), and the union is what the consumer is handed.
+      job.kind === "sample" ||
+      job.kind === "deepen" ||
+      job.kind === "summarize" ||
+      job.kind === "fallback"
         ? Promise.resolve()
         : processSegmentJob(harness.deps, job),
     );

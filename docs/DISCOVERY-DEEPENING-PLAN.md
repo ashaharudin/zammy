@@ -37,6 +37,17 @@ not a bigger one. Note ADR-0019 resolves the boundary case G2 raised: the
 storyline refresh is `deepening`, because the test is whether *our ranking chose
 the target*, not what triggered the call.
 
+**What no phase below schedules, recorded 2026-09-23.** The paragraph above
+says Google News "provides search and breadth as well as deepening", and none of
+G0–G8 plans the search half: G5 wires deepening, #196 left
+`PLANNED_COVERAGE_PROVIDER = "currents"` as a decision "that wants measuring",
+and G7 is the deepening scheduler. A production trace (ADR-0029, `4e3a28c2…`)
+showed what that costs — a search whose deferred pages Currents refused on
+quota, beside an idle Google News. [ADR-0030](adr/0030-a-refused-search-asks-google-news-for-its-leading-edge.md)
+lands the smaller half, a quota FALLBACK for a search, clipped inside the
+`pubDate` cliff and off by default; a second PLANNED discovery provider is still
+unscheduled and still wants its own measurement.
+
 **The organising principle.** Everything that protects the existing system lands
 *before* the first Google News article is ingested. G1–G4 are all either
 independently valuable or provably no-ops today, so the risky phase (G5) starts

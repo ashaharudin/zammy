@@ -4,11 +4,11 @@
   "summary": "A search nobody has run lately: the page cache misses, one Currents call is made while the reader waits, the rest of the window is handed to four background jobs, and one of those fails and is redelivered five minutes later. Timings are illustrative; the path is the code's.",
   "mirrors": [
     {
-      "at": "apps/api/src/coverage-fill.ts:216-275",
+      "at": "apps/api/src/coverage-fill.ts:239-323",
       "begins": "const budget: FillBudget = {"
     },
     {
-      "at": "apps/api/src/coverage-fill.ts:446-597",
+      "at": "apps/api/src/coverage-fill.ts:519-670",
       "begins": "async function fillSegment("
     },
     {

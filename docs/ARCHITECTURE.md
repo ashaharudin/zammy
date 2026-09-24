@@ -435,7 +435,7 @@ Accepts front-end requests and turns them into the right upstream query — or, 
 | `GET /api/v1/reference` | Cached `/available/*` values, for front-end filter controls. Languages and regions only — the category taxonomy is no longer served, because nothing can pick from it (ADR-0020). |
 | `GET /api/v1/storylines?q=` | Storylines by keyword, and nothing else: the same match the timeline makes beside a search's results, without the search — no topic minted, nothing fetched. What the storyline view's search box runs (ADR-0028, amended). `{ storylines: StorylineSummary[] }`. |
 | `GET /api/v1/topics/:fingerprint` | Topic metadata: coverage window, article count, freshness, summary. |
-| `POST /api/v1/storylines/:id/refresh` | Fire-and-forget: queue one background top-up of what this arc's coverage says (§9.1, ADR-0017), and — separately planned, against the arc itself — one deepening fetch (§9.1a, ADR-0019) and one summary job for its qualifying days that have no sentence yet (ADR-0027). A UUID is the whole request; the keywords and the language are derived from the arc, never sent. 202 with `{ storyline, queued, keywords, fingerprint, deepening: { status, queued }, summaries: { status, queued } }` — `fingerprint` absent when the arc yields no keywords — one key per plane, so a reader of the body can tell which plane spent what. Nothing on the page reads it; operators and tests do, and a traced open records the three statuses as its `planes` (ADR-0029). |
+| `POST /api/v1/storylines/:id/refresh` | Fire-and-forget: queue one background top-up of what this arc's coverage says (§9.1, ADR-0017), and — separately planned, against the arc itself — one deepening fetch (§9.1a, ADR-0019) and one summary job for its qualifying days that have no sentence yet (ADR-0027). A UUID is the whole request; the keywords and the language are derived from the arc, never sent. 202 with `{ storyline, queued, keywords, fingerprint, refresh: { status, queued }, deepening: { status, queued }, summaries: { status, queued } }` — `fingerprint` absent when the arc yields no keywords — one key per plane, so a reader of the body can tell which plane spent what; `refresh.status` is `deferred` when `STORYLINE_REFRESH_DEFERS_TO_DEEPENING` let the deepening plane's plan stand for the Currents top-up (ADR-0017, amended), and top-level `queued` is kept for existing readers. Nothing on the page reads it; operators and tests do, and a traced open records the three statuses as its `planes` (ADR-0029). |
 | `GET /api/v1/traces/:id` | One stored request trace and its job runs, for the playback view (§8.1, ADR-0029). **Registered only while `REQUEST_TRACE_ENABLED`** — otherwise Fastify's default 404. No token: the 122-bit id is the capability, for `REQUEST_TRACE_TTL_SECONDS`. Its own rate-limit bucket (30/min), so polling a trace never spends a reader's allowance — and GET only, since an auto-cloned HEAD would be a second bucket over the same reads (HEAD is Fastify's 404). 400 for a malformed id (before any trace-store command), 404 for an unknown, expired or unparseable trace, 503 when the trace store errors, 200 `TraceReadResponse`; `no-store` on every answer, the limiter's 429 included (set in the route's `onSend`, which the 429 reaches and the handler does not). |
 | `GET /healthz` · `GET /readyz` | Liveness, and dependency checks for Postgres/Redis/upstream — plus a `chores` digest saying which nightly passes are overdue or stalled (`chore-status.ts`). The digest is additive and never moves `status`: `ready`/`degraded`/`unready` stay a statement about Postgres and Redis alone. |
 
@@ -1436,7 +1436,8 @@ All triggers originate from a user request:
 | **Deferred backfill** — gap segments and subdivisions §6.3 didn't have budget for | queued, background | metered |
 | **Refresh-on-read** — stale coverage noticed while serving (§6.4) | queued, background | ~1 call |
 | **Storyline opened** — a label clicked anywhere: the cloud, the gutter, a pill (ADR-0017) | queued, background | 0 or 1 call, freshness-gated; ~38 distinct arcs is a day's background budget (ADR-0017) |
-| **Storyline deepened** — the same click, planned again for the deepening provider (§9.1a) | queued, background | 0 or 1 call, freshness-gated and grounding-gated; only with a deepening provider configured |
+| **Storyline deepened** — the same click, planned again for the deepening provider (§9.1a) | queued, background | 0 or 1 call, freshness-gated and grounding-gated; only with a deepening provider configured. With `STORYLINE_REFRESH_DEFERS_TO_DEEPENING`, a `queued`/`fresh` answer here skips the Currents row above — only while the deepening plane's last fetch of this arc, within a day, walked it to a clean end |
+| **Search fallback** — a SEARCH Currents refused on quota, sync or deferred (§9.1b, ADR-0030) | queued, background | ≥ 1 Google News call per refused span inside the six-day reach, halved on the 100-item cap; per-topic cap and `SEARCH_FALLBACK_DAILY_CALL_LIMIT` bound it; only with `SEARCH_FALLBACK_ENABLED` |
 
 The worker also handles coverage-span merging and a daily `/available/*` refresh (3 calls).
 
@@ -1463,8 +1464,25 @@ Three things are different about it, and each is a decision rather than an imple
   with storylines nobody asked for — and every deepening article that formed one would then be
   feeding the ranking that chose the arc (§3a of the design doc).
 
-Off unless a deepening provider is configured (`GOOGLE_NEWS_ENABLED`), in which case the route
+Off unless a deepening provider is configured (`GOOGLE_NEWS_ENABLED`); without one the route
 answers `deepening: {status: "unavailable"}` and spends nothing.
+
+#### 9.1b The search fallback
+
+A reader's search is planned against Currents alone (`PLANNED_COVERAGE_PROVIDER`), and that does not
+change. What [ADR-0030](adr/0030-a-refused-search-asks-google-news-for-its-leading-edge.md) adds is
+a second provider for the one failure a second provider answers: a **quota** refusal of a
+**search**, on the read's own fill or on a deferred segment. The refused spans are clipped to the
+last six days — inside Google News' `pubDate` cliff, with G6's margin — snapped to the window grid,
+and queued as `kind: "fallback"` jobs under the topic's own pending registry, so the reader's poll
+waits for them. The consumer subtracts Google News' OWN `topic_coverage` rows, asks the topic's
+keywords at background priority, folds the answer in as `search`-plane sightings, and records a
+coverage row only for a span that came back under the 100-item cap. A capped span is halved, never
+recorded as a frontier (that frontier assumes newest-first answers, and Google News' are not), and
+halving stops at three days, since the provider's date-only bounds cannot ask a narrower question. No
+Currents row is ever written, so a refused span stays a Currents gap for a day with budget. Off
+unless `SEARCH_FALLBACK_ENABLED` (which config refuses without `GOOGLE_NEWS_ENABLED`); the ADR
+prices what its articles cost the cloud, the linker and the labeler.
 
 **The nightly chores are not in this process.** Retention (§7.5) and the storyline lifecycle pass
 (ADR-0011) are one-shot runs on the platform's scheduler, reached two ways that share everything

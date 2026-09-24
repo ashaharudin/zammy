@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "kysely";
 import { deriveAltKey, deriveDedupKey, type Sighting } from "@zammy/currents-client";
 import {
@@ -8,6 +8,7 @@ import {
   ingestSightings,
   mergeStorylines,
   promoteStoryline,
+  hexToBytea,
   readTopic,
   recordCoverage,
   setStorylineLabel,
@@ -415,6 +416,65 @@ describe("how much a click may queue", () => {
     const later = await refresh(storylineId, new Date(NOW.getTime() + 60_000));
     if (later.status !== "queued") throw new Error(later.status);
     expect(ingestJobId(later.job)).toBe(ingestJobId(outcome.job));
+  });
+});
+
+describe("deferring to the deepening plane (ADR-0017, amended)", () => {
+  const deferred = (storylineId: string) =>
+    queueStorylineRefresh(harness.deps, {
+      storylineId,
+      canonicalize: canonicalizer(),
+      deferToDeepening: true,
+    });
+
+  it("queues no Currents job when the route says the deepening plane has the arc", async () => {
+    const storylineId = await seedStoryline();
+    // Watched rather than counted: the pending set outlives the per-test
+    // truncate, and this arc's fingerprint is the one earlier cases queued.
+    const enqueues = vi.spyOn(harness.queue, "enqueueSegment");
+
+    const outcome = await deferred(storylineId);
+
+    expect(outcome.status).toBe("deferred");
+    if (outcome.status !== "deferred") return;
+    // The same ask it would have made, reported — just not spent.
+    expect(outcome.keywords).toEqual(["fausto", "hawaii"]);
+    expect(enqueues).not.toHaveBeenCalled();
+    enqueues.mockRestore();
+    expect(harness.counting.searchCalls).toBe(0);
+  });
+
+  it("still mints the topic and counts the click, so retention keeps what it claims", async () => {
+    const storylineId = await seedStoryline();
+
+    const first = await deferred(storylineId);
+    const second = await deferred(storylineId);
+    if (first.status !== "deferred" || second.status !== "deferred") {
+      throw new Error(`${first.status} / ${second.status}`);
+    }
+
+    // The topic row is what claims earlier refreshes' articles against the idle
+    // cutoff (§7.5); a deferral that skipped it would let them go.
+    const topic = await readTopic(db, first.fingerprint);
+    expect(topic?.keywords).toEqual(["fausto", "hawaii"]);
+    const hits = await db
+      .selectFrom("topics")
+      .select("hit_count")
+      .where("fingerprint", "=", hexToBytea(first.fingerprint))
+      .executeTakeFirstOrThrow();
+    expect(Number(hits.hit_count)).toBe(2);
+  });
+
+  it("is ADR-0017's refresh, unchanged, when the route does not defer", async () => {
+    const storylineId = await seedStoryline();
+
+    const outcome = await queueStorylineRefresh(harness.deps, {
+      storylineId,
+      canonicalize: canonicalizer(),
+      deferToDeepening: false,
+    });
+
+    expect(outcome.status).toBe("queued");
   });
 });
 

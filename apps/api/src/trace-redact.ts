@@ -216,7 +216,12 @@ export function pgTablesOf(node: unknown): PgTable[] {
  *   lock:refresh:                     fill_lock       single-flight.ts (refreshLockKey)
  *   lock:summarize:                   summarize_lock  storyline-summary-job.ts
  *   budget:topic:                     topic_budget    topic-budget.ts
+ *   budget:fallback:                  topic_budget    topic-budget.ts (reserveFallbackCall)
  *   ingest:pending:                   pending_ledger  ingest-queue.ts (PendingSet.key)
+ *   fallback:published:               pending_ledger  search-fallback.ts (queueSearchFallback)
+ *   deepening:served:                 other           storyline-deepening.ts — deliberately unbinned:
+ *                                                     a new bin redraws the rack, and "other" is the
+ *                                                     safe direction this table already names
  */
 export function classifyRedisKey(key: unknown, queueName: string): RedisKeyClass {
   if (typeof key !== "string") return "other";
@@ -230,7 +235,13 @@ export function classifyRedisKey(key: unknown, queueName: string): RedisKeyClass
   if (key.startsWith("lock:refresh:")) return "fill_lock";
   if (key.startsWith("lock:summarize:")) return "summarize_lock";
   if (key.startsWith("budget:topic:")) return "topic_budget";
+  // The search fallback's daily share (ADR-0030) is a budget counter of the same
+  // shape, taken beside the per-topic one; one bin for "a call was counted".
+  if (key.startsWith("budget:fallback:")) return "topic_budget";
   if (key.startsWith("ingest:pending:")) return "pending_ledger";
+  // The search fallback's publish-once guard (ADR-0030): it exists to keep the
+  // ledger honest, so it is drawn in the ledger's bin.
+  if (key.startsWith("fallback:published:")) return "pending_ledger";
   return "other";
 }
 
@@ -375,13 +386,22 @@ export function upstreamOutcomeOf(failure: UpstreamFailure): "refused" | "failed
 
 /** What a job is, from its discriminant: `kind` for the tagged ones, a top-up by its flag. */
 export function jobKindOf(job: IngestJob): JobKind {
-  if (job.kind === "sample" || job.kind === "deepen" || job.kind === "summarize") return job.kind;
+  if (
+    job.kind === "sample" ||
+    job.kind === "deepen" ||
+    job.kind === "summarize" ||
+    job.kind === "fallback"
+  ) {
+    return job.kind;
+  }
   return job.kind === "topup" ? "topup" : "segment";
 }
 
 /** A segment's (or top-up's) ADR-0019 plane. The arc-subject jobs carry none by design. */
 export function jobPlaneOf(job: IngestJob): JobPlane | undefined {
   if (job.kind === "sample" || job.kind === "deepen" || job.kind === "summarize") return undefined;
+  // A fallback exists only on the search plane, so it carries no field to read.
+  if (job.kind === "fallback") return "search";
   return job.plane;
 }
 
@@ -490,12 +510,19 @@ export function metaFromBody(body: unknown): TraceMeta | null {
 export function planesFromBody(route: TraceRoute, body: unknown): PlaneStatuses | null {
   if (route !== "storyline_open") return null;
   const record = queryRecord(body);
+  // The refresh reports under its own key now, like the other two planes, and
+  // has to: `deferred` (ADR-0017, amended) is a 202 with `queued: false` and
+  // keywords, which the inference below would read as `fresh`. The inference
+  // stays for a body without the key, so a trace from before it still parses.
+  const stated = queryRecord(record.refresh).status;
   const refresh =
-    record.queued === true
-      ? "queued"
-      : Array.isArray(record.keywords) && record.keywords.length === 0
-        ? "no_keywords"
-        : "fresh";
+    typeof stated === "string"
+      ? stated
+      : record.queued === true
+        ? "queued"
+        : Array.isArray(record.keywords) && record.keywords.length === 0
+          ? "no_keywords"
+          : "fresh";
   const parsed = PlaneStatuses.safeParse({
     refresh,
     deepening: queryRecord(record.deepening).status,

@@ -48,9 +48,9 @@ export interface StorylineRefreshDeps {
 /**
  * What opening a storyline queued, as the route reports it (ADR-0017).
  *
- * A discriminated union rather than a boolean, because only two of the five are
+ * A discriminated union rather than a boolean, because only two of the six are
  * errors — a UUID nobody holds is a 404, a language upstream no longer lists is
- * a 400 — and the other three are all a 202 that says what it did or did not
+ * a 400 — and the other four are all a 202 that says what it did or did not
  * spend. `fresh` in particular is not a failure: it is the freshness gate
  * working.
  */
@@ -69,6 +69,12 @@ export type StorylineRefreshOutcome =
   | { status: "invalid"; storylineId: string; errors: Record<string, string> }
   /** Coverage reaches inside the staleness tier already: nothing to ask for. */
   | { status: "fresh"; storylineId: string; fingerprint: string; keywords: string[] }
+  /**
+   * The deepening plane planned this arc on the same click, so no Currents call
+   * was spent on it (`STORYLINE_REFRESH_DEFERS_TO_DEEPENING`, ADR-0017 amended).
+   * The topic is still minted and its hit still counted — see the planner.
+   */
+  | { status: "deferred"; storylineId: string; fingerprint: string; keywords: string[] }
   | {
       status: "queued";
       storylineId: string;
@@ -159,6 +165,15 @@ export async function queueStorylineRefresh(
       keywords: string;
       language: string | undefined;
     }) => CanonicalizeResult;
+    /**
+     * The deepening plane has this arc in hand — it queued a Google News fetch
+     * for it on this click, or found it fresh — and the deployment has said that
+     * is enough (`STORYLINE_REFRESH_DEFERS_TO_DEEPENING`). The route decides it,
+     * because only the route holds both planes' answers.
+     *
+     * Absent or false is the refresh as ADR-0017 wrote it.
+     */
+    deferToDeepening?: boolean;
   },
 ): Promise<StorylineRefreshOutcome> {
   // Aliases first: a merged-away UUID is still on every page that was rendered
@@ -197,6 +212,21 @@ export async function queueStorylineRefresh(
     country: query.country,
     category: query.category,
   });
+
+  // AFTER the topic is minted, and that ordering is the one decision here. A
+  // deferred click spends no Currents call, but it is still a reader opening this
+  // arc, and the topic row is what claims the articles earlier refreshes fetched
+  // against retention's idle cutoff (§7.5). Deferring before the upsert would let
+  // an arc whose refreshes all defer shed its Currents history one idle window
+  // later — a loss nothing would report, bought to save one Postgres write.
+  if (input.deferToDeepening === true) {
+    return {
+      status: "deferred",
+      storylineId,
+      fingerprint: query.fingerprint,
+      keywords: query.keywords,
+    };
+  }
 
   const maxSpanMs = deps.currents.limits.maxRangeDays * 86_400_000;
   const covered = await readCoverage(deps.db, query.fingerprint, PLANNED_COVERAGE_PROVIDER);

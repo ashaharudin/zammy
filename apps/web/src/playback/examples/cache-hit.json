@@ -8,7 +8,7 @@
       "begins": "const cached = await readCachedPage"
     },
     {
-      "at": "apps/api/src/routes.ts:600-613",
+      "at": "apps/api/src/routes.ts:635-648",
       "begins": "async function cachedReference("
     }
   ],

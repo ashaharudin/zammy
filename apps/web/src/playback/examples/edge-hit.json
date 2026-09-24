@@ -4,11 +4,11 @@
   "summary": "A settled trending cloud the CDN still holds: the edge answers and no function runs, so there is nothing for the API to record and the browser draws this one itself. Timings are illustrative; the path is the code's.",
   "mirrors": [
     {
-      "at": "apps/api/src/routes.ts:521-522",
+      "at": "apps/api/src/routes.ts:556-557",
       "begins": "const TRENDING_CACHE_SETTLED ="
     },
     {
-      "at": "apps/api/src/routes.ts:547-554",
+      "at": "apps/api/src/routes.ts:582-589",
       "begins": "return reply"
     }
   ],

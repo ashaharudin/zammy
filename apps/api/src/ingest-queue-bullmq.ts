@@ -8,6 +8,7 @@ import {
   type DeepenJob,
   type IngestQueue,
   type SampleJob,
+  type SearchFallbackJob,
   type SegmentJob,
   type SummarizeJob,
 } from "./ingest-queue.js";
@@ -42,7 +43,7 @@ export class BullMqIngestQueue implements IngestQueue {
     this.pending = new PendingSet(this.redis, this.queueName);
   }
 
-  async enqueueSegment(job: SegmentJob): Promise<void> {
+  async enqueueSegment(job: SegmentJob | SearchFallbackJob): Promise<void> {
     await this.queue.add("segment", job, {
       jobId: ingestJobId(job),
       attempts: 3,

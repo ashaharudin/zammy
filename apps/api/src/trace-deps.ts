@@ -83,6 +83,7 @@ export const TRACED_KEYS = [
   "redis",
   "currents",
   "deepening",
+  "searchFallback",
   "queue",
   "labeler",
   "summarizer",
@@ -175,7 +176,11 @@ export function createTouchScope(options: {
       case "currents":
         wrapped = traceNewsClient(value, "currents", recorder);
         break;
+      // The search fallback holds the deepening plane's own client (ADR-0030),
+      // so the memo above usually answers first; the case is here for a bag
+      // that carries only one of the two.
       case "deepening":
+      case "searchFallback":
         wrapped = traceNewsClient(value, "google_news", recorder);
         break;
       case "queue":

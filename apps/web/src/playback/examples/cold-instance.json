@@ -4,7 +4,7 @@
   "summary": "The first request a fresh instance serves, inside the Redis handshake: the limiter fails open, every cache command is refused as not ready, the reference lists are fetched from Currents again, the single-flight lock cannot be taken so nothing is fetched or deferred, and the pending-job count waits for the connection. Timings are illustrative; the path is the code's.",
   "mirrors": [
     {
-      "at": "apps/api/src/server.ts:191-201",
+      "at": "apps/api/src/server.ts:192-202",
       "begins": "const redis = new Redis(config.REDIS_URL, {"
     },
     {
@@ -12,15 +12,15 @@
       "begins": "export async function tryAcquire("
     },
     {
-      "at": "apps/api/src/coverage-fill.ts:232-239",
+      "at": "apps/api/src/coverage-fill.ts:263-270",
       "begins": "const lockKey = refreshLockKey("
     },
     {
-      "at": "apps/api/src/ingest-queue-vercel.ts:276-287",
+      "at": "apps/api/src/ingest-queue-vercel.ts:277-288",
       "begins": "// `maxRetriesPerRequest: 2` so a genuinely unreachable Redis"
     },
     {
-      "at": "apps/api/src/routes.ts:615-636",
+      "at": "apps/api/src/routes.ts:650-671",
       "begins": "async function fetchReference("
     }
   ],

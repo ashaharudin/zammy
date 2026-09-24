@@ -1,10 +1,7 @@
 import type { Kysely } from "kysely";
 import type { Redis } from "ioredis";
-import {
-  NewsQuotaError,
-  type CallPriority,
-  type CurrentsClient,
-} from "@zammy/currents-client";
+import { type CallPriority, type CurrentsClient } from "@zammy/currents-client";
+import type { NewsClient } from "@zammy/news-client";
 import {
   ingestSightings,
   readCoverage,
@@ -30,6 +27,7 @@ import { freshnessTtlMs } from "./page-cache.js";
 import { refreshLockKey, release, tryAcquire } from "./single-flight.js";
 import { reserveTopicCall } from "./topic-budget.js";
 import { segmentJob, type IngestQueue, type SegmentJob } from "./ingest-queue.js";
+import { isQuotaRefusal, queueSearchFallback } from "./search-fallback.js";
 import {
   groupCreatedArticles,
   groupingDepsFor,
@@ -62,6 +60,13 @@ import {
  * a provider. Which one is not this module's call — `PLANNED_COVERAGE_PROVIDER`
  * in `coverage-gaps.ts` holds the planner's policy, and this module asks it.
  *
+ * **One `topic_coverage` writer lives elsewhere, and only for another provider's
+ * rows**: the search fallback (ADR-0030, `search-fallback.ts`), which this
+ * module triggers when Currents refuses a search on quota. It never writes a
+ * Currents row, so the pairing above — every write of the PLANNED provider's
+ * coverage in view of its clamp — still holds in this file alone. Its own clamp
+ * and its own write are a pair in that file, for the same reason.
+ *
  * Two §12 invariants also run through this file: the single-flight lock
  * deduplicates UPSTREAM CALLS and never queues READERS, and the store's
  * `hasMore` (more in our store) stays independent of `meta.ingest.state` (more
@@ -81,9 +86,21 @@ export interface CoverageFillDeps {
    */
   currents: Pick<CurrentsClient, "search" | "limits">;
   /**
+   * The provider a SEARCH falls back to when Currents refuses it on quota
+   * (ADR-0030) — present only when `SEARCH_FALLBACK_ENABLED` is on.
+   *
+   * Nothing in this module calls it. The fill's only use for it is to know that
+   * a fallback exists before planning one; the fetch is `search-fallback.ts`'s,
+   * which is also where its coverage is written. Held here because this is where
+   * the refusal is seen.
+   */
+  searchFallback?: NewsClient;
+  /**
    * Only `enqueueSegment`: a fill defers pages and truncation remainders and
-   * nothing else. It cannot start a breadth sample or a deepening fetch, and it
-   * cannot read a pending count — that is the read path's question.
+   * nothing else — and, since ADR-0030, the search fallback for a span it was
+   * refused on, which is a topic-subject job on the same method. It cannot start
+   * a breadth sample or a deepening fetch, and it cannot read a pending count —
+   * that is the read path's question.
    */
   queue: Pick<IngestQueue, "enqueueSegment">;
   config: {
@@ -94,6 +111,12 @@ export interface CoverageFillDeps {
     minSegmentMs: number;
     /** §9.4: upstream calls one topic may spend per UTC day, both paths combined. */
     perTopicDailyCallCap: number;
+    /**
+     * ADR-0030: the search fallback's share of its provider's day. Read by the
+     * fallback's consumer, not here; on this bag because that consumer is
+     * dispatched over the same deps the fill is.
+     */
+    searchFallbackDailyCallCap: number;
     /** §14.3: write-time article grouping (and its storyline layer, ADR-0009),
      * and the day both draw candidates from. */
     grouping: GroupingDeps["config"];
@@ -219,13 +242,21 @@ export async function fillWindowForRead(
     callsUsed: 0,
   };
   const deferred: SegmentJob[] = [];
+  /**
+   * Every gap this read did not see through to the end — deferred, cut, or
+   * never reached — which is what a quota refusal leaves owed (ADR-0030). A
+   * degraded read enqueues NONE of its deferred Currents jobs (below), so the
+   * fallback is the only thing that would ask for them today.
+   */
+  const unfinished: Span[] = [];
 
-  for (const gap of gaps) {
+  for (const [index, gap] of gaps.entries()) {
     if (
       budget.callsUsed >= budget.maxCalls ||
       (budget.callsUsed > 0 && deps.now().getTime() >= budget.deadline)
     ) {
       deferred.push(segmentJob(query.fingerprint, gap, 1, "search"));
+      unfinished.push(gap);
       continue;
     }
 
@@ -247,19 +278,36 @@ export async function fillWindowForRead(
       if (outcome.callsMade > 0) report.servedFrom = "upstream";
       if (outcome.kind === "deferred") {
         deferred.push(segmentJob(query.fingerprint, gap, outcome.resumePage, "search"));
+        unfinished.push(gap);
       } else if (outcome.kind === "truncated") {
         deferred.push(
           ...(await onTruncated(deps, query.fingerprint, gap, outcome.oldestSeen, "search")),
         );
+        unfinished.push(gap);
       } else if (outcome.kind === "capped") {
         report.capped = true;
       }
     } catch (error) {
-      report.degraded = error instanceof NewsQuotaError ? "quota" : "upstream";
+      // Structural, like the fallback trigger below keys on: an `instanceof`
+      // that a duplicated package made quietly false would report `upstream` AND
+      // skip the fallback, and nothing would say either happened.
+      report.degraded = isQuotaRefusal(error) ? "quota" : "upstream";
       deps.log?.warn(
         { err: error, fingerprint: query.fingerprint },
         "synchronous fill failed; serving from store",
       );
+      // ADR-0030: a QUOTA refusal is the one failure a second provider answers.
+      // The gap that was refused and every gap the loop will now never reach
+      // join what was already owed, and the fallback asks Google News for the
+      // leading edge of all of it. Behind the reader, like any deferred page:
+      // this read still returns the store and says `degraded: quota`.
+      // Keyed on the verdict just reported rather than on a second reading of
+      // the error, so a read that says `degraded: quota` and a read that queued
+      // a fallback can never disagree about what happened.
+      if (report.degraded === "quota") {
+        unfinished.push(...gaps.slice(index));
+        await queueSearchFallback(deps, query.fingerprint, unfinished, now);
+      }
       break;
     } finally {
       await release(deps.redis, lockKey, token);
@@ -366,29 +414,54 @@ export async function processSegmentJob(
     // behind a 400 it can no longer avoid.
     const slices = sliceSpan(segment, deps.currents.limits.maxRangeDays * 86_400_000);
     for (const [index, slice] of slices.entries()) {
-      const outcome = await fillSegment(
-        deps,
-        query,
-        slice,
-        { deadline: Number.POSITIVE_INFINITY, maxCalls: Number.POSITIVE_INFINITY, callsUsed: 0 },
-        // The resume page belongs to the slice the deadline actually cut.
+      let outcome: FillOutcome;
+      try {
+        outcome = await fillSegment(
+          deps,
+          query,
+          slice,
+          { deadline: Number.POSITIVE_INFINITY, maxCalls: Number.POSITIVE_INFINITY, callsUsed: 0 },
+          // The resume page belongs to the slice the deadline actually cut.
+          //
+          // A stored page number survives the clamp above because upstream sorts
+          // `published` DESC (PROBE-FINDINGS §1, verified monotonic): raising a
+          // span's lower edge drops articles from the TAIL of that ordering, so
+          // pages 1..N-1 hold the same newest articles either way and the
+          // narrowed query simply runs out of pages sooner. Resuming at N then
+          // reads a short or empty page, which is the honest end-of-results
+          // signal for the clamped span — everything in it was already seen.
+          index === 0 ? job.startPage : 1,
+          // No reader is waiting: draw only what the interactive reserve spares
+          // (§9.4). A refusal fails the job; BullMQ's backoff is the retry pacing.
+          "background",
+          // The plane the PLANNER recorded, never one inferred here. A deferred
+          // page of a reader's search and a storyline refresh's top-up arrive at
+          // this function looking identical.
+          job.plane,
+        );
+      } catch (error) {
+        // ADR-0030, and the case trace 4e3a28c2… recorded: a reader's deferred
+        // pages refused because the day's budget was down to the interactive
+        // reserve. The refused slice and every older one this loop will not now
+        // reach (`sliceSpan` is newest-first, so they are one contiguous span
+        // below it) are asked of Google News instead, at the leading edge.
         //
-        // A stored page number survives the clamp above because upstream sorts
-        // `published` DESC (PROBE-FINDINGS §1, verified monotonic): raising a
-        // span's lower edge drops articles from the TAIL of that ordering, so
-        // pages 1..N-1 hold the same newest articles either way and the
-        // narrowed query simply runs out of pages sooner. Resuming at N then
-        // reads a short or empty page, which is the honest end-of-results
-        // signal for the clamped span — everything in it was already seen.
-        index === 0 ? job.startPage : 1,
-        // No reader is waiting: draw only what the interactive reserve spares
-        // (§9.4). A refusal fails the job; BullMQ's backoff is the retry pacing.
-        "background",
-        // The plane the PLANNER recorded, never one inferred here. A deferred
-        // page of a reader's search and a storyline refresh's top-up arrive at
-        // this function looking identical.
-        job.plane,
-      );
+        // SEARCH plane only. A storyline refresh's top-up is `deepening`, and
+        // its fallback is the deepening plane itself; a breadth job never
+        // reaches this function. And the error is RETHROWN unchanged: the
+        // Currents job's own redelivery is untouched, because the fallback
+        // claims only its own provider's coverage and the Currents gap is still
+        // Currents' to fill.
+        if (job.plane === "search" && isQuotaRefusal(error)) {
+          await queueSearchFallback(
+            deps,
+            job.fingerprint,
+            [{ from: segment.from, to: slice.to }],
+            deps.now(),
+          );
+        }
+        throw error;
+      }
       if (outcome.kind === "truncated") {
         for (const half of await onTruncated(
           deps,

@@ -296,6 +296,27 @@ describe("loadConfig", () => {
       } as NodeJS.ProcessEnv),
     ).toThrow(/GOOGLE_NEWS_INTERACTIVE_RESERVE/);
   });
+
+  it("leaves the search fallback and the refresh deferral off by default", () => {
+    const config = loadConfig({ ...base } as NodeJS.ProcessEnv);
+    expect(config.SEARCH_FALLBACK_ENABLED).toBe(false);
+    expect(config.STORYLINE_REFRESH_DEFERS_TO_DEEPENING).toBe(false);
+    // A share that leaves the deepening plane at least 100 of the 150 both draw.
+    expect(config.SEARCH_FALLBACK_DAILY_CALL_LIMIT).toBe(50);
+  });
+
+  it("refuses a search fallback with nothing to fall back to", () => {
+    expect(() =>
+      loadConfig({ ...base, SEARCH_FALLBACK_ENABLED: "true" } as NodeJS.ProcessEnv),
+    ).toThrow(/SEARCH_FALLBACK_ENABLED/);
+    expect(
+      loadConfig({
+        ...base,
+        GOOGLE_NEWS_ENABLED: "true",
+        SEARCH_FALLBACK_ENABLED: "true",
+      } as NodeJS.ProcessEnv).SEARCH_FALLBACK_ENABLED,
+    ).toBe(true);
+  });
 });
 
 // Request traces (ADR-0029). The token is the whole of the opt-in, so each way it

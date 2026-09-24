@@ -25,7 +25,7 @@ import type { Database } from "@zammy/storage";
 import { PendingSet, type IngestJob } from "./ingest-queue.js";
 import { pageCacheKey } from "./page-cache.js";
 import { refreshLockKey } from "./single-flight.js";
-import { reserveTopicCall } from "./topic-budget.js";
+import { reserveFallbackCall, reserveTopicCall } from "./topic-budget.js";
 import {
   PG_WALK_NODE_LIMIT,
   TRACEABLE_TABLES,
@@ -95,6 +95,7 @@ describe("classifyRedisKey", () => {
     it(`classifies every key the codebase builds, under queue ${queueName}`, async () => {
       const budget = keyRecorder();
       await reserveTopicCall(budget.redis, FINGERPRINT, 10, new Date("2026-08-01T00:00:00Z"));
+      await reserveFallbackCall(budget.redis, "google-news", 10, new Date("2026-08-01T00:00:00Z"));
       const ledger = keyRecorder();
       await new PendingSet(ledger.redis, queueName).add({ kind: "sample", language: "en" });
 
@@ -110,6 +111,10 @@ describe("classifyRedisKey", () => {
         // storyline-summary-job.ts builds this inline.
         ["lock:summarize:11111111-1111-4111-8111-111111111111", "summarize_lock"],
         [budget.keys[0]!, "topic_budget"],
+        // INCR then EXPIRE for each counter, so the fallback's INCR is the third key.
+        [budget.keys[2]!, "topic_budget"],
+        // search-fallback.ts: its own subject, so the fill lock's class.
+        [refreshLockKey(`fallback:${FINGERPRINT}`, span), "fill_lock"],
         [ledger.keys[0]!, "pending_ledger"],
       ];
       for (const [key, expected] of cases) {
@@ -405,6 +410,9 @@ describe("jobKindOf and jobPlaneOf", () => {
     const deepen: IngestJob = { kind: "deepen", storylineId: "x", from: "a", to: "b" };
     expect([jobKindOf(deepen), jobPlaneOf(deepen)]).toEqual(["deepen", undefined]);
     expect(jobKindOf({ kind: "summarize", storylineId: "x", at: "a" })).toBe("summarize");
+    // A fallback carries no plane field, and has one: it exists only for a search.
+    const fallback: IngestJob = { kind: "fallback", fingerprint: FINGERPRINT, from: "a", to: "b" };
+    expect([jobKindOf(fallback), jobPlaneOf(fallback)]).toEqual(["fallback", "search"]);
   });
 });
 
@@ -526,6 +534,21 @@ describe("planesFromBody", () => {
     expect(
       planesFromBody("storyline_open", opened({ queued: false, keywords: [], fingerprint: undefined })),
     ).toMatchObject({ refresh: "no_keywords" });
+  });
+
+  it("reads the refresh's own status where the body states it", () => {
+    // `deferred` (ADR-0017, amended) is `queued: false` with keywords — which the
+    // inference would read as `fresh`, so the stated status has to win.
+    expect(
+      planesFromBody(
+        "storyline_open",
+        opened({ queued: false, refresh: { status: "deferred", queued: false } }),
+      ),
+    ).toMatchObject({ refresh: "deferred" });
+    // And a status the schema does not know is no planes at all, not a guess.
+    expect(
+      planesFromBody("storyline_open", opened({ refresh: { status: "mystery", queued: true } })),
+    ).toBeNull();
   });
 
   it("is null for every other route and for an error body", () => {
