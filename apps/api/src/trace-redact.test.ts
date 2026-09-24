@@ -38,6 +38,8 @@ import {
   pgOperationOf,
   pgTablesOf,
   planesFromBody,
+  subjectOf,
+  withViewLabels,
   queryKeysOf,
   rateLimitOutcome,
   redisCommandOf,
@@ -577,5 +579,70 @@ describe("traceEnvironment", () => {
         labeler: true,
       }),
     ).toMatchObject({ googleNews: "live", labeler: true });
+  });
+});
+
+// ADR-0031: the one place a trace holds what was asked.
+describe("subjectOf", () => {
+  const A = "1b671a64-40d5-491e-99b0-da01ff1f3341";
+  const B = "2c671a64-40d5-491e-99b0-da01ff1f3342";
+
+  it("keeps a search's keywords and filters, trimmed and bounded", () => {
+    expect(
+      subjectOf("timeline_search", { q: "  quokka zebra ", language: "en", country: "au" }, {}),
+    ).toEqual({ keywords: "quokka zebra", language: "en", country: "au" });
+    expect(subjectOf("storylines_search", { q: "k".repeat(300) }, {})).toEqual({
+      keywords: "k".repeat(200),
+    });
+  });
+
+  it("names a view's storylines by id, UUIDs only, and an open's by its param", () => {
+    expect(subjectOf("timeline_view", { storyline: `${A},nope,${B.toUpperCase()}` }, {})).toEqual({
+      storylines: [{ id: A }, { id: B }],
+    });
+    expect(subjectOf("storyline_open", {}, { id: A })).toEqual({ storylines: [{ id: A }] });
+    expect(subjectOf("storyline_open", {}, { id: "not-a-uuid" })).toBeNull();
+  });
+
+  it("keeps trending's language, and nothing for reference or an empty ask", () => {
+    expect(subjectOf("trending", { language: "fr", limit: "10" }, {})).toEqual({ language: "fr" });
+    expect(subjectOf("trending", {}, {})).toBeNull();
+    expect(subjectOf("reference", { q: "ignored" }, {})).toBeNull();
+    expect(subjectOf("timeline_search", { q: ["a", "b"] }, {})).toBeNull();
+  });
+});
+
+describe("withViewLabels", () => {
+  const A = "1b671a64-40d5-491e-99b0-da01ff1f3341";
+  const B = "2c671a64-40d5-491e-99b0-da01ff1f3342";
+
+  it("takes the view's ids and labels from its reply, survivors and all", () => {
+    const body = {
+      storylines: [
+        { id: B, label: "Nepal Flash Floods", from: "x", to: "y" },
+        { id: A, label: null },
+      ],
+    };
+    expect(withViewLabels("timeline_view", { storylines: [{ id: A }] }, body)).toEqual({
+      storylines: [
+        { id: B, label: "Nepal Flash Floods" },
+        { id: A, label: null },
+      ],
+    });
+  });
+
+  it("keeps the requested ids where the reply names none, and leaves other routes alone", () => {
+    const subject = { storylines: [{ id: A }] };
+    expect(withViewLabels("timeline_view", subject, { error: { message: "x" } })).toBe(subject);
+    expect(withViewLabels("timeline_view", subject, { storylines: [] })).toBe(subject);
+    const search = { keywords: "floods" };
+    expect(withViewLabels("timeline_search", search, { storylines: [{ id: A, label: "L" }] })).toBe(
+      search,
+    );
+  });
+
+  it("cuts an overlong label rather than refusing the record", () => {
+    const body = { storylines: [{ id: A, label: "l".repeat(250) }] };
+    expect(withViewLabels("timeline_view", null, body)?.storylines?.[0]?.label).toHaveLength(200);
   });
 });

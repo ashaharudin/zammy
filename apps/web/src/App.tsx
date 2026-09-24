@@ -42,11 +42,11 @@ const StorylinesPrototype = lazy(() =>
 const showStorylinesPrototype =
   !import.meta.env.PROD && window.location.pathname.startsWith("/prototype/storylines");
 
-// Request playback (ADR-0029): `/?trace`, `/?trace=<example>`, `/?trace#t=<id>`. An
-// operator's view of how one API request is served, drawn as a 16-bit warehouse, in its own
-// lazy chunk — the reader's main chunk gains only `playbackRoute.ts`, which imports nothing,
-// and never the trace schemas. No PROD guard: with tracing off (the default) the built-in
-// examples are the whole page, and recording a real request needs the operator's token.
+// Request playback (ADR-0029, ADR-0031): `/?trace` (the newest trace) and `/?trace#t=<id>`.
+// An operator's view of how one API request was served, drawn as a 16-bit warehouse, in its
+// own lazy chunk — the reader's main chunk gains only `playbackRoute.ts`, which imports
+// nothing, and never the trace schemas. No PROD guard: with tracing off (the default) the
+// page has nothing to list and says so.
 const PlaybackPage = lazy(() =>
   import("./playback/PlaybackPage.js").then((m) => ({ default: m.PlaybackPage })),
 );

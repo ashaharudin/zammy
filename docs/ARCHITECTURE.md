@@ -436,17 +436,17 @@ Accepts front-end requests and turns them into the right upstream query — or, 
 | `GET /api/v1/storylines?q=` | Storylines by keyword, and nothing else: the same match the timeline makes beside a search's results, without the search — no topic minted, nothing fetched. What the storyline view's search box runs (ADR-0028, amended). `{ storylines: StorylineSummary[] }`. |
 | `GET /api/v1/topics/:fingerprint` | Topic metadata: coverage window, article count, freshness, summary. |
 | `POST /api/v1/storylines/:id/refresh` | Fire-and-forget: queue one background top-up of what this arc's coverage says (§9.1, ADR-0017), and — separately planned, against the arc itself — one deepening fetch (§9.1a, ADR-0019) and one summary job for its qualifying days that have no sentence yet (ADR-0027). A UUID is the whole request; the keywords and the language are derived from the arc, never sent. 202 with `{ storyline, queued, keywords, fingerprint, refresh: { status, queued }, deepening: { status, queued }, summaries: { status, queued } }` — `fingerprint` absent when the arc yields no keywords — one key per plane, so a reader of the body can tell which plane spent what; `refresh.status` is `deferred` when `STORYLINE_REFRESH_DEFERS_TO_DEEPENING` let the deepening plane's plan stand for the Currents top-up (ADR-0017, amended), and top-level `queued` is kept for existing readers. Nothing on the page reads it; operators and tests do, and a traced open records the three statuses as its `planes` (ADR-0029). |
+| `GET /api/v1/traces` | The newest request traces still stored, newest first, at most ten — `{ traces: TraceSummary[] }`, each its id, route, method, status, start, duration and subject, never its touches (§8.1, ADR-0031). The playback page's dropdown. **Registered only while `REQUEST_TRACE_ENABLED`**, with the read route's posture: its own rate-limit bucket (30/min), GET only, `no-store` on every answer, 503 when the trace store errors. No token: while tracing is on it lists the last ten requests' keywords and storylines to anyone. |
 | `GET /api/v1/traces/:id` | One stored request trace and its job runs, for the playback view (§8.1, ADR-0029). **Registered only while `REQUEST_TRACE_ENABLED`** — otherwise Fastify's default 404. No token: the 122-bit id is the capability, for `REQUEST_TRACE_TTL_SECONDS`. Its own rate-limit bucket (30/min), so polling a trace never spends a reader's allowance — and GET only, since an auto-cloned HEAD would be a second bucket over the same reads (HEAD is Fastify's 404). 400 for a malformed id (before any trace-store command), 404 for an unknown, expired or unparseable trace, 503 when the trace store errors, 200 `TraceReadResponse`; `no-store` on every answer, the limiter's 429 included (set in the route's `onSend`, which the 429 reaches and the handler does not). |
 | `GET /healthz` · `GET /readyz` | Liveness, and dependency checks for Postgres/Redis/upstream — plus a `chores` digest saying which nightly passes are overdue or stalled (`chore-status.ts`). The digest is additive and never moves `status`: `ready`/`degraded`/`unready` stay a statement about Postgres and Redis alone. |
 
-**Request tracing is an opt-in header, not an endpoint** (ADR-0029). With `REQUEST_TRACE_ENABLED`
-on, a request to the timeline, storylines, refresh, trending or reference route that carries
-`x-zammy-trace: Bearer <REQUEST_TRACE_TOKEN>` is recorded as the stations it touched and answers
-with `x-zammy-trace-id: <id>` (or `unstored`) and `cache-control: no-store` — the body
-byte-identical to an untraced one. A missing or wrong token is not an error: the request is served
-untraced and says nothing, so the header cannot be used to probe for the token. HEAD, OPTIONS,
-`/topics`, the health checks and the trace route itself are never traced. With the flag off none
-of this is registered at all.
+**Request tracing is a flag, not an endpoint** (ADR-0029, ADR-0031). With `REQUEST_TRACE_ENABLED`
+on, every request to the timeline, storylines, refresh, trending or reference route is recorded as
+the stations it touched and what it asked for (its subject), within a per-instance budget of 30 a
+minute and 8 at once, and answers with `x-zammy-trace-id: <id>` (or `unstored`) and
+`cache-control: no-store` — the body byte-identical to an untraced one. There is no header and no
+token. HEAD, OPTIONS, `/topics`, the health checks and the trace routes themselves are never
+traced. With the flag off none of this is registered at all.
 
 `GET /api/v1/timeline` request:
 
@@ -748,10 +748,11 @@ Two tiers with distinct jobs: Redis makes repeat reads free; Postgres makes the 
 | `budget:topic:<fingerprint>:<utcDay>` | per-topic daily call cap (§9.4) | 48h |
 | `quota:<provider>:burst` | shared sliding burst window, a sorted set of call timestamps (§5.4) | one burst window |
 | `quota:<provider>:observed` | last `x-ratelimit-*` reading, `<observedAtMs>\|<json>` (§5.4) | 24h |
-| `ratelimit:<ip>` | per-IP request counter (§9.4); while tracing is on, the trace read route's own bucket beside it, `ratelimit:GET/api/v1/traces/:id-<ip>` | `timeWindow` |
+| `ratelimit:<ip>` | per-IP request counter (§9.4); while tracing is on, the trace routes' own buckets beside it, `ratelimit:GET/api/v1/traces/:id-<ip>` and `ratelimit:GET/api/v1/traces-<ip>` | `timeWindow` |
 | `ingest:pending:<queue>:<pendingId>` | the ledger `meta.ingest` reads (§6.1) | pruned at `STALE_PENDING_MS` |
 | `<queue>:trace:<id>` | one request trace — the PARSE OUTPUT of `RequestTrace`, never the draft (ADR-0029) | `REQUEST_TRACE_TTL_SECONDS` (1h) |
 | `<queue>:trace:<id>:runs` | that trace's job runs, a list; the first 16 are kept | the same |
+| `<queue>:trace:recent` | the newest ten trace ids, a list (`LPUSH` + `LTRIM` beside each record's `SET`); `GET /api/v1/traces` reads their records (ADR-0031) | the same, refreshed on each push |
 | `<queue>:trace:job:<jobId>` | the `<traceId>\|<ref>` members a job owes a run to, written before its publish and removed after an ok run | the same |
 
 Redis is **pure cache**: a total flush costs latency and quota, never correctness. Nothing lives
@@ -1292,26 +1293,20 @@ keywords in, timeline out.
   limiter), a rack of ten Redis bins (one per key class), a Postgres vault and a Currents mast,
   and drops its jobs through a hatch onto a belt; in the back room worker robots pick them up at
   the bay and carry them to the machines their job runs touched — the Google News kiosk, the
-  Gemini oracle — stamping ✓ or ✗ on the way back. `/?trace` opens the default built-in example,
-  `/?trace=<slug>` a named one, `/?trace#t=<uuid>` a recorded trace read from
-  `GET /api/v1/traces/:id`. The id rides in the fragment, so the page's own request never carries
-  it — not in its query string, the static file's CDN cache key or its log — but every read of
-  the trace does, in the read route's path, through the edge to the function and its request log
-  (ADR-0029, *Consequences*). The page switches what it plays with `history.replaceState` only.
-  Seven examples ship in the chunk (`apps/web/src/playback/examples/`), parsed through the wire
-  schema at load and pinned to the server's real paths by `apps/api/src/trace-examples.test.ts`,
-  and to the lines of code they cite by `exampleTraces.test.ts`, so the page is whole with
-  tracing off — the default — and every example says its timings are illustrative. "Record a
-  real request" makes one traced request of any traceable kind with the operator's token, which
-  lives in that panel's state for the visit and never in storage or a URL, and reads only the
-  response headers: an id becomes a recorded trace, polled on a schedule that backs off from
-  every 3 s to once a minute and stops when every linked job has an ok run, at the first 404, or
-  once the trace is thirty minutes old — its age the larger of the server's `startedAt` against
-  the browser's clock and the page's own time since its first read, so a browser clock running
-  behind cannot keep the poll going (`tracePoll.ts`). An edge `HIT`/`STALE` or a 504, where no
-  function recorded anything, becomes a browser-only trace the page draws from the headers and
-  does not store, and the page words the two apart: a cache answer ran no function, and a 504 is
-  the platform answering in the API's place, most likely a function stopped at its time limit.
+  Gemini oracle — stamping ✓ or ✗ on the way back. `/?trace` plays the newest recorded trace
+  and `/?trace#t=<uuid>` a named one, read from `GET /api/v1/traces/:id`; a dropdown lists the
+  newest ten from `GET /api/v1/traces`, each by when it ran, what it asked for and how it
+  answered, re-read every 20 s (ADR-0031). The id rides in the fragment, so the page's own request
+  never carries it — not in its query string, the static file's CDN cache key or its log — but
+  every read of the trace does, in the read route's path, through the edge to the function and
+  its request log (ADR-0029, *Consequences*). The page switches what it plays with
+  `history.replaceState` only. It has no built-in examples and makes no requests of its own
+  (ADR-0031 removed both): with tracing off it has nothing to list and says so. A recorded trace
+  is polled on a schedule that backs off from every 3 s to once a minute and stops when every
+  linked job has an ok run, at the first 404, or once the trace is thirty minutes old — its age
+  the larger of the server's `startedAt` against the browser's clock and the page's own time
+  since its first read, so a browser clock running behind cannot keep the poll going
+  (`tracePoll.ts`).
   The floor is a 320×180 plan on desktop and a 160×240 one below 640 px, at an integer scale.
   Two paces: readable (dwell compressed logarithmically, consecutive touches at one station
   merged into one stop) and real time; every step starts at its own instant (`separateTies`), so
@@ -2112,16 +2107,18 @@ apart see the same cloud.
   unmeasured: near zero means grouping is doing nothing, a sharp rise means it is merging stories
   that are merely similar (ADR-0005).
 
-  **Request traces are opt-in diagnostics, not metrics** (ADR-0029). A trace is one request an
-  operator asked to watch — by sending the token — recorded as the stations it touched and joined
-  by the job runs of the jobs it enqueued, kept for `REQUEST_TRACE_TTL_SECONDS` (an hour by
+  **Request traces are diagnostics, not metrics** (ADR-0029, ADR-0031). A trace is one request
+  served while tracing was on, recorded as the stations it touched and what it asked for, and
+  joined by the job runs of the jobs it enqueued, kept for `REQUEST_TRACE_TTL_SECONDS` (an hour by
   default) and played back at `/?trace`. Nothing
   is sampled, aggregated or counted from them, and no number above is derived from one: a trace
   answers "how was THIS request served", which the log fields cannot join up (the request, its
   jobs on another instance minutes later, a redelivery, the drain), and never "how are requests
-  served", which is what the fields are for. They hold no reader data by construction — enums,
-  numbers and patterned ids only, stored as the schema's parse output — and they cost a Redis
-  command per job delivery while enabled, so the operating policy is on for a session, then off.
+  served", which is what the fields are for. Their touches and job runs hold no reader data by
+  construction — enums, numbers and patterned ids only, stored as the schema's parse output — but
+  each record's subject holds the reader's keywords or storylines, and the newest ten are listed
+  to anyone while tracing is on. That, and a Redis command per job delivery, is why the operating
+  policy is on for a session, then off.
 - **Security:** API key server-side only; CORS pinned to the web origin; per-IP rate limit on
   `/api/v1/*`; parameterized SQL only; article text escaped by React, never rendered as HTML.
 - **Testing:** unit tests on the canonicalizer, normalizer, and coverage-gap math (pure functions,

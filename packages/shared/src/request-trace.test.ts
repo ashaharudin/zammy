@@ -12,7 +12,9 @@ import {
   Touch,
   TraceId,
   TraceReadResponse,
-  traceAuthorization,
+  MAX_RECENT_TRACES,
+  RecentTracesResponse,
+  TraceSummary,
   traceReadPath,
   traceSignature,
   PostgresOutcome,
@@ -267,6 +269,60 @@ describe("RequestTrace", () => {
       RequestTrace.safeParse(trace({ touches: touches.slice(0, MAX_TRACE_TOUCHES) })).success,
     ).toBe(true);
   });
+
+  // ADR-0031: what the request asked for is on the record, bounded.
+  it("keeps a subject's keywords, filters and storylines", () => {
+    const subject = {
+      keywords: "quokka zebra",
+      language: "en",
+      storylines: [
+        { id: "1b671a64-40d5-491e-99b0-da01ff1f3341", label: "Nepal Flash Floods" },
+        { id: "2b671a64-40d5-491e-99b0-da01ff1f3341" },
+      ],
+    };
+    const parsed = RequestTrace.parse(trace({ subject }));
+    expect(parsed.subject).toEqual(subject);
+  });
+
+  it("parses a record with no subject, as every record before ADR-0031 has", () => {
+    const { subject: _absent, ...before } = trace();
+    expect(RequestTrace.safeParse(before).success).toBe(true);
+    expect(RequestTrace.safeParse(trace({ subject: null })).success).toBe(true);
+  });
+
+  it("refuses a subject past its bounds, or naming a storyline by anything but a UUID", () => {
+    for (const subject of [
+      { keywords: "k".repeat(201) },
+      { storylines: [{ id: "not-a-uuid" }] },
+      { storylines: [{ id: "1b671a64-40d5-491e-99b0-da01ff1f3341", label: "l".repeat(201) }] },
+    ]) {
+      expect(RequestTrace.safeParse(trace({ subject })).success, JSON.stringify(subject)).toBe(
+        false,
+      );
+    }
+  });
+});
+
+describe("RecentTracesResponse", () => {
+  it("holds summaries, which carry the subject and not the touches", () => {
+    const summary = TraceSummary.parse(trace({ subject: { keywords: "floods" } }));
+    expect(summary).toEqual({
+      id: TRACE_ID,
+      route: "timeline_search",
+      method: "GET",
+      status: 200,
+      startedAt: "2026-09-01T12:00:00.000Z",
+      ms: 9.8,
+      subject: { keywords: "floods" },
+    });
+    expect(RecentTracesResponse.safeParse({ traces: [summary] }).success).toBe(true);
+  });
+
+  it("refuses more than the list holds", () => {
+    const summary = TraceSummary.parse(trace());
+    const traces = Array.from({ length: MAX_RECENT_TRACES + 1 }, () => summary);
+    expect(RecentTracesResponse.safeParse({ traces }).success).toBe(false);
+  });
 });
 
 describe("traceSignature", () => {
@@ -354,12 +410,6 @@ describe("the outcome types", () => {
     expectTypeOf<QueueOutcome>().toEqualTypeOf<TouchOf<"queue">["outcome"]>();
     expectTypeOf<RateLimitOutcome>().toEqualTypeOf<TouchOf<"rate_limit">["outcome"]>();
     expectTypeOf<EdgeOutcome>().toEqualTypeOf<TouchOf<"edge">["outcome"]>();
-  });
-});
-
-describe("traceAuthorization", () => {
-  it("is the Bearer shape the cron routes already speak", () => {
-    expect(traceAuthorization("x")).toBe("Bearer x");
   });
 });
 

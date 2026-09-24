@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted (amended by ADR-0031: there is no token and every traceable request is traced while tracing is on; a trace's record now carries its SUBJECT — what it asked for — and the newest ten are listed at `GET /api/v1/traces`; the built-in examples and the record panel are gone from the page, and the examples are test fixtures)
 ---
 
 # A traced request records what it touched, never what it asked

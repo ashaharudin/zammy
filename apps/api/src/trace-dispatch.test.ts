@@ -102,7 +102,6 @@ function runtimeOver(redis: Redis, log = captureLog().log): TraceRuntime {
       REDIS_URL,
       CURRENTS_USER_AGENT: "zammy-tests/0.1",
       REQUEST_TRACE_ENABLED: "true",
-      REQUEST_TRACE_TOKEN: "t".repeat(32),
     } as NodeJS.ProcessEnv),
     { redis, queueName: harness.queue.name, environment: ENVIRONMENT, log },
   );

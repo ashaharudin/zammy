@@ -500,13 +500,8 @@ export async function buildApp(
   const app = Fastify({
     logger: {
       level: config.LOG_LEVEL,
-      // Never let a key reach the logs (ARCHITECTURE 5.5). The trace opt-in is
-      // a bearer token too (ADR-0029), and travels in its own header.
-      redact: [
-        "req.headers.authorization",
-        "req.headers.cookie",
-        'req.headers["x-zammy-trace"]',
-      ],
+      // Never let a key reach the logs (ARCHITECTURE 5.5).
+      redact: ["req.headers.authorization", "req.headers.cookie"],
     },
     // A hop COUNT, never `true`. Trusting the whole X-Forwarded-For chain makes
     // the leftmost entry win, and the leftmost entry is client-supplied — so
@@ -563,9 +558,10 @@ export async function buildApp(
       // fresh bucket by walking its own subnet. Nothing else joins the key here,
       // because no route sets its own `config.rateLimit` or a `groupId`; either
       // would add the route's method and URL and split the bucket per endpoint —
-      // except `GET /api/v1/traces/:id` (ADR-0029), whose own bucket keeps trace
-      // polling off a reader's allowance. That route exists only while tracing
-      // is on, and its split is the point of it.
+      // except `GET /api/v1/traces/:id` (ADR-0029) and `GET /api/v1/traces`
+      // (ADR-0031), whose own buckets keep trace polling off a reader's
+      // allowance. Those routes exist only while tracing is on, and their split
+      // is the point of them.
       nameSpace: RATE_LIMIT_NAMESPACE,
       skipOnError: true,
     });

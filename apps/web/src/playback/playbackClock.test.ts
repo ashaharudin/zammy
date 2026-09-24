@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildTimeline, stepAt, type Step } from "./choreography.js";
-import { EXAMPLE_TRACES, exampleBySlug } from "./exampleTraces.js";
+import { TRACE_FIXTURES, traceFixture } from "./fixtures/traceFixtures.js";
 import {
   SPEEDS,
   STEP_HOLD_MS,
@@ -29,7 +29,7 @@ import {
  * the stage for a map while the transport plays on.
  */
 
-const timeline = buildTimeline(exampleBySlug("cold-search")!.response, { pace: "readable" });
+const timeline = buildTimeline(traceFixture("cold-search")!.response, { pace: "readable" });
 const at = (overrides: Partial<Transport> = {}): Transport => ({
   ...initialTransport({ autoplay: false, speed: 1, mode: "animated" }),
   ...overrides,
@@ -297,7 +297,7 @@ describe("carryAcrossPace", () => {
   const paused = (t: number) => at({ t, status: "paused" });
 
   it("names every step once, and the same steps at both paces", () => {
-    for (const example of EXAMPLE_TRACES) {
+    for (const example of TRACE_FIXTURES) {
       const readable = buildTimeline(example.response, { pace: "readable" });
       const real = buildTimeline(example.response, { pace: "real" });
       const names = stepNames(readable);
@@ -308,7 +308,7 @@ describe("carryAcrossPace", () => {
 
   it("lands on the same step, not the same index, both ways, in every example", () => {
     let reordered = 0;
-    for (const example of EXAMPLE_TRACES) {
+    for (const example of TRACE_FIXTURES) {
       const readable = buildTimeline(example.response, { pace: "readable" });
       const real = buildTimeline(example.response, { pace: "real" });
       for (const [from, to] of [
@@ -334,8 +334,8 @@ describe("carryAcrossPace", () => {
   });
 
   it("keeps a playing transport playing, resets the hold, and an ended one at its end", () => {
-    const readable = buildTimeline(exampleBySlug("cold-search")!.response, { pace: "readable" });
-    const real = buildTimeline(exampleBySlug("cold-search")!.response, { pace: "real" });
+    const readable = buildTimeline(traceFixture("cold-search")!.response, { pace: "readable" });
+    const real = buildTimeline(traceFixture("cold-search")!.response, { pace: "real" });
     const playing = at({ t: readable.steps[10]!.t0 + 5, status: "playing", held: 300 });
     expect(carryAcrossPace(playing, readable, real)).toMatchObject({ status: "playing", held: 0 });
     const ended = at({ t: readable.duration, status: "ended" });

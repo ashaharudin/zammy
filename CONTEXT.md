@@ -148,12 +148,18 @@ _Avoid_: term, keyword, phrase, tag, title
 ### Operations
 
 **Trace**:
-One opted-in API request, recorded as the ordered touches it made and joined by the job runs of the
-jobs it enqueued. It holds what was touched, never what was asked: stations, key classes, table
-names, timings and outcome classes, and no key, URL, SQL value, header, id or search text
-(ADR-0029). A request is traced only when tracing is on and it presents the token; every other
-request is served exactly as it would be without the feature.
+One API request made while tracing was on, recorded as the ordered touches it made, joined by the
+job runs of the jobs it enqueued, and labelled with its subject. Its touches and job runs hold what
+was touched — stations, key classes, table names, timings and outcome classes, and no key, URL, SQL
+value, header or job id (ADR-0029); only the record's subject holds what was asked (ADR-0031).
+While tracing is on, every request to a traceable route is traced, within a per-instance budget.
 _Avoid_: span, replay, recording, request log
+
+**Subject**:
+What a traced request asked for: a search's keywords and filters, or the storylines a view or an
+open named — with each one's label where the reply carried it, and its id alone where it did not
+(ADR-0031). The one free text a trace holds, on the request record alone.
+_Avoid_: query (the canonical search owns it), payload
 
 **Touch**:
 One call from our code to one station: when it started, how long it took, and an outcome class
@@ -164,9 +170,8 @@ _Avoid_: span, event, hop, call
 
 **Station**:
 A dependency a touch can reach: the CDN edge, the rate limiter, Redis, Postgres, the queue,
-Currents, Google News, Gemini. The playback page draws each as a machine. The edge is only ever
-drawn from what the browser saw, and no server records it: a CDN cache answer runs no function,
-and a platform 504 answers in place of one that never got to store a trace.
+Currents, Google News, Gemini. The playback page draws each as a machine. No server records the
+edge: a CDN cache answer runs no function. Only the playback tests' fixtures still hold one.
 _Avoid_: service, backend
 
 **Job run**:
@@ -176,5 +181,6 @@ both asked for is one job run appended to each.
 _Avoid_: delivery (the platform's word, which excludes the drain), chore run
 
 **Playback**:
-The page at `/?trace` that animates a trace — a built-in example, or a recorded one by its id.
+The page at `/?trace` that animates a recorded trace, picked from a dropdown of the newest ten or
+named by its id (ADR-0031).
 _Avoid_: replay

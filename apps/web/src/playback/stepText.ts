@@ -34,12 +34,11 @@ import {
   type TouchOutcome,
   type TraceEnvironment,
   type TraceReadResponse,
+  type TraceSubject,
+  type TraceSummary,
   type UpstreamFailure,
 } from "@zammy/shared/request-trace";
 import type { Step, Stop, Timeline } from "./choreography.js";
-
-/** Where the trace on screen came from: a built-in example, the API's store, or the browser. */
-export type PlaybackSource = "example" | "recorded" | "browser";
 
 /**
  * Longest caption a bubble can hold, in glyphs: what `ActorPose.bubble` promises
@@ -570,6 +569,38 @@ export function describeHeadline(trace: RequestTrace): string {
 }
 
 /**
+ * What the request asked for, in words (ADR-0031), or null when it named nothing:
+ * `“quokka zebra” (en, AU)`, `storyline “Nepal Flash Floods”`, or — where the reply carried no
+ * label, as a storyline open's does not — the storyline's id.
+ */
+export function describeSubject(subject: TraceSubject | null | undefined): string | null {
+  if (!subject) return null;
+  const parts: string[] = [];
+  if (subject.keywords !== undefined) parts.push(`“${subject.keywords}”`);
+  if (subject.storylines && subject.storylines.length > 0) {
+    const names = subject.storylines.map((s) => (s.label ? `“${s.label}”` : s.id));
+    parts.push(`${subject.storylines.length === 1 ? "storyline" : "storylines"} ${names.join(", ")}`);
+  }
+  const filters = [subject.language, subject.country].filter((f) => f !== undefined);
+  if (filters.length > 0) {
+    parts.push(parts.length > 0 ? `(${filters.join(", ")})` : `language ${filters.join(", ")}`);
+  }
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+
+/**
+ * One recent trace as the dropdown lists it:
+ * "12:04:31 · search “quokka zebra” → 200 in 812 ms". `time` formats the start (a parameter so
+ * a test need not depend on the machine's time zone).
+ */
+export function describeSummary(summary: TraceSummary, time: (iso: string) => string): string {
+  const subject = describeSubject(summary.subject);
+  const kind = ROUTE_KINDS[summary.route];
+  const ask = subject === null ? kind : `${kind} ${subject}`;
+  return `${time(summary.startedAt)} · ${ask} → ${summary.status} in ${formatMs(summary.ms)}`;
+}
+
+/**
  * What a trace the BROWSER drew says answered it, read off its one edge touch —
  * or null for a trace a function recorded.
  *
@@ -598,19 +629,13 @@ export function routeLabel(trace: RequestTrace): string {
  * What the page cannot see, or is only guessing, about this trace — each note
  * present only when it applies. Shown under the stage as the legend.
  */
-export function honestyNotes(
-  response: TraceReadResponse,
-  source: PlaybackSource,
-): readonly string[] {
+export function honestyNotes(response: TraceReadResponse): readonly string[] {
   const { trace, runs } = response;
   const notes: string[] = [];
   const records = [trace, ...runs];
   const all = records.flatMap((r) => r.touches);
   const upstream = new Set<Station>(["queue", "currents", "google_news", "gemini"]);
 
-  if (source === "example") {
-    notes.push("Timings are illustrative; the path is the one the code takes.");
-  }
   const edge = edgeAnswer(trace);
   if (edge === "cache") {
     notes.push(

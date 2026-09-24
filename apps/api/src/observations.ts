@@ -66,16 +66,15 @@ export const TRACE_UNSTORED_MESSAGE =
   "request trace not stored: its record or a job run did not reach Redis (ADR-0029)";
 
 /**
- * A request that presented the trace header and was not traced (ADR-0029):
- * a wrong token, the per-minute open budget spent, or the concurrent cap hit.
+ * A traceable request that was not traced (ADR-0029, ADR-0031): the
+ * per-minute open budget spent, or the concurrent cap hit.
  *
- * Logged at DEBUG, and the reason is deliberately the only field. The request
- * itself is served untraced with no signal at all — no error and no header —
- * so that the header cannot be used to probe for the token; a line at warn
- * would be a probe with a log-volume side channel.
+ * Logged at DEBUG, and the reason is deliberately the only field: with every
+ * traceable request traced while the flag is on, a line at warn would be one
+ * per reader request past the budget.
  */
 export const TRACE_NOT_OPENED_MESSAGE =
-  "request trace not opened: token, budget or capacity (ADR-0029)";
+  "request trace not opened: budget or capacity (ADR-0029)";
 
 /** The narrowest logger these lines need. `info` optional, as every dep has it. */
 export interface ObservationLog {

@@ -14,7 +14,7 @@ import {
   type Stop,
   type Timeline,
 } from "./choreography.js";
-import { EXAMPLE_TRACES, exampleBySlug } from "./exampleTraces.js";
+import { TRACE_FIXTURES, traceFixture } from "./fixtures/traceFixtures.js";
 import { STEP_HOLD_MS, initialTransport, transport } from "./playbackClock.js";
 
 /**
@@ -29,7 +29,7 @@ import { STEP_HOLD_MS, initialTransport, transport } from "./playbackClock.js";
  */
 
 function example(slug: string) {
-  const found = exampleBySlug(slug);
+  const found = traceFixture(slug);
   if (!found) throw new Error(`no example ${slug}`);
   return found.response;
 }
@@ -84,7 +84,7 @@ function synthetic(
   };
 }
 
-const TIMELINES: readonly { slug: string; timeline: Timeline }[] = EXAMPLE_TRACES.flatMap((e) =>
+const TIMELINES: readonly { slug: string; timeline: Timeline }[] = TRACE_FIXTURES.flatMap((e) =>
   (["readable", "real"] as const).map((pace) => ({
     slug: `${e.slug} (${pace})`,
     timeline: buildTimeline(e.response, { pace }),
@@ -205,7 +205,7 @@ describe("planPart", () => {
 
 describe("buildTimeline", () => {
   it("is deterministic: the same response always builds the same timeline", () => {
-    for (const e of EXAMPLE_TRACES) {
+    for (const e of TRACE_FIXTURES) {
       for (const pace of ["readable", "real"] as const) {
         expect(buildTimeline(e.response, { pace })).toEqual(buildTimeline(e.response, { pace }));
       }
@@ -237,7 +237,7 @@ describe("buildTimeline", () => {
   });
 
   it("puts every request touch in exactly one stop, or in the elision", () => {
-    for (const e of EXAMPLE_TRACES) {
+    for (const e of TRACE_FIXTURES) {
       const timeline = buildTimeline(e.response, { pace: "readable" });
       const drawn = timeline.steps
         .filter((s) => s.part.kind === "request" && s.stop)
@@ -367,7 +367,7 @@ describe("buildTimeline", () => {
   });
 
   it("keeps the order at real pace and never plays a stop shorter than it really took", () => {
-    for (const e of EXAMPLE_TRACES) {
+    for (const e of TRACE_FIXTURES) {
       const readable = buildTimeline(e.response, { pace: "readable" });
       const real = buildTimeline(e.response, { pace: "real" });
       const key = (s: Step) => `${s.kind}|${s.actor}|${s.station}|${s.realAt}`;

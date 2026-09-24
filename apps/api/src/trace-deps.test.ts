@@ -40,7 +40,6 @@ import { createTraceRuntime, traceJobKey, type TraceRuntime } from "./trace-stor
 
 const REDIS_URL = process.env.TEST_REDIS_URL ?? "redis://localhost:6379";
 const FIXTURES_DIR = new URL("../../../fixtures/", import.meta.url).pathname;
-const TOKEN = "t".repeat(32);
 
 const ENVIRONMENT: TraceEnvironment = {
   queue: "bullmq",
@@ -61,7 +60,6 @@ function traceConfig(overrides: Record<string, string> = {}): Config {
     CURRENTS_USER_AGENT: "zammy-tests/0.1",
     FIXTURES_DIR,
     REQUEST_TRACE_ENABLED: "true",
-    REQUEST_TRACE_TOKEN: TOKEN,
     ...overrides,
   } as NodeJS.ProcessEnv);
 }

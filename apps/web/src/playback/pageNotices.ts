@@ -7,7 +7,7 @@
  * Its own module for `railAnnouncement.ts`'s reason: `apps/web` has no renderer
  * in its tests, so a sentence assembled inline in `PlaybackPage.tsx` is guarded
  * by nothing, and these sentences are the page's most important ones — the
- * explanation of why a recording did not become a playback. Every one of them
+ * explanation of why a trace could not be played back. Every one of them
  * says ONLY what the page knows. A response header tells it whether a trace was
  * stored and a status code tells it how the request ended; neither tells it
  * WHY, and a sentence that names one cause where several fit sends the operator
@@ -17,8 +17,8 @@
  *
  * The live-region half follows the house pattern (`RailAnnouncer`,
  * `PlaybackAnnouncer.tsx`): one polite region, one sentence, set ONCE per
- * event — a reader's transport action, a record run coming back, a read of the
- * trace settling — and never per frame or per identical poll.
+ * event — a reader's transport action, a read of the trace settling — and never
+ * per frame or per identical poll.
  *
  * Deliberately not here: any decision about polling (`tracePoll.ts`) or about
  * what a response header means (`traceFetch.ts`); this module only words what
@@ -27,7 +27,7 @@
 import type { CSSProperties } from "react";
 import { ApiError } from "../api.js";
 import { describeHeadline } from "./stepText.js";
-import { TraceNotFound, type RecordResult } from "./traceFetch.js";
+import { TraceNotFound, TracingOff } from "./traceFetch.js";
 import { pollStatus, type PollStatus, type PolledTrace } from "./tracePoll.js";
 
 const jobRuns = (n: number) => (n === 1 ? "1 job run" : `${n} job runs`);
@@ -37,7 +37,7 @@ const jobRuns = (n: number) => (n === 1 ? "1 job run" : `${n} job runs`);
  * `--fg`, and the amber that marks it as a warning carried by a bar beside it.
  * The words were amber once, and in the light theme `--amber` (#b58900) is
  * 3.21:1 on `--surface` and 3.07:1 on `--bg`, under WCAG 1.4.3's 4.5:1 for text
- * this size — on the very sentences that say why a recording failed. The bar
+ * this size — on the very sentences that say why a trace could not be read. The bar
  * is a graphic, where 3:1 is the bar (1.4.11), and the words carry the meaning
  * without it. The tokens stay as they are: the rest of the app uses them.
  */
@@ -49,55 +49,21 @@ export const NOTICE_TEXT: CSSProperties = {
   lineHeight: 1.5,
 };
 
-// ── a record run coming back ────────────────────────────────────────────────
+// ── the recent list failing ─────────────────────────────────────────────────
 
 /**
- * The status plate's notice for a record run that did not become a stored
- * trace; null for `traced` (the read that follows speaks for it) and `invalid`
- * (the record panel shows its own form errors, next to the field at fault).
+ * Why the dropdown has nothing to offer. `TracingOff` is the route's absence, which is final;
+ * anything else (a 503 from a store that is down, the route's own 429) may pass.
  */
-export function recordNotice(result: RecordResult): string | null {
-  switch (result.kind) {
-    case "traced":
-    case "invalid":
-      return null;
-    case "browser":
-      return result.cause === "cache"
-        ? "The CDN answered that request from its cache, so no function ran and nothing was " +
-            "traced: the browser drew this one from the response headers. It is not saved and " +
-            "has no link."
-        : // A 504 with no id: the platform answered in the API's place. A function may well
-          // have run for its whole time limit, so nothing here may say none did.
-          "That request came back 504 with no trace id: the platform answered in the API's " +
-            "place, most likely because the function ran to its time limit and was stopped " +
-            "before it could store a trace (an edge that cannot reach the function answers " +
-            "the same way). The browser drew this one from what it saw. It is not saved and " +
-            "has no link.";
-    case "unstored":
-      // Three causes send `unstored` (`trace-http.ts`): a draft that failed its own
-      // schema, a write Redis refused or was not ready for, and anything thrown.
-      return (
-        `The API traced that request (status ${result.status}) but could not store the ` +
-        "trace: the store was not ready, the write failed, or the record was refused, and " +
-        "the API's log says which. Nothing was saved to play back."
-      );
-    case "untraced":
-      return (
-        `That request was answered (status ${result.status}) but not traced. Tracing may be ` +
-        "off (REQUEST_TRACE_ENABLED), the token may be wrong, or this instance's trace " +
-        "budget is spent; the API does not say which, on purpose."
-      );
+export function recentFailureNotice(error: unknown): string {
+  if (error instanceof TracingOff) {
+    return (
+      "Tracing is off on this API (REQUEST_TRACE_ENABLED=false), so there are no recorded " +
+      "traces to list."
+    );
   }
-}
-
-/**
- * What to say out loud when a record run comes back: its notice, or for a
- * stored trace that the read has begun. Null for `invalid`, which the record
- * panel announces itself (`role="alert"`).
- */
-export function recordAnnouncement(result: RecordResult): string | null {
-  if (result.kind === "traced") return "Recorded. Reading the trace…";
-  return recordNotice(result);
+  const status = error instanceof ApiError ? ` (status ${error.status})` : "";
+  return `The list of recorded traces could not be read${status}.`;
 }
 
 // ── a read of a recorded trace failing ──────────────────────────────────────
@@ -105,7 +71,7 @@ export function recordAnnouncement(result: RecordResult): string | null {
 /**
  * Why a recorded trace could not be read, and whether asking again could help.
  * `hadCopy`: an earlier read succeeded, so the page is still playing that copy
- * (a poll or "Check again" failed); without one it shows the default example.
+ * (a poll or "Check again" failed); without one the stage is empty.
  *
  * A 404 is final and has four causes the page cannot tell apart (`TraceNotFound`):
  * expired, mistyped, a record a newer API wrote, or no read route because tracing
@@ -128,8 +94,8 @@ export function readFailureNotice(
           text:
             "The API has no trace with that id (404). It may have expired (a trace lasts " +
             "REQUEST_TRACE_TTL_SECONDS, an hour by default), the id may be mistyped, or " +
-            "tracing may be off on this API; a 404 does not say which. The default example " +
-            "is showing instead.",
+            "tracing may be off on this API; a 404 does not say which. Pick another from " +
+            "the list.",
           retry: false,
         };
   }
@@ -140,7 +106,7 @@ export function readFailureNotice(
         retry: true,
       }
     : {
-        text: `The trace could not be read${status}. The default example is showing meanwhile.`,
+        text: `The trace could not be read${status}.`,
         retry: true,
       };
 }
@@ -239,7 +205,7 @@ export function readAnnouncement(
 /**
  * The text to put in the live region for the `serial`-th thing said. A region
  * is announced when its contents CHANGE, so saying the same sentence twice in a
- * row — a second record run refused the same way, a second "Check again" that
+ * row — a second poll refused the same way, a second "Check again" that
  * found nothing — would be silence the second time. Every other sentence
  * carries a trailing no-break space, which a screen reader does not voice and
  * which makes it a change.

@@ -16,13 +16,14 @@ import {
   type TraceEnvironment,
 } from "@zammy/shared/request-trace";
 import { buildTimeline, type Stop } from "./choreography.js";
-import { EXAMPLE_TRACES, exampleBySlug } from "./exampleTraces.js";
-import { browserOnlyTrace } from "./traceFetch.js";
+import { TRACE_FIXTURES, traceFixture } from "./fixtures/traceFixtures.js";
 import {
   canvasMs,
   captionFor,
   describeHeadline,
   describeStep,
+  describeSubject,
+  describeSummary,
   formatMs,
   honestyNotes,
   keyClassLabel,
@@ -249,14 +250,14 @@ describe("names and plates", () => {
   });
 
   it("writes the route label in the font", () => {
-    for (const e of EXAMPLE_TRACES) expect(fontSafe(routeLabel(e.response.trace))).toBe(true);
-    expect(routeLabel(exampleBySlug("cold-search")!.response.trace)).toBe("GET /API/V1/TIMELINE");
+    for (const e of TRACE_FIXTURES) expect(fontSafe(routeLabel(e.response.trace))).toBe(true);
+    expect(routeLabel(traceFixture("cold-search")!.response.trace)).toBe("GET /API/V1/TIMELINE");
   });
 });
 
 describe("describeStep", () => {
   it("never leaks undefined, NaN or null into any step of any example, at either pace", () => {
-    for (const e of EXAMPLE_TRACES) {
+    for (const e of TRACE_FIXTURES) {
       for (const pace of ["readable", "real"] as const) {
         const timeline = buildTimeline(e.response, { pace });
         for (const step of timeline.steps) {
@@ -270,7 +271,7 @@ describe("describeStep", () => {
   });
 
   it("describes a Redis stop as who · station · command · key class · outcome · time", () => {
-    const timeline = buildTimeline(exampleBySlug("cold-search")!.response, { pace: "readable" });
+    const timeline = buildTimeline(traceFixture("cold-search")!.response, { pace: "readable" });
     const lock = timeline.steps.find((s) => s.key === "fill_lock" && s.part.kind === "request")!;
     expect(describeStep(lock, timeline)).toBe(
       `Step ${lock.index + 1} of ${timeline.steps.length} · Request · Redis · SET · ` +
@@ -279,7 +280,7 @@ describe("describeStep", () => {
   });
 
   it("names a redelivered job's attempt and when it started", () => {
-    const response = exampleBySlug("cold-search")!.response;
+    const response = traceFixture("cold-search")!.response;
     const timeline = buildTimeline(response, { pace: "readable" });
     const retry = response.runs.findLastIndex((r) => r.ref === "4");
     const start = timeline.steps.find(
@@ -300,7 +301,7 @@ describe("describeStep", () => {
   });
 
   it("says a helper's call ran in parallel, and that it never ended", () => {
-    const timeline = buildTimeline(exampleBySlug("cold-search")!.response, { pace: "readable" });
+    const timeline = buildTimeline(traceFixture("cold-search")!.response, { pace: "readable" });
     const gemini = timeline.steps.find((s) => s.station === "gemini")!;
     const text = describeStep(gemini, timeline);
     expect(text).toContain("Request, in parallel · Gemini · generate (label)");
@@ -311,33 +312,35 @@ describe("describeStep", () => {
 
 describe("describeHeadline", () => {
   it("summarises the request in one line", () => {
-    expect(describeHeadline(exampleBySlug("cold-search")!.response.trace)).toBe(
+    expect(describeHeadline(traceFixture("cold-search")!.response.trace)).toBe(
       "GET /api/v1/timeline (search, q) → 200 in 1,204 ms · served from upstream · 4 jobs pending",
     );
   });
 
   it("names the planes of a storyline open and the edge of a CDN hit", () => {
-    expect(describeHeadline(exampleBySlug("storyline-open")!.response.trace)).toContain(
+    expect(describeHeadline(traceFixture("storyline-open")!.response.trace)).toContain(
       "refresh queued · deepening queued · summaries queued",
     );
-    const edge = exampleBySlug("edge-hit")!.response.trace;
+    const edge = traceFixture("edge-hit")!.response.trace;
     expect(describeHeadline(edge)).toContain("no function ran");
   });
 
   it("never says no function ran of a platform 504, which the browser draws as an edge miss", () => {
-    const timeout = browserOnlyTrace({
-      startedAt: new Date("2026-09-01T12:00:00.000Z"),
-      status: 504,
-      ms: 60_000,
-      route: "timeline_search",
-      method: "GET",
-      queryKeys: ["q"],
-      cache: "MISS",
-    });
+    const edge = traceFixture("edge-hit")!.response;
+    const timeout = {
+      ...edge,
+      trace: {
+        ...edge.trace,
+        status: 504,
+        touches: edge.trace.touches.map((t) =>
+          t.station === "edge" ? { ...t, outcome: "miss" as const } : t,
+        ),
+      },
+    };
     const headline = describeHeadline(timeout.trace);
     expect(headline).toContain("the platform answered in the API's place");
     expect(headline).not.toMatch(/no function ran|CDN edge/);
-    const notes = honestyNotes(timeout, "browser");
+    const notes = honestyNotes(timeout);
     expect(notes.some((n) => n.startsWith("Nothing was recorded: the platform answered 504"))).toBe(
       true,
     );
@@ -345,7 +348,7 @@ describe("describeHeadline", () => {
   });
 
   it("never leaks a missing field into any example's headline", () => {
-    for (const e of EXAMPLE_TRACES) {
+    for (const e of TRACE_FIXTURES) {
       expect(describeHeadline(e.response.trace)).not.toMatch(/undefined|NaN|null/);
     }
   });
@@ -353,8 +356,7 @@ describe("describeHeadline", () => {
 
 describe("honestyNotes", () => {
   it("tells the cold search's reader about the elision and the call still running", () => {
-    const notes = honestyNotes(exampleBySlug("cold-search")!.response, "example");
-    expect(notes.some((n) => n.includes("illustrative"))).toBe(true);
+    const notes = honestyNotes(traceFixture("cold-search")!.response);
     expect(notes.some((n) => n.includes("elided"))).toBe(true);
     expect(notes.some((n) => n.includes("1 call was still running"))).toBe(true);
     expect(notes.some((n) => n.includes("inferred"))).toBe(true);
@@ -363,23 +365,23 @@ describe("honestyNotes", () => {
   });
 
   it("says nothing it cannot back up", () => {
-    const notes = honestyNotes(exampleBySlug("rate-limited")!.response, "recorded");
+    const notes = honestyNotes(traceFixture("rate-limited")!.response);
     expect(notes).toEqual([
       "The rate-limit step is inferred from hook timing and the x-ratelimit headers, not observed.",
     ]);
   });
 
   it("owns up to a browser-only trace, and to linked jobs nobody saw run", () => {
-    const edge = exampleBySlug("edge-hit")!.response;
-    expect(honestyNotes(edge, "browser").some((n) => n.startsWith("No function ran"))).toBe(true);
-    const cold = exampleBySlug("cold-search")!.response;
+    const edge = traceFixture("edge-hit")!.response;
+    expect(honestyNotes(edge).some((n) => n.startsWith("No function ran"))).toBe(true);
+    const cold = traceFixture("cold-search")!.response;
     const orphaned = { ...cold, runs: cold.runs.filter((r) => r.ref !== "3") };
-    const notes = honestyNotes(orphaned, "recorded");
+    const notes = honestyNotes(orphaned);
     expect(notes.some((n) => n.startsWith("1 linked job has no recorded run"))).toBe(true);
   });
 
   it("reports fixture mode and a shared run", () => {
-    const cold = exampleBySlug("cold-search")!.response;
+    const cold = traceFixture("cold-search")!.response;
     const fixture = {
       ...cold,
       trace: {
@@ -391,8 +393,52 @@ describe("honestyNotes", () => {
       },
       runs: cold.runs.map((r, i) => (i === 0 ? { ...r, sharedWith: 2 } : r)),
     };
-    const notes = honestyNotes(fixture, "recorded");
+    const notes = honestyNotes(fixture);
     expect(notes.some((n) => n.startsWith("Currents is in fixture mode"))).toBe(true);
     expect(notes.some((n) => n.startsWith("A job run was shared"))).toBe(true);
+  });
+});
+
+// ADR-0031: what a trace asked for, in the plate's and the dropdown's words.
+describe("describeSubject", () => {
+  const A = "1b671a64-40d5-491e-99b0-da01ff1f3341";
+
+  it("quotes keywords and labels, and names an unlabelled storyline by its id", () => {
+    expect(describeSubject({ keywords: "quokka zebra", language: "en", country: "au" })).toBe(
+      "“quokka zebra” (en, au)",
+    );
+    expect(describeSubject({ storylines: [{ id: A, label: "Nepal Flash Floods" }] })).toBe(
+      "storyline “Nepal Flash Floods”",
+    );
+    expect(describeSubject({ storylines: [{ id: A }, { id: A, label: null }] })).toBe(
+      `storylines ${A}, ${A}`,
+    );
+    expect(describeSubject({ language: "fr" })).toBe("language fr");
+  });
+
+  it("is null for a trace that asked nothing, or predates subjects", () => {
+    expect(describeSubject(null)).toBeNull();
+    expect(describeSubject(undefined)).toBeNull();
+    expect(describeSubject({})).toBeNull();
+  });
+});
+
+describe("describeSummary", () => {
+  it("reads as when, what was asked, and how it answered", () => {
+    const summary = {
+      id: "3f2b8c1e-9a4d-4e7f-8b21-0c5d6e7f8a9b",
+      route: "timeline_search" as const,
+      method: "GET" as const,
+      status: 200,
+      startedAt: "2026-09-01T12:04:31.000Z",
+      ms: 812,
+      subject: { keywords: "quokka zebra" },
+    };
+    expect(describeSummary(summary, () => "12:04:31")).toBe(
+      `12:04:31 · search “quokka zebra” → 200 in ${formatMs(812)}`,
+    );
+    expect(describeSummary({ ...summary, route: "reference", subject: null }, () => "t")).toBe(
+      `t · reference → 200 in ${formatMs(812)}`,
+    );
   });
 });

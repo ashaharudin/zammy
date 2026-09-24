@@ -15,6 +15,7 @@ import {
   createTraceRuntime,
   traceJobKey,
   traceKey,
+  traceRecentKey,
   traceRunsKey,
   type TraceRuntime,
 } from "./trace-store.js";
@@ -33,7 +34,6 @@ import {
  */
 
 const REDIS_URL = process.env.TEST_REDIS_URL ?? "redis://localhost:6379";
-const TOKEN = "t".repeat(32);
 
 const ENVIRONMENT: TraceEnvironment = {
   queue: "bullmq",
@@ -50,7 +50,6 @@ function traceConfig(overrides: Record<string, string> = {}): Config {
     REDIS_URL,
     CURRENTS_USER_AGENT: "zammy-tests/0.1",
     REQUEST_TRACE_ENABLED: "true",
-    REQUEST_TRACE_TOKEN: TOKEN,
     ...overrides,
   } as NodeJS.ProcessEnv);
 }
@@ -155,7 +154,6 @@ describe("createTraceRuntime", () => {
     const rt = freshRuntime(traceConfig({ REQUEST_TRACE_TTL_SECONDS: "7200" }));
     expect(rt.ttlMs).toBe(7_200_000);
     expect(rt.maxTouches).toBe(240);
-    expect(rt.token).toBe(TOKEN);
     expect(rt.defaultSource).toBe("bullmq");
     expect(freshRuntime(traceConfig({ INGEST_QUEUE_DRIVER: "vercel" })).defaultSource).toBe(
       "vercel_queue",
@@ -192,6 +190,22 @@ describe("putTrace and readTrace", () => {
     expect(read?.expiresAt).toBe(
       new Date(Date.parse("2026-09-01T12:00:00.000Z") + rt.ttlMs).toISOString(),
     );
+  });
+
+  it("lists each stored id at the head of the recent list, with the record's TTL", async () => {
+    const rt = freshRuntime();
+    const first = randomUUID();
+    const second = randomUUID();
+    await rt.putTrace(record(first));
+    await rt.putTrace(record(second));
+
+    const key = traceRecentKey(queueName);
+    expect(key).toBe(`${queueName}:trace:recent`);
+    expect(await redis.lrange(key, 0, -1)).toEqual([second, first]);
+    const pttl = await redis.pttl(key);
+    expect(pttl).toBeGreaterThan(0);
+    expect(pttl).toBeLessThanOrEqual(rt.ttlMs);
+    expect((await rt.readRecent()).map((summary) => summary.id)).toEqual([second, first]);
   });
 
   it("answers null for an id it never stored", async () => {

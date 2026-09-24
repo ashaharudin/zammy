@@ -56,7 +56,7 @@
 
 import { queryOptions } from "@tanstack/react-query";
 import type { TraceReadResponse, Touch } from "@zammy/shared/request-trace";
-import { fetchTrace, TraceNotFound } from "./traceFetch.js";
+import { fetchRecentTraces, fetchTrace, TraceNotFound, TracingOff } from "./traceFetch.js";
 
 /**
  * The cadence, by the trace's age (`traceAgeMs`): `everyMs` applies while the
@@ -255,5 +255,26 @@ export function traceQueryOptions(id: string | null, deps: TraceQueryDeps = {}) 
     enabled: id !== null,
     refetchInterval: (query) => nextPollDelay(query.state, now()),
     retry: (failures, error) => !(error instanceof TraceNotFound) && failures < 1,
+  });
+}
+
+/**
+ * How often the dropdown's list is re-read while the page is open (ADR-0031): three Redis
+ * commands a read (the limiter's, `LRANGE`, `MGET`), so a page left open for an hour spends
+ * about 360 — and "Refresh" is there for an operator who has just made a request.
+ */
+export const RECENT_POLL_MS = 20_000;
+
+/** The recent list's query: polled, never while tracing is off, and retried once otherwise. */
+export function recentTracesQueryOptions(
+  deps: { read?: typeof fetchRecentTraces } = {},
+) {
+  const read = deps.read ?? fetchRecentTraces;
+  return queryOptions({
+    queryKey: ["recent-traces"] as const,
+    queryFn: ({ signal }) => read(signal),
+    refetchInterval: (query) => (query.state.error instanceof TracingOff ? false : RECENT_POLL_MS),
+    refetchIntervalInBackground: false,
+    retry: (failures, error) => !(error instanceof TracingOff) && failures < 1,
   });
 }

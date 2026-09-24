@@ -1097,37 +1097,26 @@ const EnvSchema = z
           "STORYLINE_LABEL_MERGE_TRIGGER=1 costs a candidate read per label and can never merge (a shared label needs two holders). Use 0 to disable, or 2.",
       })
       .default(2),
-    // --- request traces and the playback view (ADR-0029) ---
+    // --- request traces and the playback view (ADR-0029, ADR-0031) ---
     /**
-     * Off by default. When on, a request that presents the token in `x-zammy-trace`
-     * is recorded as the stations it touched (never what it asked) and can be played
-     * back at `/?trace`. An enum, not a truthiness test, for the reason
-     * GROUPING_ENABLED gives: `REQUEST_TRACE_ENABLED=ture` must refuse to boot.
+     * Off by default. When on, every request to a traceable route is recorded as
+     * the stations it touched and what it asked for (ADR-0031), the newest ten are
+     * listed, and any of them can be played back at `/?trace`. There is no token:
+     * the flag IS the opt-in, and turning it on exposes the last ten searches and
+     * storylines to anyone who can reach the API. An enum, not a truthiness test,
+     * for the reason GROUPING_ENABLED gives: `REQUEST_TRACE_ENABLED=ture` must
+     * refuse to boot.
      *
      * Off means ABSENT rather than idle: no hook, no route, no decorator and no
      * consumer-side lookup is registered, so an untraced deployment runs exactly
      * the code it ran before the feature existed. On costs one `SMEMBERS` per job
-     * delivery, which is why the operating policy is on for a session, then off.
+     * delivery and four commands per traced request, which is why the operating
+     * policy is on for a session, then off.
      */
     REQUEST_TRACE_ENABLED: z
       .enum(["true", "false"])
       .default("false")
       .transform((value) => value === "true"),
-    /**
-     * The opt-in. Required when enabled, in EVERY environment (superRefine below):
-     * the flag on with no token REFUSES TO BOOT — the API, the consumer and the
-     * drain alike — rather than run a tracer that nobody (or anybody) can open.
-     * Stricter than CRON_SECRET, whose unset secret only switches its route off:
-     * this flag was turned on by someone who meant it, so the misconfiguration
-     * is told to them at deploy time instead of discovered as silence.
-     * `|| undefined` for SUMMARY_API_KEY's reason — `.env.example` ships it present
-     * and empty, and an empty string must read as unset, not as a zero-length token.
-     */
-    REQUEST_TRACE_TOKEN: z
-      .string()
-      .trim()
-      .optional()
-      .transform((value) => value || undefined),
     /**
      * How long a trace, its job links and its job runs live. ≥ 1800 because a
      * drained run arrives 15–25 minutes after enqueue (drain.ts takes entries
@@ -1735,38 +1724,6 @@ const EnvSchema = z
           "which discards history the upstream can no longer supply.",
       });
     }
-
-    // Request traces (ADR-0029). The token is the whole of the opt-in, so the
-    // three ways it can be wrong are refused at boot rather than discovered as a
-    // tracer that either never opens or opens for anyone.
-    if (env.REQUEST_TRACE_ENABLED && !env.REQUEST_TRACE_TOKEN) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["REQUEST_TRACE_TOKEN"],
-        message:
-          "REQUEST_TRACE_TOKEN is required when REQUEST_TRACE_ENABLED=true, so this " +
-          "process refuses to start: set the token, or set REQUEST_TRACE_ENABLED=false " +
-          "(ADR-0029). Generate one with `openssl rand -hex 16`.",
-      });
-    }
-    if (env.REQUEST_TRACE_TOKEN && env.REQUEST_TRACE_TOKEN.length < 24) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["REQUEST_TRACE_TOKEN"],
-        message: "REQUEST_TRACE_TOKEN must be at least 24 characters",
-      });
-    }
-    // Whitespace inside the token cannot survive the header it travels in: the
-    // comparison is against `Bearer <token>` exactly, and a proxy or a copy-paste
-    // that folds or trims it would make a token nobody can ever present.
-    if (env.REQUEST_TRACE_TOKEN && /\s/.test(env.REQUEST_TRACE_TOKEN)) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["REQUEST_TRACE_TOKEN"],
-        message:
-          "REQUEST_TRACE_TOKEN must not contain whitespace; it travels as `Bearer <token>`",
-      });
-    }
   });
 
 export type Config = z.infer<typeof EnvSchema>;
@@ -1807,7 +1764,6 @@ export function redactConfig(config: Config): Record<string, unknown> {
     GEMINI_API_KEY,
     SUMMARY_API_KEY,
     CRON_SECRET,
-    REQUEST_TRACE_TOKEN,
     DATABASE_URL,
     DATABASE_SESSION_URL,
     DATABASE_CA_CERT,
@@ -1825,9 +1781,6 @@ export function redactConfig(config: Config): Record<string, unknown> {
     // A bearer token is a password: it authenticates the one route that can
     // spend quota unprompted.
     CRON_SECRET: CRON_SECRET ? "[redacted]" : null,
-    // The same kind of bearer token (ADR-0029): whoever holds it can open
-    // traces, and the boot line is exactly where a copy of it would otherwise sit.
-    REQUEST_TRACE_TOKEN: REQUEST_TRACE_TOKEN ? "[redacted]" : null,
     DATABASE_URL: redactUrlCredentials(DATABASE_URL),
     // A second URL is a second password (§4.1's session-mode connection).
     DATABASE_SESSION_URL: DATABASE_SESSION_URL
