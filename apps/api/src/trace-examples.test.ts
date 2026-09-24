@@ -79,11 +79,13 @@ const SIGNATURES: Record<string, string[]> = {
     "queue:segment",
     "redis:pending_ledger",
   ],
+  // The deepening plane is planned before the reference read, because the
+  // Currents top-up may defer to it (ADR-0017, amended).
   "storyline-open": [
     "rate_limit:counted",
+    "queue:deepen",
     "redis:reference",
     "queue:topup",
-    "queue:deepen",
     "queue:summarize",
   ],
   "rate-limited": ["rate_limit:limited"],
@@ -368,13 +370,15 @@ describe("what the API records, against the examples", () => {
 
     const planes = trace.planes as PlaneStatuses;
     expect(planes).not.toBeNull();
-    const expected = ["rate_limit:counted", "redis:reference"];
+    const expected = ["rate_limit:counted"];
+    // Planned first (ADR-0017, amended), so its enqueue precedes the reference read.
+    if (planes.deepening === "queued") expected.push("queue:deepen");
+    expected.push("redis:reference");
     if (planes.refresh === "queued") {
       const queued = trace.touches.find((t) => t.station === "queue");
       expect(["segment", "topup"]).toContain(queued?.station === "queue" ? queued.job : null);
       expected.push(`queue:${queued?.station === "queue" ? queued.job : "topup"}`);
     }
-    if (planes.deepening === "queued") expected.push("queue:deepen");
     if (planes.summaries === "queued") expected.push("queue:summarize");
     expect(traceSignature(trace.touches)).toEqual(expected);
 
@@ -382,9 +386,9 @@ describe("what the API records, against the examples", () => {
     expect(drawn.trace.planes).toEqual({ refresh: "queued", deepening: "queued", summaries: "queued" });
     expect(traceSignature(drawn.trace.touches)).toEqual([
       "rate_limit:counted",
+      "queue:deepen",
       "redis:reference",
       "queue:topup",
-      "queue:deepen",
       "queue:summarize",
     ]);
   });

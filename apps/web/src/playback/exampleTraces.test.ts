@@ -40,11 +40,13 @@ const SIGNATURES: Readonly<Record<ExampleSlug, readonly string[]>> = {
     "queue:segment",
     "redis:pending_ledger",
   ],
+  // Deepening before the reference read: the route plans it first, because the
+  // Currents top-up may defer to it (ADR-0017, amended).
   "storyline-open": [
     "rate_limit:counted",
+    "queue:deepen",
     "redis:reference",
     "queue:topup",
-    "queue:deepen",
     "queue:summarize",
   ],
   "rate-limited": ["rate_limit:limited"],
@@ -74,8 +76,9 @@ const RUN_SIGNATURES: Readonly<Record<JobKind, readonly string[]>> = {
   topup: FILL_RUN,
   deepen: ["redis:deepen_lock", "google_news:search", "redis:deepen_lock"],
   summarize: ["redis:summarize_lock", "gemini:generate", "redis:summarize_lock"],
-  // No example runs a sample job; listed so the table is total over JobKind.
+  // No example runs a sample or a fallback job; listed so the table is total over JobKind.
   sample: [],
+  fallback: [],
 };
 
 function example(slug: ExampleSlug) {
@@ -170,9 +173,9 @@ describe("the path invariants", () => {
     }
   });
 
-  it("opens a storyline onto topup, deepen and summarize, as refs 1, 2, 3", () => {
+  it("opens a storyline onto deepen, topup and summarize, as refs 1, 2, 3", () => {
     const queued = queueTouches(example("storyline-open").response.trace.touches);
-    expect(queued.map((t) => t.job)).toEqual(["topup", "deepen", "summarize"]);
+    expect(queued.map((t) => t.job)).toEqual(["deepen", "topup", "summarize"]);
     expect(queued.map((t) => t.ref)).toEqual(["1", "2", "3"]);
   });
 

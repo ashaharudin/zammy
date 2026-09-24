@@ -33,6 +33,7 @@ import {
   type SummarizeJobDeps,
 } from "./storyline-summary-job.js";
 import { processDeepenJob } from "./storyline-deepening.js";
+import { processSearchFallbackJob, SEARCH_FALLBACK_REACH_MS } from "./search-fallback.js";
 import { processSampleJob, type TrendingDeps } from "./trending-service.js";
 import { traceRuns } from "./trace-dispatch.js";
 import { registerRequestTracing } from "./trace-http.js";
@@ -287,6 +288,16 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
         "GOOGLE_NEWS_ENABLED — a storyline open now also deepens the arc from " +
           "Google News; its articles join that arc by provenance and feed no ranking",
       );
+      if (config.SEARCH_FALLBACK_ENABLED) {
+        log.info(
+          {
+            reachDays: SEARCH_FALLBACK_REACH_MS / 86_400_000,
+            dailyLimit: config.SEARCH_FALLBACK_DAILY_CALL_LIMIT,
+          },
+          "SEARCH_FALLBACK_ENABLED — a search Currents refuses on quota is asked of " +
+            "Google News for its leading edge; those articles are search-plane and feed the ranking",
+        );
+      }
     }
 
     const db = createDb(pool);
@@ -317,6 +328,10 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
       redis,
       currents,
       ...(deepening ? { deepening } : {}),
+      // The same client, under the name the search fallback reads (ADR-0030),
+      // and only when that plane is switched on. Config refuses the flag without
+      // GOOGLE_NEWS_ENABLED, so `deepening` is present whenever this is asked.
+      ...(deepening && config.SEARCH_FALLBACK_ENABLED ? { searchFallback: deepening } : {}),
       queue,
       labeler,
       config: {
@@ -325,6 +340,7 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
         lookbackDays: config.CURRENTS_MAX_LOOKBACK_DAYS,
         minSegmentMs: MIN_SEGMENT_MS,
         perTopicDailyCallCap: config.PER_TOPIC_DAILY_CALL_CAP,
+        searchFallbackDailyCallCap: config.SEARCH_FALLBACK_DAILY_CALL_LIMIT,
         grouping: {
           enabled: config.GROUPING_ENABLED,
           threshold: config.GROUPING_SIMILARITY_THRESHOLD,
@@ -452,6 +468,7 @@ export function dispatchOver(
   return (job) => {
     if (job.kind === "sample") return processSampleJob(bundles.trendingDeps, job);
     if (job.kind === "deepen") return processDeepenJob(bundles.deps, job);
+    if (job.kind === "fallback") return processSearchFallbackJob(bundles.deps, job);
     if (job.kind === "summarize") return processSummarizeJob(bundles.summarizeDeps, job);
     return processSegmentJob(bundles.deps, job);
   };
@@ -606,6 +623,7 @@ export async function buildApp(
       deps: services.deps,
       defaultLanguage: config.DEFAULT_LANGUAGE,
       summariesEnabled: config.SUMMARIES_ENABLED,
+      refreshDefersToDeepening: config.STORYLINE_REFRESH_DEFERS_TO_DEEPENING,
     });
     registerTrendingRoute(app, { deps: services.trendingDeps });
 

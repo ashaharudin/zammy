@@ -212,6 +212,8 @@ export async function createTestHarness(
       // Non-binding by default: the recorded fixture is denser than a real
       // topic, and only the §9.4 tests are ABOUT the cap.
       perTopicDailyCallCap: 10_000,
+      // Non-binding for the same reason, and only the ADR-0030 tests are about it.
+      searchFallbackDailyCallCap: 10_000,
       grouping: shippedGroupingConfig(),
       ...configOverrides,
     },
@@ -288,6 +290,7 @@ export async function createReadHarness(
       lookbackDays: 30,
       minSegmentMs: 60 * 60 * 1000,
       perTopicDailyCallCap: 10_000,
+      searchFallbackDailyCallCap: 10_000,
       grouping: shippedGroupingConfig(),
       ...configOverrides,
     },

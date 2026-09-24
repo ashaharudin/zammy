@@ -1,5 +1,5 @@
 ---
-status: accepted (amended by ADR-0021: this ADR's accepted costs name one hazard for `plane` — a column that can be set wrong — and plan §G6 found a second that needs no mislabelling at all. `plane` gates which rows a ranking COUNTS; it cannot gate what a counted row SAYS, so an absorbed sighting was rewriting the timestamps of articles the cloud does count. ADR-0021 closes the timestamp half; the group-re-parenting half is open and recorded in §G6)
+status: accepted (amended by ADR-0021: this ADR's accepted costs name one hazard for `plane` — a column that can be set wrong — and plan §G6 found a second that needs no mislabelling at all. `plane` gates which rows a ranking COUNTS; it cannot gate what a counted row SAYS, so an absorbed sighting was rewriting the timestamps of articles the cloud does count. ADR-0021 closes the timestamp half; the group-re-parenting half is open and recorded in §G6. The "search" half of "Google News is intended to serve search and breadth" was never phased; ADR-0030 lands the smaller part of it, a quota FALLBACK for a reader's search, and leaves `PLANNED_COVERAGE_PROVIDER` at Currents)
 ---
 
 # A fetch carries its own reason, and its own coverage

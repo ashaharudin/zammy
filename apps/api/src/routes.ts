@@ -29,6 +29,7 @@ import {
   type StorylineSummaryJobDeps,
 } from "./storyline-summary-job.js";
 import {
+  deepeningServedLately,
   queueStorylineDeepening,
   type StorylineDeepeningDeps,
 } from "./storyline-deepening.js";
@@ -80,6 +81,13 @@ export interface QueryRouteOptions {
    * configure.
    */
   summariesEnabled?: boolean;
+  /**
+   * `STORYLINE_REFRESH_DEFERS_TO_DEEPENING` (ADR-0017, amended) — whether a
+   * storyline open skips ADR-0017's Currents top-up when the deepening plane has
+   * planned the same arc. An option for `summariesEnabled`'s reason, and false
+   * where it is read, so every caller that predates it keeps both refreshes.
+   */
+  refreshDefersToDeepening?: boolean;
 }
 
 /** 24h, matching the upstream refresh cadence in §9.1. */
@@ -262,12 +270,53 @@ export async function registerQueryRoutes(
         });
       }
 
+      // The DEEPENING plane's half of the click (ADR-0019, plan §G5), planned
+      // separately and reported separately — and planned FIRST, because since
+      // ADR-0017's amendment the refresh below may defer to it.
+      //
+      // Two plans rather than one, because ADR-0019 is explicit that providers
+      // stop sharing a plan: this asks an ARC of the deepening provider against
+      // `storyline_coverage`, the refresh asks a TOPIC of the discovery provider
+      // against `topic_coverage`, and neither completion may stand for the
+      // other's. They can and will disagree about whether this arc is fresh,
+      // which is the point of per-provider coverage rather than a defect.
+      //
+      // Awaited, not raced: both enqueue and neither fetches, so the cost is two
+      // Redis round trips on a fire-and-forget POST. A throw here fails the
+      // request before either plane has queued anything. The reverse order has
+      // one cost, stated rather than hidden: the refresh's `invalid` 400 — which
+      // its own planner calls defensive rather than expected — now answers after
+      // a deepening fetch may already be queued. That fetch is for the arc and
+      // is right on its own terms; only the status code misdescribes the click.
+      //
+      // It answers `unavailable` and spends nothing whenever no deepening
+      // provider is configured (`GOOGLE_NEWS_ENABLED=false`, the repo default),
+      // and a refresh never defers to `unavailable` — so for a deployment
+      // without the provider this route behaves exactly as it did.
+      const deepened = await queueStorylineDeepening(deps, { storylineId: id });
+
       // The CACHED reference only — never `loadReference`, which spends three
       // interactive upstream calls on a cold cache. See `cachedReference`.
       const cached = await cachedReference(deps);
       const codes = cached === null ? null : referenceCodes(cached);
       const outcome = await queueStorylineRefresh(deps, {
         storylineId: id,
+        // ADR-0017, amended: the Currents top-up is skipped only when the
+        // deepening plane has THIS arc in hand on this click — a fetch queued, or
+        // its own coverage fresh. `ungrounded` does not count, and that is the
+        // case the refresh is still for: an arc whose label the deepening plane
+        // will not trust is refreshed from its profile words instead, as before.
+        //
+        // And only for an arc the deepening plane has actually SERVED lately —
+        // its last fetch walked the arc to a clean end (`deepeningServedLately`).
+        // `queued` is a plan, and for a busy arc it is a plan that comes back
+        // capped on every click; deferring on it would take the Currents refresh
+        // away from the arcs with the most news. Asked with the RESOLVED id,
+        // which is the survivor the consumer writes its mark against.
+        deferToDeepening:
+          options.refreshDefersToDeepening === true &&
+          (deepened.status === "queued" || deepened.status === "fresh") &&
+          (await deepeningServedLately(deps.redis, deepened.storylineId)),
         // The window is the default lookback ending now — no `from`/`to` is
         // accepted, because a background refresh is about the leading edge and
         // an arbitrary window would let a caller aim the queue at any span of
@@ -317,28 +366,6 @@ export async function registerQueryRoutes(
           .status(400)
           .send({ error: { message: "invalid query", fields: outcome.errors } });
       }
-      // The DEEPENING plane's half of the same click (ADR-0019, plan §G5),
-      // planned separately and reported separately.
-      //
-      // Two plans rather than one, because ADR-0019 is explicit that providers
-      // stop sharing a plan: the refresh above asks a TOPIC of the discovery
-      // provider against `topic_coverage`, this asks an ARC of the deepening
-      // provider against `storyline_coverage`, and neither completion may stand
-      // for the other's. They can and will disagree about whether this arc is
-      // fresh, which is the point of per-provider coverage rather than a defect.
-      //
-      // After the refresh and awaited, not raced: both enqueue and neither
-      // fetches, so the cost is two Redis round trips on a fire-and-forget POST.
-      // Sequential keeps the failure story simple — a throw here fails the
-      // request AFTER the refresh has been queued, which is the same partial
-      // outcome any two-write route has, rather than an unhandled rejection.
-      //
-      // It answers `unavailable` and spends nothing whenever no deepening
-      // provider is configured, which is the shipped default
-      // (`GOOGLE_NEWS_ENABLED=false`). So this route's behaviour is unchanged
-      // for anyone who has not turned the flag on.
-      const deepened = await queueStorylineDeepening(deps, { storylineId: id });
-
       // The THIRD plane of the same click (ADR-0027): the arc's unsummarised
       // days, submitted for a sentence.
       //
@@ -381,9 +408,12 @@ export async function registerQueryRoutes(
       // archive, while all `queued` on a live window would mean they are not
       // holding and every click is buying an upstream call. `refresh:
       // no_keywords` is a labelling failure surfacing here — an arc with
-      // neither a label nor a profile. `deepening: unavailable` dominating is
-      // the shipped state rather than a fault (`GOOGLE_NEWS_ENABLED` gates the
-      // provider); it should fall to zero after the flag goes on. `deepening:
+      // neither a label nor a profile. `refresh: deferred` is a Currents call
+      // NOT spent because the deepening plane had the arc — its share of opens
+      // is the saving ADR-0017's amendment was made for. `deepening:
+      // unavailable` means no Google News provider is configured, which is the
+      // repo default and not production's; with the provider on it should be
+      // zero. `deepening:
       // ungrounded` is the number nothing else reports: arcs whose model label
       // shares no word with their own coverage, which is a labelling failure
       // the cloud hides rather than a fetch problem — so a sudden rise means
@@ -414,6 +444,11 @@ export async function registerQueryRoutes(
         ...(outcome.status === "no_keywords"
           ? { keywords: [] }
           : { keywords: outcome.keywords, fingerprint: outcome.fingerprint }),
+        // The refresh's own status, under its own key like the other two planes.
+        // `queued` above could always be read back into one of three statuses;
+        // `deferred` is a fourth that it cannot tell from `fresh`, and a trace of
+        // this open (ADR-0029) needs the difference.
+        refresh: { status: outcome.status, queued: outcome.status === "queued" },
         deepening: {
           status: deepened.status,
           queued: deepened.status === "queued",

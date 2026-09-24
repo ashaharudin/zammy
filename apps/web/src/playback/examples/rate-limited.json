@@ -4,7 +4,7 @@
   "summary": "The 121st request in a minute from one address: the rate limiter answers 429 before any route runs, so nothing else is touched. Timings are illustrative; the path is the code's.",
   "mirrors": [
     {
-      "at": "apps/api/src/server.ts:538-554",
+      "at": "apps/api/src/server.ts:555-571",
       "begins": "await app.register(rateLimit, {"
     }
   ],

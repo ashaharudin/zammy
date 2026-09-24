@@ -15,6 +15,7 @@ import {
 import {
   attachGroup,
   ingestSightings,
+  mergeStorylines,
   readStorylineCoverage,
   readTrendingStorylines,
   promoteStoryline,
@@ -27,7 +28,11 @@ import { WINDOW_SNAP_MS } from "./canonical.js";
 import { groupCreatedArticles } from "./grouping-service.js";
 import { ingestJobId } from "./ingest-queue.js";
 import { labelWords } from "./storyline-label-merge.js";
-import { processDeepenJob, queueStorylineDeepening } from "./storyline-deepening.js";
+import {
+  deepeningServedLately,
+  processDeepenJob,
+  queueStorylineDeepening,
+} from "./storyline-deepening.js";
 import { UPSTREAM_FETCH_MESSAGE } from "./observations.js";
 import { captureLog, createTestHarness, type TestHarness } from "./test-support.js";
 
@@ -555,6 +560,80 @@ describe("what the deepening plane refuses to spend on", () => {
     expect(await readStorylineCoverage(db, storylineId, DEEPENING_PROVIDER)).toEqual([]);
     // So the next click re-plans the same gap rather than treating it as done.
     expect((await queueStorylineDeepening(harness.deps, { storylineId })).status).toBe("queued");
+  });
+
+  it("marks an arc it served, and unmarks it when a later fetch caps or fails", async () => {
+    // ADR-0017, amended: the Currents refresh may defer only to an arc the
+    // deepening plane has actually walked to a clean end. The mark is what the
+    // route reads, and a busy arc — capped every time — must never hold one.
+    const storylineId = await seedArc();
+    const outcome = await queueStorylineDeepening(harness.deps, { storylineId });
+    if (outcome.status !== "queued") throw new Error("expected queued");
+    // A different span each time, so the single-flight key and the job are fresh.
+    const earlier = (ms: number) => ({
+      ...outcome.job,
+      from: new Date(Date.parse(outcome.job.from) - ms).toISOString(),
+    });
+    expect(await deepeningServedLately(harness.redis, storylineId)).toBe(false);
+
+    stub.next = [];
+    stub.nextRawCount = 5;
+    await processDeepenJob(harness.deps, outcome.job);
+    expect(await deepeningServedLately(harness.redis, storylineId)).toBe(true);
+
+    stub.nextRawCount = 100;
+    await processDeepenJob(harness.deps, earlier(60_000));
+    expect(await deepeningServedLately(harness.redis, storylineId)).toBe(false);
+
+    stub.nextRawCount = 5;
+    await processDeepenJob(harness.deps, earlier(120_000));
+    expect(await deepeningServedLately(harness.redis, storylineId)).toBe(true);
+    const search = stub.search.bind(stub);
+    stub.search = async () => {
+      throw new Error("google news unreachable");
+    };
+    try {
+      await expect(processDeepenJob(harness.deps, earlier(180_000))).rejects.toThrow(
+        "google news unreachable",
+      );
+      expect(await deepeningServedLately(harness.redis, storylineId)).toBe(false);
+    } finally {
+      stub.search = search;
+    }
+  });
+
+  it("marks the survivor when the job's arc was merged away before delivery", async () => {
+    const survivor = await seedArc();
+    const outcome = await queueStorylineDeepening(harness.deps, { storylineId: survivor });
+    if (outcome.status !== "queued") throw new Error("expected queued");
+    // A second arc over one of the survivor's groups, merged away after the job
+    // naming it was published — the job arrives carrying a UUID that is now an
+    // alias, exactly as a message planned before a merge does.
+    const [member] = await db
+      .selectFrom("storyline_groups")
+      .select("group_id")
+      .where("storyline_id", "=", survivor)
+      .execute();
+    const loser = await createProvisionalStoryline(db, { groupId: member!.group_id, ...TZ });
+    await mergeStorylines(db, { winnerId: survivor, loserId: loser.id, ...TZ });
+
+    stub.next = [];
+    stub.nextRawCount = 5;
+    await processDeepenJob(harness.deps, { ...outcome.job, storylineId: loser.id });
+
+    // The route asks with the id it resolved, which is the survivor's.
+    expect(await deepeningServedLately(harness.redis, survivor)).toBe(true);
+  });
+
+  it("answers 'not served' when Redis cannot say, so the refresh runs", async () => {
+    const broken = {
+      exists: async () => {
+        throw new Error("redis down");
+      },
+    };
+    expect(await deepeningServedLately(broken as never, "11111111-1111-4111-8111-111111111111")).toBe(
+      false,
+    );
   });
 
   it("drops a delivered job whose arc has since lost its grounding", async () => {

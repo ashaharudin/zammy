@@ -122,6 +122,7 @@ export function keyClassLabel(key: RedisKeyClass): string {
 const JOB_LABELS: Readonly<Record<JobKind, string>> = {
   segment: "fill",
   topup: "top-up",
+  fallback: "fallback fill",
   sample: "sample",
   deepen: "deepening",
   summarize: "summary",

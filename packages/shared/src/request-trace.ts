@@ -195,7 +195,8 @@ export const CallPriority = z.enum(["interactive", "background"]);
 export type CallPriority = z.infer<typeof CallPriority>;
 export const GeneratorPurpose = z.enum(["label", "summary"]);
 export type GeneratorPurpose = z.infer<typeof GeneratorPurpose>;
-export const JobKind = z.enum(["segment", "topup", "sample", "deepen", "summarize"]);
+/** `fallback` is a refused search retried against Google News (ADR-0030). */
+export const JobKind = z.enum(["segment", "topup", "fallback", "sample", "deepen", "summarize"]);
 export type JobKind = z.infer<typeof JobKind>;
 export const JobPlane = z.enum(["search", "breadth", "deepening"]);
 export type JobPlane = z.infer<typeof JobPlane>;
@@ -375,7 +376,8 @@ export type TraceMeta = z.infer<typeof TraceMeta>;
 
 /** What each plane's gate decided on a storyline open (ADR-0017, ADR-0019, ADR-0027). */
 export const PlaneStatuses = z.object({
-  refresh: z.enum(["queued", "fresh", "no_keywords"]),
+  /** `deferred`: the deepening plane planned this arc, so no Currents call was spent (ADR-0017). */
+  refresh: z.enum(["queued", "fresh", "deferred", "no_keywords"]),
   deepening: z.enum(["queued", "fresh", "unavailable", "ungrounded", "unknown"]),
   summaries: z.enum(["queued", "disabled", "unknown"]),
 });

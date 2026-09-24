@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted (amended 2026-09-23: the Currents top-up may defer to the deepening plane — see the last section)
 ---
 
 # Opening a storyline queues its own refresh
@@ -183,3 +183,64 @@ asking for it.
   `/available/languages` are not the same vocabulary — the reference table holds
   `{"Malay": "msa"}` against ISO-639-1 everywhere else (PROBE-FINDINGS 6) — and a
   400 there would be silent by construction and permanent for that arc.
+
+## Amended: the top-up defers to the deepening plane, when told to
+
+2026-09-23, behind `STORYLINE_REFRESH_DEFERS_TO_DEEPENING` (off by default).
+
+When this ADR was written, a click had one plan. G5 gave it a second: the
+deepening fetch of the arc itself, from Google News, against `storyline_coverage`
+(ADR-0019). From then on, every open with a deepening provider configured bought
+**both**. There was this ADR's Currents top-up of the topic the arc's two grounded
+words name, and the deepening fetch of the arc. Both refresh one arc, and only the
+first draws on the Currents budget readers' searches need. The background half of
+that budget is what a reader's deferred pages were refused on (trace `4e3a28c2…`,
+2026-09-24, and ADR-0030).
+
+With the flag on, the route plans the deepening fetch **first**. The Currents
+top-up is then skipped when the deepening plane answered `queued` (a fetch for
+this arc is on the queue) or `fresh` (its own coverage of the arc is inside the
+staleness tier). The refresh reports `deferred`.
+
+Five things are deliberate:
+
+- **Only for an arc the deepening plane has actually served.** `queued` is a
+  plan, not a result, and two ways it goes unkept are common:
+  - a busy arc comes back capped on every call (100 items of a seven-day span
+    records no coverage, so every click plans the same fetch and reads `queued`
+    again);
+  - Google News' day can be spent after the plan is made.
+
+  Deferring on the plan alone would take the Currents refresh away from the arcs
+  with the most news. So `processDeepenJob` sets a **served** mark when its fetch
+  walks the arc to a clean end (24 h), and clears it when a later fetch caps or
+  fails. The route defers only while the mark stands, checking it with the
+  resolved id, which is the survivor the consumer writes it against.
+  - A busy arc never holds a mark, so its Currents refresh always runs.
+  - The first open of any arc runs it too.
+  - A Redis error reads as "not served", which spends the Currents call: the
+    behaviour before the flag.
+
+  An earlier draft used the opposite design, a one-hour mark of failure. Review
+  showed it protected only clicks inside the hour after a capped result.
+- **`ungrounded` and `unavailable` never defer.** An arc whose label the deepening
+  plane will not trust is exactly the arc this refresh's profile-word fallback
+  exists for. With no provider configured, the route behaves as it always did.
+- **The topic is still minted and its hit still counted.** The topic row is what
+  claims the articles earlier refreshes fetched against retention's idle cutoff
+  (§7.5, and the first consequence above). A deferral that skipped it would let an
+  arc shed its Currents history one idle window later, and nothing would report the
+  loss.
+- **The refresh now reports under its own key**, `refresh: { status, queued }`,
+  beside `deepening` and `summaries`. The top-level `queued` stays for existing
+  readers. It could not carry `deferred`, which a traced open (ADR-0029) needs to
+  tell from `fresh`.
+- **What is given up** is this refresh's Currents articles for an arc Google News
+  is refreshing. They have real URLs and descriptions, which Google News rows
+  never do, and they write `topic_coverage` for the arc's two words. A reader who
+  later searches those words finds the topic colder than it would have been, and
+  fetches for themselves. That is the truth, and a cost in the same currency the
+  flag saves.
+
+`refresh: deferred` in the storyline-open log line is the saving, counted: its
+share of opens is the Currents calls not spent.

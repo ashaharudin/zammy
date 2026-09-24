@@ -73,7 +73,11 @@ export class GoogleNewsFixtureStore {
       );
     }
 
-    // Newest first, which is the order the live feed arrives in.
+    // Newest first — OUR order, not the feed's. The live feed does not arrive
+    // date-ordered: the capped capture in ./fixtures has 2,564 of its 4,950 item
+    // pairs out of date order. Sorting here makes the cap truncate predictably
+    // offline; it must not be read as evidence that the first 100 live items are
+    // the newest 100 (ADR-0030 — why no caller may record a frontier over them).
     collected.sort((a, b) => parsePublished(b.pubDate) - parsePublished(a.pubDate));
     this.items = collected;
     this.loaded = true;
@@ -89,7 +93,8 @@ export class GoogleNewsFixtureStore {
   }
 
   /**
-   * Approximate the endpoint: window-filter, newest first, truncate at the cap.
+   * Approximate the endpoint: window-filter, newest first (see `load` — the live
+   * feed is not), truncate at the cap.
    *
    * The truncation is the part worth having. It means a window wide enough to
    * catch the capped capture returns exactly `ITEMS_PER_QUERY` items offline,

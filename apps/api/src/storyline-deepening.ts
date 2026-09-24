@@ -46,10 +46,11 @@ export interface StorylineDeepeningDeps {
   /**
    * The DEEPENING plane's provider (ADR-0019), when one is configured.
    *
-   * Absent is the default and the shipped production state: `GOOGLE_NEWS_ENABLED`
-   * is false, `createGoogleNewsClient` refuses to build without it, and with no
-   * client here `queueStorylineDeepening` answers `unavailable` and spends
-   * nothing. So this whole path is behind the same flag G4 put the adapter
+   * Absent is the repo default — not production's, which runs with
+   * `GOOGLE_NEWS_ENABLED=true` (observed in its boot logs 2026-08-29, and in
+   * every trace's environment since). With the flag false,
+   * `createGoogleNewsClient` refuses to build, and with no client here
+   * `queueStorylineDeepening` answers `unavailable` and spends nothing. So this whole path is behind the same flag G4 put the adapter
    * behind, and turning the flag on is what turns it on.
    *
    * A separate field rather than a second entry in a registry, and separate from
@@ -219,6 +220,78 @@ export async function queueStorylineDeepening(
 }
 
 /**
+ * How long a clean deepening walk lets the arc's Currents refresh defer to the
+ * deepening plane (`STORYLINE_REFRESH_DEFERS_TO_DEEPENING`, ADR-0017 amended):
+ * a day, the scale of the historical freshness tier.
+ *
+ * **A POSITIVE mark, set only on a result, and that direction is the point.**
+ * `queued` at plan time is a promise, and two ways it goes unkept are common:
+ *
+ *  - **A busy arc is capped on every call.** 100 items of a seven-day span means
+ *    `isLastPage` is false, so no coverage is recorded and the next click plans
+ *    the same fetch again — `queued`, every time. And a capped answer is 100
+ *    relevance-ranked items that need not include the newest ones.
+ *  - **Google News' day is spent.** The plan still says `queued`; the job is
+ *    refused later.
+ *
+ * Deferring on the plan alone takes the Currents refresh away from exactly the
+ * arcs with the most news. A mark of FAILURE with a short life does not fix
+ * that — it was tried, and review showed it protects only clicks inside the hour
+ * after a capped result, leaving the first open of every busy arc, and every open
+ * more than an hour apart, deferring to a plan that will cap again. So the mark
+ * says the opposite: this arc's last deepening fetch walked its span to a clean
+ * end. It is written when coverage is, and DELETED when a later fetch caps or
+ * fails, so a busy arc never holds one and its Currents refresh always runs.
+ */
+const DEEPENING_SERVED_TTL_SECONDS = 24 * 60 * 60;
+
+function servedKey(storylineId: string): string {
+  return `deepening:served:${storylineId}`;
+}
+
+/**
+ * Record how this arc's deepening fetch went: served (a clean end of results) or
+ * not (capped, or the call failed). Never throws — a lost write degrades to the
+ * refresh running, or to one more deferral on an arc that WAS served recently.
+ */
+async function recordDeepeningServed(
+  redis: Redis,
+  storylineId: string,
+  served: boolean,
+): Promise<void> {
+  try {
+    if (served) {
+      await redis.set(servedKey(storylineId), "1", "EX", DEEPENING_SERVED_TTL_SECONDS);
+    } else {
+      await redis.del(servedKey(storylineId));
+    }
+  } catch {
+    // Best effort: see above.
+  }
+}
+
+/**
+ * Whether the deepening plane's last fetch for this arc, within a day, walked it
+ * to a clean end — the one condition under which it may stand in for the arc's
+ * Currents refresh. Pass the RESOLVED id: the mark is written against the
+ * survivor a job re-resolved to, and an alias would never find it.
+ *
+ * Fails CLOSED, to "not served": a Redis error means the refresh runs, which
+ * spends one background Currents call — the behaviour before the flag existed —
+ * where the other answer could leave an arc refreshed by nobody.
+ */
+export async function deepeningServedLately(
+  redis: Pick<Redis, "exists">,
+  storylineId: string,
+): Promise<boolean> {
+  try {
+    return (await redis.exists(servedKey(storylineId))) === 1;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * How wide a span one deepening call may ask for.
  *
  * Seven days, and it is a guess with a stated reason rather than a measured
@@ -336,22 +409,31 @@ export async function processDeepenJob(
       category: null,
     });
 
-    const result = await deepening.search(
-      {
-        // The label VERBATIM and unsplit, which is what the provider is asked —
-        // word order is part of a phrase query and `topicKeywords` above has
-        // sorted it away for identity purposes. The two are deliberately
-        // different strings and neither can stand in for the other.
-        keywords: [query.keywords],
-        ...(language ? { language } : {}),
-        startDate: span.from,
-        endDate: span.to,
-        pageNumber: 1,
-        pageSize: deepening.limits.maxPageSize,
-      },
-      // No reader is waiting; draw only what the interactive reserve spares.
-      { priority: "background" },
-    );
+    let result;
+    try {
+      result = await deepening.search(
+        {
+          // The label VERBATIM and unsplit, which is what the provider is asked —
+          // word order is part of a phrase query and `topicKeywords` above has
+          // sorted it away for identity purposes. The two are deliberately
+          // different strings and neither can stand in for the other.
+          keywords: [query.keywords],
+          ...(language ? { language } : {}),
+          startDate: span.from,
+          endDate: span.to,
+          pageNumber: 1,
+          pageSize: deepening.limits.maxPageSize,
+        },
+        // No reader is waiting; draw only what the interactive reserve spares.
+        { priority: "background" },
+      );
+    } catch (error) {
+      // Any failure to answer — a spent day, an upstream fault — is an arc this
+      // fetch did not serve, so its Currents refresh must stop deferring to it.
+      // Rethrown unchanged: the job's own retry story is untouched.
+      await recordDeepeningServed(deps.redis, storylineId, false);
+      throw error;
+    }
     // What came back, and how much of what this provider just sent is DATED
     // rather than timed (plan §G6, ADR-0021). Recorded here rather than inside
     // `ingestSightings` because storage should not grow an opinion about
@@ -427,7 +509,11 @@ export async function processDeepenJob(
     const walked = result.completeness.find((page) => page.provider === deepening.provider);
     if (walked?.isLastPage) {
       await recordStorylineCoverage(deps.db, storylineId, deepening.provider, span);
+      await recordDeepeningServed(deps.redis, storylineId, true);
     } else {
+      // Capped: served in part, and planned again on the next click — the case
+      // `DEEPENING_SERVED_TTL_SECONDS` is about. The mark goes.
+      await recordDeepeningServed(deps.redis, storylineId, false);
       deps.log?.info?.(
         { storylineId, from: span.from, to: span.to, items: result.rawCount },
         "deepening span hit the item cap; coverage not recorded, the gap stays open",

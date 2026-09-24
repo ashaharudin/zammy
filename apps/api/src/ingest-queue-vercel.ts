@@ -11,6 +11,7 @@ import {
   type DeepenJob,
   type IngestQueue,
   type SampleJob,
+  type SearchFallbackJob,
   type SegmentJob,
   type SummarizeJob,
 } from "./ingest-queue.js";
@@ -295,7 +296,7 @@ export class VercelIngestQueue implements IngestQueue {
     this.publish = options.publish ?? new QueueClient().send;
   }
 
-  async enqueueSegment(job: SegmentJob): Promise<void> {
+  async enqueueSegment(job: SegmentJob | SearchFallbackJob): Promise<void> {
     // Publish FIRST and let it throw: the message is the durable half, and a
     // caller told the enqueue succeeded when it did not would leave a gap
     // nothing is going to fill.
