@@ -1,0 +1,75 @@
+{
+  "slug": "quota-degraded",
+  "title": "Out of Currents quota",
+  "summary": "A cold search on a day the Currents quota is spent: the call is refused before it leaves, nothing is enqueued, and the reader gets what the store already holds, marked degraded. Timings are illustrative; the path is the code's.",
+  "mirrors": [
+    {
+      "at": "apps/api/src/quota-redis.ts:242-262",
+      "begins": "async reserve(priority: CallPriority)"
+    },
+    {
+      "at": "packages/news-client/src/quota.ts:169-174",
+      "begins": "if (daily <= 0) {"
+    },
+    {
+      "at": "apps/api/src/coverage-fill.ts:257-275",
+      "begins": "} catch (error) {"
+    }
+  ],
+  "response": {
+    "trace": {
+      "v": 1,
+      "id": "00000000-0000-4000-8000-000000000005",
+      "route": "timeline_search",
+      "method": "GET",
+      "queryKeys": ["q"],
+      "status": 200,
+      "startedAt": "2026-09-01T12:00:00.000Z",
+      "ms": 38.2,
+      "overheadMs": 0,
+      "origin": {
+        "instanceSequence": 214,
+        "redisAtStart": "ready",
+        "environment": {
+          "queue": "vercel",
+          "currents": "live",
+          "gnews": false,
+          "googleNews": "live",
+          "summaries": true,
+          "labeler": true
+        }
+      },
+      "meta": {
+        "servedFrom": "store",
+        "stale": false,
+        "degraded": "quota",
+        "ingest": {
+          "state": "complete",
+          "pendingJobs": 0
+        }
+      },
+      "planes": null,
+      "touches": [
+        {"station":"rate_limit","at":0,"ms":2,"outcome":"counted","inferred":true,"limit":120,"remaining":101},
+        {"station":"redis","at":2.3,"ms":1,"outcome":"hit","command":"MGET","key":"reference"},
+        {"station":"redis","at":3.6,"ms":0.9,"outcome":"miss","command":"GET","key":"page_cache"},
+        {"station":"postgres","at":4.9,"ms":3.1,"outcome":"ok","operation":"insert","tables":["topics"]},
+        {"station":"postgres","at":8.4,"ms":2,"outcome":"ok","operation":"select","tables":["topic_coverage"]},
+        {"station":"redis","at":10.8,"ms":0.9,"outcome":"acquired","command":"SET","key":"fill_lock"},
+        {"station":"redis","at":12,"ms":0.8,"outcome":"ok","command":"INCR","key":"topic_budget"},
+        {"station":"currents","at":13.1,"ms":1.9,"outcome":"refused","call":"search","priority":"interactive","failure":"quota"},
+        {"station":"redis","at":15.4,"ms":0.8,"outcome":"released","command":"EVAL","key":"fill_lock"},
+        {"station":"postgres","at":16.6,"ms":6.8,"outcome":"ok","operation":"select","tables":["articles","storyline_groups","storyline_days","topic_articles"]},
+        {"station":"postgres","at":23.8,"ms":2.2,"outcome":"ok","operation":"select","tables":["articles","storyline_groups"]},
+        {"station":"postgres","at":26.3,"ms":1.9,"outcome":"ok","operation":"select","tables":["storylines","storyline_days"]},
+        {"station":"postgres","at":28.6,"ms":4.1,"outcome":"ok","operation":"raw","tables":["storylines","storyline_days"]},
+        {"station":"postgres","at":33.1,"ms":1.2,"outcome":"ok","operation":"select","tables":["storyline_groups","storylines"]},
+        {"station":"redis","at":34.6,"ms":0.9,"outcome":"ok","command":"ZCARD","key":"pending_ledger"},
+        {"station":"postgres","at":35.8,"ms":1.9,"outcome":"ok","operation":"select","tables":["topic_coverage"]}
+      ],
+      "elided": null
+    },
+    "runs": [],
+    "expiresAt": "2099-12-31T23:59:59.000Z"
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "slug": "cold-instance",
+  "title": "A cold instance",
+  "summary": "The first request a fresh instance serves, inside the Redis handshake: the limiter fails open, every cache command is refused as not ready, the reference lists are fetched from Currents again, the single-flight lock cannot be taken so nothing is fetched or deferred, and the pending-job count waits for the connection. Timings are illustrative; the path is the code's.",
+  "mirrors": [
+    {
+      "at": "apps/api/src/server.ts:191-201",
+      "begins": "const redis = new Redis(config.REDIS_URL, {"
+    },
+    {
+      "at": "apps/api/src/single-flight.ts:18-30",
+      "begins": "export async function tryAcquire("
+    },
+    {
+      "at": "apps/api/src/coverage-fill.ts:232-239",
+      "begins": "const lockKey = refreshLockKey("
+    },
+    {
+      "at": "apps/api/src/ingest-queue-vercel.ts:276-287",
+      "begins": "// `maxRetriesPerRequest: 2` so a genuinely unreachable Redis"
+    },
+    {
+      "at": "apps/api/src/routes.ts:615-636",
+      "begins": "async function fetchReference("
+    }
+  ],
+  "response": {
+    "trace": {
+      "v": 1,
+      "id": "00000000-0000-4000-8000-000000000006",
+      "route": "timeline_search",
+      "method": "GET",
+      "queryKeys": ["q"],
+      "status": 200,
+      "startedAt": "2026-09-01T12:00:00.000Z",
+      "ms": 1130,
+      "overheadMs": 0,
+      "origin": {
+        "instanceSequence": 1,
+        "redisAtStart": "connecting",
+        "environment": {
+          "queue": "vercel",
+          "currents": "live",
+          "gnews": false,
+          "googleNews": "live",
+          "summaries": true,
+          "labeler": true
+        }
+      },
+      "meta": {
+        "servedFrom": "store",
+        "stale": false,
+        "degraded": null,
+        "ingest": {
+          "state": "in_progress",
+          "pendingJobs": 0
+        }
+      },
+      "planes": null,
+      "touches": [
+        {"station":"rate_limit","at":0,"ms":3.1,"outcome":"fail_open","inferred":true,"limit":120,"remaining":120},
+        {"station":"redis","at":3.4,"ms":0.3,"outcome":"not_ready","command":"MGET","key":"reference"},
+        {"station":"currents","at":4,"ms":742,"outcome":"ok","call":"available_languages","priority":"interactive"},
+        {"station":"currents","at":4.2,"ms":768,"outcome":"ok","call":"available_regions","priority":"interactive"},
+        {"station":"redis","at":772.6,"ms":0.2,"outcome":"not_ready","command":"SET","key":"reference"},
+        {"station":"redis","at":773,"ms":0.2,"outcome":"not_ready","command":"SET","key":"reference"},
+        {"station":"redis","at":773.4,"ms":0.2,"outcome":"not_ready","command":"GET","key":"page_cache"},
+        {"station":"postgres","at":774,"ms":41,"outcome":"ok","operation":"insert","tables":["topics"]},
+        {"station":"postgres","at":815.4,"ms":2.3,"outcome":"ok","operation":"select","tables":["topic_coverage"]},
+        {"station":"redis","at":818.1,"ms":0.2,"outcome":"not_ready","command":"SET","key":"fill_lock"},
+        {"station":"redis","at":818.5,"ms":0.2,"outcome":"not_ready","command":"SET","key":"fill_lock"},
+        {"station":"redis","at":818.9,"ms":0.2,"outcome":"not_ready","command":"SET","key":"fill_lock"},
+        {"station":"redis","at":819.3,"ms":0.2,"outcome":"not_ready","command":"SET","key":"fill_lock"},
+        {"station":"redis","at":819.7,"ms":0.2,"outcome":"not_ready","command":"SET","key":"fill_lock"},
+        {"station":"postgres","at":820.4,"ms":5.9,"outcome":"ok","operation":"select","tables":["articles","storyline_groups","storyline_days","topic_articles"]},
+        {"station":"postgres","at":826.6,"ms":2.1,"outcome":"ok","operation":"select","tables":["articles","storyline_groups"]},
+        {"station":"postgres","at":829,"ms":1.8,"outcome":"ok","operation":"select","tables":["storylines","storyline_days"]},
+        {"station":"postgres","at":831.1,"ms":3.9,"outcome":"ok","operation":"raw","tables":["storylines","storyline_days"]},
+        {"station":"postgres","at":835.3,"ms":1,"outcome":"ok","operation":"select","tables":["storyline_groups","storylines"]},
+        {"station":"redis","at":836.6,"ms":290.4,"outcome":"ok","command":"ZCARD","key":"pending_ledger"},
+        {"station":"postgres","at":1127.3,"ms":2.1,"outcome":"ok","operation":"select","tables":["topic_coverage"]}
+      ],
+      "elided": null
+    },
+    "runs": [],
+    "expiresAt": "2099-12-31T23:59:59.000Z"
+  }
+}

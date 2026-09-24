@@ -9,6 +9,7 @@ import { type Config, redactConfig } from "@zammy/config";
 import type { CurrentsClient } from "@zammy/currents-client";
 import { createNewsClient } from "@zammy/news-providers";
 import { createGoogleNewsClient, PROVIDER as GOOGLE_NEWS_PROVIDER } from "@zammy/google-news-client";
+import type { RunSource } from "@zammy/shared/request-trace";
 import { createDb, databaseSsl } from "@zammy/storage";
 import { registerHealthRoutes } from "./health.js";
 import {
@@ -33,6 +34,10 @@ import {
 } from "./storyline-summary-job.js";
 import { processDeepenJob } from "./storyline-deepening.js";
 import { processSampleJob, type TrendingDeps } from "./trending-service.js";
+import { traceRuns } from "./trace-dispatch.js";
+import { registerRequestTracing } from "./trace-http.js";
+import { traceEnvironment } from "./trace-redact.js";
+import { createTraceRuntime, type TraceRuntime } from "./trace-store.js";
 
 /**
  * Subdivision floor (§6.3): a truncated segment this short is accepted as
@@ -149,6 +154,13 @@ export interface Services {
    * nothing `QueryRouteDeps` carries.
    */
   summarizeDeps: SummarizeJobDeps;
+  /**
+   * Present only when REQUEST_TRACE_ENABLED (ADR-0029). Its absence is the
+   * whole of "off": no hook, no read route and no consumer-side lookup is
+   * registered for a `Services` without it, so a deployment that never turns
+   * tracing on runs exactly the code it ran before tracing existed.
+   */
+  tracing?: TraceRuntime;
   close: () => Promise<void>;
 }
 
@@ -374,6 +386,20 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
       },
     };
 
+    // Request traces (ADR-0029), over the SAME boot client the page cache and the
+    // locks use — the store is diagnostics beside them, scoped by the queue's
+    // name the way the trending keys are. The environment is read here, once,
+    // from the live config and the labeler actually built, so a trace says what
+    // this process RAN rather than what the defaults suggest.
+    const tracing = config.REQUEST_TRACE_ENABLED
+      ? createTraceRuntime(config, {
+          redis,
+          queueName: queue.name,
+          environment: traceEnvironment(config, { labeler: labeler.generator !== null }),
+          log,
+        })
+      : undefined;
+
     const close = async (): Promise<void> => {
       // The queue first (it holds Redis connections and may be mid-job), then
       // the stores.
@@ -393,7 +419,17 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
       if (!pool.ending) await pool.end();
     };
 
-    return { pool, redis, currents, queue, deps, trendingDeps, summarizeDeps, close };
+    return {
+      pool,
+      redis,
+      currents,
+      queue,
+      deps,
+      trendingDeps,
+      summarizeDeps,
+      close,
+      ...(tracing ? { tracing } : {}),
+    };
   } catch (error) {
     await Promise.allSettled(abandon.reverse().map((release) => release()));
     throw error;
@@ -401,20 +437,43 @@ export async function buildServices(config: Config, log: ServiceLogger): Promise
 }
 
 /**
- * How a delivered job becomes work, and the only place that mapping exists.
+ * The job → processor mapping, over explicit bundles — the boot ones, or a
+ * traced copy for a job run a trace is waiting on (ADR-0029).
  *
- * Both consumers route through it — the in-process BullMQ worker and the
- * push-mode Vercel function — because the discriminant is the job payload, not
- * the transport, and two copies of this `if` is one place for a sample to start
- * being processed as a segment on exactly one of them.
+ * The only place that mapping exists. Every consumer routes through it — the
+ * in-process BullMQ worker, the push-mode Vercel function and the manual drain
+ * — because the discriminant is the job payload, not the transport, and two
+ * copies of this `if` is one place for a sample to start being processed as a
+ * segment on exactly one of them.
  */
-export function ingestDispatch(services: Services): IngestHandler {
+export function dispatchOver(
+  bundles: Pick<Services, "deps" | "trendingDeps" | "summarizeDeps">,
+): IngestHandler {
   return (job) => {
-    if (job.kind === "sample") return processSampleJob(services.trendingDeps, job);
-    if (job.kind === "deepen") return processDeepenJob(services.deps, job);
-    if (job.kind === "summarize") return processSummarizeJob(services.summarizeDeps, job);
-    return processSegmentJob(services.deps, job);
+    if (job.kind === "sample") return processSampleJob(bundles.trendingDeps, job);
+    if (job.kind === "deepen") return processDeepenJob(bundles.deps, job);
+    if (job.kind === "summarize") return processSummarizeJob(bundles.summarizeDeps, job);
+    return processSegmentJob(bundles.deps, job);
   };
+}
+
+/**
+ * How a delivered job becomes work: `dispatchOver` the boot bundles, and — only
+ * while tracing is on — with a lookup in front that runs a job some trace is
+ * waiting on over traced deps and appends the run to it (`trace-dispatch.ts`).
+ *
+ * `source` names the consumer on the run record. Absent, it is the queue
+ * driver's (`bullmq` or `vercel_queue`); the drain passes `"drain"`, since it
+ * runs under the Vercel driver but is not a queue delivery. With tracing off
+ * this is exactly the dispatch it always was: the same function, no lookup.
+ */
+export function ingestDispatch(
+  services: Pick<Services, "deps" | "trendingDeps" | "summarizeDeps" | "tracing">,
+  source?: RunSource,
+): IngestHandler {
+  if (!services.tracing) return dispatchOver(services);
+  const tracing = services.tracing;
+  return traceRuns(services, tracing, dispatchOver, source ?? tracing.defaultSource);
 }
 
 export async function buildApp(
@@ -424,8 +483,13 @@ export async function buildApp(
   const app = Fastify({
     logger: {
       level: config.LOG_LEVEL,
-      // Never let a key reach the logs (ARCHITECTURE 5.5).
-      redact: ["req.headers.authorization", "req.headers.cookie"],
+      // Never let a key reach the logs (ARCHITECTURE 5.5). The trace opt-in is
+      // a bearer token too (ADR-0029), and travels in its own header.
+      redact: [
+        "req.headers.authorization",
+        "req.headers.cookie",
+        'req.headers["x-zammy-trace"]',
+      ],
     },
     // A hop COUNT, never `true`. Trusting the whole X-Forwarded-For chain makes
     // the leftmost entry win, and the leftmost entry is client-supplied — so
@@ -481,7 +545,10 @@ export async function buildApp(
       // deployment shares one bucket per caller, and a v6 client cannot mint a
       // fresh bucket by walking its own subnet. Nothing else joins the key here,
       // because no route sets its own `config.rateLimit` or a `groupId`; either
-      // would add the route's method and URL and split the bucket per endpoint.
+      // would add the route's method and URL and split the bucket per endpoint —
+      // except `GET /api/v1/traces/:id` (ADR-0029), whose own bucket keeps trace
+      // polling off a reader's allowance. That route exists only while tracing
+      // is on, and its split is the point of it.
       nameSpace: RATE_LIMIT_NAMESPACE,
       skipOnError: true,
     });
@@ -501,6 +568,12 @@ export async function buildApp(
     // there too, and is just as blind. `rate-limit-fail-open.ts` has the
     // measurements and says how to read each value.
     watchRateLimitFailOpen(app, { redis: services.redis });
+
+    // Request traces (ADR-0029), and only when the flag is on: the hooks, the
+    // request decorator and the read route are absent otherwise. After the
+    // limiter, so the read route's own `config.rateLimit` is seen by its
+    // `onRoute`; before the query routes, so they inherit the hooks.
+    if (services.tracing) registerRequestTracing(app, services.tracing);
 
     app.decorate("currents", services.currents);
     registerHealthRoutes(app, {

@@ -82,6 +82,22 @@ thought of yet is noindex by default rather than by being remembered. (`vercel.j
 `additionalProperties: false` in Vercel's schema and cannot hold a comment saying so — hence this
 paragraph.)
 
+**`?trace` is an operator's view on `/`, and the view keeps itself out of the index.** `/?trace`
+([ADR-0029](adr/0029-a-traced-request-records-what-it-touched-never-what-it-asked.md)) plays an API
+request back as a 16-bit animation — a tool for whoever runs the site, not a page for readers or
+crawlers. Nothing links to it: it is not in the landing page, the sitemap or `llms.txt`, and it
+has no route of its own, so its canonical is `/` like every other parameter route — it is the
+same static `index.html`. What it adds is a `<meta name="robots" content="noindex">` that its
+lazy chunk appends to `<head>` while the view is mounted, with its own title, and removes on the
+way out. So a crawler that runs no JavaScript sees the ordinary shell and its canonical, and one
+that renders sees `noindex`; neither is ever asked to index `?trace`. A `vercel.json` header was
+the alternative and was refused: the view shares `/`'s file, and the home page is the one URL a
+mis-scoped index rule must never catch, whereas a tag the view's own chunk writes can only apply
+where the view renders. A recorded trace's id travels in the fragment (`#t=`), which no crawler
+or server receives with the page, so no indexable or loggable page URL ever carries it; only the
+view's own reads of the trace send it, in the API path `GET /api/v1/traces/:id`, which is under
+`/api/` and `noindex` like the rest (below).
+
 **`/api/` is `noindex` but NOT disallowed in `robots.txt`.** These pull in opposite directions on
 purpose. The JSON under `/api/v1/` is the only surface a non-rendering agent can read today, so
 blocking it in `robots.txt` would close the one door that works; but a timeline response is not a

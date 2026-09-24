@@ -4,6 +4,7 @@ import cloud from "d3-cloud";
 import type { TrendingResponse, TrendingStoryline } from "@zammy/shared";
 import type { StorylineOpenSource } from "./analytics.js";
 import { fetchTrending } from "./api.js";
+import { usePrefersReducedMotion } from "./browser.js";
 import { cloudDetail, windowPhrase } from "./cloudLabels.js";
 import { HOVER_CRAWL_RATE, boardWidth, laneDriftSeconds } from "./cloudBoard.js";
 import { dealIntoLanes, edgeFades, laneCount, laneWidths } from "./cloudLanes.js";
@@ -179,31 +180,6 @@ interface PlacedWord {
   size: number;
 }
 
-/**
- * Whether the reader has asked for less motion, as a subscription rather than
- * a read: the drift runs for as long as the landing page is open, so a reader
- * who turns the preference on while looking at it is exactly the reader who
- * meant it.
- *
- * The stylesheet honours the same query for the animation itself; this is here
- * because the fallback is a different LAYOUT, not a paused one — a strip the
- * reader pans by hand, which CSS alone cannot swap in. Absent `matchMedia`
- * (jsdom, a server render) this reports false and the stylesheet is what
- * carries the preference, which is the safe half to be wrong about.
- */
-function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(false);
-  useEffect(() => {
-    const query = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
-    if (!query) return;
-    setReduced(query.matches);
-    const onChange = (event: MediaQueryListEvent) => setReduced(event.matches);
-    query.addEventListener("change", onChange);
-    return () => query.removeEventListener("change", onChange);
-  }, []);
-  return reduced;
-}
-
 /** Deterministic per language (see layoutSeed): no reshuffle per poll. */
 function seededRandom(seed: string): () => number {
   let h = 2166136261;
@@ -229,6 +205,9 @@ export function TrendingCloud({
   const trending = useTrending(language);
   const [asList, setAsList] = useState(false);
   const [placed, setPlaced] = useState<PlacedWord[]>([]);
+  // The stylesheet honours the same query for the drift itself; the hook is here
+  // because the fallback is a different LAYOUT, not a paused one — a strip the
+  // reader pans by hand, which CSS alone cannot swap in.
   const reduced = usePrefersReducedMotion();
   const sectionRef = useRef<HTMLElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);

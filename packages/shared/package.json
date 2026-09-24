@@ -7,6 +7,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./request-trace": {
+      "types": "./dist/request-trace.d.ts",
+      "default": "./dist/request-trace.js"
     }
   },
   "main": "./dist/index.js",

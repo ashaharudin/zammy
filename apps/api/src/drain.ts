@@ -286,7 +286,10 @@ async function bootFromEnvironment(): Promise<Drainable> {
     listOutstanding: (olderThanMs) => pending.listOutstanding(olderThanMs),
     settle: (job) => services.queue.settle(job),
     forget: (pendingId, jobId) => pending.forget(pendingId, jobId),
-    dispatch: ingestDispatch(services),
+    // `"drain"`, so a run this pass performs is labelled as the drain's in any
+    // trace waiting on it (ADR-0029) rather than as a queue delivery — it runs
+    // under the Vercel driver, whose default source would say otherwise.
+    dispatch: ingestDispatch(services, "drain"),
   };
 }
 

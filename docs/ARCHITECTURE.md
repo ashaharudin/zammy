@@ -435,8 +435,18 @@ Accepts front-end requests and turns them into the right upstream query — or, 
 | `GET /api/v1/reference` | Cached `/available/*` values, for front-end filter controls. Languages and regions only — the category taxonomy is no longer served, because nothing can pick from it (ADR-0020). |
 | `GET /api/v1/storylines?q=` | Storylines by keyword, and nothing else: the same match the timeline makes beside a search's results, without the search — no topic minted, nothing fetched. What the storyline view's search box runs (ADR-0028, amended). `{ storylines: StorylineSummary[] }`. |
 | `GET /api/v1/topics/:fingerprint` | Topic metadata: coverage window, article count, freshness, summary. |
-| `POST /api/v1/storylines/:id/refresh` | Fire-and-forget: queue one background top-up of what this arc's coverage says (§9.1, ADR-0017), and — separately planned, against the arc itself — one deepening fetch (§9.1a, ADR-0019). A UUID is the whole request; the keywords and the language are derived from the arc, never sent. 202 with `{ queued, deepening: { status, queued } }`; nothing on the page reads it. |
+| `POST /api/v1/storylines/:id/refresh` | Fire-and-forget: queue one background top-up of what this arc's coverage says (§9.1, ADR-0017), and — separately planned, against the arc itself — one deepening fetch (§9.1a, ADR-0019) and one summary job for its qualifying days that have no sentence yet (ADR-0027). A UUID is the whole request; the keywords and the language are derived from the arc, never sent. 202 with `{ storyline, queued, keywords, fingerprint, deepening: { status, queued }, summaries: { status, queued } }` — `fingerprint` absent when the arc yields no keywords — one key per plane, so a reader of the body can tell which plane spent what. Nothing on the page reads it; operators and tests do, and a traced open records the three statuses as its `planes` (ADR-0029). |
+| `GET /api/v1/traces/:id` | One stored request trace and its job runs, for the playback view (§8.1, ADR-0029). **Registered only while `REQUEST_TRACE_ENABLED`** — otherwise Fastify's default 404. No token: the 122-bit id is the capability, for `REQUEST_TRACE_TTL_SECONDS`. Its own rate-limit bucket (30/min), so polling a trace never spends a reader's allowance — and GET only, since an auto-cloned HEAD would be a second bucket over the same reads (HEAD is Fastify's 404). 400 for a malformed id (before any trace-store command), 404 for an unknown, expired or unparseable trace, 503 when the trace store errors, 200 `TraceReadResponse`; `no-store` on every answer, the limiter's 429 included (set in the route's `onSend`, which the 429 reaches and the handler does not). |
 | `GET /healthz` · `GET /readyz` | Liveness, and dependency checks for Postgres/Redis/upstream — plus a `chores` digest saying which nightly passes are overdue or stalled (`chore-status.ts`). The digest is additive and never moves `status`: `ready`/`degraded`/`unready` stay a statement about Postgres and Redis alone. |
+
+**Request tracing is an opt-in header, not an endpoint** (ADR-0029). With `REQUEST_TRACE_ENABLED`
+on, a request to the timeline, storylines, refresh, trending or reference route that carries
+`x-zammy-trace: Bearer <REQUEST_TRACE_TOKEN>` is recorded as the stations it touched and answers
+with `x-zammy-trace-id: <id>` (or `unstored`) and `cache-control: no-store` — the body
+byte-identical to an untraced one. A missing or wrong token is not an error: the request is served
+untraced and says nothing, so the header cannot be used to probe for the token. HEAD, OPTIONS,
+`/topics`, the health checks and the trace route itself are never traced. With the flag off none
+of this is registered at all.
 
 `GET /api/v1/timeline` request:
 
@@ -738,14 +748,27 @@ Two tiers with distinct jobs: Redis makes repeat reads free; Postgres makes the 
 | `budget:topic:<fingerprint>:<utcDay>` | per-topic daily call cap (§9.4) | 48h |
 | `quota:<provider>:burst` | shared sliding burst window, a sorted set of call timestamps (§5.4) | one burst window |
 | `quota:<provider>:observed` | last `x-ratelimit-*` reading, `<observedAtMs>\|<json>` (§5.4) | 24h |
-| `ratelimit:<ip>` | per-IP request counter (§9.4) | `timeWindow` |
+| `ratelimit:<ip>` | per-IP request counter (§9.4); while tracing is on, the trace read route's own bucket beside it, `ratelimit:GET/api/v1/traces/:id-<ip>` | `timeWindow` |
 | `ingest:pending:<queue>:<pendingId>` | the ledger `meta.ingest` reads (§6.1) | pruned at `STALE_PENDING_MS` |
+| `<queue>:trace:<id>` | one request trace — the PARSE OUTPUT of `RequestTrace`, never the draft (ADR-0029) | `REQUEST_TRACE_TTL_SECONDS` (1h) |
+| `<queue>:trace:<id>:runs` | that trace's job runs, a list; the first 16 are kept | the same |
+| `<queue>:trace:job:<jobId>` | the `<traceId>\|<ref>` members a job owes a run to, written before its publish and removed after an ok run | the same |
 
 Redis is **pure cache**: a total flush costs latency and quota, never correctness. Nothing lives
 only in Redis. **That still holds for the two rows that look like exceptions.** The burst window and
 the rate-limit counter are the only shared *enforcement* state here, and both fail OPEN — losing
 them costs the deployment-wide ceiling and degrades to per-instance counting, never a refused call
 (§11). The circuit breaker is in-process, in `@zammy/news-client`, and has never had a key here.
+
+**The three trace rows DO live only in Redis, and they are the exception because they are not
+state.** A trace is a diagnostic an operator asked for: losing one — to a flush, an eviction, a
+write that missed its deadline — costs that trace and nothing else. The trace route reads the
+record and runs keys, and the consumer's dispatch reads the job-link key on every delivery,
+running the plain handler when it is gone. They exist only while `REQUEST_TRACE_ENABLED` is on,
+are scoped by the queue's name the way `<queue>:trending:*` is (so production's are
+`ingest:trace:*`), and every command on them is bounded and fails open: the record write waits up
+to 1.5 s for a cold client and then 300 ms, and the job link and the consumer's lookup get 250 ms
+with no wait at all.
 
 ### 7.2 Postgres (durable)
 
@@ -1264,6 +1287,52 @@ keywords in, timeline out.
   the measured queues happened not to move. And a mutation inside a pre-existing region is the
   PRECONDITION an announcement needs, not proof of one: no screen reader has been exercised against
   this view.
+- **Request playback** — an OPERATOR's view, not a reader's: `/?trace` plays one API request back
+  as a 16-bit warehouse (ADR-0029). A robot carries the request past a turnstile (the rate
+  limiter), a rack of ten Redis bins (one per key class), a Postgres vault and a Currents mast,
+  and drops its jobs through a hatch onto a belt; in the back room worker robots pick them up at
+  the bay and carry them to the machines their job runs touched — the Google News kiosk, the
+  Gemini oracle — stamping ✓ or ✗ on the way back. `/?trace` opens the default built-in example,
+  `/?trace=<slug>` a named one, `/?trace#t=<uuid>` a recorded trace read from
+  `GET /api/v1/traces/:id`. The id rides in the fragment, so the page's own request never carries
+  it — not in its query string, the static file's CDN cache key or its log — but every read of
+  the trace does, in the read route's path, through the edge to the function and its request log
+  (ADR-0029, *Consequences*). The page switches what it plays with `history.replaceState` only.
+  Seven examples ship in the chunk (`apps/web/src/playback/examples/`), parsed through the wire
+  schema at load and pinned to the server's real paths by `apps/api/src/trace-examples.test.ts`,
+  and to the lines of code they cite by `exampleTraces.test.ts`, so the page is whole with
+  tracing off — the default — and every example says its timings are illustrative. "Record a
+  real request" makes one traced request of any traceable kind with the operator's token, which
+  lives in that panel's state for the visit and never in storage or a URL, and reads only the
+  response headers: an id becomes a recorded trace, polled on a schedule that backs off from
+  every 3 s to once a minute and stops when every linked job has an ok run, at the first 404, or
+  once the trace is thirty minutes old — its age the larger of the server's `startedAt` against
+  the browser's clock and the page's own time since its first read, so a browser clock running
+  behind cannot keep the poll going (`tracePoll.ts`). An edge `HIT`/`STALE` or a 504, where no
+  function recorded anything, becomes a browser-only trace the page draws from the headers and
+  does not store, and the page words the two apart: a cache answer ran no function, and a 504 is
+  the platform answering in the API's place, most likely a function stopped at its time limit.
+  The floor is a 320×180 plan on desktop and a 160×240 one below 640 px, at an integer scale.
+  Two paces: readable (dwell compressed logarithmically, consecutive touches at one station
+  merged into one stop) and real time; every step starts at its own instant (`separateTies`), so
+  a seek, a step and the step list always land on the step they name, and a pace change keeps
+  the reader on the same step (`carryAcrossPace`). Everything the canvas shows is also the page's
+  text — the canvas is `aria-hidden`, a list of steps (one button per step) carries the same
+  content and seeks the stage, and the legend lists what the trace could not see — and the
+  transport is a reducer (`playbackClock.ts`) driven by buttons, a scrubber and window-wide keys
+  that keep working while a button has focus. The single-letter keys can be switched off with a
+  "Letter shortcuts" toggle, remembered per browser (WCAG 2.1.4); Space, the arrows, Home and End
+  stay. It autoplays once, never loops, and pausing is always one press away; under reduced
+  motion it does not autoplay, opens on a static overview of the whole route, and plays a step at
+  a time. One announcer portals into `#rail-status` and speaks once per event, never per frame:
+  a reader's transport action, a record run coming back, a read that brings something new, and
+  the poll window closing with runs still missing (`pageNotices.ts`). It is a lazy chunk: the
+  main chunk gains `playbackRoute.ts`, which imports nothing, and none of the trace schemas —
+  though ~1.3 KB gzipped of zod classes the chunk uses stay in the main chunk, where zod lives
+  (ADR-0029, *Consequences*). It injects a `noindex` meta tag while mounted, and nothing links to
+  it (docs/SEO.md). The engine is pure modules with tests (`choreography.ts`, `frame.ts`,
+  `layout.ts`, `drawList.ts`, …); `renderer.ts` is the only canvas code and a loop over
+  `drawList`'s ops.
 
 ### 8.2 Behaviour
 
@@ -1313,6 +1382,19 @@ Restrained and legible: system font stack, generous line-height, one accent colo
 width ~720px. Dark and light via `prefers-color-scheme`. Images lazy-loaded with fixed aspect boxes.
 Accessibility is not deferred: real landmarks, visible focus rings, `aria-live` on result-count
 changes, full keyboard reachability, AA contrast in both themes.
+
+**The playback canvas is the one exception, and the exception is the art, never the words**
+(ADR-0029, §8.1). Its floor, machines and robots are pixel art in a fixed sixteen-colour palette
+(`playback/palette.ts`, Sweetie 16) that is the SAME in both themes — `TrendingCloud`'s recency
+ramp is the precedent: decoration the page's text already makes redundant, on a canvas that is
+`aria-hidden` — and its lettering is a 5×7 bitmap font defined in code (`pixelFont.ts`), because
+anti-aliased canvas text on a pixel floor reads as a diagram and a web font would be a request.
+What does not bend: **every word the canvas draws is in the page's own ink** — the theme tokens
+(`--fg`, `--surface`, `--amber`, …) read at runtime, re-read when the theme changes, on an ink
+backing — so plates, bubbles, the clock and the banner have the theme's contrast whatever art is
+behind them, and the station lamps, which are signals, use the same ink. `drawList.test.ts` fails
+on any text op carrying a palette colour. Everything outside the canvas — the controls, the step
+list, the status plate — is ordinary page UI in `MONO` on the same tokens as everything else.
 
 **Articles fade in as they mount** — a short rise and fade per card, each a beat behind the one
 above it, so a run of cards arrives as a cascade rather than as a slab. The beat is
@@ -1521,12 +1603,29 @@ is draining it. Under `vercel` that ledger is best-effort: the message is alread
 hosted topic, so a Redis blip makes `meta.ingest` under-report rather than failing the read.
 
 The consumer runs **in-process in the API** under Compose and as its own deployable on Vercel — it
-stays structured as a separable unit, and both routes through one `ingestDispatch`, over services
-one `buildServices` assembles. Quota honesty: the shared quota snapshot (§5.4) that
+stays structured as a separable unit, and both, with the manual drain (`POST /api/drain`) as a
+third, route through one `ingestDispatch`, over services one `buildServices` assembles. Quota
+honesty: the shared quota snapshot (§5.4) that
 would let N instances share the 60/60s burst ceiling is **designed and not built** (quota.ts, §13
 "Designed but unbuilt"); today's governor is per-process. One process, one governor is safe; the
 Vercel build carries the Redis burst window (VERCEL-ALL-IN-SCOPE §3.4) precisely because the
 consumer and the request path scale independently there.
+
+**That one seam is also where a traced request's jobs are followed** (ADR-0029). The mapping
+from job to processor is `dispatchOver(bundles)`, over explicit bundles;
+`ingestDispatch(services, source?)` is that mapping over the boot bundles, and with tracing off
+it is exactly that and nothing more. With tracing on, a lookup sits in front of it — one `SMEMBERS` of
+`<queue>:trace:job:<jobId>` per delivery, the feature's standing charge — and a job no trace is
+waiting on runs the plain handler over the boot bundles by identity. A job a traced request
+enqueued (the link was written BEFORE its publish, beside the job and keyed by its unchanged id)
+runs the same processor over a traced copy of the bundles, and its **job run** — one attempt, by
+whichever consumer ran it — is appended to every trace that asked for it, `sharedWith` saying how
+many when the queue deduplicated one job several traces enqueued. `source` labels the run:
+`bullmq` or `vercel_queue` by the driver, and `drain` from the drain, which runs under the Vercel
+driver but is not a delivery. Whatever the processor throws is rethrown unchanged, so the
+redelivery and give-up logic and the drain's settle see exactly what they would have; a thrown
+run keeps its links, so the redelivery at +305 s or the drain appends another attempt under the
+same ref, and an ok run consumes them. Job ids, payloads and `parseIngestJob` are untouched.
 
 ### 9.2 Why demand-driven wins here
 
@@ -1958,6 +2057,7 @@ apart see the same cloud.
 | Deferred ingest job fails or stalls | Coverage is not extended; the gap remains and the next reader retries it. Client stops polling when the 60s poll window closes (§6.5) — never an indefinite spinner, but no explicit timeout signal either; `meta.ingest.state` just stays `"in_progress"`. Rows already stored stay reachable meanwhile: the rail's tail is gated on `hasMore` alone (§8.2). |
 | Ingest still running when user scrolls past loaded rows | `hasMore: false` with `ingest.state: "in_progress"` → "still gathering", **not** "end of results" (§6.1). |
 | Redis down | Skip cache and single-flight; serve from Postgres. The shared burst window (§5.4) and the per-IP rate limit (§9.4) both fall open to in-process counting — the ceilings degrade from once-per-deployment to once-per-instance, and no call is refused for want of a cache. Degraded, not down. |
+| Trace store down or slow (tracing on, ADR-0029) | Never a 500, and nothing changes for an untraced request. A traced request is served unchanged with `x-zammy-trace-id: unstored`, delayed by at most ~1.8 s on a cold instance (the record write's 1.5 s ready-wait plus 300 ms, a ceiling only a late handshake reaches — a client that never becomes ready answers `unstored` after the 1.5 s, its write refused at once with no offline queue); a traced enqueue whose link write fails or passes 250 ms is published anyway and recorded `linked: false`; a consumer whose lookup fails runs the plain dispatch; a run append that fails leaves the job's result untouched. A record or run that did not reach Redis is warned about at most once a minute per process (`TRACE_UNSTORED_MESSAGE`, with a count); a run past a trace's sixteenth, which Redis takes and the cap trims (`appendRun` answers `capped`), is a designed omission and is not warned about. The trace route answers `503` rather than a `404` that would tell the page the trace does not exist. |
 | Postgres down | `503` from `/readyz`; the API cannot honour its ordering guarantee without it. The one hard dependency. |
 | Zero upstream results | Record coverage anyway, so we don't re-ask. Empty state distinguishes "nothing published" from "not yet fetched". |
 | Malformed article | Drop it, increment a metric, keep the rest of the batch. |
@@ -1993,6 +2093,17 @@ apart see the same cloud.
   **articles-grouped rate** (grouped / created), exists because §14.3's similarity threshold ships
   unmeasured: near zero means grouping is doing nothing, a sharp rise means it is merging stories
   that are merely similar (ADR-0005).
+
+  **Request traces are opt-in diagnostics, not metrics** (ADR-0029). A trace is one request an
+  operator asked to watch — by sending the token — recorded as the stations it touched and joined
+  by the job runs of the jobs it enqueued, kept for `REQUEST_TRACE_TTL_SECONDS` (an hour by
+  default) and played back at `/?trace`. Nothing
+  is sampled, aggregated or counted from them, and no number above is derived from one: a trace
+  answers "how was THIS request served", which the log fields cannot join up (the request, its
+  jobs on another instance minutes later, a redelivery, the drain), and never "how are requests
+  served", which is what the fields are for. They hold no reader data by construction — enums,
+  numbers and patterned ids only, stored as the schema's parse output — and they cost a Redis
+  command per job delivery while enabled, so the operating policy is on for a session, then off.
 - **Security:** API key server-side only; CORS pinned to the web origin; per-IP rate limit on
   `/api/v1/*`; parameterized SQL only; article text escaped by React, never rendered as HTML.
 - **Testing:** unit tests on the canonicalizer, normalizer, and coverage-gap math (pure functions,

@@ -15,6 +15,9 @@ command answered rather than something the repo asserts:
   `DATABASE_URL`, `REDIS_URL`, `INGEST_QUEUE_DRIVER`, `CURRENTS_MODE` and `CRON_SECRET`
   (`vercel env ls production`). Sensitive means write-only: no laptop can read them back, so the
   gitignored `deploy/vercel/.env.production` the wizard writes is the only copy.
+  `REQUEST_TRACE_TOKEN` joins that Sensitive list for as long as a tracing session lasts, and
+  leaves it after — it is not among the 22, because tracing is off
+  ([below](#request-tracing--on-for-a-session-then-off)).
 - `/readyz` answers `ready`, Postgres `ok`, and `chores.ok: true` with nothing overdue and nothing
   stalled — `lastRunAt` was `2026-09-11T07:00:01.861Z`, which is `zammy-chores-summaries-3` firing
   on its 07:00 UTC schedule. **The cron is running.**
@@ -77,6 +80,8 @@ What differs from a Compose `.env`:
 | `FIXTURES_DIR` | irrelevant |
 | `TRUSTED_PROXY_HOPS` | `1` — measured on the spike: Fastify sees `127.0.0.1` with the client one hop out in `x-forwarded-for` |
 | `CORS_ORIGIN` | the deployment origin |
+| `REQUEST_TRACE_ENABLED` | unset (the `false` default) — `true` only for a tracing session, then removed again ([below](#request-tracing--on-for-a-session-then-off)) |
+| `REQUEST_TRACE_TOKEN` | Sensitive, and present only while tracing is on. Boot refuses `REQUEST_TRACE_ENABLED=true` without one — at least 24 characters, no whitespace; `openssl rand -hex 16` |
 
 `pnpm` 11 needs `ENABLE_EXPERIMENTAL_COREPACK=1` set as a project environment variable, after which
 Vercel reads `packageManager` from the root manifest.
@@ -401,6 +406,80 @@ curl -X POST -H "Authorization: Bearer $CRON_SECRET" "$URL/api/chores?pass=story
   that returns 22% of the database (findings §5). Its tripwire is `reindex.invalidIndexes` in the
   report: an interrupted rebuild leaves a `_ccnew` twin that is never read and still maintained on
   every write, and nothing in Postgres complains about it. Non-empty wants a `DROP INDEX` by hand.
+
+## Request tracing — on for a session, then off
+
+`https://www.zammy.info/?trace` plays an API request back as a 16-bit warehouse
+([ADR-0029](../../docs/adr/0029-a-traced-request-records-what-it-touched-never-what-it-asked.md)).
+Its seven built-in examples need nothing switched on. Recording a REAL production request does, and
+that is a session, not a setting:
+
+- **While on, every job delivery pays one Redis command**, traced or not — the consumer's
+  `SMEMBERS` for the job's trace links — on a free tier of ~16K a day. A traced cold search, its
+  jobs and the page's polls come to ~110 more (~140 if Upstash bills an `EVALSHA` by the commands
+  its script runs). Cheap for an hour, not for a month.
+- **Each change is a redeploy.** A variable applies to deployments built after it changes, and
+  the request function, the ingest consumer and the drain all read the flag at boot — they flip
+  together in the new deployment. **So finish watching before turning it off.** After the off
+  redeploy the production URL has no read route, so every trace — however far inside its TTL —
+  reads 404 on `/?trace#t=<id>`, and the page lists expiry, a mistyped id and tracing being off
+  as the causes it cannot tell apart. Messages already published do still run in the deployment
+  that published them (push-mode topics are partitioned by deployment id, see *The queue*), and
+  that deployment still appends their runs; but the drain is a cron call to the production alias,
+  so it runs in the NEW deployment, untraced, and a job left to it is never appended. Nothing is
+  deleted: the keys live out their TTL in Redis, and turning tracing back on inside it makes them
+  readable again.
+
+Turning it on — the token Sensitive, like every other Production variable here:
+
+```bash
+TOKEN=$(openssl rand -hex 16)                  # ≥ 24 characters, no whitespace, or boot refuses
+printf '%s' "$TOKEN" | vercel env add REQUEST_TRACE_TOKEN production
+printf '%s' true     | vercel env add REQUEST_TRACE_ENABLED production
+./deploy/vercel/deploy.sh --prod
+curl -s -o /dev/null -w '%{http_code}\n' "$URL/api/v1/traces/x"   # 400 = on; 404 = still off
+```
+
+That check is a GET on purpose: the read route serves no HEAD (a cloned one would be a second
+rate-limit bucket over the same reads), so `curl -I` reads 404 whether tracing is on or not.
+
+Then paste `$TOKEN` into **Record a real request** on `/?trace`, or send it yourself — the reply's
+`x-zammy-trace-id` names the trace, and `$URL/?trace#t=<id>` plays it:
+
+```bash
+curl -s -o /dev/null -D - -H "x-zammy-trace: Bearer $TOKEN" "$URL/api/v1/timeline?q=wildfire"
+```
+
+What to expect of it on this platform:
+
+- **A wrong token looks exactly like tracing being off**: the request is served untraced, with no
+  `x-zammy-trace-id` and no error. That is deliberate (the header must not be a way to probe for
+  the token), and it means the curl above is how to tell the two apart.
+- **A trending request may never reach the function.** `/api/v1/trending` is edge-cached, and a CDN
+  hit runs nothing to trace; the page draws that one from `x-vercel-cache` and stores nothing.
+  "Skip the edge cache" on the page adds a nonce so the request reaches the function. A traced
+  response is `no-store`, so it never becomes the cached copy itself.
+- **A cold instance's first trace waits for the Upstash handshake**, up to 1.5 s, then gets 300 ms
+  to write — the traced request is that much slower, and only it; ~1.8 s is the ceiling, reached
+  only by a handshake that finishes late and a write that is then slow. An instance holding an
+  unusable Redis client (*What is still not done*, below) answers `x-zammy-trace-id: unstored`
+  after the 1.5 s ready-wait — at once if the client has closed for good — because with no offline
+  queue its write is then refused on the spot, and the function log carries one
+  `request trace not stored` warning a minute.
+- **Traces expire on their own** after `REQUEST_TRACE_TTL_SECONDS` (an hour by default, 30 minutes
+  at the least); a drained run arrives 15–25 minutes after its enqueue, inside it. Nothing needs
+  cleaning up.
+
+Turning it off, once every trace you want to read has been read and its drain window (~25
+minutes after the last traced enqueue) has passed — the token too, so the next session mints a
+fresh one and a copy of this one opens nothing:
+
+```bash
+vercel env rm REQUEST_TRACE_ENABLED production --yes
+vercel env rm REQUEST_TRACE_TOKEN production --yes
+./deploy/vercel/deploy.sh --prod
+curl -s -o /dev/null -w '%{http_code}\n' "$URL/api/v1/traces/x"   # 404 = off
+```
 
 ## The cutover — Phase 5
 

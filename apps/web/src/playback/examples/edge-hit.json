@@ -1,0 +1,37 @@
+{
+  "slug": "edge-hit",
+  "title": "Answered by the CDN",
+  "summary": "A settled trending cloud the CDN still holds: the edge answers and no function runs, so there is nothing for the API to record and the browser draws this one itself. Timings are illustrative; the path is the code's.",
+  "mirrors": [
+    {
+      "at": "apps/api/src/routes.ts:521-522",
+      "begins": "const TRENDING_CACHE_SETTLED ="
+    },
+    {
+      "at": "apps/api/src/routes.ts:547-554",
+      "begins": "return reply"
+    }
+  ],
+  "response": {
+    "trace": {
+      "v": 1,
+      "id": "00000000-0000-4000-8000-000000000007",
+      "route": "trending",
+      "method": "GET",
+      "queryKeys": ["language"],
+      "status": 200,
+      "startedAt": "2026-09-01T12:00:00.000Z",
+      "ms": 21,
+      "overheadMs": 0,
+      "origin": null,
+      "meta": null,
+      "planes": null,
+      "touches": [
+        {"station":"edge","at":0,"ms":21,"outcome":"hit"}
+      ],
+      "elided": null
+    },
+    "runs": [],
+    "expiresAt": "2099-12-31T23:59:59.000Z"
+  }
+}

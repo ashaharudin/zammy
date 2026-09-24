@@ -1,0 +1,310 @@
+{
+  "slug": "cold-search",
+  "title": "A cold search",
+  "summary": "A search nobody has run lately: the page cache misses, one Currents call is made while the reader waits, the rest of the window is handed to four background jobs, and one of those fails and is redelivered five minutes later. Timings are illustrative; the path is the code's.",
+  "mirrors": [
+    {
+      "at": "apps/api/src/coverage-fill.ts:216-275",
+      "begins": "const budget: FillBudget = {"
+    },
+    {
+      "at": "apps/api/src/coverage-fill.ts:446-597",
+      "begins": "async function fillSegment("
+    },
+    {
+      "at": "apps/api/src/timeline-read.ts:254-307",
+      "begins": "const stored = await readStorylineTimelinePage("
+    },
+    {
+      "at": "apps/api/src/grouping-service.ts:444-445",
+      "begins": "if (deps.labelTail) deps.labelTail(tail);"
+    }
+  ],
+  "response": {
+    "trace": {
+      "v": 1,
+      "id": "00000000-0000-4000-8000-000000000001",
+      "route": "timeline_search",
+      "method": "GET",
+      "queryKeys": ["q"],
+      "status": 200,
+      "startedAt": "2026-09-01T12:00:00.000Z",
+      "ms": 1204,
+      "overheadMs": 4.8,
+      "origin": {
+        "instanceSequence": 214,
+        "redisAtStart": "ready",
+        "environment": {
+          "queue": "vercel",
+          "currents": "live",
+          "gnews": false,
+          "googleNews": "live",
+          "summaries": true,
+          "labeler": true
+        }
+      },
+      "meta": {
+        "servedFrom": "upstream",
+        "stale": false,
+        "degraded": null,
+        "ingest": {
+          "state": "in_progress",
+          "pendingJobs": 4
+        }
+      },
+      "planes": null,
+      "touches": [
+        {"station":"rate_limit","at":0,"ms":2.1,"outcome":"counted","inferred":true,"limit":120,"remaining":112},
+        {"station":"redis","at":2.4,"ms":1.1,"outcome":"hit","command":"MGET","key":"reference"},
+        {"station":"redis","at":3.8,"ms":1,"outcome":"miss","command":"GET","key":"page_cache"},
+        {"station":"postgres","at":5.2,"ms":3.4,"outcome":"ok","operation":"insert","tables":["topics"]},
+        {"station":"postgres","at":9,"ms":2.2,"outcome":"ok","operation":"select","tables":["topic_coverage"]},
+        {"station":"redis","at":11.6,"ms":1,"outcome":"acquired","command":"SET","key":"fill_lock"},
+        {"station":"redis","at":12.9,"ms":0.9,"outcome":"ok","command":"INCR","key":"topic_budget"},
+        {"station":"redis","at":14,"ms":0.8,"outcome":"ok","command":"EXPIRE","key":"topic_budget"},
+        {"station":"currents","at":15.2,"ms":712,"outcome":"ok","call":"search","priority":"interactive"},
+        {"station":"postgres","at":730.1,"ms":1.8,"outcome":"ok","operation":"select","tables":["articles"]},
+        {"station":"postgres","at":732.3,"ms":2,"outcome":"ok","operation":"insert","tables":["articles"]},
+        {"station":"postgres","at":734.6,"ms":1.6,"outcome":"ok","operation":"insert","tables":["sightings"]},
+        {"station":"postgres","at":736.4,"ms":1.2,"outcome":"ok","operation":"update","tables":["articles"]},
+        {"station":"postgres","at":737.9,"ms":1.1,"outcome":"ok","operation":"insert","tables":["topic_articles"]},
+        {"station":"redis","at":1129.1,"ms":0.9,"outcome":"released","command":"EVAL","key":"fill_lock"},
+        {"station":"postgres","at":1129.3,"ms":1.3,"outcome":"ok","operation":"select","tables":["storylines"]},
+        {"station":"queue","at":1130.3,"ms":15.2,"outcome":"ok","job":"segment","plane":"search","ref":"1","linked":true},
+        {"station":"postgres","at":1130.9,"ms":1.1,"outcome":"ok","operation":"select","tables":["storylines","storyline_groups","articles"]},
+        {"station":"gemini","at":1132,"ms":null,"outcome":"open","call":"generate","purpose":"label"},
+        {"station":"queue","at":1145.8,"ms":14.8,"outcome":"ok","job":"segment","plane":"search","ref":"2","linked":true},
+        {"station":"queue","at":1160.9,"ms":15,"outcome":"ok","job":"segment","plane":"search","ref":"3","linked":true},
+        {"station":"queue","at":1176.2,"ms":14.1,"outcome":"ok","job":"segment","plane":"search","ref":"4","linked":true},
+        {"station":"postgres","at":1191,"ms":4.2,"outcome":"ok","operation":"select","tables":["articles","storyline_groups","storyline_days","topic_articles"]},
+        {"station":"postgres","at":1195.4,"ms":2.1,"outcome":"ok","operation":"select","tables":["articles","storyline_groups"]},
+        {"station":"postgres","at":1197.7,"ms":1.6,"outcome":"ok","operation":"select","tables":["storylines","storyline_days"]},
+        {"station":"postgres","at":1199.5,"ms":2,"outcome":"ok","operation":"raw","tables":["storylines","storyline_days"]},
+        {"station":"postgres","at":1201.6,"ms":0.9,"outcome":"ok","operation":"select","tables":["storyline_groups","storylines"]},
+        {"station":"redis","at":1202.6,"ms":0.8,"outcome":"ok","command":"ZCARD","key":"pending_ledger"},
+        {"station":"postgres","at":1203.5,"ms":0.4,"outcome":"ok","operation":"select","tables":["topic_coverage"]}
+      ],
+      "elided": {
+        "after": 13,
+        "count": 181,
+        "stations": {
+          "postgres": 181
+        },
+        "fromAt": 739.2,
+        "toAt": 1128.6
+      }
+    },
+    "runs": [
+      {
+        "v": 1,
+        "ref": "1",
+        "job": "segment",
+        "plane": "search",
+        "source": "vercel_queue",
+        "startedAt": "2026-09-01T12:00:01.462Z",
+        "ms": 1310,
+        "overheadMs": 0,
+        "result": "ok",
+        "sharedWith": 1,
+        "origin": {
+          "instanceSequence": 1,
+          "redisAtStart": "ready",
+          "environment": {
+            "queue": "vercel",
+            "currents": "live",
+            "gnews": false,
+            "googleNews": "live",
+            "summaries": true,
+            "labeler": true
+          }
+        },
+        "touches": [
+          {"station":"postgres","at":0,"ms":2.4,"outcome":"ok","operation":"select","tables":["topics"]},
+          {"station":"redis","at":3,"ms":1.1,"outcome":"acquired","command":"SET","key":"fill_lock"},
+          {"station":"redis","at":4.4,"ms":0.9,"outcome":"ok","command":"INCR","key":"topic_budget"},
+          {"station":"currents","at":5.6,"ms":688,"outcome":"ok","call":"search","priority":"background"},
+          {"station":"postgres","at":695,"ms":1.7,"outcome":"ok","operation":"select","tables":["articles"]},
+          {"station":"postgres","at":697,"ms":1.9,"outcome":"ok","operation":"insert","tables":["articles"]},
+          {"station":"postgres","at":699.2,"ms":1.4,"outcome":"ok","operation":"insert","tables":["sightings"]},
+          {"station":"postgres","at":1297,"ms":9.8,"outcome":"ok","operation":"raw","tables":["topic_coverage"]},
+          {"station":"redis","at":1307.5,"ms":1,"outcome":"released","command":"EVAL","key":"fill_lock"}
+        ],
+        "elided": {
+          "after": 6,
+          "count": 152,
+          "stations": {
+            "postgres": 152
+          },
+          "fromAt": 700.9,
+          "toAt": 1296.4
+        }
+      },
+      {
+        "v": 1,
+        "ref": "2",
+        "job": "segment",
+        "plane": "search",
+        "source": "vercel_queue",
+        "startedAt": "2026-09-01T12:00:01.520Z",
+        "ms": 1804,
+        "overheadMs": 0,
+        "result": "ok",
+        "sharedWith": 1,
+        "origin": {
+          "instanceSequence": 2,
+          "redisAtStart": "ready",
+          "environment": {
+            "queue": "vercel",
+            "currents": "live",
+            "gnews": false,
+            "googleNews": "live",
+            "summaries": true,
+            "labeler": true
+          }
+        },
+        "touches": [
+          {"station":"postgres","at":0,"ms":2.4,"outcome":"ok","operation":"select","tables":["topics"]},
+          {"station":"redis","at":3,"ms":1.1,"outcome":"acquired","command":"SET","key":"fill_lock"},
+          {"station":"redis","at":4.4,"ms":0.9,"outcome":"ok","command":"INCR","key":"topic_budget"},
+          {"station":"currents","at":5.6,"ms":1180,"outcome":"ok","call":"search","priority":"background"},
+          {"station":"postgres","at":1187,"ms":1.7,"outcome":"ok","operation":"select","tables":["articles"]},
+          {"station":"postgres","at":1189,"ms":1.9,"outcome":"ok","operation":"insert","tables":["articles"]},
+          {"station":"postgres","at":1191.2,"ms":1.4,"outcome":"ok","operation":"insert","tables":["sightings"]},
+          {"station":"postgres","at":1791,"ms":9,"outcome":"ok","operation":"raw","tables":["topic_coverage"]},
+          {"station":"redis","at":1800.6,"ms":0.9,"outcome":"released","command":"EVAL","key":"fill_lock"}
+        ],
+        "elided": {
+          "after": 6,
+          "count": 131,
+          "stations": {
+            "postgres": 131
+          },
+          "fromAt": 1192.9,
+          "toAt": 1790.4
+        }
+      },
+      {
+        "v": 1,
+        "ref": "3",
+        "job": "segment",
+        "plane": "search",
+        "source": "vercel_queue",
+        "startedAt": "2026-09-01T12:00:02.950Z",
+        "ms": 1402,
+        "overheadMs": 0,
+        "result": "ok",
+        "sharedWith": 1,
+        "origin": {
+          "instanceSequence": 3,
+          "redisAtStart": "ready",
+          "environment": {
+            "queue": "vercel",
+            "currents": "live",
+            "gnews": false,
+            "googleNews": "live",
+            "summaries": true,
+            "labeler": true
+          }
+        },
+        "touches": [
+          {"station":"postgres","at":0,"ms":2.4,"outcome":"ok","operation":"select","tables":["topics"]},
+          {"station":"redis","at":3,"ms":1.1,"outcome":"acquired","command":"SET","key":"fill_lock"},
+          {"station":"redis","at":4.4,"ms":0.9,"outcome":"ok","command":"INCR","key":"topic_budget"},
+          {"station":"currents","at":5.6,"ms":610,"outcome":"ok","call":"search","priority":"background"},
+          {"station":"postgres","at":617,"ms":1.7,"outcome":"ok","operation":"select","tables":["articles"]},
+          {"station":"postgres","at":619,"ms":1.9,"outcome":"ok","operation":"insert","tables":["articles"]},
+          {"station":"postgres","at":621.2,"ms":1.4,"outcome":"ok","operation":"insert","tables":["sightings"]},
+          {"station":"postgres","at":1389,"ms":9.8,"outcome":"ok","operation":"raw","tables":["topic_coverage"]},
+          {"station":"redis","at":1399.5,"ms":1,"outcome":"released","command":"EVAL","key":"fill_lock"}
+        ],
+        "elided": {
+          "after": 6,
+          "count": 148,
+          "stations": {
+            "postgres": 148
+          },
+          "fromAt": 622.9,
+          "toAt": 1388.4
+        }
+      },
+      {
+        "v": 1,
+        "ref": "4",
+        "job": "segment",
+        "plane": "search",
+        "source": "vercel_queue",
+        "startedAt": "2026-09-01T12:00:03.010Z",
+        "ms": 2961,
+        "overheadMs": 0,
+        "result": "threw",
+        "failure": "upstream",
+        "sharedWith": 1,
+        "origin": {
+          "instanceSequence": 4,
+          "redisAtStart": "ready",
+          "environment": {
+            "queue": "vercel",
+            "currents": "live",
+            "gnews": false,
+            "googleNews": "live",
+            "summaries": true,
+            "labeler": true
+          }
+        },
+        "touches": [
+          {"station":"postgres","at":0,"ms":2.1,"outcome":"ok","operation":"select","tables":["topics"]},
+          {"station":"redis","at":2.7,"ms":1,"outcome":"acquired","command":"SET","key":"fill_lock"},
+          {"station":"redis","at":3.9,"ms":0.8,"outcome":"ok","command":"INCR","key":"topic_budget"},
+          {"station":"currents","at":5,"ms":2950,"outcome":"failed","call":"search","priority":"background","failure":"upstream"},
+          {"station":"redis","at":2956.4,"ms":1,"outcome":"released","command":"EVAL","key":"fill_lock"}
+        ],
+        "elided": null
+      },
+      {
+        "v": 1,
+        "ref": "4",
+        "job": "segment",
+        "plane": "search",
+        "source": "vercel_queue",
+        "startedAt": "2026-09-01T12:05:08.020Z",
+        "ms": 1290,
+        "overheadMs": 0,
+        "result": "ok",
+        "sharedWith": 1,
+        "origin": {
+          "instanceSequence": 1,
+          "redisAtStart": "ready",
+          "environment": {
+            "queue": "vercel",
+            "currents": "live",
+            "gnews": false,
+            "googleNews": "live",
+            "summaries": true,
+            "labeler": true
+          }
+        },
+        "touches": [
+          {"station":"postgres","at":0,"ms":2.4,"outcome":"ok","operation":"select","tables":["topics"]},
+          {"station":"redis","at":3,"ms":1.1,"outcome":"acquired","command":"SET","key":"fill_lock"},
+          {"station":"redis","at":4.4,"ms":0.9,"outcome":"ok","command":"INCR","key":"topic_budget"},
+          {"station":"currents","at":5.6,"ms":668,"outcome":"ok","call":"search","priority":"background"},
+          {"station":"postgres","at":675,"ms":1.7,"outcome":"ok","operation":"select","tables":["articles"]},
+          {"station":"postgres","at":677,"ms":1.9,"outcome":"ok","operation":"insert","tables":["articles"]},
+          {"station":"postgres","at":679.2,"ms":1.4,"outcome":"ok","operation":"insert","tables":["sightings"]},
+          {"station":"postgres","at":1277,"ms":9.8,"outcome":"ok","operation":"raw","tables":["topic_coverage"]},
+          {"station":"redis","at":1287.5,"ms":1,"outcome":"released","command":"EVAL","key":"fill_lock"}
+        ],
+        "elided": {
+          "after": 6,
+          "count": 152,
+          "stations": {
+            "postgres": 152
+          },
+          "fromAt": 680.9,
+          "toAt": 1276.4
+        }
+      }
+    ],
+    "expiresAt": "2099-12-31T23:59:59.000Z"
+  }
+}
